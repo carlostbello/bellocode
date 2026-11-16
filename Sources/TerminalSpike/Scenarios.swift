@@ -26,6 +26,7 @@ struct Scenarios {
         case "contract": return await contract()
         case "diag": return await diag()
         case "perf": return await perf()
+        case "compat": return await compat()
         case "latency": return await latency()
         case "memory": return await memory()
         case "idle": return await idle()

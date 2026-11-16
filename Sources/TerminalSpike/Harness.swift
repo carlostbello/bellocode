@@ -156,6 +156,17 @@ final class Harness {
         window.sendEvent(event)
     }
 
+    /// Delivers a mouse event straight to the view (bypasses the window's first-click activation handling, which
+    /// swallows clicks while the spike's window is not key).
+    func mouseDirect(_ type: NSEvent.EventType, at point: NSPoint, in view: NSView) {
+        let windowPoint = view.convert(point, to: nil)
+        guard let event = NSEvent.mouseEvent(
+            with: type, location: windowPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ) else { return }
+        if type == .leftMouseDown { view.mouseDown(with: event) } else { view.mouseUp(with: event) }
+    }
+
     func mouse(_ type: NSEvent.EventType, at point: NSPoint, in view: NSView, modifiers: NSEvent.ModifierFlags = [], clickCount: Int = 1) {
         let windowPoint = view.convert(point, to: nil)
         guard let event = NSEvent.mouseEvent(
