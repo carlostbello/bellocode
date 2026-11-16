@@ -134,7 +134,7 @@ public final class MonogramView: NSView {
 /// A dense sidebar row: leading image, title (inline-editable), trailing detail text and an optional badge. Hosts in
 /// an `NSOutlineView`/`NSTableView` (it is an `NSTableCellView`, so `textField` editing and accessibility work).
 @MainActor
-public final class SidebarRowView: NSTableCellView {
+open class SidebarRowView: NSTableCellView {
     public let leading = NSImageView()
     public let monogram = MonogramView()
     public let title = NSTextField(labelWithString: "")
@@ -193,13 +193,13 @@ public final class SidebarRowView: NSTableCellView {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    public override func updateLayer() {
+    open override func updateLayer() {
         unreadDot.layer?.backgroundColor = DS.Palette.accent.cgColor
     }
 
-    public override var wantsUpdateLayer: Bool { true }
+    open override var wantsUpdateLayer: Bool { true }
 
     public var leadingInset: CGFloat {
         get { leadingConstraint.constant }
