@@ -480,6 +480,35 @@ public actor ProjectionStore {
         }
     }
 
+    /// IDs of cached messages of a session whose sort key lies in `lower...upper`.
+    public func messageIDs(sessionID: SessionID, from lower: MessageSortKey, through upper: MessageSortKey) async throws -> [MessageID] {
+        try await read("messageIDsInRange") { db in
+            try String.fetchAll(
+                db,
+                sql: """
+                    SELECT id FROM message WHERE session_id = ?
+                    AND (created > ? OR (created = ? AND id >= ?)) AND (created < ? OR (created = ? AND id <= ?))
+                    """,
+                arguments: [
+                    sessionID.rawValue, lower.created.milliseconds, lower.created.milliseconds, lower.id.rawValue,
+                    upper.created.milliseconds, upper.created.milliseconds, upper.id.rawValue,
+                ]
+            ).map { MessageID($0) }
+        }
+    }
+
+    /// Whether the cache holds any message of the session that sorts before `key`.
+    public func hasMessages(sessionID: SessionID, before key: MessageSortKey) async throws -> Bool {
+        try await read("hasOlder") { db in
+            try Bool.fetchOne(
+                db,
+                sql: """
+                    SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ? AND (created < ? OR (created = ? AND id < ?)))
+                    """,
+                arguments: [sessionID.rawValue, key.created.milliseconds, key.created.milliseconds, key.id.rawValue]) ?? false
+        }
+    }
+
     public func messageCount(sessionID: SessionID) async throws -> Int {
         try await read("messageCount") { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM message WHERE session_id = ?", arguments: [sessionID.rawValue]) ?? 0
