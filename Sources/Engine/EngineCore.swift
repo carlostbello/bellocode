@@ -1000,7 +1000,9 @@ actor EngineCore {
     /// Sends a prompt. Idle: the user message appears at once as `.sending`. Busy: it is listed in the queue as
     /// `.sending` (queue by default, or steer). Either way it becomes `.accepted`/`.queued` only when the server answers.
     /// On failure the optimistic entry is removed and the error thrown (the caller restores the draft).
-    func sendPrompt(_ sessionID: SessionID, text: String, delivery: PromptDelivery?) async throws -> MessageID {
+    func sendPrompt(
+        _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
+    ) async throws -> MessageID {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
         let now = serverNow()
         let id = ids.messageID(now: now)
@@ -1014,13 +1016,24 @@ actor EngineCore {
         } else {
             let latest = pipeline.state.messages.messages(in: sessionID).map(\.created).max()
             let created = max(now, Timestamp(milliseconds: (latest?.milliseconds ?? 0) + 1))
+            // Attached files show at once (as the server lists them on a user message: file parts); mentions are text.
+            let parts = attachments.files.filter { $0.mention == nil }.enumerated().map { index, file in
+                Part(
+                    id: Part.makeID(message: id, .file(index: index)), index: index,
+                    content: .file(FileReference(uri: file.uri, mime: file.mime, name: file.name)))
+            }
             let message = Message(
-                id: id, sessionID: sessionID, kind: .user(UserContent(text: text)), created: created, delivery: .sending)
+                id: id, sessionID: sessionID, kind: .user(UserContent(text: text, agents: attachments.agents.map(\.name))),
+                created: created, parts: parts, delivery: .sending)
             pipeline.state.putMessage(message, persist: false, into: &reduction)
         }
         commit(reduction)
 
-        let request = PromptRequest(text: text, id: id.rawValue, delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        let request = PromptRequest(
+            text: text, id: id.rawValue, files: attachments.files.map(Mapping.promptFile),
+            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
+            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
+            delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
         var lastError: (any Error)?
         for attempt in 0..<3 {
             do {
@@ -1040,6 +1053,20 @@ actor EngineCore {
         if pipeline.state.messages[id]?.delivery == .sending { pipeline.state.removeMessage(id, sessionID: sessionID, into: &rollback) }
         commit(rollback)
         throw EngineError.from(lastError ?? EngineError.failed("Send failed."))
+    }
+
+    /// Runs a slash command (`session.command`). No optimistic message: the server's events add what it produces.
+    func runCommand(
+        _ sessionID: SessionID, name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?
+    ) async throws {
+        guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+        let busy = session.isRunning && !pipeline.state.orphaned.contains(sessionID)
+        let body = CommandRequest(
+            name: name, text: arguments, files: attachments.files.map(Mapping.promptFile),
+            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
+            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
+            delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        try await call { try await $0.runCommand(sessionID: sessionID.rawValue, body) }
     }
 
     private func acknowledgeSend(_ id: MessageID, sessionID: SessionID, serverCreated: Timestamp) {

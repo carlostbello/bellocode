@@ -387,3 +387,41 @@ extension OpenCodeClient {
         return request
     }
 }
+
+// MARK: - Commands, skills, files, locations
+
+extension OpenCodeClient {
+    /// `GET /api/command` (command.list).
+    public func commands(directory: String?) async throws -> [CommandInfo] {
+        let request = try makeRequest(.get, ["api", "command"], directory: directory)
+        return try await send("command.list", request, as: LocatedList<CommandInfo>.self).data
+    }
+
+    /// `POST /api/session/{id}/command` (session.command): 204 once the command ran or was admitted.
+    public func runCommand(sessionID: String, _ body: CommandRequest) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "command"], body: body, timeout: .seconds(120))
+        try await sendIgnoringBody("session.command", request)
+    }
+
+    /// `GET /api/skill` (skill.list).
+    public func skills(directory: String?) async throws -> [SkillInfo] {
+        let request = try makeRequest(.get, ["api", "skill"], directory: directory)
+        return try await send("skill.list", request, as: LocatedList<SkillInfo>.self).data
+    }
+
+    /// `GET /api/fs/find` (fs.find): ranked entries below the location whose path matches `query`.
+    public func findFiles(
+        directory: String?, query: String, type: FileSystemEntry.Kind? = .file, limit: Int = 50
+    ) async throws -> [FileSystemEntry] {
+        var parameters: [(String, String)] = [("query", query), ("limit", String(limit))]
+        if let type { parameters.append(("type", type.rawValue)) }
+        let request = try makeRequest(.get, ["api", "fs", "find"], query: parameters, directory: directory)
+        return try await send("fs.find", request, as: LocatedList<FileSystemEntry>.self).data
+    }
+
+    /// `GET /api/location` (location.get): the project a directory belongs to.
+    public func location(directory: String) async throws -> LocationInfo {
+        let request = try makeRequest(.get, ["api", "location"], directory: directory)
+        return try await send("location.get", request, as: LocationInfo.self)
+    }
+}

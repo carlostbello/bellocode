@@ -223,8 +223,10 @@ public final class Engine {
     public func setArchived(_ id: SessionID, _ archived: Bool) async throws { try await core.setArchived(id, archived: archived) }
 
     /// Sends a prompt to a thread that may not be open. See `ThreadModel.send` for the open-thread variant.
-    public func send(_ text: String, to id: SessionID, delivery: PromptDelivery? = nil) async throws -> MessageID {
-        try await core.sendPrompt(id, text: text, delivery: delivery)
+    public func send(
+        _ text: String, to id: SessionID, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async throws -> MessageID {
+        try await core.sendPrompt(id, text: text, attachments: attachments, delivery: delivery)
     }
 
     public func stop(_ id: SessionID) async throws { try await core.interrupt(id) }

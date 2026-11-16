@@ -20,6 +20,13 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
     init(style: ComposerStyle) {
         self.style = style
         super.init(frame: .zero)
+        // Layer-backed and clipped to the rounded shape, so nothing (table background, the row being scrolled, a
+        // window backing) can show square corners outside the border in either appearance.
+        wantsLayer = true
+        layer?.cornerRadius = Self.cornerRadius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.backgroundColor = NSColor.clear.cgColor
         let column = NSTableColumn(identifier: .init("item"))
         table.addTableColumn(column)
         table.headerView = nil
@@ -71,8 +78,15 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
         return CGFloat(rows) * style.completionRowHeight + 8
     }
 
+    static let cornerRadius: CGFloat = 8
+
+    override var isOpaque: Bool { false }
+
     override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        NSColor.clear.set()
+        bounds.fill(using: .copy)
+        let radius = Self.cornerRadius
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         style.popoverBackgroundColor.setFill()
         path.fill()
         (style.increasedContrast ? NSColor.labelColor.withAlphaComponent(0.6) : style.borderColor).setStroke()

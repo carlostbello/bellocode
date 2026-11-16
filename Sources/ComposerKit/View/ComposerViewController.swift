@@ -749,9 +749,14 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
             if origin.y + size.height > screen.maxY { origin.y = caret.minY - 6 - size.height }
             origin.x = min(max(origin.x, screen.minX + 4), screen.maxX - size.width - 4)
         }
+        // Follow the window's appearance (a child panel otherwise takes the app's).
+        if panel.appearance?.name != window.effectiveAppearance.name { panel.appearance = window.effectiveAppearance }
+        let resized = panel.frame.size != size
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
         if panel.parent == nil { window.addChildWindow(panel, ordered: .above) }
         panel.orderFront(nil)
+        // The shadow follows the rounded, transparent-cornered content; recompute it when the shape changes.
+        if resized { panel.invalidateShadow() }
         announceCompletion(query)
     }
 

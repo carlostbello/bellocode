@@ -80,7 +80,7 @@ let targets: [Target] =
             name: "BelloCodeApp",
             dependencies: [
                 "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
-                "TerminalKit", "BrowserKit", "MockOpenCode",
+                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI",
             ],
             swiftSettings: swiftSettings
         ),
@@ -96,7 +96,8 @@ let targets: [Target] =
     + [
         // Window shell logic (sidebar tree, commands, restoration, undo, switch timing). `@testable import BelloCodeApp`.
         .testTarget(
-            name: "BelloCodeAppTests", dependencies: ["BelloCodeApp", "Engine", "MockOpenCode"],
+            name: "BelloCodeAppTests",
+            dependencies: ["BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore"],
             swiftSettings: testSwiftSettings
         ),
     ]

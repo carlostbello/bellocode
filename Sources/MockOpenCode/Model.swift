@@ -305,8 +305,14 @@ public struct MockMessage: Sendable, Hashable {
         self.kind = kind
     }
 
-    public static func user(id: String, text: String, time: Int64) -> MockMessage {
-        MockMessage(id: id, kind: .user(text: text, created: time, metadata: nil))
+    public static func user(id: String, text: String, time: Int64, attachments: JSONValue? = nil) -> MockMessage {
+        guard let attachments else { return MockMessage(id: id, kind: .user(text: text, created: time, metadata: nil)) }
+        // With files, agents or skills: the full `Session.Message.User` JSON.
+        var json: [(String, JSONValue?)] = [
+            ("id", .string(id)), ("time", ["created": .int(Int(time))]), ("text", .string(text)), ("type", "user"),
+        ]
+        for key in ["files", "agents", "skills"] { json.append((key, attachments[key])) }
+        return MockMessage(id: id, kind: .raw(type: "user", json: .compact(json)))
     }
 
     public static func assistant(_ message: AssistantMessage) -> MockMessage {

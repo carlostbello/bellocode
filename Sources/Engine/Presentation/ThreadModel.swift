@@ -139,19 +139,36 @@ public final class ThreadModel: Identifiable {
     /// Sends `text` (default: the draft). Idle: appears at once as `.sending`. Running: queued (or steered). On
     /// failure the text returns to the draft and `lastError` is set. Returns the message ID once the server admitted it.
     @discardableResult
-    public func send(_ text: String? = nil, delivery: PromptDelivery? = nil) async -> MessageID? {
+    public func send(
+        _ text: String? = nil, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async -> MessageID? {
         let text = text ?? draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
         let fromDraft = text == draft
         if fromDraft { draft = "" }
         do {
-            let id = try await core.sendPrompt(sessionID, text: text, delivery: delivery)
+            let id = try await core.sendPrompt(sessionID, text: text, attachments: attachments, delivery: delivery)
             lastError = nil
             return id
         } catch {
             lastError = EngineError.from(error)
             if fromDraft, draft.isEmpty { draft = text }
             return nil
+        }
+    }
+
+    /// Runs a server slash command (`/name arguments`). Returns whether the server accepted it; `lastError` otherwise.
+    @discardableResult
+    public func runCommand(
+        _ name: String, arguments: String, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async -> Bool {
+        do {
+            try await core.runCommand(sessionID, name: name, arguments: arguments, attachments: attachments, delivery: delivery)
+            lastError = nil
+            return true
+        } catch {
+            lastError = EngineError.from(error)
+            return false
         }
     }
 

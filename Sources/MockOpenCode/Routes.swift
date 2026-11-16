@@ -77,6 +77,7 @@ extension MockOpenCodeServer {
         }
 
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
+        if let response = routeWorkspace(method, parts, request) { return .response(response) }
         let response: HTTPResponse
         switch method {
         case "GET":
@@ -541,9 +542,10 @@ extension MockOpenCodeServer {
             return .json(["data": existing])
         }
         let delivery = body["delivery"]?.stringValue ?? "steer"
+        recordedPrompts.append(body)
         let item = admit(
             sessionID: sessionID, id: body["id"]?.stringValue, text: text, delivery: delivery,
-            script: selectScript(sessionID: sessionID, text: text))
+            script: selectScript(sessionID: sessionID, text: text), attachments: Self.echoedAttachments(body))
         return .json(["data": item])
     }
 

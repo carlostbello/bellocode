@@ -60,6 +60,18 @@ enum Mapping {
             lastError: nil, usage: usage(cost: dto.cost, tokens: dto.tokens) ?? .zero, metadata: raw(dto.metadata))
     }
 
+    // MARK: Prompt input
+
+    static func promptMention(_ mention: PromptAttachments.Mention) -> PromptRequest.Mention {
+        PromptRequest.Mention(start: mention.start, end: mention.end, text: mention.text)
+    }
+
+    /// A file to send: `source` repeats the URI (the contract's `{type: "uri"}`), `mention` places an `@` token.
+    static func promptFile(_ file: PromptAttachments.File) -> PromptRequest.FileAttachment {
+        PromptRequest.FileAttachment(
+            uri: file.uri, name: file.name, source: .uri(file.uri), mention: file.mention.map(promptMention))
+    }
+
     // MARK: Messages
 
     static func message(_ dto: SessionMessage, sessionID: SessionID) -> Message {
@@ -67,10 +79,12 @@ enum Mapping {
         switch dto {
         case .user(let user):
             var parts: [Part] = []
-            for (index, file) in (user.files ?? []).enumerated() {
+            // `Prompt.FileAttachment`: the URI is in `source` (`{type: "uri", uri}`); `@` mentions stay in the text.
+            let attached = (user.files ?? []).filter { $0["mention"] == nil }
+            for (index, file) in attached.enumerated() {
                 let reference = FileReference(
-                    uri: file["uri"]?.stringValue ?? "", mime: file["mime"]?.stringValue ?? "application/octet-stream",
-                    name: file["name"]?.stringValue)
+                    uri: file["source"]?["uri"]?.stringValue ?? file["uri"]?.stringValue ?? "",
+                    mime: file["mime"]?.stringValue ?? "application/octet-stream", name: file["name"]?.stringValue)
                 parts.append(Part(id: Part.makeID(message: id, .file(index: index)), index: index, content: .file(reference)))
             }
             let agents = (user.agents ?? []).compactMap { $0["name"]?.stringValue }

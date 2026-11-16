@@ -122,6 +122,14 @@ public actor MockOpenCodeServer {
     var pendingInbox: [String: [InboxItem]] = [:]
     var waiters: [String: Waiter] = [:]
     var queuedScripts: [TurnScript] = []
+    /// Bodies of admitted `prompt` requests, oldest first (bounded), for tests that check the request shape.
+    var recordedPrompts: [JSONValue] = [] {
+        didSet { if recordedPrompts.count > 200 { recordedPrompts.removeFirst(recordedPrompts.count - 200) } }
+    }
+    /// `session.command` runs: session, name, argument text (bounded).
+    var recordedCommands: [(sessionID: String, name: String, text: String)] = [] {
+        didSet { if recordedCommands.count > 200 { recordedCommands.removeFirst(recordedCommands.count - 200) } }
+    }
     var queuedSessionScripts: [String: [TurnScript]] = [:]
 
     public init(scenario: Scenario = .empty(), options: MockServerOptions = MockServerOptions()) {
@@ -218,6 +226,12 @@ public actor MockOpenCodeServer {
     // MARK: Fault injection and control
 
     /// The next prompt (for `sessionID`, or any session when `nil`) plays `script`. Scripts queue in order.
+    /// The `prompt` request bodies received so far, oldest first (at most 200).
+    public func promptBodies() -> [JSONValue] { recordedPrompts }
+
+    /// The `session.command` runs received so far (at most 200).
+    public func commandRuns() -> [(sessionID: String, name: String, text: String)] { recordedCommands }
+
     public func enqueueScript(_ script: TurnScript, for sessionID: String? = nil) {
         if let sessionID {
             queuedSessionScripts[sessionID, default: []].append(script)
