@@ -5,6 +5,19 @@ import Foundation
 /// Window, composer, fake hosts, input synthesis, checks and snapshots.
 @MainActor
 final class Harness {
+    /// Reports itself key so focus rendering shows in snapshots (the demo runs without activating, to leave the
+    /// user's frontmost app alone).
+    final class DemoWindow: NSWindow {
+        override var isKeyWindow: Bool { true }
+    }
+    /// Window background drawn in `draw(_:)`, so snapshots include it in both appearances.
+    final class BackgroundView: NSView {
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.windowBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
+    }
+
     let window: NSWindow
     var composer: ComposerViewController
     let projectRoot: URL
@@ -15,7 +28,7 @@ final class Harness {
 
     init(interactive: Bool) {
         projectRoot = Harness.makeProject()
-        window = NSWindow(
+        window = DemoWindow(
             contentRect: NSRect(x: 120, y: 120, width: 760, height: 480),
             styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false
         )
@@ -61,8 +74,8 @@ final class Harness {
 
     private func mount(_ composer: ComposerViewController) {
         if composer.configuration.completionProviders.isEmpty { composer.configuration = configuration() }
-        let content = window.contentView ?? NSView()
-        if window.contentView == nil { window.contentView = content }
+        if !(window.contentView is BackgroundView) { window.contentView = BackgroundView() }
+        let content = window.contentView!
         content.subviews.forEach { $0.removeFromSuperview() }
 
         let transcript = NSTextField(wrappingLabelWithString: "Transcript area. The composer below is the real ComposerKit view with a fake thread.")
@@ -120,6 +133,7 @@ final class Harness {
 
     func run(_ names: [String]) async -> Int32 {
         window.orderFrontRegardless()
+        window.makeKey()
         let scenarios = Scenarios(self)
         let all = scenarios.all
         let selected = names.isEmpty ? all.map(\.0) : names
@@ -291,6 +305,11 @@ final class Harness {
                     popover.appearance = appearance
                     let frame = window.convertFromScreen(panel.frame)
                     if let popoverRep = popover.bitmapImageRepForCachingDisplay(in: popover.bounds) {
+                        NSGraphicsContext.saveGraphicsState()
+                        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: popoverRep)
+                        NSColor.clear.set()
+                        NSRect(origin: .zero, size: popoverRep.size).fill(using: .copy)
+                        NSGraphicsContext.restoreGraphicsState()
                         popover.cacheDisplay(in: popover.bounds, to: popoverRep)
                         NSGraphicsContext.saveGraphicsState()
                         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)

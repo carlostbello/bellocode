@@ -46,7 +46,7 @@ final class ComposerSendButton: NSButton {
         switch appearanceState {
         case .send: "arrow.up"
         case .followUp(.steer): "arrow.turn.down.right"
-        case .followUp: "text.line.last.and.arrowtriangle.forward"
+        case .followUp: "text.badge.plus"
         case .stop, .stopping: "stop.fill"
         }
     }
@@ -55,11 +55,21 @@ final class ComposerSendButton: NSButton {
         [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold), .foregroundColor: foreground]
     }
 
+    private var symbolImage: NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: label == nil ? 12 : 10, weight: .bold)
+            .applying(.init(paletteColors: [foreground]))
+        return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+    }
+
+    private static let iconGap: CGFloat = 4
+    private static let sidePadding: CGFloat = 9
+
     override var intrinsicContentSize: NSSize {
         let height = style.controlHeight
         guard let label else { return NSSize(width: height, height: height) }
         let width = (label as NSString).size(withAttributes: labelAttributes).width
-        return NSSize(width: ceil(width) + 12 + 14 + 10, height: height)
+        let icon = symbolImage?.size.width ?? 0
+        return NSSize(width: ceil(width + icon + Self.iconGap + Self.sidePadding * 2), height: height)
     }
 
     private var fill: NSColor {
@@ -84,18 +94,17 @@ final class ComposerSendButton: NSButton {
         let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
         (isHighlighted ? fill.blended(withFraction: 0.2, of: .black) ?? fill : fill).setFill()
         path.fill()
-        let configuration = NSImage.SymbolConfiguration(pointSize: label == nil ? 12 : 10, weight: .bold)
-            .applying(.init(paletteColors: [foreground]))
-        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-            .withSymbolConfiguration(configuration) {
+        var textX = rect.minX + Self.sidePadding
+        if let image = symbolImage {
             let size = image.size
-            let x = label == nil ? rect.midX - size.width / 2 : rect.minX + 10
+            let x = label == nil ? rect.midX - size.width / 2 : rect.minX + Self.sidePadding
             image.draw(in: NSRect(x: x, y: rect.midY - size.height / 2, width: size.width, height: size.height))
+            textX = x + size.width + Self.iconGap
         }
         if let label {
             let text = NSAttributedString(string: label, attributes: labelAttributes)
             let size = text.size()
-            text.draw(at: NSPoint(x: rect.minX + 10 + 14 + 2, y: rect.midY - size.height / 2))
+            text.draw(at: NSPoint(x: textX, y: rect.midY - size.height / 2))
         }
         if window?.firstResponder === self, NSApp.isFullKeyboardAccessEnabled {
             NSGraphicsContext.saveGraphicsState()
@@ -142,7 +151,7 @@ final class ComposerErrorView: NSView {
         }
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor),
             icon.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
             label.topAnchor.constraint(equalTo: topAnchor, constant: 1),

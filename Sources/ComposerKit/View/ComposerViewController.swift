@@ -128,7 +128,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         for item in [strip, scrollView, errorView!, controlsBar] as [NSView] {
             item.translatesAutoresizingMaskIntoConstraints = false
             cardStack.addArrangedSubview(item)
-            let horizontalInset = item === scrollView ? style.contentInsets.left - 5 + style.contentInsets.right : style.contentInsets.left + style.contentInsets.right
+            let horizontalInset = style.contentInsets.left + style.contentInsets.right
             item.widthAnchor.constraint(equalTo: cardStack.widthAnchor, constant: -horizontalInset).isActive = true
         }
         cardStack.setCustomSpacing(2, after: scrollView)
@@ -165,6 +165,8 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         contentStorage.addTextLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = true
+        // Text starts where the chips and controls start.
+        container.lineFragmentPadding = 0
         layoutManager.textContainer = container
         let textView = ComposerTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 20), textContainer: container)
         textView.owner = self
@@ -736,7 +738,9 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         let panel = completionPanel ?? makeCompletionPanel(list)
         let caret = textView.firstRect(forCharacterRange: NSRange(location: query.range.location, length: 0), actualRange: nil)
         let size = NSSize(width: style.completionWidth, height: list.preferredHeight)
-        var origin = NSPoint(x: caret.minX - 10, y: caret.maxY + 6)
+        // Above the card (never over the text being typed), aligned with the trigger character.
+        let cardTop = window.convertToScreen(card.convert(card.bounds, to: nil)).maxY
+        var origin = NSPoint(x: caret.minX - 10, y: max(caret.maxY, cardTop) + 4)
         if let screen = window.screen?.visibleFrame {
             if origin.y + size.height > screen.maxY { origin.y = caret.minY - 6 - size.height }
             origin.x = min(max(origin.x, screen.minX + 4), screen.maxX - size.width - 4)
