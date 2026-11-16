@@ -267,7 +267,8 @@ extension MockOpenCodeServer {
     /// Anchor-based paging like the real server: `cursor.next` continues after the last item, `cursor.previous`
     /// before the first. Both are `null` for an empty page.
     func page(
-        _ ids: [String], request: HTTPRequest, extra: [(String, JSONValue)] = []
+        _ ids: [String], request: HTTPRequest, extra: [(String, JSONValue)] = [],
+        anchorTime: (String) -> Int64? = { _ in nil }
     ) -> Result<(page: [String], cursor: JSONValue), HTTPResponse> {
         var limit: Int?
         if let raw = request.queryValue("limit") {
@@ -296,7 +297,9 @@ extension MockOpenCodeServer {
             return .success((page, ["previous": .null, "next": .null]))
         }
         func cursor(_ id: String, _ direction: String) -> JSONValue {
-            let anchor: JSONValue = .object(extra + [("anchor", ["id": .string(id), "direction": .string(direction)])])
+            let time = anchorTime(id).map { [("time", JSONValue.int(Int($0)))] } ?? []
+            let anchor: JSONValue = .object(
+                extra + [("anchor", .object([("id", .string(id))] + time + [("direction", .string(direction))]))])
             return .string(Self.encodeCursor(anchor))
         }
         return .success((page, ["previous": cursor(first, "previous"), "next": cursor(last, "next")]))
@@ -334,14 +337,18 @@ extension MockOpenCodeServer {
         if let search = request.queryValue("search")?.lowercased(), !search.isEmpty {
             sessions = sessions.filter { ($0.title ?? "").lowercased().contains(search) }
         }
+        // The real server orders by last update (verified against 2.3.0), newest first unless `order=asc`.
         let ascending = request.queryValue("order") == "asc"
         let position = Dictionary(uniqueKeysWithValues: state.sessionOrder.enumerated().map { ($1, $0) })
         sessions.sort {
-            let a = ($0.created, position[$0.id] ?? 0)
-            let b = ($1.created, position[$1.id] ?? 0)
+            let a = ($0.updated, position[$0.id] ?? 0)
+            let b = ($1.updated, position[$1.id] ?? 0)
             return ascending ? a < b : a > b
         }
-        switch page(sessions.map(\.id), request: request) {
+        var extra: [(String, JSONValue)] = []
+        if let parent = request.queryValue("parentID") { extra.append(("parentID", .string(parent))) }
+        let updated = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.updated) })
+        switch page(sessions.map(\.id), request: request, extra: extra, anchorTime: { updated[$0] }) {
         case let .failure(error): return error
         case let .success((ids, cursor)):
             return .json(["data": .array(ids.compactMap { state.sessions[$0]?.json }), "cursor": cursor])
@@ -458,7 +465,7 @@ extension MockOpenCodeServer {
             state.messages[sessionID] = nil
             state.permissions.removeAll { $0.sessionID == sessionID }
             state.forms.removeAll { $0.sessionID == sessionID }
-            publish("session.deleted", ["sessionID": .string(sessionID)], durable: sessionID)
+            publish("session.deleted", ["sessionID": .string(sessionID)], durable: sessionID, version: 2)
         }
         return .noContent()
     }

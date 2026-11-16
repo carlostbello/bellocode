@@ -455,6 +455,8 @@ public actor MockOpenCodeServer {
             }
         }
         if let delay { try? await Task.sleep(for: delay) }
+        // Each request moves the virtual clock by 1 ms, so request-driven changes get distinct, ordered timestamps.
+        if options.clock == .virtual { virtualNow += 1 }
         if let unauthenticated = authenticate(request) { return .response(unauthenticated) }
         return await route(request, connectionID: connectionID)
     }
