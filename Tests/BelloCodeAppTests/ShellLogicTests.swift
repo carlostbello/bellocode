@@ -78,6 +78,14 @@ import Testing
     }
 }
 
+@Suite struct CanonicalDirectoryTests {
+    @Test func resolvesSymlinksAndTrailingSlash() {
+        #expect(WorkspaceController.canonicalDirectory(URL(filePath: "/tmp/", directoryHint: .isDirectory)) == "/private/tmp")
+        #expect(WorkspaceController.canonicalDirectory(URL(filePath: "/private/tmp/../tmp")) == "/private/tmp")
+        #expect(WorkspaceController.canonicalDirectory(URL(filePath: "/")) == "/")
+    }
+}
+
 @Suite struct CommandValidationTests {
     let thread = CommandTarget.thread("ses_1", directory: "/p", isRunning: false)
     let running = CommandTarget.thread("ses_1", directory: "/p", isRunning: true)

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import BelloCore
 import Engine
 import Observation
@@ -136,6 +137,18 @@ final class WorkspaceController {
 
     func session(_ id: SessionID) -> Session? { openThreads[id]?.session ?? row(id)?.session }
 
+    /// The path opencode records for a folder: symlinks resolved (`/var/…` is `/private/var/…`, `/tmp` is
+    /// `/private/tmp`), standardized, no trailing slash. Without this the sidebar entry never joins opencode's project.
+    nonisolated static func canonicalDirectory(_ url: URL) -> String {
+        // realpath(3): Foundation's resolvingSymlinksInPath strips "/private" again on macOS.
+        var path = url.standardizedFileURL.path(percentEncoded: false)
+        if let resolved = realpath(path, nil) {
+            path = String(cString: resolved)
+            free(resolved)
+        }
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
     static func name(of directory: String) -> String {
         let name = (directory as NSString).lastPathComponent
         return name.isEmpty ? directory : name
@@ -260,8 +273,7 @@ final class WorkspaceController {
 
     /// Adds folders (open panel or drop). Selects the first one's new-thread draft.
     func addProjects(_ urls: [URL]) {
-        let directories = urls.map { $0.standardizedFileURL.path(percentEncoded: false) }
-            .map { $0.count > 1 && $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+        let directories = urls.map(Self.canonicalDirectory)
         guard !directories.isEmpty else { return }
         let engine = self.engine
         let name = directories.count == 1 ? Self.name(of: directories[0]) : "\(directories.count) projects"
