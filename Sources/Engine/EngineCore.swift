@@ -72,6 +72,10 @@ actor EngineCore {
     private var dynamicGeneration = 0
     private var lastDynamicURL: URL?
     private var started = false
+    /// Server clock minus local clock, from the latest event timestamp. Optimistic IDs and times use the server's
+    /// clock so they sort correctly against what it creates (zero for a local server; large for the mock's virtual
+    /// clock).
+    private var serverClockOffset: Double = 0
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -222,6 +226,7 @@ actor EngineCore {
         let signpost = EngineSignposts.events.beginInterval("receive")
         defer { EngineSignposts.events.endInterval("receive", signpost) }
         statistics.events += 1
+        if let created = envelope.created { observeServerTime(created) }
         if let target = EventReducer.target(of: envelope.event), !pipeline.state.messages.contains(target.message) {
             if let stored = try? await store.messages(ids: [target.message]).first,
                 !pipeline.state.messages.contains(target.message)
@@ -742,7 +747,7 @@ actor EngineCore {
         let state = pipeline.state
         return ThreadSnapshot(
             session: state.sessions[sessionID], status: statuses[sessionID], messages: messages,
-            hasOlder: window.hasOlderCached || (sync.map { !$0.historyComplete } ?? !messages.isEmpty),
+            hasOlder: window.hasOlderCached || (sync.map { !$0.historyComplete } ?? !window.messages.isEmpty),
             pending: state.pending.values.filter { $0.sessionID == sessionID }.sorted { $0.received < $1.received },
             queue: state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created },
             ui: state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID))
@@ -857,8 +862,17 @@ actor EngineCore {
         }
     }
 
+    private func observeServerTime(_ milliseconds: Double) {
+        serverClockOffset = milliseconds - Timestamp.now.milliseconds
+    }
+
+    /// The current time on the server's clock (estimated).
+    private func serverNow() -> Timestamp {
+        Timestamp(milliseconds: (Timestamp.now.milliseconds + serverClockOffset).rounded())
+    }
+
     func createSession(directory: String, title: String?, agent: String?, model: ModelSelection?, parentID: SessionID?) async throws -> Session {
-        let now = Timestamp.now
+        let now = serverNow()
         let id = ids.sessionID(now: now)
         let projectID = pipeline.state.registry[directory]?.projectID
             ?? pipeline.state.projects.values.first { $0.directory == directory }?.id
@@ -880,6 +894,7 @@ actor EngineCore {
                 directory: directory, id: id.rawValue, parentID: parentID?.rawValue, title: title, agent: agent,
                 model: model.map(Mapping.modelRef))
             let dto = try await call { try await $0.createSession(request) }
+            observeServerTime(dto.time.created)
             var reduction = Reduction()
             let session = mergeSession(local: pipeline.state.sessions[id], server: Mapping.session(dto))
             pipeline.state.sessions[id] = nil
@@ -962,7 +977,7 @@ actor EngineCore {
     /// On failure the optimistic entry is removed and the error thrown (the caller restores the draft).
     func sendPrompt(_ sessionID: SessionID, text: String, delivery: PromptDelivery?) async throws -> MessageID {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
-        let now = Timestamp.now
+        let now = serverNow()
         let id = ids.messageID(now: now)
         let busy = session.isRunning || pipeline.state.queue.values.contains { $0.sessionID == sessionID }
         var reduction = Reduction()
@@ -984,6 +999,7 @@ actor EngineCore {
         for attempt in 0..<3 {
             do {
                 let item = try await currentClient().prompt(sessionID: sessionID.rawValue, request)
+                observeServerTime(item.time.created)
                 acknowledgeSend(id, sessionID: sessionID, serverCreated: Timestamp(milliseconds: item.time.created))
                 return id
             } catch {

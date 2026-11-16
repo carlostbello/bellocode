@@ -39,7 +39,7 @@ struct MockHarness {
                 sessionID: sessionID.rawValue,
                 MessageListQuery(limit: 200, order: cursor == nil ? .ascending : nil, cursor: cursor))
             messages += page.data.map { Mapping.message($0, sessionID: sessionID) }
-            cursor = page.cursor.next
+            cursor = page.data.count < 200 ? nil : page.cursor.next
         } while cursor != nil
         return messages
     }
