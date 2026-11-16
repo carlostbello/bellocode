@@ -171,6 +171,9 @@ public final class SpikeTextView: NSTextView {
         return pboard.setString(text, forType: .string)
     }
 
+    /// The transcript is read-only: a click on a card header or a drag should work even when the window is not key.
+    override public func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override public var writablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
 }
 

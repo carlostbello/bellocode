@@ -438,14 +438,45 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
             scrollToBottom()
             return nil
         }
-        let anchor: Anchor? = pin.flatMap { anchor(at: $0) } ?? captureTopAnchor()
+        guard compensateAnchors else { body(); return nil }
+        // TextKit 2 geometry above the viewport is an estimate, and laying it out moves everything (measured: forcing
+        // layout between edit and anchor changed the document height by up to 147k pt). So the anchor is a text
+        // location plus screen offset, restored with TextKit's own `relocateViewport(to:)`.
+        guard var anchor = pin.flatMap({ anchor(at: $0) }) ?? captureTopAnchor() else { body(); return nil }
         body()
-        guard compensateAnchors, var anchor else { return anchor }
         if edit.location < anchor.location || (edit.location == anchor.location && edit.length == 0 && pin == nil) {
             anchor.location = max(edit.location, anchor.location + delta)
         }
-        restore(anchor)
+        relocate(to: anchor)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isFollowing else { return }
+            self.relocate(to: anchor)
+        }
         return anchor
+    }
+
+    /// Puts the fragment at `anchor.location` at `anchor.screenY` using the viewport controller's own origin.
+    private func relocate(to anchor: Anchor) {
+        guard let location = textLocation(anchor.location) else { return }
+        programmaticScrollDepth += 1
+        let controller = layoutManager.textViewportLayoutController
+        let originY = controller.relocateViewport(to: location)
+        scrollProgrammatically(toY: originY + textView.textContainerOrigin.y - anchor.screenY)
+        controller.layoutViewport()
+        // Fine-tune against the now-laid-out fragment (viewport fragments are measured, not estimated).
+        if let fragment = layoutManager.textLayoutFragment(for: location) {
+            let screenY = fragment.layoutFragmentFrame.minY + textView.textContainerOrigin.y - visibleRect.minY
+            if abs(screenY - anchor.screenY) > 0.5 {
+                scrollProgrammatically(toY: visibleRect.minY + screenY - anchor.screenY)
+                controller.layoutViewport()
+            }
+        }
+        programmaticScrollDepth -= 1
+    }
+
+    private func ensureLayout(_ range: NSRange) {
+        guard let textRange = textRange(range) else { return }
+        layoutManager.ensureLayout(for: textRange)
     }
 
     private func anchor(at offset: Int) -> Anchor? {
@@ -470,10 +501,12 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     public func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
         guard let url, url.scheme == SpikeToggleURL.scheme, let id = url.host else { return false }
+        linkClicks += 1
         toggleCard(id, pinned: true)
         return true
     }
 
+    public private(set) var linkClicks = 0
     public func cardIDs() -> [String] { Array(cardMessage.keys) }
     public func isTool(_ id: String) -> Bool { if case .tool = cardContent[id] { return true } else { return false } }
 

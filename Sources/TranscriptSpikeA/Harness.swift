@@ -207,7 +207,9 @@ final class Harness {
         guard let down = mouseEvent(.leftMouseDown, at: point, modifiers: modifiers),
               let up = mouseEvent(.leftMouseUp, at: point, modifiers: modifiers) else { return }
         NSApp.postEvent(up, atStart: false)
-        window.sendEvent(down)
+        // Delivered to the hit view directly: the window cannot become key when launched from a shell, and a
+        // non-key NSWindow does not route this synthetic click to the text view's link handling.
+        controller.textView.mouseDown(with: down)
     }
 
     /// Text-view point for a document offset (middle of the first line of its layout fragment).

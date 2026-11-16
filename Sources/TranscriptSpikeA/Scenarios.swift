@@ -562,11 +562,23 @@ final class Scenarios {
         // Click a tool card header in the viewport (behaviour 5): the header must stay put.
         c.reveal(messageAt: count - 2_000, offset: 0)
         await h.sleep(0.5)
-        let visibleCards = toolCards(in: (count - 2_000)..<(count - 1_990))
-        if let card = visibleCards.first, let header = c.headerRange(ofCard: card.id),
-           let point = c.characterPoint(at: header.location + 4) {
+        let candidates = toolCards(in: (count - 2_000)..<(count - 1_980))
+        var chosen: (card: (index: Int, id: String), header: NSRange, point: CGPoint)?
+        for card in candidates {
+            guard let header = c.headerRange(ofCard: card.id) else { continue }
+            if chosen == nil { c.reveal(messageAt: card.index, offset: 0); await h.sleep(0.4) }
+            if let point = c.characterPoint(at: header.location + 4), c.visibleRect.insetBy(dx: 0, dy: 20).contains(point) {
+                chosen = (card, header, point)
+                break
+            }
+        }
+        if let chosen {
+            let card = chosen.card, header = chosen.header, point = chosen.point
             let before = c.fragmentFrame(at: header.location)!.minY - c.visibleRect.minY
             let wasExpanded = c.expanded.contains(card.id)
+            log("app active \(NSApp.isActive) window key \(h.window.isKeyWindow) first responder is text view \(h.window.firstResponder === c.textView)")
+            let hit = c.textView.characterIndexForInsertion(at: point)
+            log("click test: card \(card.id) header \(header) point \(point) hit index \(hit) link \(String(describing: c.storage.attribute(.link, at: min(hit, c.storage.length - 1), effectiveRange: nil)))")
             Output.snapshot(h.window.contentView!, "S5-before-click")
             h.click(textViewPoint: point)
             await h.sleep(0.4)
@@ -576,6 +588,7 @@ final class Scenarios {
             h.click(textViewPoint: c.characterPoint(at: header.location + 4) ?? point)
             await h.sleep(0.4)
             let afterCollapse = c.fragmentFrame(at: header.location)!.minY - c.visibleRect.minY
+            log("link clicks \(c.linkClicks)")
             r.clickToggleWorked = !wasExpanded && expandedNow && !c.expanded.contains(card.id)
             r.clickToggle = ["headerDriftAfterExpandPT": Double(afterExpand - before),
                              "headerDriftAfterCollapsePT": Double(afterCollapse - before)]
