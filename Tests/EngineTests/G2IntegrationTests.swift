@@ -124,6 +124,8 @@ struct G2IntegrationTests {
             try await Task.sleep(for: .milliseconds(500))
             await engine.flush()
             let client = try await engine.core.currentClient()
+            let after = try await client.session(session.id.rawValue)
+            print("G2: server session after restart: busy \(after.time.busy as Any) idle \(after.time.idle as Any) outcome \(after.outcome as Any); shown status \(thread.status?.status.label ?? "-")")
             var listed: [Message] = []
             var cursor: String?
             repeat {
@@ -141,6 +143,12 @@ struct G2IntegrationTests {
             #expect(normalized(cached) == normalized(listed))
             #expect(normalized(shown) == normalized(listed))
             #expect(listed.filter { $0.kind.typeName == "user" }.count == 1)
+            // What the server does with the orphaned turn a little later (observation only).
+            try await Task.sleep(for: .seconds(3))
+            let later = try await client.session(session.id.rawValue)
+            let laterMessages = try await client.messages(sessionID: session.id.rawValue, MessageListQuery(limit: 10, order: .ascending)).data
+            let laterAssistant = laterMessages.compactMap { if case .assistant(let a) = $0 { a } else { nil } }.last
+            print("G2: 3 s later: busy \(later.time.busy as Any) idle \(later.time.idle as Any) outcome \(later.outcome as Any); assistant finish \(laterAssistant?.finish as Any) error \(laterAssistant?.error?.type as Any) completed \(laterAssistant?.time.completed as Any); shown status \(thread.status?.status.label ?? "-")")
             thread.close()
         } catch {
             await engine.stop()

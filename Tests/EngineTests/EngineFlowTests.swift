@@ -185,7 +185,7 @@ struct EngineFlowTests {
         let projectModel = await engine.project(session.projectID)
         try await waitUntil("row") { projectModel.row(session.id) != nil }
         try await engine.renameThread(session.id, to: "New")
-        #expect(projectModel.row(session.id)?.session.title == "New")
+        try await waitUntil("renamed") { projectModel.row(session.id)?.session.title == "New" }
         try await engine.setModel(ModelSelection(providerID: "opencode", modelID: "big-pickle"), for: session.id)
         try await engine.setAgent("plan", for: session.id)
         try await engine.setPermissionMode(.autoEdit, for: session.id)
@@ -199,12 +199,12 @@ struct EngineFlowTests {
         // A failed rename rolls back.
         await harness.server.injectHTTPFault(.status(500, method: "PATCH", pathPrefix: "/api/session/\(session.id.rawValue)"))
         await #expect(throws: EngineError.self) { try await engine.renameThread(session.id, to: "Broken") }
-        #expect(projectModel.row(session.id)?.session.title == "New")
+        try await waitUntil("rolled back") { projectModel.row(session.id)?.session.title == "New" }
 
         try await engine.setArchived(session.id, true)
         try await waitUntil("archived") { projectModel.archivedSessionIDs.contains(session.id) }
         try await engine.deleteThread(session.id)
-        #expect(projectModel.row(session.id) == nil)
+        try await waitUntil("row removed") { projectModel.row(session.id) == nil }
         #expect(try await harness.client.sessions().data.isEmpty)
         await engine.stop()
         await harness.stop()

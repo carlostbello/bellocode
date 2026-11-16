@@ -7,11 +7,20 @@ import Foundation
 /// turn streams, so it may predate deltas and events already applied. Local text that extends the server's text, a tool
 /// call further along its state machine, and a step the local copy already closed are kept. Anything else (an edit or
 /// revert on the server) takes the server's version. `revision` increases only if the result differs from the local copy.
+///
+/// `keepLocalProgress: false` after the server process restarted: text streamed by the old process was never
+/// persisted (deltas are live-only) and can never be confirmed, so the server's copy wins outright.
 enum SnapshotMerge {
-    static func message(local: Message?, server: Message) -> Message {
+    static func message(local: Message?, server: Message, keepLocalProgress: Bool = true) -> Message {
         guard let local else { return server }
         var merged = server
         merged.delivery = local.delivery.map { _ in .delivered }
+        guard keepLocalProgress else {
+            var comparable = merged
+            comparable.revision = local.revision
+            merged.revision = comparable == local ? local.revision : local.revision + 1
+            return merged
+        }
 
         if case .assistant(let localInfo) = local.kind, case .assistant(var serverInfo) = server.kind {
             if !localInfo.isOpen, serverInfo.isOpen {

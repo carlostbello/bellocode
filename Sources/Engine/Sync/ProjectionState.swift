@@ -13,6 +13,9 @@ struct ProjectionState: Sendable {
     var messages: MessageCache
     /// Sessions the user asked to stop whose stop the server has not confirmed.
     var stopping: Set<SessionID> = []
+    /// Sessions the server reports busy although their execution belonged to a server process that has since died
+    /// (opencode keeps `time.busy` set after a crash). Shown as "Status unknown" until a new execution event arrives.
+    var orphaned: Set<SessionID> = []
     /// The assistant message currently streaming in each session.
     var openMessage: [SessionID: MessageID] = [:]
 

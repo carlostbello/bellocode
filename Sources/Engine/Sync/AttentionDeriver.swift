@@ -4,7 +4,8 @@ import Foundation
 /// Derives each session's status and the global "Needs you" list. Pure; tested directly.
 ///
 /// Per session, the most urgent of: a pending permission (awaiting approval), a pending question (awaiting answer),
-/// a requested stop the server has not confirmed (stopping), a running execution (running, or unknown while offline),
+/// a requested stop the server has not confirmed (stopping), a running execution (running; unknown while offline or
+/// when the server process that ran it died),
 /// a failed last turn not yet seen (failed), a finished turn not yet seen (finished, unread), else idle. "Seen" is the
 /// later of opencode's `viewedAt` and the app's visit watermark.
 ///
@@ -16,17 +17,21 @@ public enum AttentionDeriver {
         public var sessions: [SessionID: Session]
         public var pending: [PendingRequest]
         public var stopping: Set<SessionID>
+        /// Running according to the server, but owned by a server process that died.
+        public var orphaned: Set<SessionID>
         public var threadUI: [SessionID: ThreadUIState]
         public var connected: Bool
         public var now: Timestamp
 
         public init(
             sessions: [SessionID: Session], pending: [PendingRequest], stopping: Set<SessionID> = [],
-            threadUI: [SessionID: ThreadUIState] = [:], connected: Bool = true, now: Timestamp
+            orphaned: Set<SessionID> = [], threadUI: [SessionID: ThreadUIState] = [:], connected: Bool = true,
+            now: Timestamp
         ) {
             self.sessions = sessions
             self.pending = pending
             self.stopping = stopping
+            self.orphaned = orphaned
             self.threadUI = threadUI
             self.connected = connected
             self.now = now
@@ -113,7 +118,10 @@ public enum AttentionDeriver {
         if let received = approvals[session.id] { return make(.awaitingApproval, received) }
         if let received = questions[session.id] { return make(.awaitingAnswer, received) }
         if input.stopping.contains(session.id) { return make(.stopping, session.busySince ?? session.updated) }
-        if session.isRunning { return make(input.connected ? .running : .unknown, session.busySince ?? session.updated) }
+        if session.isRunning {
+            let known = input.connected && !input.orphaned.contains(session.id)
+            return make(known ? .running : .unknown, session.busySince ?? session.updated)
+        }
         if let idle = session.idleAt, idle > seen {
             if session.outcome == .failed { return make(.failed, idle) }
             return make(.finishedUnread, idle)

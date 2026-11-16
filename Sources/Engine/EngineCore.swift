@@ -76,6 +76,10 @@ actor EngineCore {
     /// clock so they sort correctly against what it creates (zero for a local server; large for the mock's virtual
     /// clock).
     private var serverClockOffset: Double = 0
+    /// The pid `/api/info` reported at the last resync, to tell a reconnect from a server restart.
+    private var serverPID: Int?
+    /// The last resync found a different server process: locally streamed text from the old one is discarded.
+    private var serverRestarted = false
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -330,7 +334,7 @@ actor EngineCore {
         let (newStatuses, newSummary) = AttentionDeriver.derive(
             .init(
                 sessions: state.sessions, pending: Array(state.pending.values), stopping: state.stopping,
-                threadUI: state.threadUI, connected: connection.isLive || connection == .syncing, now: .now))
+                orphaned: state.orphaned, threadUI: state.threadUI, connected: connection.isLive || connection == .syncing, now: .now))
         var changes: [ProjectionChange] = []
         for (id, status) in newStatuses where statuses[id] != status { changes.append(.status(status)) }
         let summaryChanged = newSummary != summary
@@ -417,6 +421,7 @@ actor EngineCore {
         var pendingComplete = true
         var inbox: [SessionID: [InboxItem]] = [:]
         var windows: [SessionID: Page<SessionMessage>] = [:]
+        var serverPID: Int?
     }
 
     /// Rebuilds the projection from the list endpoints. Runs on the event loop, so events received meanwhile wait in
@@ -455,6 +460,8 @@ actor EngineCore {
 
     private func fetchSnapshot(_ client: OpenCodeClient) async throws -> ServerSnapshot {
         var snapshot = ServerSnapshot()
+        let info = try await client.info()
+        snapshot.serverPID = info.pid
         snapshot.projects = try await client.projects()
 
         var seen = Set<String>()
@@ -549,6 +556,15 @@ actor EngineCore {
         let now = Timestamp.now
         var reduction = Reduction()
         var state = pipeline.state
+        if let pid = snapshot.serverPID {
+            serverRestarted = serverPID != nil && serverPID != pid
+            serverPID = pid
+        }
+        if serverRestarted {
+            // Nothing the old process was streaming can continue or be confirmed.
+            state.openMessage.removeAll()
+            state.stopping.removeAll()
+        }
 
         // Projects: the server list is complete.
         let projects = Dictionary(snapshot.projects.map { (ProjectID($0.id), Mapping.project($0)) }, uniquingKeysWith: { $1 })
@@ -580,7 +596,11 @@ actor EngineCore {
         }
         for session in sessions where !session.isRunning {
             state.stopping.remove(session.id)
+            state.orphaned.remove(session.id)
             state.openMessage[session.id] = nil
+        }
+        if serverRestarted {
+            for session in sessions where session.isRunning { state.orphaned.insert(session.id) }
         }
 
         // Pending requests.
@@ -658,7 +678,8 @@ actor EngineCore {
         let serverIDs = Set(input.server.map(\.id))
         for message in input.server {
             let local = state.messages[message.id] ?? input.local[message.id]
-            state.putMessage(SnapshotMerge.message(local: local, server: message), persist: true, into: &reduction)
+            let merged = SnapshotMerge.message(local: local, server: message, keepLocalProgress: !serverRestarted)
+            state.putMessage(merged, persist: true, into: &reduction)
         }
         let newest = input.server.last?.sortKey
         var candidates = Set(input.cachedInRange)
@@ -982,7 +1003,8 @@ actor EngineCore {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
         let now = serverNow()
         let id = ids.messageID(now: now)
-        let busy = session.isRunning || pipeline.state.queue.values.contains { $0.sessionID == sessionID }
+        let running = session.isRunning && !pipeline.state.orphaned.contains(sessionID)
+        let busy = running || pipeline.state.queue.values.contains { $0.sessionID == sessionID }
         var reduction = Reduction()
         if busy {
             let prompt = QueuedPrompt(id: id, sessionID: sessionID, text: text, delivery: delivery ?? .queue, created: now, state: .sending)

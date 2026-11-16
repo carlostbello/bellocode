@@ -342,6 +342,7 @@ enum EventReducer {
     }
 
     private static func executionStarted(_ id: SessionID, at: Timestamp, state: inout ProjectionState, into reduction: inout Reduction) {
+        if state.orphaned.remove(id) != nil { reduction.statusDirty.insert(id) }
         guard state.sessions[id] != nil else {
             reduction.effects.append(.fetchSession(id))
             return
@@ -362,6 +363,7 @@ enum EventReducer {
             if let idle = session.idleAt, idle > at { return }
         }
         state.stopping.remove(id)
+        state.orphaned.remove(id)
         reduction.statusDirty.insert(id)
         if let open = state.openMessage.removeValue(forKey: id) {
             state.updateMessage(open, persist: true, into: &reduction, create: { nil }) { message in

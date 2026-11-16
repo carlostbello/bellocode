@@ -122,7 +122,8 @@ public final class ThreadModel: Identifiable {
     public var isRunning: Bool {
         switch status?.status {
         case .running, .stopping, .awaitingApproval, .awaitingAnswer: true
-        default: session?.isRunning ?? false
+        case .unknown, .failed, .finishedUnread, .idle: false
+        case nil: session?.isRunning ?? false
         }
     }
 

@@ -109,6 +109,18 @@ struct AttentionTests {
         #expect(summary.items.map(\.sessionID) == ["ses_blocked"])
     }
 
+    @Test func runningAcrossAServerRestartIsUnknown() {
+        var orphan = Fixtures.session("ses_orphan")
+        orphan.busySince = t(1)
+        var live = Fixtures.session("ses_live")
+        live.busySince = t(1)
+        let (statuses, summary) = AttentionDeriver.derive(
+            .init(sessions: sessions([orphan, live]), pending: [], orphaned: ["ses_orphan"], now: t(5)))
+        #expect(statuses["ses_orphan"]?.status == .unknown)
+        #expect(statuses["ses_live"]?.status == .running)
+        #expect(summary.counts.running == 1)
+    }
+
     @Test func archivedSessionsAreNotListed() {
         var archived = Fixtures.session("ses_old")
         archived.archivedAt = t(1)
@@ -132,6 +144,20 @@ struct SnapshotMergeTests {
         let merged = SnapshotMerge.message(local: local, server: server)
         #expect(merged.parts.first?.content == .text("Hello, wor"))
         #expect(merged.revision == 5, "nothing changed, so the revision is kept")
+    }
+
+    @Test func afterAServerRestartTheServerCopyWins() {
+        let id: MessageID = "msg_1"
+        let partID = Part.makeID(message: id, .text(ordinal: 0))
+        let local = Message(
+            id: id, sessionID: "ses_1", kind: .assistant(AssistantInfo(isOpen: true)), created: Fixtures.t(1),
+            parts: [Part(id: partID, index: 0, content: .text("streamed by the old process"), isStreaming: true)], revision: 4)
+        let server = Message(
+            id: id, sessionID: "ses_1", kind: .assistant(AssistantInfo(isOpen: true)), created: Fixtures.t(1),
+            parts: [Part(id: partID, index: 0, content: .text(""), isStreaming: true)])
+        let merged = SnapshotMerge.message(local: local, server: server, keepLocalProgress: false)
+        #expect(merged.parts.first?.content == .text(""))
+        #expect(merged.revision == 5)
     }
 
     @Test func serverEditWinsAndBumpsRevision() {
