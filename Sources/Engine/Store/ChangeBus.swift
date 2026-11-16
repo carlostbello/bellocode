@@ -37,6 +37,8 @@ public enum ProjectionChange: Sendable {
     case threadUI(ThreadUIState)
     /// The thread's history was replaced (resync found a gap, or the cache was rebuilt): reload its window.
     case threadReset(SessionID)
+    /// After the server's newest window was read: whether the server has messages older than it.
+    case threadHistory(SessionID, hasOlder: Bool)
     case attention(AttentionSummary)
     case catalog(Catalog)
     case connection(ConnectionStatus)
@@ -55,7 +57,7 @@ public enum ProjectionChange: Sendable {
         case .queued(let prompt): [.thread(prompt.sessionID)]
         case .queueRemoved(_, let sessionID): [.thread(sessionID)]
         case .threadUI(let state): [.thread(state.sessionID)]
-        case .threadReset(let id): [.thread(id)]
+        case .threadReset(let id), .threadHistory(let id, _): [.thread(id)]
         case .attention: [.attention]
         case .catalog: [.catalog]
         case .connection: [.connection]
@@ -109,6 +111,8 @@ public struct ChangeSet: Sendable {
     public var removedQueue: Set<MessageID> = []
     public var threadUI: [SessionID: ThreadUIState] = [:]
     public var resetThreads: Set<SessionID> = []
+    /// Whether the server has history older than its newest window, per thread.
+    public var historyHasOlder: [SessionID: Bool] = [:]
     public var attention: AttentionSummary?
     public var catalog: Catalog?
     public var connection: ConnectionStatus?
@@ -121,6 +125,7 @@ public struct ChangeSet: Sendable {
         projects.count + removedProjects.count + registry.count + removedRegistry.count + sessions.count
             + removedSessions.count + statuses.count + messages.count + removedMessages.count + pending.count
             + resolvedRequests.count + queue.count + removedQueue.count + threadUI.count + resetThreads.count
+            + historyHasOlder.count
     }
 
     public var isEmpty: Bool {
@@ -175,6 +180,8 @@ public struct ChangeSet: Sendable {
             resetThreads.insert(id)
             // A reset supersedes queued message changes for that thread.
             messages = messages.filter { $0.value.sessionID != id }
+        case .threadHistory(let id, let hasOlder):
+            historyHasOlder[id] = hasOlder
         case .attention(let summary):
             attention = summary
         case .catalog(let catalog):

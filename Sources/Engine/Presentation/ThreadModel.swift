@@ -89,6 +89,8 @@ public final class ThreadModel: Identifiable {
     @ObservationIgnored private let core: EngineCore
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var loadGeneration = 0
+    /// Older pages were loaded; the server's newest-window flag no longer describes this window.
+    @ObservationIgnored private var didPage = false
     @ObservationIgnored private var subscription: ChangeSubscription?
     @ObservationIgnored private weak var engine: Engine?
 
@@ -223,6 +225,7 @@ public final class ThreadModel: Identifiable {
                 older.append(message.id)
             }
             if !older.isEmpty { messageIDs = older + messageIDs }
+            didPage = true
             hasOlder = page.hasOlder
         } catch {
             if !(error is CancellationError) { lastError = EngineError.from(error) }
@@ -322,6 +325,9 @@ public final class ThreadModel: Identifiable {
             for (id, prompt) in change.queue { byID[id] = prompt }
             let updated = byID.values.sorted { $0.created == $1.created ? $0.id < $1.id : $0.created < $1.created }
             if updated != queue { queue = updated }
+        }
+        if let serverHasOlder = change.historyHasOlder[sessionID], !didPage, serverHasOlder != hasOlder {
+            hasOlder = serverHasOlder
         }
         if let ui = change.threadUI[sessionID] {
             // The draft is owned here while open; other fields follow the store.

@@ -393,8 +393,12 @@ enum EventReducer {
         let delivery = PromptDelivery(rawValue: p.item.delivery?.rawValue ?? "steer") ?? .steer
         if let message = state.messages[id] {
             // Our own optimistic send, already in the transcript: the server has it now.
-            guard message.delivery == .sending else { return }
-            state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { $0.delivery = .accepted }
+            guard message.delivery == .sending || message.delivery == .accepted else { return }
+            state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { message in
+                message.delivery = .accepted
+                // Adopt the server's clock so the message sorts with the replies.
+                message.created = at
+            }
         } else if var prompt = state.queue[id] {
             prompt.state = .queued
             prompt.delivery = delivery
@@ -420,7 +424,10 @@ enum EventReducer {
             if prompt.text.isEmpty { reduction.effects.append(.fetchMessage(sessionID, id)) }
         } else if state.messages[id] != nil {
             state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { message in
-                if message.delivery != nil { message.delivery = .delivered }
+                if message.delivery != nil, message.delivery != .delivered {
+                    message.delivery = .delivered
+                    message.created = at
+                }
             }
         } else {
             reduction.effects.append(.fetchMessage(sessionID, id))

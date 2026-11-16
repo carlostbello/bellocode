@@ -672,6 +672,7 @@ actor EngineCore {
             if let delivery = state.messages[id]?.delivery, delivery != .delivered { continue }
             state.removeMessage(id, sessionID: sessionID, into: &reduction)
         }
+        reduction.changes.append(.threadHistory(sessionID, hasOlder: input.full))
         var sync = input.syncState ?? SessionSyncState(sessionID: sessionID)
         sync.synced = now
         if !input.full {
@@ -741,7 +742,7 @@ actor EngineCore {
         let state = pipeline.state
         return ThreadSnapshot(
             session: state.sessions[sessionID], status: statuses[sessionID], messages: messages,
-            hasOlder: window.hasOlderCached || !(sync?.historyComplete ?? false) && !(messages.isEmpty && sync != nil),
+            hasOlder: window.hasOlderCached || (sync.map { !$0.historyComplete } ?? !messages.isEmpty),
             pending: state.pending.values.filter { $0.sessionID == sessionID }.sorted { $0.received < $1.received },
             queue: state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created },
             ui: state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID))
@@ -1007,7 +1008,10 @@ actor EngineCore {
             pipeline.state.putQueued(prompt, into: &reduction)
         }
         if pipeline.state.messages[id]?.delivery == .sending {
-            pipeline.state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { $0.delivery = .accepted }
+            pipeline.state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { message in
+                message.delivery = .accepted
+                message.created = serverCreated
+            }
         }
         commit(reduction)
     }
