@@ -684,6 +684,9 @@ final class Scenarios {
         var messagesSpanned = 0
         var selectedUTF16 = 0
         var dragSeconds = 0.0
+        var dragMessagesSpanned = 0
+        var dragStartedAtMessageStart = false
+        var shiftClickMS = 0.0
         var copyMS = 0.0
         var copiedCharacters = 0
         var startsWithRoleLabel = false
@@ -721,7 +724,7 @@ final class Scenarios {
         let endRange = c.range(ofMessage: endIndex)
         guard let startPoint = c.characterPoint(at: startRange.location) else { return r }
         // Real drag: mouse-down at the start, then drag below the view so NSTextView autoscrolls, then mouse-up.
-        r.method = "synthetic drag with autoscroll (mouseDown, posted mouseDragged below the view, mouseUp)"
+        r.method = "synthetic drag with autoscroll: mouseDown on the text view, mouseDragged posted below the view each frame until the live selection passes message start+20, mouseUp"
         let windowStart = c.textView.convert(startPoint, to: nil)
         let below = NSPoint(x: windowStart.x + 200, y: -30)
         let began = CACurrentMediaTime()
@@ -730,13 +733,19 @@ final class Scenarios {
         let harness = h
         let controller = c
         h.frames.start()
-        // The display link runs in common modes, so it keeps firing inside the text view's mouse tracking loop.
+        // The display link runs in common modes, so it keeps firing inside the text view's mouse tracking loop. The
+        // stop condition reads the live selection (TextKit geometry for far text is an estimate, see the report).
+        let target = endRange.upperBound - 1
+        var ticks = 0
         h.frames.onTick = { _ in
             guard !finished else { return }
-            let target = endRange.upperBound - 1
-            let visible = controller.visibleRect
-            if let p = controller.characterPoint(at: target), p.y < visible.maxY - 30 || CACurrentMediaTime() > deadline {
-                let wp = controller.textView.convert(NSPoint(x: p.x + 2, y: p.y), to: nil)
+            ticks += 1
+            // Hit-test a visible point near the bottom of the viewport (measured layout, unlike far geometry).
+            let probe = NSPoint(x: 60, y: controller.visibleRect.maxY - 40)
+            let index = controller.textView.characterIndexForInsertion(at: probe)
+            if ticks % 30 == 0 { log("drag tick \(ticks) visible-bottom index \(index) target \(target) selection \(controller.textView.selectedRange())") }
+            if (ticks > 3 && index >= target) || CACurrentMediaTime() > deadline {
+                let wp = controller.textView.convert(probe, to: nil)
                 if let drag = harness.mouseEvent(.leftMouseDragged, at: wp), let up = harness.mouseEvent(.leftMouseUp, at: wp) {
                     NSApp.postEvent(drag, atStart: false)
                     NSApp.postEvent(up, atStart: false)
@@ -747,12 +756,35 @@ final class Scenarios {
                 NSApp.postEvent(drag, atStart: false)
             }
         }
-        if let down = h.mouseEvent(.leftMouseDown, at: windowStart) { h.window.sendEvent(down) }
+        c.textView.setSelectedRange(NSRange(location: startRange.location, length: 0))
+        log("drag start hit index \(c.textView.characterIndexForInsertion(at: startPoint)) expected \(startRange.location)")
+        if let down = h.mouseEvent(.leftMouseDown, at: windowStart) { c.textView.mouseDown(with: down) }
         // sendEvent returns when the text view's tracking loop sees the mouse-up.
         while !finished { await h.sleep(0.05) }
         await h.sleep(0.2)
         r.frames = h.frames.stop()
         r.dragSeconds = CACurrentMediaTime() - began
+        let dragSelection = c.textView.selectedRange()
+        r.dragMessagesSpanned = (0..<count).filter { NSIntersectionRange(c.range(ofMessage: $0), dragSelection).length > 0 }.count
+        r.dragStartedAtMessageStart = dragSelection.location == startRange.location
+        Output.snapshot(h.window.contentView!, "S7-drag-end")
+        // Method 2 (exact extent): click at the start, scroll to the 20th message, shift-click at its last character.
+        c.reveal(messageAt: start, offset: 10)
+        await h.sleep(0.3)
+        if let p = c.characterPoint(at: startRange.location) { h.click(textViewPoint: p) }
+        c.reveal(messageAt: endIndex, offset: 10)
+        await h.sleep(0.3)
+        var endPoint: CGPoint?
+        // Find a visible point whose hit index is the end of message start+20 (hit-testing, not far geometry).
+        if let guess = c.characterPoint(at: endRange.upperBound - 1) {
+            let hit = c.textView.characterIndexForInsertion(at: guess)
+            log("shift-click target \(endRange.upperBound - 1) hit \(hit) visible \(c.visibleRect.contains(guess))")
+            endPoint = guess
+        }
+        let t2 = CACurrentMediaTime()
+        if let endPoint { h.click(textViewPoint: CGPoint(x: endPoint.x + 4, y: endPoint.y), modifiers: .shift) }
+        r.shiftClickMS = (CACurrentMediaTime() - t2) * 1_000
+        r.method = "primary: click at message start, scroll, shift-click at the end of message start+20; also a synthetic drag with autoscroll (dragMessagesSpanned)"
         let selection = c.textView.selectedRange()
         r.selectedUTF16 = selection.length
         r.messagesSpanned = (0..<count).filter { NSIntersectionRange(c.range(ofMessage: $0), selection).length > 0 }.count
