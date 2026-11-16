@@ -35,7 +35,9 @@ let testSwiftSettings: [SwiftSetting] = swiftSettings + (
 //   .package(url: "https://github.com/swiftlang/swift-markdown", ...)                // TranscriptKit: Markdown
 //   .package(url: "https://github.com/tree-sitter/swift-tree-sitter", ...)  // TranscriptKit, DiffKit: highlighting
 //   .package(url: "https://github.com/migueldeicaza/SwiftTerm", ...)                // TerminalKit
-let packageDependencies: [Package.Dependency] = []
+let packageDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/groue/GRDB.swift", exact: "7.12.0"),
+]
 
 // MARK: - Targets
 
@@ -56,7 +58,10 @@ let uiKitDependencies: [Target.Dependency] = ["BelloCore", "DesignSystem"]
 let targets: [Target] =
     library("BelloCore")
     + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
-    + library("Engine", dependencies: ["BelloCore", "OpenCodeKit"], testDependencies: ["MockOpenCode"])
+    + library(
+        "Engine", dependencies: ["BelloCore", "OpenCodeKit", .product(name: "GRDB", package: "GRDB.swift")],
+        testDependencies: ["MockOpenCode"]
+    )
     + library("DesignSystem", dependencies: ["BelloCore"])
     + library("TranscriptKit", dependencies: uiKitDependencies)
     + library("ComposerKit", dependencies: uiKitDependencies)
