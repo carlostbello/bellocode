@@ -234,7 +234,8 @@ extension MockOpenCodeServer {
     }
 
     func eventTypes(_ request: HTTPRequest) -> Set<String>? {
-        let values = request.queryValues("types")
+        // Repeated `types=a&types=b` (the OpenAPI form style); comma-separated values are accepted too.
+        let values = request.queryValues("types").flatMap { $0.split(separator: ",").map(String.init) }
         return values.isEmpty ? nil : Set(values)
     }
 

@@ -186,3 +186,30 @@ struct RouteTests {
         }
     }
 }
+
+@Suite("Standalone")
+struct StandaloneTests {
+    @Test func printsURLAndStopsWhenInputCloses() async throws {
+        let input = Pipe()
+        let output = Pipe()
+        let runner = Task {
+            try await MockOpenCodeServer.runStandalone(
+                scenario: .demo(), options: .testing, input: input.fileHandleForReading,
+                output: output.fileHandleForWriting)
+        }
+        var line = Data()
+        for try await byte in output.fileHandleForReading.bytes {
+            if byte == 10 { break }
+            line.append(byte)
+        }
+        let announced = try JSONValue.parse(line)
+        let url = try #require(announced["url"]?.stringValue.flatMap(URL.init(string:)))
+        let password = try #require(announced["password"]?.stringValue)
+        let client = TestClient(MockOpenCodeEndpoint(url: url, username: "opencode", password: password))
+        let sessions = try await client.get("/api/session")["data"]?.arrayValue ?? []
+        #expect(!sessions.isEmpty)
+        try input.fileHandleForWriting.close()
+        try await runner.value
+        await #expect(throws: (any Error).self) { try await client.request("GET", "/api/session") }
+    }
+}

@@ -190,18 +190,25 @@ public actor MockOpenCodeServer {
         connections.removeAll()
     }
 
-    /// Serves until the process's standard input closes, like `opencode serve --stdio`: prints one JSON line with
-    /// the URL (and, unlike the real server, the password, because the caller cannot choose it), then waits.
+    /// Serves until `input` closes, like `opencode serve --stdio`: writes one JSON line to `output` with the URL (and,
+    /// unlike the real server, the password, because the caller cannot choose it), then waits for end of input and
+    /// stops. Point the app at it with `BELLOCODE_SERVER_URL` and `BELLOCODE_SERVER_PASSWORD` (docs/spikes/mock-opencode.md).
     public static func runStandalone(
-        scenario: Scenario = .demo(), options: MockServerOptions = MockServerOptions(clock: .realTime)
+        scenario: Scenario = .demo(), options: MockServerOptions = MockServerOptions(clock: .realTime),
+        input: FileHandle = .standardInput, output: FileHandle = .standardOutput
     ) async throws {
         let server = MockOpenCodeServer(scenario: scenario, options: options)
         let endpoint = try await server.start()
         let line: JSONValue = .compact([
             ("url", .string(endpoint.url.absoluteString)), ("password", endpoint.password.map(JSONValue.string)),
         ])
-        FileHandle.standardOutput.write(Data((line.serialized + "\n").utf8))
-        for try await _ in FileHandle.standardInput.bytes {}
+        output.write(Data((line.serialized + "\n").utf8))
+        do {
+            for try await _ in input.bytes {}
+        } catch {
+            await server.stop()
+            throw error
+        }
         await server.stop()
     }
 
