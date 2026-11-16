@@ -77,6 +77,7 @@ final class Scenarios {
         case "S8": Output.write("S8", await s8())
         case "huge": Output.write("huge", await huge())
         case "find": Output.write("find", await find())
+        case "bench": await bench()
         default: await look()
         }
     }
@@ -84,9 +85,58 @@ final class Scenarios {
     /// Opens a fresh window with the full transcript loaded and settled.
     func openLoaded(autoDeliverImages: Bool = true, width: CGFloat = 1_100) async {
         h.makeWindow(width: width, autoDeliverImages: autoDeliverImages)
+        log("window up, loading")
         _ = await h.load(t0: CACurrentMediaTime())
+        log("first content frame; marks \(c.loadMarks)")
         await c.waitUntilLoaded()
+        log("history loaded; marks \(c.loadMarks)")
         await h.sleep(1)
+    }
+
+    // MARK: storage micro-benchmark (no window)
+
+    func bench() async {
+        func ms(_ t: Double) -> String { String(format: "%.1f ms", (CACurrentMediaTime() - t) * 1_000) }
+        var t = CACurrentMediaTime()
+        let rich = await SpikeTranscriptController.renderIR(h.transcript.messages, expanded: [])
+        log("render IR 10k: \(ms(t))")
+        t = CACurrentMediaTime()
+        let full = SpikeMaterializer().materialize(rich)
+        log("materialize 10k: \(ms(t)) length \(full.length)")
+        let stock = NSTextStorage()
+        t = CACurrentMediaTime()
+        stock.setAttributedString(full)
+        log("stock setAttributedString: \(ms(t))")
+        let hundred = SpikeMaterializer().materialize(Array(rich[100..<200]))
+        t = CACurrentMediaTime()
+        stock.insert(hundred, at: 0)
+        log("stock insert 100 messages at 0: \(ms(t))")
+        t = CACurrentMediaTime()
+        let perMessage = await SpikeTranscriptController.materializeOffMain(rich) { _ in }
+        log("materialize per message (parallel): \(ms(t))")
+        let storage = SpikeChunkedStorage()
+        t = CACurrentMediaTime()
+        storage.insertChunks(perMessage, at: 0)
+        log("chunked insert all: \(ms(t))")
+        let page = Array(perMessage[100..<200])
+        t = CACurrentMediaTime()
+        storage.insertChunks(page, at: 0)
+        log("chunked insert 100 messages at 0: \(ms(t))")
+        t = CACurrentMediaTime()
+        storage.replaceCharacters(in: NSRange(location: storage.chunkRange(5_000).location + 10, length: 20), with: hundred.attributedSubstring(from: NSRange(location: 0, length: 300)))
+        log("chunked replace inside a message: \(ms(t))")
+        t = CACurrentMediaTime()
+        storage.replaceCharacters(in: NSRange(location: storage.chunkRange(6_000).location + 10, length: 20), with: hundred.attributedSubstring(from: NSRange(location: 0, length: 300)))
+        log("chunked replace inside a message again: \(ms(t))")
+        if arguments.contains("--loop") {
+            for i in 0..<40 {
+                storage.replaceCharacters(in: NSRange(location: storage.chunkRange(6_000 + i).location + 10, length: 20), with: hundred.attributedSubstring(from: NSRange(location: 0, length: 300)))
+            }
+        }
+        t = CACurrentMediaTime()
+        var runs = 0
+        storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { _, _, _ in runs += 1 }
+        log("chunked enumerate all attributes: \(ms(t)) runs \(runs)")
     }
 
     // MARK: look (visual check)

@@ -31,8 +31,6 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     // Canonical model (display order) and storage geometry.
     public private(set) var messages: [SpikeMessage] = []
     private var lengths: [Int] = []
-    private var starts: [Int] = []
-    private var startsValid = 0
     private var indexByID: [String: Int] = [:]
     private var cardMessage: [String: String] = [:]
     private var cardContent: [String: SpikePart] = [:]
@@ -68,6 +66,7 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         container = NSView(frame: frame)
         layoutManager = NSTextLayoutManager()
         contentStorage = NSTextContentStorage()
+        contentStorage.textStorage = SpikeChunkedStorage()
         contentStorage.addTextLayoutManager(layoutManager)
         let textContainer = NSTextContainer(size: NSSize(width: frame.width, height: 0))
         textContainer.widthTracksTextView = true
@@ -135,6 +134,8 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     }
 
     public var storage: NSTextStorage { contentStorage.textStorage! }
+    /// One chunk per message, in display order (chunk index == message index).
+    public var chunked: SpikeChunkedStorage { contentStorage.textStorage as! SpikeChunkedStorage }
     public var isUsingTextKit2: Bool { !textKit1Fallback && textView.textLayoutManager != nil }
 
     // MARK: Message geometry
@@ -142,7 +143,6 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     private func registerMessages(_ new: [SpikeMessage], at index: Int, lengths newLengths: [Int]) {
         messages.insert(contentsOf: new, at: index)
         lengths.insert(contentsOf: newLengths, at: index)
-        startsValid = min(startsValid, index)
         indexByID.removeAll(keepingCapacity: true)
         for (i, message) in messages.enumerated() { indexByID[message.id] = i }
         for message in new {
@@ -157,24 +157,12 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         }
     }
 
-    public func range(ofMessage index: Int) -> NSRange {
-        if starts.count != lengths.count { starts = Array(repeating: 0, count: lengths.count); startsValid = 0 }
-        if startsValid <= index {
-            var location = startsValid == 0 ? 0 : starts[startsValid - 1] + lengths[startsValid - 1]
-            for i in startsValid..<lengths.count {
-                starts[i] = location
-                location += lengths[i]
-            }
-            startsValid = lengths.count
-        }
-        return NSRange(location: starts[index], length: lengths[index])
-    }
+    public func range(ofMessage index: Int) -> NSRange { chunked.chunkRange(index) }
 
     public func messageIndex(id: String) -> Int? { indexByID[id] }
 
     private func adjustLength(ofMessage index: Int, by delta: Int) {
         lengths[index] += delta
-        startsValid = min(startsValid, index + 1)
     }
 
     // MARK: Loading
@@ -189,11 +177,11 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         let request: @MainActor (String) -> Void = { [weak self] id in self?.imageRequested(id) }
         loadTask = Task { [weak self] in
             let tailRich = await Self.renderIR(tail, expanded: [])
-            let tailString = await Self.materializeOffMain(tailRich, imageRequest: request)
+            let tailStrings = await Self.materializeOffMain(tailRich, imageRequest: request)
             guard let self, !Task.isCancelled else { return }
             self.loadMarks["tailRenderedMS"] = (CACurrentMediaTime() - t0) * 1_000
             self.contentStorage.performEditingTransaction {
-                self.storage.setAttributedString(tailString)
+                self.chunked.insertChunks(tailStrings, at: 0)
             }
             self.registerMessages(tail, at: 0, lengths: tailRich.map(\.rich.length))
             self.scrollToBottom()
@@ -205,10 +193,10 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
                 let begin = max(0, end - pageSize)
                 let page = Array(all[begin..<end])
                 let rich = await Self.renderIR(page, expanded: [])
-                let string = await Self.materializeOffMain(rich, imageRequest: request)
+                let strings = await Self.materializeOffMain(rich, imageRequest: request)
                 guard !Task.isCancelled else { return }
                 let started = CACurrentMediaTime()
-                self.insertAtTop(page, rich: rich.map(\.rich.length), string: string)
+                self.insertAtTop(page, rich: rich.map(\.rich.length), strings: strings)
                 self.loadMarks["maxPrependMS"] = max(self.loadMarks["maxPrependMS"] ?? 0, (CACurrentMediaTime() - started) * 1_000)
                 end = begin
             }
@@ -221,11 +209,11 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         await loadTask?.value
     }
 
-    private func insertAtTop(_ page: [SpikeMessage], rich lengths: [Int], string: NSAttributedString) {
-        let inserted = string.length
+    private func insertAtTop(_ page: [SpikeMessage], rich lengths: [Int], strings: [NSAttributedString]) {
+        let inserted = lengths.reduce(0, +)
         performAnchored(edit: NSRange(location: 0, length: 0), delta: inserted) {
             self.contentStorage.performEditingTransaction {
-                self.storage.insert(string, at: 0)
+                self.chunked.insertChunks(strings, at: 0)
             }
         }
         registerMessages(page, at: 0, lengths: lengths)
@@ -235,17 +223,20 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     public func prependOlder(_ page: [SpikeMessage]) async -> SpikeAnchorResult {
         let request: @MainActor (String) -> Void = { [weak self] id in self?.imageRequested(id) }
         let rich = await Self.renderIR(page, expanded: [])
-        let string = await Self.materializeOffMain(rich, imageRequest: request)
+        let strings = await Self.materializeOffMain(rich, imageRequest: request)
+        let inserted = rich.reduce(0) { $0 + $1.rich.length }
         let before = captureTopAnchor()
-        insertAtTop(page, rich: rich.map(\.rich.length), string: string)
-        let immediate = drift(of: before, shiftedBy: string.length)
-        let settled = await settledDrift(of: before, shiftedBy: string.length)
+        let started = CACurrentMediaTime()
+        insertAtTop(page, rich: rich.map(\.rich.length), strings: strings)
+        loadMarks["lastPrependMS"] = (CACurrentMediaTime() - started) * 1_000
+        let immediate = drift(of: before, shiftedBy: inserted)
+        let settled = await settledDrift(of: before, shiftedBy: inserted)
         return SpikeAnchorResult(case_: "prepend100", driftImmediate: immediate, driftSettled: settled,
                                  compensated: compensateAnchors, editLocation: 0, anchorLocation: before?.location ?? -1)
     }
 
     @concurrent
-    nonisolated static func renderIR(_ messages: [SpikeMessage], expanded: Set<String>) async -> [(id: String, rich: SpikeRich)] {
+    public nonisolated static func renderIR(_ messages: [SpikeMessage], expanded: Set<String>) async -> [(id: String, rich: SpikeRich)] {
         let chunk = 250
         return await withTaskGroup(of: (Int, [(id: String, rich: SpikeRich)]).self) { group in
             for start in stride(from: 0, to: messages.count, by: chunk) {
@@ -258,12 +249,14 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         }
     }
 
+    /// One attributed string per message, built off the main actor. (NSAttributedString is not Sendable, so this is
+    /// one sequential task handing back a `sending` result rather than a task group.)
     @concurrent
-    nonisolated static func materializeOffMain(_ items: [(id: String, rich: SpikeRich)],
-                                               imageRequest: @escaping @MainActor (String) -> Void) async -> sending NSMutableAttributedString {
+    public nonisolated static func materializeOffMain(_ items: [(id: String, rich: SpikeRich)],
+                                                      imageRequest: @escaping @MainActor (String) -> Void) async -> sending [NSAttributedString] {
         let materializer = SpikeMaterializer()
         materializer.imageRequest = imageRequest
-        return materializer.materialize(items)
+        return items.map { materializer.materialize($0.rich, messageID: $0.id) }
     }
 
     // MARK: Coordinates
@@ -539,7 +532,7 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         streamMessageID = id
         let location = storage.length
         performAnchored(edit: NSRange(location: location, length: 0), delta: label.length) {
-            contentStorage.performEditingTransaction { storage.append(label) }
+            contentStorage.performEditingTransaction { chunked.insertChunks([label], at: chunked.chunkCount) }
         }
         registerMessages([SpikeMessage(id: id, role: .assistant, parts: [])], at: messages.count, lengths: [label.length])
         return streamGeneration
