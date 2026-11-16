@@ -66,10 +66,9 @@ XDG). Secrets never enter BelloCode's memory. Import prints its summary on stder
 
 ## Verification
 
-`swift test` (AgentUI 21, Engine 69, Mock 52, OpenCodeKit 88). `BELLOCODE_CONTRACT_REAL=1 swift test --filter
-AgentRealBinary` (integration list, fake-key connect, mode table above, import between two sandboxes).
-`swift run AgentUIDemo --all` drives 5 scenarios (requests, modes, models, onboarding, accounts) with 60 checks and
-writes 50 PNGs (light and dark) to `build/snapshots/agent-ui/`.
+`swift test` (AgentUI 21, Engine 69, Mock 52, OpenCodeKit 88); `BELLOCODE_CONTRACT_REAL=1 swift test --filter
+AgentRealBinary` (integrations, fake-key connect, mode table, sandbox-to-sandbox import); `swift run AgentUIDemo
+--all` (5 scenarios, 60 checks, 50 light/dark PNGs in `build/snapshots/agent-ui/`).
 
 ## Section E checklist (docs/research/03)
 
