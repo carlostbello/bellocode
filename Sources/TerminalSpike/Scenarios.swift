@@ -24,6 +24,11 @@ struct Scenarios {
     func run(_ name: String) async -> Int32 {
         switch name {
         case "contract": return await contract()
+        case "diag": return await diag()
+        case "perf": return await perf()
+        case "latency": return await latency()
+        case "memory": return await memory()
+        case "idle": return await idle()
         default:
             h.say("unknown scenario \(name)")
             return 2
@@ -214,5 +219,28 @@ struct Scenarios {
         report["log"] = h.log
         h.write("contract", report)
         return failures.isEmpty ? 0 : 1
+    }
+
+    // MARK: - Display diagnostics
+
+    func diag() async -> Int32 {
+        await h.pause(1500)
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+        let monitor = SpikeFrameMonitor()
+        monitor.start(on: h.container)
+        await h.pause(1000)
+        let frames = monitor.stop()
+        let info: Report = [
+            "screens": NSScreen.screens.map { "\($0.localizedName) \($0.frame)" },
+            "occlusionVisible": h.window.occlusionState.contains(.visible),
+            "isVisible": h.window.isVisible, "isKey": h.window.isKeyWindow, "appActive": NSApp.isActive,
+            "screenLocked": session["CGSSessionScreenIsLocked"].map { "\($0)" } ?? "nil",
+            "onConsole": session["kCGSSessionOnConsoleKey"].map { "\($0)" } ?? "nil",
+            "displayAsleep": CGDisplayIsAsleep(CGMainDisplayID()),
+            "framesIn1s": frames.intervals.count,
+        ]
+        h.write("diag", info)
+        h.say("\(info)")
+        return 0
     }
 }

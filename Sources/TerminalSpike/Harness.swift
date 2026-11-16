@@ -133,11 +133,11 @@ final class Harness {
 
     func pause(_ milliseconds: Int) async { try? await Task.sleep(for: .milliseconds(milliseconds)) }
 
-    func waitUntil(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
+    func waitUntil(timeout: Duration = .seconds(5), poll: Duration = .milliseconds(5), _ condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
             if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(5))
+            try? await Task.sleep(for: poll)
         }
         return condition()
     }
@@ -175,6 +175,7 @@ final class Harness {
     }
 
     func snapshot(_ view: NSView, _ name: String) -> String {
+        if let terminal = view as? TerminalView { ForcedFrameClock.renderOnce(terminal) }
         let url = paths.snapshots.appending(path: "G5-\(name).png")
         return SpikeSnapshot.writePNG(view, to: url) ? url.path.replacingOccurrences(of: paths.root.path + "/", with: "") : "failed"
     }
@@ -200,5 +201,38 @@ final class Harness {
     func stats(_ stats: SpikeStats) -> Report {
         ["count": stats.count, "p50": round(stats.p50), "p95": round(stats.p95), "p99": round(stats.p99),
          "max": round(stats.max), "mean": round(stats.mean)]
+    }
+}
+
+// MARK: - Model-independent helpers
+
+extension Harness {
+    /// `--model local|remote`, `--renderer cg|metal`.
+    func makeTerminal(model: String, renderer: String, scrollback: Int = 10_000) async throws -> any SpikeTerminal {
+        let terminal: any SpikeTerminal = model == "remote"
+            ? try await makeRemote(scrollback: scrollback)
+            : makeLocal(scrollback: scrollback)
+        if renderer == "metal" { try terminal.view.setUseMetal(true) }
+        return terminal
+    }
+
+    /// CPU seconds and footprint of the processes that do the work for a terminal: this app, plus the opencode
+    /// server and its pty daemon in the remote model.
+    func processSample() -> [String: (cpu: Double, mib: Double)] {
+        var result: [String: (cpu: Double, mib: Double)] = ["app": (SpikeProcessStats.cpuSeconds(), SpikeProcessStats.footprintMiB())]
+        if let server {
+            if let stats = SpikeProcessStats.other(pid: server.pid) { result["server"] = (stats.cpu, stats.footprintMiB) }
+            if let daemon = server.daemonPID(), let stats = SpikeProcessStats.other(pid: daemon) { result["daemon"] = (stats.cpu, stats.footprintMiB) }
+        }
+        return result
+    }
+
+    func cpuDelta(_ before: [String: (cpu: Double, mib: Double)], _ after: [String: (cpu: Double, mib: Double)]) -> Report {
+        var report: Report = [:]
+        for (key, value) in after {
+            guard let start = before[key] else { continue }
+            report[key] = ["cpuSeconds": round(value.cpu - start.cpu, 3), "footprintMiB": round(value.mib, 1)]
+        }
+        return report
     }
 }
