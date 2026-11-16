@@ -66,8 +66,15 @@ extension Scenarios {
                 let lastRow = lastNonEmptyRow(view)
                 // vim's status/echo line is the last row and the file's first line is still at the top.
                 let top = h.screenText(view).first ?? ""
+                // Ctrl-L makes vim repaint everything from its own model: if the top row changes, the emulator's
+                // screen had diverged from vim's (a rendering bug); if not, vim itself scrolled (benign).
+                let before = h.screenText(view)
+                terminal.type("\u{c}")
+                await h.pause(400)
+                let after = h.screenText(view)
                 resizeResults.append(["view": expected, "vimSays": lastRow.trimmingCharacters(in: .whitespaces),
-                                      "topRow": String(top.prefix(40)), "ok": ok && top.hasPrefix("line 1")])
+                                      "topRow": String(top.prefix(40)), "screenStableAfterCtrlL": before.dropLast() == after.dropLast(),
+                                      "ok": ok && before.dropLast() == after.dropLast()])
                 if size.width == 420 { report["vimResizedSnapshot"] = h.snapshot(view, "compat-\(tag)-vim-small") }
             }
             if let remote = terminal as? SpikeRemoteTerminal {
