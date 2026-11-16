@@ -150,7 +150,7 @@ public final class WebTab: NSObject {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONValue, any Error>) in
                 once.set(continuation)
-                let completion: (Result<Any, any Error>) -> Void = { result in
+                let completion: @MainActor @Sendable (Result<Any, any Error>) -> Void = { result in
                     switch result {
                     case .success(let value): once.resume(returning: JSONValue(foundation: value))
                     case .failure(let error): once.resume(throwing: Self.scriptFailure(error))

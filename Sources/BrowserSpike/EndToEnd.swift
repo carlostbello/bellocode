@@ -83,7 +83,7 @@ struct EndToEnd {
         // 5. Evidence.
         let (messages, _) = try await server.send("GET", "api/session/\(sessionID)/message", query: location + [URLQueryItem(name: "limit", value: "50")])
         try? messages.encoded().write(to: snapshots.appending(path: "g3-e2e-messages.json"))
-        let page = (try? await host.perform(BrowserCommand(action: ["type": "evaluate", "tabID": .string(host.focusedTabID ?? ""), "script": "document.getElementById('result')?.textContent ?? ''"])))
+        let page = Optional(await host.perform(BrowserCommand(action: ["type": "evaluate", "tabID": .string(host.focusedTabID ?? ""), "script": "document.getElementById('result')?.textContent ?? ''"])))
         var confirmation = ""
         if case .success(let result)? = page { confirmation = result.value["value"]?.string ?? "" }
         if let tabID = host.focusedTabID, case .success = await host.perform(BrowserCommand(action: ["type": "screenshot", "tabID": .string(tabID), "format": "png"])), let data = host.lastScreenshot {

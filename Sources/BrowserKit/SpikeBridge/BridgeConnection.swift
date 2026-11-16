@@ -173,7 +173,8 @@ public final class BridgeConnection {
         case .success: label = "success"
         case .failure(let failure): label = "failure \(failure.code)"
         }
-        Task {
+        let outbox = self.outbox
+        Task { [weak self] in
             await outbox.enqueue { [weak self] in
                 do {
                     _ = try await server.rpc("result", input)
