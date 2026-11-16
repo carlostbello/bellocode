@@ -20,14 +20,15 @@ public protocol PendingRequestSource: AnyObject {
 
 extension ThreadModel: PendingRequestSource {}
 
-/// Names the stack shows next to a request: the project, and the title of a child session that asked.
+/// What the stack shows next to a request: the project, and the child session that asked (its title, directory and
+/// agent), looked up in the engine's cached session rows.
 public struct PendingRequestContext {
     public var projectName: String?
-    public var sessionTitle: @MainActor (SessionID) -> String?
+    public var session: @MainActor (SessionID) -> Session?
 
-    public init(projectName: String? = nil, sessionTitle: @escaping @MainActor (SessionID) -> String? = { _ in nil }) {
+    public init(projectName: String? = nil, session: @escaping @MainActor (SessionID) -> Session? = { _ in nil }) {
         self.projectName = projectName
-        self.sessionTitle = sessionTitle
+        self.session = session
     }
 }
 
@@ -93,11 +94,17 @@ public final class PendingRequestStackModel {
     /// The child session that asked, when it is not the open thread.
     public func origin(of request: PendingRequest) -> String? {
         guard request.sessionID != source.sessionID else { return nil }
-        return context.sessionTitle(request.sessionID) ?? "a sub-agent"
+        return context.session(request.sessionID)?.title ?? "a sub-agent"
+    }
+
+    /// The session that asked: the open thread, or the child (when known).
+    public func session(of request: PendingRequest) -> Session? {
+        request.sessionID == source.sessionID ? source.session : context.session(request.sessionID)
     }
 
     public func presentation(_ request: PermissionRequest) -> PermissionPresentation {
-        PermissionPresentation(request, directory: source.session?.directory, projectName: context.projectName)
+        let directory = session(of: .permission(request))?.directory ?? source.session?.directory
+        return PermissionPresentation(request, directory: directory, projectName: context.projectName)
     }
 
     // MARK: Actions

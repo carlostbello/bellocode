@@ -159,8 +159,14 @@ struct ConnectDetail: View {
 
     private var methods: [AuthMethod] { item.interactiveMethods }
 
+    /// The method of an attempt in progress (or just finished) wins over the picker, so its state shows under the
+    /// right method.
     private var method: AuthMethod? {
-        methods.first { $0.id == inputs.methodID } ?? methods.first
+        if let flow = auth.flow, flow.integrationID == item.id, flow.phase != .idle {
+            let attemptMethod = flow.methodID ?? methods.first { $0.kind == .key }?.id
+            if let match = methods.first(where: { $0.id == attemptMethod }) { return match }
+        }
+        return methods.first { $0.id == inputs.methodID } ?? methods.first
     }
 
     /// The flow for this provider, if the current attempt is for it.

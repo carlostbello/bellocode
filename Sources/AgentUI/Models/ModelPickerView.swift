@@ -227,27 +227,42 @@ struct ModelPickerRow: View {
         let isFavourite = model.preferences.value.isFavourite(entry.id)
         let isHidden = model.preferences.value.hidden.contains(entry.id)
         let variant = model.variant(for: entry)
-        return HStack(spacing: style.spacing * 2) {
-            Image(systemName: isSelected ? "checkmark" : (isFavourite ? "star.fill" : ""))
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: style.spacing * 2) {
+                ZStack {
+                    Color.clear
+                    if isSelected {
+                        Image(systemName: "checkmark").foregroundStyle(style.accent)
+                    } else if isFavourite {
+                        Image(systemName: "star.fill").foregroundStyle(style.attention)
+                    }
+                }
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isSelected ? style.accent : style.attention)
-                .frame(width: 14)
+                .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
-            Text(entry.name)
-                .foregroundStyle(row.isEnabled ? style.primaryText : style.secondaryText)
-                .lineLimit(1)
-            if model.query.isEmpty == false || isFavouriteSection {
-                Text(providerName).font(style.smallFont).foregroundStyle(style.secondaryText).lineLimit(1)
+                Text(entry.name)
+                    .foregroundStyle(row.isEnabled ? style.primaryText : style.secondaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if model.query.isEmpty == false || isFavouriteSection {
+                    Text(providerName).font(style.smallFont).foregroundStyle(style.secondaryText).lineLimit(1)
+                }
+                if entry.status != "active" { Tag(text: entry.status).fixedSize() }
+                if isHidden { Tag(text: "hidden").fixedSize() }
+                if let variant, !isHighlighted { Tag(text: variant).fixedSize() }
+                Spacer(minLength: style.spacing)
+                hints(entry).fixedSize()
             }
-            if entry.status != "active" {
-                Tag(text: entry.status)
+            // The effort choices of the highlighted model, on their own line (⇥ cycles them).
+            if isHighlighted, !entry.variants.isEmpty {
+                HStack(spacing: style.spacing * 2) {
+                    Color.clear.frame(width: 14, height: 1)
+                    Text("Effort").font(style.smallFont).foregroundStyle(style.secondaryText)
+                    variantChips(entry, selected: variant)
+                    Spacer(minLength: 0)
+                }
+                .padding(.bottom, 3)
             }
-            if isHidden { Tag(text: "hidden") }
-            Spacer(minLength: style.spacing)
-            if !entry.variants.isEmpty {
-                variantChips(entry, selected: variant)
-            }
-            hints(entry)
         }
         .font(style.bodyFont)
         .help(row.disabledReason ?? help(entry, providerName: providerName))
@@ -259,27 +274,23 @@ struct ModelPickerRow: View {
 
     private func variantChips(_ entry: ModelEntry, selected: String?) -> some View {
         HStack(spacing: 2) {
+            // Not buttons: a button inside the row's button breaks the row's layout on macOS.
             ForEach([nil] + entry.variants.map(Optional.some), id: \.self) { variant in
-                Button {
-                    model.setVariant(variant, for: entry)
-                } label: {
-                    Text(variant ?? "default")
-                        .font(.system(size: NSFont.smallSystemFontSize - 1))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(
-                            variant == selected ? style.accent.opacity(0.25) : style.separator.opacity(0.25),
-                            in: RoundedRectangle(cornerRadius: 3))
-                        .foregroundStyle(variant == selected ? style.primaryText : style.secondaryText)
-                }
-                .buttonStyle(.plain)
-                .help("Effort: \(variant ?? "model default")")
+                Text(variant ?? "default")
+                    .font(.system(size: NSFont.smallSystemFontSize - 1))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        variant == selected ? style.accent.opacity(0.25) : style.separator.opacity(0.25),
+                        in: RoundedRectangle(cornerRadius: 3))
+                    .foregroundStyle(variant == selected ? style.primaryText : style.secondaryText)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.setVariant(variant, for: entry) }
+                    .help("Effort: \(variant ?? "model default")")
             }
         }
-        .opacity(isHighlighted || variantIsCustom(entry, selected) ? 1 : 0.55)
+        .fixedSize()
     }
-
-    private func variantIsCustom(_ entry: ModelEntry, _ selected: String?) -> Bool { selected != nil }
 
     private func hints(_ entry: ModelEntry) -> some View {
         HStack(spacing: style.spacing * 1.5) {

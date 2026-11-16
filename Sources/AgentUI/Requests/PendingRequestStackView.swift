@@ -225,7 +225,7 @@ struct PermissionCard: View {
     }
 
     private var context: some View {
-        let session = model.source.session
+        let session = model.session(of: .permission(request))
         return HStack(spacing: style.spacing * 3) {
             if let directory = session?.directory {
                 Label(PermissionPresentation.lastComponent(directory), systemImage: "folder")
@@ -249,7 +249,7 @@ struct PermissionCard: View {
             row("Action", request.action)
             row("Resources", request.resources.isEmpty ? "—" : request.resources.joined(separator: "\n"))
             row("Always rule", presentation.alwaysRules.isEmpty ? "none offered" : presentation.alwaysRules.joined(separator: "\n"))
-            row("Directory", model.source.session?.directory ?? "—")
+            row("Directory", model.session(of: .permission(request))?.directory ?? "—")
             row("Session", request.sessionID.rawValue)
             if let call = request.toolCallID { row("Tool call", call) }
             row("Request", request.id.rawValue)

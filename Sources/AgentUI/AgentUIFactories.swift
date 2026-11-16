@@ -22,7 +22,7 @@ public enum AgentUIFactories {
         let projectName = engine.root.projects.first { $0.projectID == projectID }?.name
         return PendingRequestContext(projectName: projectName) { [weak engine] id in
             guard let engine, let projectID else { return nil }
-            return engine.root.project(projectID)?.row(id)?.session.title
+            return engine.root.project(projectID)?.row(id)?.session
         }
     }
 
