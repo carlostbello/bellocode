@@ -7,6 +7,13 @@ Read [docs/PLAN.md](docs/PLAN.md) first, then the research file for the area you
 
 - Command Line Tools only: use `swift build` and `swift test`. There is no `xcodebuild`, no Xcode project.
 - `Scripts/make-app.sh` assembles `build/BelloCode.app`. Do not hand-edit the bundle.
+- Tests use Swift Testing (`import Testing`). XCTest is not available with Command Line Tools.
+- `Scripts/fetch-opencode.sh` puts the pinned opencode in `Vendor/opencode/<version>/opencode` (run it once per
+  worktree; it is cached and fast). `make app`, `make run`, `make smoke` are the common commands.
+- The shell cannot take screenshots or drive the UI (no Screen Recording or Automation permission). To check UI,
+  render the view or window to a PNG from inside the process (`bitmapImageRepForCachingDisplay` /
+  `cacheDisplay`, or `WKWebView.takeSnapshot`) behind a launch argument, write it under `build/snapshots/`, and
+  read the image. Measure frame timing in-process (`CADisplayLink`/`CVDisplayLink`, `os_signpost`), not by eye.
 - opencode is pinned. Its OpenAPI document and recorded event streams live in `Contracts/`. Never call an endpoint
   from memory: check the contract. Much of what we use is under `/api/experimental`.
 - Never read, print or log credentials. `GET /api/credential` returns secret values.
