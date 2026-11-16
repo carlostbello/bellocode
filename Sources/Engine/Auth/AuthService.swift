@@ -295,8 +295,8 @@ public final class AuthService {
             try await client().connectKey(
                 integrationID: integrationID, key: trimmed, answer: Self.formAnswer(answers), label: Self.label(label),
                 directory: directory)
-            setPhase(.succeeded, generation)
             await refresh()
+            setPhase(.succeeded, generation)
         } catch {
             setPhase(.failed(message: Self.message(error)), generation)
         }
@@ -309,8 +309,8 @@ public final class AuthService {
             try await client().connectExternal(
                 integrationID: integrationID, methodID: methodID, answer: Self.formAnswer(answers), label: Self.label(label),
                 directory: directory())
-            setPhase(.succeeded, generation)
             await refresh()
+            setPhase(.succeeded, generation)
         } catch {
             setPhase(.failed(message: Self.message(error)), generation)
         }
@@ -377,8 +377,8 @@ public final class AuthService {
             }
             stopPolling()
             self.attempt = nil
-            setPhase(.succeeded, generation)
             await refresh()
+            setPhase(.succeeded, generation)
         } catch {
             guard generation == flowGeneration else { return }
             switch previous {
@@ -478,8 +478,8 @@ public final class AuthService {
         switch status.status {
         case .complete:
             self.attempt = nil
-            setPhase(.succeeded, generation)
             await refresh()
+            setPhase(.succeeded, generation)
             return false
         case .failed:
             self.attempt = nil
