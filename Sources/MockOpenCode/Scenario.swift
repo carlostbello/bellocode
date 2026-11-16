@@ -13,6 +13,8 @@ public struct Scenario: Sendable {
     /// Messages per session id, oldest first.
     public var messages: [String: [MockMessage]]
     public var catalog: MockCatalog
+    /// Integrations offered for login (`GET /api/integration`), with the catalog entries each unlocks.
+    public var integrations: [MockIntegration] = MockIntegration.standard
     /// Named scripts. A prompt whose text contains `#script:<name>` plays that script.
     public var scripts: [String: TurnScript]
     /// Played for a prompt that names no script and has nothing queued with ``MockOpenCodeServer/enqueueScript(_:for:)``.

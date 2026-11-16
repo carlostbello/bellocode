@@ -76,6 +76,7 @@ extension MockOpenCodeServer {
             return .eventStream(subscriberID: openSubscriber(connectionID: connectionID, types: eventTypes(request)))
         }
 
+        if let response = routeIntegrations(method, parts, request) { return .response(response) }
         let response: HTTPResponse
         switch method {
         case "GET":
@@ -426,7 +427,8 @@ extension MockOpenCodeServer {
         var session = MockSession(
             id: sessionID, parentID: parentID, projectID: project.id, directory: directory,
             slug: slug, title: title, agent: agent, model: model, time: now(), metadata: metadata)
-        session.permissions = permissions
+        // A child session starts with a copy of its parent's rules (verified on 2.3.0).
+        session.permissions = permissions ?? parentID.flatMap { state.sessions[$0]?.permissions }
         state.sessions[sessionID] = session
         state.sessionOrder.append(sessionID)
         state.messages[sessionID] = state.messages[sessionID] ?? []
@@ -437,7 +439,7 @@ extension MockOpenCodeServer {
                 ("projectID", .string(project.id)), ("location", ["directory": .string(directory)]),
                 ("subpath", ""), ("parentID", parentID.map(JSONValue.string)), ("title", title.map(JSONValue.string)),
                 ("agent", agent.map(JSONValue.string)), ("model", model?.json), ("metadata", metadata),
-                ("permissions", permissions),
+                ("permissions", session.permissions),
             ]), location: directory, durable: sessionID)
         return session
     }
@@ -568,6 +570,11 @@ extension MockOpenCodeServer {
         if let raw = body["source"], let message = raw["messageID"]?.stringValue, let tool = raw["id"]?.stringValue {
             source = (message, tool)
         }
+        // Like the real server: evaluate the rules first; only `ask` creates a pending request.
+        let effect = evaluate(action: action, resources: resources, session: session, agent: body["agent"]?.stringValue)
+        guard effect == "ask" else {
+            return .json(["data": ["id": .string(body["id"]?.stringValue ?? makeID("per")), "effect": .string(effect)]])
+        }
         let permission = MockPermission(
             id: body["id"]?.stringValue ?? makeID("per"), sessionID: sessionID, action: action, resources: resources,
             save: body["save"]?.arrayValue?.compactMap(\.stringValue), metadata: body["metadata"], source: source,
@@ -594,6 +601,7 @@ extension MockOpenCodeServer {
             for resource in permission.save ?? permission.resources {
                 state.allowed[sessionID, default: []].insert(permission.action + "\u{0}" + resource)
             }
+            saveAlways(action: permission.action, patterns: permission.save ?? permission.resources, sessionID: sessionID)
         }
         publish(
             "permission.replied",

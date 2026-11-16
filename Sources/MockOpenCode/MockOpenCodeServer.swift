@@ -86,6 +86,8 @@ public actor MockOpenCodeServer {
     // MARK: State
 
     var state: ServerState
+    /// Integrations, credentials, login attempts and saved permission rules (IntegrationRoutes.swift).
+    var integration: IntegrationState
     var ids: IdentifierGenerator
     var virtualNow: Int64
 
@@ -125,6 +127,7 @@ public actor MockOpenCodeServer {
     public init(scenario: Scenario = .empty(), options: MockServerOptions = MockServerOptions()) {
         self.options = options
         state = ServerState(scenario: scenario)
+        integration = IntegrationState(integrations: scenario.integrations)
         ids = IdentifierGenerator(seed: scenario.seed)
         virtualNow = scenario.startTime
     }
