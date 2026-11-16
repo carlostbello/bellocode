@@ -163,6 +163,16 @@ public final class SpikeImageAttachment: NSTextAttachment {
 // MARK: - Text view and scroll view
 
 public final class SpikeTextView: NSTextView {
+    /// Hooks around TextKit 2 viewport layout (the controller uses them to stabilise the top visible fragment).
+    var willLayout: (() -> Void)?
+    var didLayout: (() -> Void)?
+
+    override public func layout() {
+        willLayout?()
+        super.layout()
+        didLayout?()
+    }
+
     /// Plain-text copy: attachments become "[image …]", collapsed cards copy as their one-line summary.
     override public func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard let storage = textStorage else { return false }

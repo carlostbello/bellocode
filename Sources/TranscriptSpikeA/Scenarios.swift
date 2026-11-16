@@ -35,6 +35,7 @@ final class Scenarios {
     let h: Harness
     let processStart: Double
     var velocity: Double { Double(argument("--velocity") ?? "") ?? 6_000 }
+    var maxScrollSeconds: Double { Double(argument("--max-seconds") ?? "") ?? 1_200 }
     var streamSeconds: Double { Double(argument("--stream-seconds") ?? "") ?? 60 }
 
     init(harness: Harness, processStart: Double) {
@@ -78,6 +79,7 @@ final class Scenarios {
         case "huge": Output.write("huge", await huge())
         case "find": Output.write("find", await find())
         case "bench": await bench()
+        case "visual": Output.write("visual-jumps", await visualJump())
         default: await look()
         }
     }
@@ -85,11 +87,19 @@ final class Scenarios {
     /// Opens a fresh window with the full transcript loaded and settled.
     func openLoaded(autoDeliverImages: Bool = true, width: CGFloat = 1_100) async {
         h.makeWindow(width: width, autoDeliverImages: autoDeliverImages)
+        if arguments.contains("--stabiliser") { c.stabiliseViewport = true }
+        if arguments.contains("--no-images") { c.autoDeliverImages = false }
+        if let screens = argument("--prefetch").flatMap(Double.init) { c.prefetchScreens = CGFloat(screens) }
         log("window up, loading")
         _ = await h.load(t0: CACurrentMediaTime())
         log("first content frame; marks \(c.loadMarks)")
         await c.waitUntilLoaded()
         log("history loaded; marks \(c.loadMarks)")
+        if arguments.contains("--full-layout") {
+            let t = CACurrentMediaTime()
+            c.layoutManager.ensureLayout(for: c.contentStorage.documentRange)
+            log("full layout \(Int((CACurrentMediaTime() - t) * 1_000)) ms, height \(c.textView.frame.height), memory \(Probe.memory())")
+        }
         await h.sleep(1)
     }
 
@@ -217,6 +227,9 @@ final class Scenarios {
         var framesUp: FrameStats?
         var stalls: StallStats?
         var memoryAfter: Probe.Memory?
+        var stabiliserEnabled = true
+        var stabiliserCorrections = 0
+        var stabiliserMaxCorrectionPT = 0.0
     }
 
     func s2() async -> S2Report {
@@ -230,14 +243,17 @@ final class Scenarios {
         Output.snapshot(h.window.contentView!, "S2-top")
         h.watchdog.start()
         h.frames.start()
-        r.down = await h.driveScroll(velocity: velocity, maxSeconds: 1_200) { $0.isAtBottom }
+        r.down = await h.driveScroll(velocity: velocity, maxSeconds: maxScrollSeconds) { $0.isAtBottom }
         r.framesDown = h.frames.stop()
         Output.snapshot(h.window.contentView!, "S2-bottom")
         h.frames.start()
-        r.up = await h.driveScroll(velocity: -velocity, maxSeconds: 1_200) { $0.visibleRect.minY <= 0.5 }
+        r.up = await h.driveScroll(velocity: -velocity, maxSeconds: maxScrollSeconds) { $0.visibleRect.minY <= 0.5 }
         r.framesUp = h.frames.stop()
         r.stalls = h.watchdog.stop()
         r.memoryAfter = Probe.memory()
+        r.stabiliserEnabled = c.stabiliseViewport
+        r.stabiliserCorrections = c.stabiliserCorrections
+        r.stabiliserMaxCorrectionPT = Double(c.stabiliserMaxCorrectionPT)
         r.environment = environment()
         return r
     }

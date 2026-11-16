@@ -12,6 +12,11 @@ struct JumpStats: Encodable {
     var deviationsOver2PT = 0
     var maxDeviationPT = 0.0
     var sumAbsDeviationPT = 0.0
+    /// Sum of |clip view motion − requested motion| (input fidelity, separate from content jumps).
+    var clipShortfallPT = 0.0
+    var clipMovedPT = 0.0
+    /// The first 25 frames whose visible content moved more than 2 pt away from the requested motion.
+    var jumps: [[String: Double]] = []
     var documentHeightStart = 0.0
     var documentHeightEnd = 0.0
     var reachedTarget = false
@@ -114,6 +119,8 @@ final class Harness {
                     let clipMoved = controller.visibleRect.minY - p.clipBefore
                     let clamped = abs(clipMoved - p.requested) > 0.5
                         && (controller.visibleRect.minY <= 0.5 || controller.isAtBottom)
+                    stats.clipMovedPT += abs(clipMoved)
+                    if !clamped { stats.clipShortfallPT += abs(clipMoved - p.requested) }
                     if !clamped {
                         let actualScreenY = frame.minY - controller.visibleRect.minY
                         let expected = p.anchor.screenY - p.requested
@@ -121,7 +128,25 @@ final class Harness {
                         stats.maxDeviationPT = max(stats.maxDeviationPT, deviation)
                         stats.sumAbsDeviationPT += deviation
                         if deviation > 1 { stats.deviationsOver1PT += 1 }
-                        if deviation > 2 { stats.deviationsOver2PT += 1 }
+                        if deviation > 2 {
+                            stats.deviationsOver2PT += 1
+                            if stats.jumps.count < 25 {
+                                stats.jumps.append(["t": elapsed, "clipY": controller.visibleRect.minY, "deviation": actualScreenY - expected,
+                                                    "clipMoved": clipMoved, "requested": p.requested,
+                                                    "docHeight": controller.textView.frame.height, "anchor": Double(p.anchor.location),
+                                                    "topNow": Double(controller.captureTopAnchor()?.location ?? -1),
+                                                    "anchorFragmentHeight": frame.height])
+                                if arguments.contains("--snap-jumps") {
+                                    let ns = controller.storage.string as NSString
+                                    let at = Int(p.anchor.location)
+                                    log("anchor text: \(ns.substring(with: NSRange(location: at, length: min(80, ns.length - at))).debugDescription)")
+                                    if let top = controller.captureTopAnchor() {
+                                        log("top text: \(ns.substring(with: NSRange(location: top.location, length: 80)).debugDescription) screenY \(top.screenY)")
+                                    }
+                                    log("anchor frame now \(frame) clip \(controller.visibleRect)")
+                                    Output.snapshot(self.window.contentView!, "jump-\(stats.jumps.count)") }
+                            }
+                        }
                     }
                 }
                 pending = nil
@@ -143,6 +168,11 @@ final class Harness {
                     pending = (anchor, dy, controller.visibleRect.minY)
                 }
                 controller.scrollView.scrollWheel(with: event)
+                if arguments.contains("--trace-jumps"), let before = pending?.anchor,
+                   let after = controller.fragmentFrame(at: before.location) {
+                    let deviation = after.minY - controller.visibleRect.minY - (before.screenY - dy)
+                    if abs(deviation) > 100 { log("sync jump in scrollWheel: \(deviation) at clip \(controller.visibleRect.minY)") }
+                }
                 stats.events += 1
                 stats.distancePT += abs(dy)
             }

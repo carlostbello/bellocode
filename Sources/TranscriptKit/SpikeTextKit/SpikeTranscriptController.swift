@@ -112,6 +112,8 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         materializer.imageRequest = { [weak self] id in self?.imageRequested(id) }
 
         scrollView.onUserScroll = { [weak self] delta in self?.userScrolled(deltaY: delta) }
+        textView.willLayout = { [weak self] in self?.captureLayoutAnchor() }
+        textView.didLayout = { [weak self] in self?.stabiliseAfterLayout() }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSTextView.willSwitchToNSLayoutManagerNotification, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.textKit1Fallback = true }
@@ -123,6 +125,10 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
                 guard let self, self.isFollowing, self.programmaticScrollDepth == 0, !self.isAtBottom else { return }
                 self.scrollToBottom()
             }
+        })
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.prefetchLayout() }
         })
         observers.append(center.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.userScrolled(deltaY: 0) }
@@ -356,6 +362,7 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     }
 
     public func scrollToTop() {
+        setFollowing(false)
         scrollProgrammatically(toY: 0)
     }
 
@@ -393,6 +400,58 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
 
     public var jumpButtonVisible: Bool { !jumpButton.isHidden }
     public var jumpButtonFrame: NSRect { jumpButton.frame }
+
+    // MARK: Layout prefetch
+
+    /// Lays out `prefetchScreens` screens above and below the viewport whenever it moves, so estimated positions
+    /// are replaced by measured ones off-screen instead of under the user's eyes.
+    public var prefetchScreens: CGFloat = 0
+    private var lastPrefetchY: CGFloat = -.greatestFiniteMagnitude
+
+    private func prefetchLayout() {
+        guard prefetchScreens > 0, programmaticScrollDepth == 0 else { return }
+        let visible = visibleRect
+        guard abs(visible.minY - lastPrefetchY) > visible.height / 4 else { return }
+        lastPrefetchY = visible.minY
+        let origin = textView.textContainerOrigin
+        let span = visible.height * prefetchScreens
+        let rect = CGRect(x: 0, y: visible.minY - origin.y - span, width: visible.width, height: visible.height + 2 * span)
+        layoutManager.ensureLayout(for: rect)
+    }
+
+    // MARK: Viewport stabiliser
+
+    /// TextKit 2 positions unlaid content by estimate. When viewport layout replaces estimates with measured
+    /// fragments, the same text can land thousands of points away from where it was drawn a frame earlier (measured:
+    /// 9,700 pt jumps while scrolling down). Before each layout pass the top visible fragment is recorded; after it,
+    /// the clip view is shifted so that fragment keeps its screen position.
+    public var stabiliseViewport = false
+    public private(set) var stabiliserCorrections = 0
+    public private(set) var stabiliserMaxCorrectionPT: CGFloat = 0
+    private var layoutAnchor: Anchor?
+
+    private func captureLayoutAnchor() {
+        layoutAnchor = nil
+        guard stabiliseViewport, !isFollowing, programmaticScrollDepth == 0, historyLoaded || loadTask == nil else { return }
+        layoutAnchor = captureTopAnchor()
+    }
+
+    private func stabiliseAfterLayout() {
+        guard let anchor = layoutAnchor else { return }
+        layoutAnchor = nil
+        guard let location = textLocation(anchor.location),
+              let fragment = layoutManager.textLayoutFragment(for: location) else { return }
+        let origin = textView.textContainerOrigin
+        let screenY = fragment.layoutFragmentFrame.minY + origin.y - visibleRect.minY
+        let correction = screenY - anchor.screenY
+        guard abs(correction) > 0.5 else { return }
+        stabiliserCorrections += 1
+        stabiliserMaxCorrectionPT = max(stabiliserMaxCorrectionPT, abs(correction))
+        programmaticScrollDepth += 1
+        scrollProgrammatically(toY: visibleRect.minY + correction)
+        layoutManager.textViewportLayoutController.layoutViewport()
+        programmaticScrollDepth -= 1
+    }
 
     // MARK: Anchored edits
 
