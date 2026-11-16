@@ -20,6 +20,9 @@ struct JumpStats: Encodable {
     var documentHeightStart = 0.0
     var documentHeightEnd = 0.0
     var reachedTarget = false
+    /// Frames longer than 25 ms, bucketed by document position (tenths of the document height).
+    var slowFramesByDecile = Array(repeating: 0, count: 10)
+    var probeEnabled = true
     var seconds = 0.0
 }
 
@@ -115,6 +118,11 @@ final class Harness {
                 guard let self else { return }
                 let now = link.timestamp
                 // Measure the previous frame's motion now that layout for it has run.
+                if let previous = last, now - previous > 0.025 {
+                    let height = max(1, controller.textView.frame.height)
+                    let decile = min(9, max(0, Int(controller.visibleRect.minY / height * 10)))
+                    stats.slowFramesByDecile[decile] += 1
+                }
                 if let p = pending, let frame = controller.fragmentFrame(at: p.anchor.location) {
                     let clipMoved = controller.visibleRect.minY - p.clipBefore
                     let clamped = abs(clipMoved - p.requested) > 0.5
@@ -164,7 +172,8 @@ final class Harness {
                 }
                 let dy = velocity * dt
                 guard let event = self.scrollEvent(deltaY: -dy) else { return }
-                if let anchor = controller.captureTopAnchor() {
+                stats.probeEnabled = !arguments.contains("--no-probe")
+                if stats.probeEnabled, let anchor = controller.captureTopAnchor() {
                     pending = (anchor, dy, controller.visibleRect.minY)
                 }
                 controller.scrollView.scrollWheel(with: event)
