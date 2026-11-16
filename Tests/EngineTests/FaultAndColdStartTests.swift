@@ -92,6 +92,31 @@ struct FaultAndColdStartTests {
         await faulty.harness.stop()
     }
 
+    /// The flake behind `faultyRunEndsIdenticalToFaultFreeRun`: the engine mints the prompt ID from the server clock
+    /// extrapolated with real time, while the mock's virtual clock stands still between events. Real time passing
+    /// before a send (load) put the prompt ID ahead of the answering step's ID; with equal `created` the answer sorted
+    /// above the prompt. Waiting here guarantees the ID runs ahead (no events arrive while the session is idle).
+    @Test func promptStaysAboveItsAnswerWhenTheClockEstimateRunsAhead() async throws {
+        let harness = try await MockHarness.start()
+        let engine = try makeEngine(harness)
+        await engine.start()
+        try await waitUntil("live") { engine.root.connection == .live }
+        let session = try await engine.createThread(in: "/tmp/mock-project")
+        let thread = engine.openThread(session.id)
+        try await waitUntil("ready") { thread.phase == .ready }
+        try await Task.sleep(for: .milliseconds(20))
+        await thread.send("hello #script:greeting")
+        await harness.server.waitUntilAllIdle()
+        try await waitUntil("finished") { thread.status?.status == .finishedUnread }
+        await engine.flush()
+        let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
+        #expect(shown.map(\.kind.typeName) == ["user", "assistant"])
+        #expect(normalized(shown) == normalized(try await harness.listedMessages(session.id)))
+        thread.close()
+        await engine.stop()
+        await harness.stop()
+    }
+
     @Test func coldStartShowsCachedContentBeforeTheServerIsReady() async throws {
         let directory = Fixtures.temporaryDirectory()
         let url = directory.appending(path: "projection.sqlite")

@@ -290,6 +290,41 @@ struct TurnTests {
         }
     }
 
+    /// A client mints prompt IDs from its estimate of the server clock (the engine extrapolates from event timestamps).
+    /// Against the virtual clock, which stands still between sleeps, that estimate runs ahead, so a prompt ID can sort
+    /// after the ID of the step that answers it. Clients order messages by (created, id); the step must therefore be
+    /// created strictly after the prompt it answers, or the order depends on how much real time the client took.
+    @Test func answerSortsAfterPromptWhenClientIDsRunAhead() async throws {
+        try await withStream { server, client, reader in
+            let session = try await client.createSession()
+            await server.enqueueScript(TurnScript { TurnStep.question("Go on?", key: "go", options: ["yes", "no"]) })
+            await server.enqueueScript(TurnScript { TurnStep.text("steered") })
+            var ahead = IdentifierGenerator(seed: 99)
+            func futureID() async -> String { ahead.make("msg", time: await server.now() + 60_000) }
+
+            _ = try await client.post("/api/session/\(session)/prompt", ["id": .string(await futureID()), "text": "one"])
+            let created = try await reader.collect(until: isType("form.created")).last!
+            let formID = try #require(created["data"]?["form"]?["id"]?.stringValue)
+            // Steered while the first step waits: delivered at the step boundary, then answered by a new step.
+            _ = try await client.post(
+                "/api/session/\(session)/prompt", ["id": .string(await futureID()), "text": "two", "delivery": "steer"])
+            let reply = try await client.request(
+                "POST", "/api/session/\(session)/form/\(formID)/reply", json: ["answer": ["go": "yes"]])
+            #expect(reply.status == 204)
+            await server.waitUntilIdle(session)
+
+            let messages = try await client.get("/api/session/\(session)/message?order=asc")["data"]?.arrayValue ?? []
+            let sorted = messages.sorted { a, b in
+                let (ca, cb) = (a["time"]?["created"]?.intValue ?? 0, b["time"]?["created"]?.intValue ?? 0)
+                return ca == cb ? (a["id"]?.stringValue ?? "") < (b["id"]?.stringValue ?? "") : ca < cb
+            }
+            let order = sorted.map { message in
+                message.type == "user" ? message["text"]?.stringValue ?? "?" : "assistant"
+            }
+            #expect(order == ["one", "assistant", "two", "assistant"])
+        }
+    }
+
     @Test func idempotentPromptAdmission() async throws {
         try await withStream { server, client, _ in
             let session = try await client.createSession()
