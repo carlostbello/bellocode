@@ -769,7 +769,8 @@ actor EngineCore {
         return ThreadSnapshot(
             session: state.sessions[sessionID], status: statuses[sessionID], messages: messages,
             hasOlder: window.hasOlderCached || (sync.map { !$0.historyComplete } ?? !window.messages.isEmpty),
-            pending: state.pending.values.filter { $0.sessionID == sessionID }.sorted { $0.received < $1.received },
+            pending: state.pending.values.filter { state.isWithin($0.sessionID, of: sessionID) }
+                .sorted { $0.received == $1.received ? $0.id < $1.id : $0.received < $1.received },
             queue: state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created },
             ui: state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID))
     }
@@ -1189,15 +1190,40 @@ actor EngineCore {
         }
     }
 
+    /// Switches the agent. When the thread has a permission mode, its rules are rewritten for the new agent's
+    /// restrictions (plan's `edit: deny` must follow the mode's rules; see `PermissionModeRules`).
     func setAgent(_ sessionID: SessionID, agent: String) async throws {
         try await optimisticSession(sessionID, { $0.agent = agent }) { client in
             try await client.switchAgent(sessionID: sessionID.rawValue, agent: agent)
         }
+        guard let session = pipeline.state.sessions[sessionID], let mode = session.permissionMode else { return }
+        let rules = try await modeRules(mode, agent: agent, directory: session.directory)
+        try await call { try await $0.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules)) }
     }
 
     func setPermissionMode(_ sessionID: SessionID, mode: PermissionMode) async throws {
+        guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+        let rules = try await modeRules(mode, agent: session.agent ?? "build", directory: session.directory)
         try await optimisticSession(sessionID, { $0.permissionMode = mode }) { client in
-            try await client.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: PermissionModeRules.rules(for: mode)))
+            try await client.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules))
+        }
+    }
+
+    /// The session rules for `mode` under `agent`, with the agent's restrictions read from the server.
+    ///
+    /// A location that has not activated yet answers 404 for its agents (seen on 2.3.0), so a not-found is retried
+    /// for up to about 3 s before failing; the mode is never applied without the agent's restrictions.
+    private func modeRules(_ mode: PermissionMode, agent: String, directory: String) async throws -> [PermissionRule] {
+        var attempt = 0
+        while true {
+            do {
+                let agentRules = try await call { try await $0.agent(agent, directory: directory).permissions }
+                return PermissionModeRules.rules(for: mode, agentRules: agentRules)
+            } catch EngineError.notFound(let detail) {
+                attempt += 1
+                guard attempt < 10 else { throw EngineError.notFound(detail) }
+                try await Task.sleep(for: .milliseconds(300))
+            }
         }
     }
 

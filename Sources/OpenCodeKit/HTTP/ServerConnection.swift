@@ -16,6 +16,10 @@ public struct ServerCredentials: Sendable, Hashable, CustomStringConvertible, Cu
         return ServerCredentials(password: Data(bytes).base64EncodedString())
     }
 
+    /// The variable an opencode CLI child (`--server <url>`) reads to authenticate, for helpers such as credential
+    /// import. Pass it only in a child's environment; never log it.
+    public var clientEnvironment: [String: String] { ["OPENCODE_PASSWORD": password] }
+
     var authorizationHeader: String {
         "Basic " + Data("\(Self.username):\(password)".utf8).base64EncodedString()
     }

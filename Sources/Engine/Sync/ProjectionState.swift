@@ -218,19 +218,36 @@ extension ProjectionState {
             }
             guard pending[request.id] != existing else { return }
             pending[request.id] = existing
-            reduction.changes.append(.pending(existing))
+            reduction.changes.append(.pending(existing, ancestors: ancestors(of: request.sessionID)))
             reduction.writes.pending.append(existing)
         } else {
             pending[request.id] = request
-            reduction.changes.append(.pending(request))
+            reduction.changes.append(.pending(request, ancestors: ancestors(of: request.sessionID)))
             reduction.writes.pending.append(request)
         }
         reduction.statusDirty.insert(request.sessionID)
     }
 
+    /// The parent chain of a session, nearest first (bounded against cycles).
+    func ancestors(of id: SessionID) -> [SessionID] {
+        var result: [SessionID] = []
+        var next = sessions[id]?.parentID
+        while let parent = next, result.count < 32, !result.contains(parent) {
+            result.append(parent)
+            next = sessions[parent]?.parentID
+        }
+        return result
+    }
+
+    /// Whether `id` is `ancestor` or one of its descendants.
+    func isWithin(_ id: SessionID, of ancestor: SessionID) -> Bool {
+        id == ancestor || ancestors(of: id).contains(ancestor)
+    }
+
     mutating func resolvePending(_ id: String, into reduction: inout Reduction) {
         guard let request = pending.removeValue(forKey: id) else { return }
-        reduction.changes.append(.pendingResolved(id: id, sessionID: request.sessionID))
+        reduction.changes.append(
+            .pendingResolved(id: id, sessionID: request.sessionID, ancestors: ancestors(of: request.sessionID)))
         reduction.writes.resolvedRequests.append(id)
         reduction.statusDirty.insert(request.sessionID)
     }

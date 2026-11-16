@@ -90,12 +90,62 @@ public struct QuestionField: Hashable, Sendable, Codable, Identifiable {
     public var placeholder: String?
     public var defaultValue: QuestionAnswer?
     public var url: String?
+    /// Not shown; its `defaultValue` is submitted as is (for example a fixed server URL in a login form).
+    public var hidden: Bool = false
+    /// Shown (and required) only when every condition holds.
+    public var conditions: [Condition] = []
+    public var validation: Validation = Validation()
+
+    /// `Form.When`: compare another field's answer.
+    public struct Condition: Hashable, Sendable, Codable {
+        public var key: String
+        /// True for `eq`, false for `neq`.
+        public var equals: Bool
+        public var value: QuestionAnswer
+
+        public init(key: String, equals: Bool, value: QuestionAnswer) {
+            self.key = key
+            self.equals = equals
+            self.value = value
+        }
+    }
+
+    /// Constraints from the contract's field types (all optional).
+    public struct Validation: Hashable, Sendable, Codable {
+        /// `email`, `uri`, `date`, `date-time`.
+        public var format: String?
+        public var pattern: String?
+        public var minLength: Int?
+        public var maxLength: Int?
+        public var minimum: Double?
+        public var maximum: Double?
+        public var minItems: Int?
+        public var maxItems: Int?
+
+        public init(
+            format: String? = nil, pattern: String? = nil, minLength: Int? = nil, maxLength: Int? = nil,
+            minimum: Double? = nil, maximum: Double? = nil, minItems: Int? = nil, maxItems: Int? = nil
+        ) {
+            self.format = format
+            self.pattern = pattern
+            self.minLength = minLength
+            self.maxLength = maxLength
+            self.minimum = minimum
+            self.maximum = maximum
+            self.minItems = minItems
+            self.maxItems = maxItems
+        }
+    }
 
     public init(
         key: String, kind: Kind, title: String? = nil, detail: String? = nil, required: Bool = false,
         options: [Option] = [], allowsCustom: Bool = false, placeholder: String? = nil,
-        defaultValue: QuestionAnswer? = nil, url: String? = nil
+        defaultValue: QuestionAnswer? = nil, url: String? = nil, hidden: Bool = false, conditions: [Condition] = [],
+        validation: Validation = Validation()
     ) {
+        self.hidden = hidden
+        self.conditions = conditions
+        self.validation = validation
         self.key = key
         self.kind = kind
         self.title = title
@@ -109,6 +159,28 @@ public struct QuestionField: Hashable, Sendable, Codable, Identifiable {
     }
 
     public var id: String { key }
+
+    private enum CodingKeys: String, CodingKey {
+        case key, kind, title, detail, required, options, allowsCustom, placeholder, defaultValue, url, hidden
+        case conditions, validation
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(String.self, forKey: .key)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        required = try c.decodeIfPresent(Bool.self, forKey: .required) ?? false
+        options = try c.decodeIfPresent([Option].self, forKey: .options) ?? []
+        allowsCustom = try c.decodeIfPresent(Bool.self, forKey: .allowsCustom) ?? false
+        placeholder = try c.decodeIfPresent(String.self, forKey: .placeholder)
+        defaultValue = try c.decodeIfPresent(QuestionAnswer.self, forKey: .defaultValue)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        conditions = try c.decodeIfPresent([Condition].self, forKey: .conditions) ?? []
+        validation = try c.decodeIfPresent(Validation.self, forKey: .validation) ?? Validation()
+    }
 }
 
 public enum QuestionAnswer: Hashable, Sendable, Codable {

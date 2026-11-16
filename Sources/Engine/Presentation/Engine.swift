@@ -98,6 +98,8 @@ public final class Engine {
     public let root = EngineRoot()
     public let store: ProjectionStore
     public let configuration: EngineConfiguration
+    /// Model picker favourites, recents and hidden models (app-owned; persisted in the store).
+    public let modelPreferences: ModelPreferencesModel
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -111,6 +113,25 @@ public final class Engine {
         self.configuration = configuration
         store = try ProjectionStore(location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
         core = EngineCore(configuration: configuration, store: store)
+        modelPreferences = ModelPreferencesModel(store: store)
+    }
+
+    /// Creates the provider sign-in service for this engine's server. Create one per app (Settings and onboarding share
+    /// it) and call `shutdown()` before `stop()`.
+    ///
+    /// - Parameters:
+    ///   - openURL: opens authorization pages in the default browser (`NSWorkspace.shared.open`).
+    ///   - bundledExecutable: the bundled opencode used as the import client; defaults to the supervised server's.
+    public func makeAuthService(openURL: @escaping URLOpener, bundledExecutable: URL? = nil) -> AuthService {
+        let core = self.core
+        var executable = bundledExecutable
+        if executable == nil, case .supervised(let supervisor) = configuration.server {
+            executable = supervisor.configuration.executableURL
+        }
+        return AuthService(
+            client: { try await core.currentClient() },
+            directory: { [weak self] in self?.root.catalog.current?.directory ?? self?.configuration.defaultDirectory },
+            openURL: openURL, importer: executable.map { CredentialImporter(bundledExecutableURL: $0) })
     }
 
     /// Loads the cache into `root`, then connects. Returns once cached content is shown (it does not wait for the
@@ -120,11 +141,13 @@ public final class Engine {
         started = true
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
+        await modelPreferences.load()
         await core.start()
     }
 
     /// Closes open threads, writes pending state, stops the event stream and (if supervised) the server.
     public func stop() async {
+        await modelPreferences.flush()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }

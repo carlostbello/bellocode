@@ -72,7 +72,7 @@ public struct StoreBatch: Sendable {
         }
         changes += messages.map(ProjectionChange.message)
         changes += truncatedHistory.keys.map(ProjectionChange.threadReset)
-        changes += pending.map(ProjectionChange.pending)
+        changes += pending.map { .pending($0) }
         changes += queue.map(ProjectionChange.queued)
         changes += threadUI.map(ProjectionChange.threadUI)
         changes += catalogs.map(ProjectionChange.catalog)
@@ -604,6 +604,27 @@ public actor ProjectionStore {
                     messageID: MessageID(row["id"] as String), sessionID: SessionID(row["session_id"] as String),
                     snippet: row["snippet"])
             }
+        }
+    }
+
+    // MARK: - App preferences
+
+    /// An app-owned preference (`app_preference`, kept by `rebuild()`), or nil when unset or unreadable.
+    public func preference<Value: Decodable & Sendable>(_ key: String, as type: Value.Type) async throws -> Value? {
+        let data = try await read("preference") { db in
+            try Data.fetchOne(db, sql: "SELECT json FROM app_preference WHERE key = ?", arguments: [key])
+        }
+        guard let data else { return nil }
+        return try? Self.decode(Value.self, data)
+    }
+
+    /// Stores an app-owned preference. Never store credentials here.
+    public func setPreference(_ key: String, _ value: some Encodable & Sendable) async throws {
+        let data = try Self.json(value, Self.encoder)
+        let now = Date().timeIntervalSince1970
+        try await writer.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO app_preference (key, updated, json) VALUES (?, ?, ?)", arguments: [key, now, data])
         }
     }
 

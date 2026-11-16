@@ -207,7 +207,7 @@ enum Mapping {
     static func question(_ dto: FormInfo, received: Timestamp) -> QuestionRequest {
         QuestionRequest(
             id: QuestionID(dto.id), sessionID: SessionID(dto.sessionID), title: dto.title,
-            fields: dto.fields.filter { $0.hidden != true }.map(field), received: received)
+            fields: dto.fields.map(field), received: received)
     }
 
     static func field(_ dto: FormField) -> QuestionField {
@@ -225,7 +225,14 @@ enum Mapping {
             key: dto.key, kind: kind, title: dto.title, detail: dto.description, required: dto.required ?? false,
             options: (dto.options ?? []).map { QuestionField.Option(value: $0.value, label: $0.label, detail: $0.description) },
             allowsCustom: dto.custom ?? false, placeholder: dto.placeholder, defaultValue: dto.default.flatMap(answer),
-            url: dto.url)
+            url: dto.url, hidden: dto.hidden ?? false,
+            conditions: (dto.when ?? []).compactMap { condition in
+                guard let key = condition["key"]?.stringValue, let value = condition["value"].flatMap(answer) else { return nil }
+                return QuestionField.Condition(key: key, equals: condition["op"]?.stringValue != "neq", value: value)
+            },
+            validation: QuestionField.Validation(
+                format: dto.format, pattern: dto.pattern, minLength: dto.minLength, maxLength: dto.maxLength,
+                minimum: dto.minimum, maximum: dto.maximum, minItems: dto.minItems, maxItems: dto.maxItems))
     }
 
     static func answer(_ value: JSONValue) -> QuestionAnswer? {
@@ -263,7 +270,9 @@ enum Mapping {
     ) -> Catalog {
         Catalog(
             directory: directory,
-            providers: providers.map { ProviderEntry(id: $0.id, name: $0.name, activation: $0.activation) },
+            providers: providers.map {
+                ProviderEntry(id: $0.id, name: $0.name, activation: $0.activation, integrationID: $0.integrationID)
+            },
             models: models.map(model),
             agents: agents.map { agent in
                 AgentEntry(
@@ -290,25 +299,107 @@ enum Mapping {
             providerID: dto.providerID, modelID: dto.modelID, name: dto.name, family: dto.family,
             contextLimit: dto.limit.context, outputLimit: dto.limit.output, variants: dto.variants.map(\.id),
             supportsTools: dto.capabilities.tools, inputModalities: dto.capabilities.input, status: dto.status.rawValue,
-            enabled: dto.enabled, isFree: free)
+            enabled: dto.enabled, isFree: free, inputCost: baseCost(dto.cost, "input"), outputCost: baseCost(dto.cost, "output"),
+            released: dto.time.released > 0 ? Timestamp(milliseconds: dto.time.released) : nil)
+    }
+
+    /// The base tier's price (the entry without a context `tier`).
+    static func baseCost(_ costs: [JSONValue], _ key: String) -> Double? {
+        let base = costs.first { $0["tier"] == nil } ?? costs.first
+        guard case .number(let value)? = base?[key] else { return nil }
+        return value
     }
 }
 
-/// BelloCode permission modes as opencode session rules (last match wins; the default is `ask`).
+/// BelloCode permission modes as opencode session rules.
+///
+/// Verified against opencode 2.3.0 (`POST /api/session/{id}/permission` evaluates without a model prompt; see
+/// docs/features/agent-ui.md): rules are evaluated agent rules first, then session rules, then saved project rules,
+/// and the last match wins. So session rules override the agent's own, which has two consequences:
+/// - A session `* allow` (full access) also overrides the agent's `read *.env: ask` and the plan agent's
+///   `edit *: deny`. To keep plan read-only, the agent's restrictions on the governed actions (its `deny` rules and
+///   the exceptions that follow them) are appended after the mode's rules (`rules(for:agentRules:)`).
+/// - Without session rules the built-in `build` agent allows everything except `.env` reads, so "ask" must list
+///   `edit`, `shell` and `external_directory` explicitly.
 public enum PermissionModeRules {
+    /// The mode's own rules, without agent restrictions.
     public static func rules(for mode: PermissionMode) -> [PermissionRule] {
         switch mode {
         case .ask:
-            [PermissionRule(action: "edit", resource: "*", effect: .ask), PermissionRule(action: "shell", resource: "*", effect: .ask)]
+            [
+                PermissionRule(action: "edit", resource: "*", effect: .ask),
+                PermissionRule(action: "shell", resource: "*", effect: .ask),
+                PermissionRule(action: "external_directory", resource: "*", effect: .ask),
+            ]
         case .autoEdit:
-            [PermissionRule(action: "edit", resource: "*", effect: .allow), PermissionRule(action: "shell", resource: "*", effect: .ask)]
+            [
+                PermissionRule(action: "edit", resource: "*", effect: .allow),
+                PermissionRule(action: "shell", resource: "*", effect: .ask),
+                PermissionRule(action: "external_directory", resource: "*", effect: .ask),
+            ]
         case .fullAccess:
             [PermissionRule(action: "*", resource: "*", effect: .allow)]
         }
     }
 
-    /// The mode whose rules exactly match `rules`, if any.
+    /// The session rules for `mode` with the agent's restrictions re-applied last, so a mode never loosens what the
+    /// agent itself denies (plan stays read-only in every mode).
+    public static func rules(for mode: PermissionMode, agentRules: [PermissionRule]) -> [PermissionRule] {
+        rules(for: mode) + restrictions(of: agentRules)
+    }
+
+    /// The actions the modes are about. Only the agent's restrictions on these are re-applied: re-applying every deny
+    /// would freeze denials that change at runtime (opencode denies `browser` until a browser is attached).
+    public static let governedActions = ["edit", "shell", "external_directory"]
+
+    /// An agent's `deny` rules for governed actions, plus any later rule for an action already denied (the exceptions,
+    /// such as plan's own `~/.opencode/plan/*` edit allowance), in order.
+    public static func restrictions(of agentRules: [PermissionRule]) -> [PermissionRule] {
+        var denied: [String] = []
+        var result: [PermissionRule] = []
+        for rule in agentRules {
+            let governed = governedActions.contains { wildcard(rule.action, matches: $0) || wildcard($0, matches: rule.action) }
+            guard governed else { continue }
+            if rule.effect == .deny {
+                denied.append(rule.action)
+                result.append(rule)
+            } else if denied.contains(where: { wildcard($0, matches: rule.action) }) {
+                result.append(rule)
+            }
+        }
+        return result
+    }
+
+    /// The mode whose rules begin `rules` (whatever agent restrictions follow), if any.
     public static func mode(from rules: [PermissionRule]) -> PermissionMode? {
-        PermissionMode.allCases.first { self.rules(for: $0) == rules }
+        PermissionMode.allCases.first { mode in
+            let base = self.rules(for: mode)
+            return rules.count >= base.count && Array(rules.prefix(base.count)) == base
+        }
+    }
+
+    /// opencode's wildcard: `*` matches any run of characters, including `/`; `?` matches one.
+    public static func wildcard(_ pattern: String, matches value: String) -> Bool {
+        let p = Array(pattern)
+        let v = Array(value)
+        var pi = 0, vi = 0, star = -1, mark = 0
+        while vi < v.count {
+            if pi < p.count, p[pi] == "?" || p[pi] == v[vi] {
+                pi += 1
+                vi += 1
+            } else if pi < p.count, p[pi] == "*" {
+                star = pi
+                mark = vi
+                pi += 1
+            } else if star >= 0 {
+                pi = star + 1
+                mark += 1
+                vi = mark
+            } else {
+                return false
+            }
+        }
+        while pi < p.count, p[pi] == "*" { pi += 1 }
+        return pi == p.count
     }
 }
