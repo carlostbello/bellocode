@@ -270,6 +270,8 @@ final class Scenarios {
         var commitP50MS = 0.0
         var commitP95MS = 0.0
         var commitMaxMS = 0.0
+        var commitEditP95MS = 0.0
+        var commitEditMaxMS = 0.0
         var deltaToVisibleP50MS = 0.0
         var deltaToVisibleP95MS = 0.0
         var deltaToVisibleMaxMS = 0.0
@@ -321,6 +323,8 @@ final class Scenarios {
         report.commitP50MS = percentile(c.commitDurationsMS, 0.5)
         report.commitP95MS = percentile(c.commitDurationsMS, 0.95)
         report.commitMaxMS = c.commitDurationsMS.max() ?? 0
+        report.commitEditP95MS = percentile(c.commitEditMS, 0.95)
+        report.commitEditMaxMS = c.commitEditMS.max() ?? 0
         report.deltaToVisibleP50MS = percentile(latencies, 0.5)
         report.deltaToVisibleP95MS = percentile(latencies, 0.95)
         report.deltaToVisibleMaxMS = latencies.max() ?? 0

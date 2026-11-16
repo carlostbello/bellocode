@@ -54,6 +54,8 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     /// Delta timestamps (CACurrentMediaTime) applied to storage but not yet confirmed on screen.
     public var pendingVisibleStamps: [Double] = []
     public private(set) var commitDurationsMS: [Double] = []
+    /// Storage splice part of each commit (the rest is keeping the bottom pinned).
+    public private(set) var commitEditMS: [Double] = []
 
     // Telemetry.
     public private(set) var textKit1Fallback = false
@@ -587,11 +589,15 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         let replace = NSRange(location: from, length: messageRange.upperBound - from)
         let replacement = streamMaterializer.materialize(update.rich, messageID: id)
         let delta = replacement.length - replace.length
+        var editMS = 0.0
         performAnchored(edit: replace, delta: delta) {
+            let t = CACurrentMediaTime()
             contentStorage.performEditingTransaction {
                 storage.replaceCharacters(in: replace, with: replacement)
             }
+            editMS = (CACurrentMediaTime() - t) * 1_000
         }
+        commitEditMS.append(editMS)
         adjustLength(ofMessage: index, by: delta)
         pendingVisibleStamps += update.deltaStamps
         commitDurationsMS.append((CACurrentMediaTime() - started) * 1_000)
