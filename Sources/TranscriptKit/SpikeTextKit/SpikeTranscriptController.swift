@@ -116,6 +116,14 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         observers.append(center.addObserver(forName: NSTextView.willSwitchToNSLayoutManagerNotification, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.textKit1Fallback = true }
         })
+        // Estimated document height changes as TextKit 2 lays out more content; keep the bottom pinned while following.
+        textView.postsFrameChangedNotifications = true
+        observers.append(center.addObserver(forName: NSView.frameDidChangeNotification, object: textView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isFollowing, self.programmaticScrollDepth == 0, !self.isAtBottom else { return }
+                self.scrollToBottom()
+            }
+        })
         observers.append(center.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.userScrolled(deltaY: 0) }
         })
@@ -168,8 +176,9 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     // MARK: Loading
 
     /// Opens the transcript at the bottom: the newest `tailWindow` messages are rendered and shown first, then
-    /// older history is rendered off the main actor and prepended in pages while the bottom stays pinned.
-    public func load(_ all: [SpikeMessage], tailWindow: Int = 150, pageSize: Int = 250,
+    /// older history is rendered off the main actor and prepended while the bottom stays pinned. Every prepend
+    /// costs one TextKit 2 viewport relayout on the main actor (~40 ms measured), so the default is one page.
+    public func load(_ all: [SpikeMessage], tailWindow: Int = 150, pageSize: Int = 100_000,
                      firstContent: @escaping @MainActor () -> Void) {
         let t0 = CACurrentMediaTime()
         let tailStart = max(0, all.count - tailWindow)

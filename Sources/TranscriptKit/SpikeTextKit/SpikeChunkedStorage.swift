@@ -110,6 +110,19 @@ public final class SpikeChunkedStorage: NSTextStorage {
         return value
     }
 
+    /// Single-attribute lookups (TextKit's attribute support scan, link and attachment queries) answered by the chunk
+    /// without bridging a whole attribute dictionary to Swift.
+    override public func attribute(_ attrName: NSAttributedString.Key, at location: Int,
+                                   effectiveRange range: NSRangePointer?) -> Any? {
+        guard !chunks.isEmpty else { range?.pointee = NSRange(location: 0, length: 0); return nil }
+        let index = chunkIndex(at: location)
+        let start = starts[index]
+        var local = NSRange()
+        let value = chunks[index].attribute(attrName, at: location - start, effectiveRange: &local)
+        range?.pointee = NSRange(location: local.location + start, length: local.length)
+        return value
+    }
+
     override public func attributes(at location: Int, effectiveRange range: NSRangePointer?) -> [NSAttributedString.Key: Any] {
         guard !chunks.isEmpty else { range?.pointee = NSRange(location: 0, length: 0); return [:] }
         let index = chunkIndex(at: location)
