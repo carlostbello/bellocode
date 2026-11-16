@@ -38,6 +38,7 @@ let testSwiftSettings: [SwiftSetting] = swiftSettings + (
 let packageDependencies: [Package.Dependency] = [
     // G5 spike: terminal emulator (MIT). Exact pin; 1.99.x is the pre-2.0 line. See docs/spikes/G5-terminal.md.
     .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.99.3"),
+    .package(url: "https://github.com/groue/GRDB.swift", exact: "7.12.0"),
 ]
 
 // MARK: - Targets
@@ -59,7 +60,10 @@ let uiKitDependencies: [Target.Dependency] = ["BelloCore", "DesignSystem"]
 let targets: [Target] =
     library("BelloCore")
     + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
-    + library("Engine", dependencies: ["BelloCore", "OpenCodeKit"], testDependencies: ["MockOpenCode"])
+    + library(
+        "Engine", dependencies: ["BelloCore", "OpenCodeKit", .product(name: "GRDB", package: "GRDB.swift")],
+        testDependencies: ["MockOpenCode"]
+    )
     + library("DesignSystem", dependencies: ["BelloCore"])
     + library("TranscriptKit", dependencies: uiKitDependencies)
     + library("ComposerKit", dependencies: uiKitDependencies)

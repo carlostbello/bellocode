@@ -41,12 +41,21 @@ public enum EventPayload {
         public var status: SessionStatus
     }
 
-    /// `session.inbox.enqueued`. The prompt text is not decoded here; read it from the message list.
+    /// `session.inbox.enqueued`. Only the prompt text is decoded from the payload (not attachments).
     public struct InboxEnqueued: Decodable, Sendable, Hashable {
         public struct Item: Decodable, Sendable, Hashable {
+            /// `payload.text` of a `user` or `synthetic` item.
+            public struct Payload: Decodable, Sendable, Hashable {
+                public var text: String?
+            }
+
             /// `user`, `synthetic`, `compaction`, `move`.
             public var type: String
             public var delivery: InboxDelivery?
+            public var payload: Payload?
+
+            /// The prompt text, for `user` and `synthetic` items.
+            public var text: String? { payload?.text }
         }
 
         public var sessionID: String

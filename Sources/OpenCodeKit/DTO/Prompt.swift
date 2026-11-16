@@ -82,3 +82,37 @@ public struct InterruptResult: Decodable, Sendable, Hashable {
     /// Whether an active execution owned by this server process was interrupted.
     public var interrupted: Bool
 }
+
+/// `Session.Inbox.Info` (`GET /api/session/{id}/inbox`): an admitted prompt not yet delivered. Only the fields BelloCode
+/// shows are decoded; attachments stay on the server.
+public struct InboxItem: Decodable, Sendable, Hashable, Identifiable {
+    public struct Time: Decodable, Sendable, Hashable { public var created: Double }
+    public struct Payload: Decodable, Sendable, Hashable { public var text: String? }
+
+    /// Becomes the user message ID on delivery.
+    public var id: String
+    public var sessionID: String
+    public var time: Time
+    /// `user`, `synthetic`, `compaction`, `move`.
+    public var type: String
+    public var delivery: InboxDelivery
+    public var payload: Payload?
+
+    public var text: String? { payload?.text }
+}
+
+struct InboxUpdateBody: Encodable, Sendable {
+    let delivery: InboxDelivery
+}
+
+struct SessionViewBody: Encodable, Sendable {
+    let idle: Double
+}
+
+struct SwitchAgentBody: Encodable, Sendable {
+    let agent: String
+}
+
+struct SwitchModelBody: Encodable, Sendable {
+    let model: ModelRef
+}

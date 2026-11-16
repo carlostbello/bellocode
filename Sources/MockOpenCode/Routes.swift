@@ -152,12 +152,20 @@ extension MockOpenCodeServer {
                 response = createForm(c[0], request)
             } else if let c = match("api/session/:id/form/:fid/reply") {
                 response = replyForm(c[0], c[1], request)
+            } else if let c = match("api/session/:id/view") {
+                response = viewSession(c[0], request)
+            } else if let c = match("api/session/:id/agent") {
+                response = switchAgent(c[0], request)
+            } else if let c = match("api/session/:id/model") {
+                response = switchModel(c[0], request)
             } else {
                 response = Self.notFound(request)
             }
         case "PATCH":
             if let c = match("api/session/:id") {
                 response = updateSession(c[0], request)
+            } else if let c = match("api/session/:id/inbox/:iid") {
+                response = updateInboxItem(c[0], c[1], request)
             } else {
                 response = Self.notFound(request)
             }
@@ -166,6 +174,8 @@ extension MockOpenCodeServer {
                 response = deleteSession(c[0])
             } else if let c = match("api/session/:id/form/:fid") {
                 response = cancelForm(c[0], c[1])
+            } else if let c = match("api/session/:id/inbox/:iid") {
+                response = cancelInboxItem(c[0], c[1])
             } else {
                 response = Self.notFound(request)
             }
@@ -312,6 +322,23 @@ extension MockOpenCodeServer {
             .replacingOccurrences(of: "=", with: "")
     }
 
+    /// The order of a list request: the `order` parameter, else the order the cursor was created with (a cursor must
+    /// not be combined with `order`, so following one keeps the first page's direction), else `desc`.
+    func listOrder(_ request: HTTPRequest) -> String {
+        if let order = request.queryValue("order") { return order }
+        if let raw = request.queryValue("cursor"), let order = Self.decodeCursorEnvelope(raw)?["order"]?.stringValue {
+            return order
+        }
+        return "desc"
+    }
+
+    static func decodeCursorEnvelope(_ text: String) -> JSONValue? {
+        var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return try? JSONValue.parse(data)
+    }
+
     static func decodeCursor(_ text: String) -> JSONValue? {
         var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while base64.count % 4 != 0 { base64 += "=" }
@@ -339,7 +366,7 @@ extension MockOpenCodeServer {
             sessions = sessions.filter { ($0.title ?? "").lowercased().contains(search) }
         }
         // The real server orders by last update (verified against 2.3.0), newest first unless `order=asc`.
-        let ascending = request.queryValue("order") == "asc"
+        let ascending = listOrder(request) == "asc"
         let position = Dictionary(uniqueKeysWithValues: state.sessionOrder.enumerated().map { ($1, $0) })
         sessions.sort {
             let a = ($0.updated, position[$0.id] ?? 0)
@@ -348,6 +375,7 @@ extension MockOpenCodeServer {
         }
         var extra: [(String, JSONValue)] = []
         if let parent = request.queryValue("parentID") { extra.append(("parentID", .string(parent))) }
+        if ascending { extra.append(("order", "asc")) }
         let updated = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.updated) })
         switch page(sessions.map(\.id), request: request, extra: extra, anchorTime: { updated[$0] }) {
         case let .failure(error): return error
@@ -477,7 +505,7 @@ extension MockOpenCodeServer {
         guard state.sessions[sessionID] != nil else { return Self.sessionNotFound(sessionID) }
         var messages = state.messages[sessionID] ?? []
         if let type = request.queryValue("type") { messages = messages.filter { $0.type == type } }
-        let order = request.queryValue("order") ?? "desc"
+        let order = listOrder(request)
         if order != "asc" { messages.reverse() }
         let byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         switch page(messages.map(\.id), request: request, extra: [("order", .string(order))]) {

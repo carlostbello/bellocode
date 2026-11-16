@@ -226,6 +226,49 @@ extension OpenCodeClient {
         return try await send("session.message.list", request, as: Page<SessionMessage>.self)
     }
 
+    /// `GET /api/session/{id}/message/{messageID}` (session.message.get).
+    public func message(sessionID: String, messageID: String) async throws -> SessionMessage {
+        let request = try makeRequest(.get, ["api", "session", sessionID, "message", messageID])
+        return try await send("session.message.get", request, as: DataEnvelope<SessionMessage>.self).data
+    }
+
+    /// `GET /api/session/{id}/inbox` (session.inbox.list): admitted prompts not yet delivered.
+    public func inbox(sessionID: String) async throws -> [InboxItem] {
+        let request = try makeRequest(.get, ["api", "session", sessionID, "inbox"])
+        return try await send("session.inbox.list", request, as: DataEnvelope<[InboxItem]>.self).data
+    }
+
+    /// `DELETE /api/session/{id}/inbox/{inboxID}` (session.inbox.cancel): withdraw a prompt before delivery.
+    public func cancelInboxItem(sessionID: String, inboxID: String) async throws {
+        try await sendIgnoringBody("session.inbox.cancel", makeRequest(.delete, ["api", "session", sessionID, "inbox", inboxID]))
+    }
+
+    /// `PATCH /api/session/{id}/inbox/{inboxID}` (session.inbox.update): change a pending prompt's delivery. 409 when it
+    /// was already delivered.
+    public func updateInboxItem(sessionID: String, inboxID: String, delivery: InboxDelivery) async throws {
+        let request = try makeRequest(
+            .patch, ["api", "session", sessionID, "inbox", inboxID], body: InboxUpdateBody(delivery: delivery))
+        try await sendIgnoringBody("session.inbox.update", request)
+    }
+
+    /// `POST /api/session/{id}/view` (session.view): mark the idle transition at `idle` (epoch ms) as seen.
+    public func viewSession(_ sessionID: String, idle: Double) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "view"], body: SessionViewBody(idle: idle))
+        try await sendIgnoringBody("session.view", request)
+    }
+
+    /// `POST /api/session/{id}/agent` (session.switchAgent).
+    public func switchAgent(sessionID: String, agent: String) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "agent"], body: SwitchAgentBody(agent: agent))
+        try await sendIgnoringBody("session.switchAgent", request)
+    }
+
+    /// `POST /api/session/{id}/model` (session.switchModel).
+    public func switchModel(sessionID: String, model: ModelRef) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "model"], body: SwitchModelBody(model: model))
+        try await sendIgnoringBody("session.switchModel", request)
+    }
+
     /// `POST /api/session/{id}/prompt` (session.prompt). Returns once the prompt is admitted; the turn is observed
     /// through events. Admission is idempotent on `body.id`.
     public func prompt(sessionID: String, _ body: PromptRequest) async throws -> InboxUserItem {
