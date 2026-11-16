@@ -89,6 +89,8 @@ extension MockOpenCodeServer {
                 response = withSession(c[0]) { .json(["data": $0.json]) }
             } else if let c = match("api/session/:id/message") {
                 response = listMessages(c[0], request)
+            } else if let c = match("api/session/:id/inbox") {
+                response = withSession(c[0]) { .json(["data": self.inboxJSON($0.id)]) }
             } else if let c = match("api/session/:id/message/:mid") {
                 response = getMessage(c[0], c[1])
             } else if match("api/permission/request") != nil {

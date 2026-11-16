@@ -109,6 +109,9 @@ public actor MockOpenCodeServer {
     private var pieceDelay: Duration?
     private var httpFaults: [HTTPFault] = []
     private var dropAfterFrames: Int?
+    /// Turn runners waiting for subscribers to drain (virtual clock only; see ``sleep(milliseconds:)``).
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    private let drainThreshold = 256
 
     // MARK: Turns
 
@@ -277,6 +280,11 @@ public actor MockOpenCodeServer {
         case .virtual:
             virtualNow += Int64(milliseconds.rounded(.up))
             await Task.yield()
+            // With no real time passing, a fast script could outrun the sockets and overflow a subscriber's queue.
+            // The virtual clock therefore waits for connected subscribers to drain: deterministic, never lossy.
+            while subscribers.values.contains(where: { $0.pending.count > drainThreshold }) {
+                await withCheckedContinuation { drainWaiters.append($0) }
+            }
         case .realTime:
             if milliseconds > 0 { try await Task.sleep(for: .microseconds(Int(milliseconds * 1000))) }
         }
@@ -290,7 +298,9 @@ public actor MockOpenCodeServer {
     // MARK: Events
 
     /// Publishes one event in the real envelope: `id`, `created`, `type`, `location?`, `data`, `durable?`.
-    func publish(_ type: String, _ data: JSONValue, location: String? = nil, durable aggregateID: String? = nil) {
+    func publish(
+        _ type: String, _ data: JSONValue, location: String? = nil, durable aggregateID: String? = nil, version: Int = 1
+    ) {
         let interval = signposter.beginInterval("publish")
         defer { signposter.endInterval("publish", interval) }
         var pairs: [(String, JSONValue)] = [
@@ -300,7 +310,7 @@ public actor MockOpenCodeServer {
         pairs.append(("data", data))
         if let aggregateID {
             let seq = state.nextSeq(aggregateID)
-            pairs.append(("durable", ["aggregateID": .string(aggregateID), "seq": .int(seq), "version": 1]))
+            pairs.append(("durable", ["aggregateID": .string(aggregateID), "seq": .int(seq), "version": .int(version)]))
         }
         let event = JSONValue.object(pairs)
         if eventLog.count >= eventLogLimit { eventLog.removeFirst(eventLogLimit / 10) }
@@ -351,6 +361,7 @@ public actor MockOpenCodeServer {
             subscriber.remainingBeforeDrop = limit - frames.count
         }
         subscribers[id] = subscriber
+        releaseDrainWaiters()
         return EventBatch(frames: frames, splitting: splitting, pieceDelay: pieceDelay, dropAfter: dropAfter)
     }
 
@@ -368,9 +379,19 @@ public actor MockOpenCodeServer {
         guard var subscriber = subscribers.removeValue(forKey: id) else { return }
         subscriber.closed = true
         subscriber.waiter?.resume(returning: nil)
+        releaseDrainWaiters()
         if abrupt, let record = connections[subscriber.connectionID] {
             record.io.reset()
         }
+    }
+
+    private func releaseDrainWaiters() {
+        guard !drainWaiters.isEmpty, !subscribers.values.contains(where: { $0.pending.count > drainThreshold }) else {
+            return
+        }
+        let waiting = drainWaiters
+        drainWaiters.removeAll()
+        for waiter in waiting { waiter.resume() }
     }
 
     func openSubscriber(connectionID: Int, types: Set<String>?) -> Int {

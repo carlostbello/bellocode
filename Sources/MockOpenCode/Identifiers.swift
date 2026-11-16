@@ -64,4 +64,14 @@ public struct IdentifierGenerator: Sendable {
             return String(repeating: "0", count: 8 - hex.count) + hex
         }.joined()
     }
+
+    /// A lowercase UUID string (the shape of a tool-call id), drawn from the seeded generator.
+    public mutating func uuid() -> String {
+        let hex = (0..<2).map { _ -> String in
+            let value = String(random.next(), radix: 16)
+            return String(repeating: "0", count: 16 - value.count) + value
+        }.joined()
+        let c = Array(hex)
+        return [c[0..<8], c[8..<12], c[12..<16], c[16..<20], c[20..<32]].map { String($0) }.joined(separator: "-")
+    }
 }
