@@ -110,38 +110,43 @@ extension JSONValue: ExpressibleByStringLiteral, ExpressibleByIntegerLiteral, Ex
 
 extension JSONValue {
     /// Compact UTF-8 JSON, matching JavaScript's `JSON.stringify` for the values the mock produces.
-    public var data: Data { Data(serialized.utf8) }
-
-    public var serialized: String {
-        var out = ""
-        out.reserveCapacity(64)
+    public var data: Data {
+        var out: [UInt8] = []
+        out.reserveCapacity(256)
         write(into: &out)
-        return out
+        return Data(out)
     }
 
-    func write(into out: inout String) {
+    public var serialized: String {
+        var out: [UInt8] = []
+        out.reserveCapacity(256)
+        write(into: &out)
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    func write(into out: inout [UInt8]) {
         switch self {
-        case .null: out += "null"
-        case let .bool(v): out += v ? "true" : "false"
-        case let .int(v): out += String(v)
-        case let .double(v): out += Self.format(v)
+        case .null: out.append(contentsOf: "null".utf8)
+        case let .bool(v): out.append(contentsOf: (v ? "true" : "false").utf8)
+        case let .int(v): out.append(contentsOf: String(v).utf8)
+        case let .double(v): out.append(contentsOf: Self.format(v).utf8)
         case let .string(v): Self.writeString(v, into: &out)
         case let .array(items):
-            out += "["
+            out.append(UInt8(ascii: "["))
             for (index, item) in items.enumerated() {
-                if index > 0 { out += "," }
+                if index > 0 { out.append(UInt8(ascii: ",")) }
                 item.write(into: &out)
             }
-            out += "]"
+            out.append(UInt8(ascii: "]"))
         case let .object(pairs):
-            out += "{"
+            out.append(UInt8(ascii: "{"))
             for (index, pair) in pairs.enumerated() {
-                if index > 0 { out += "," }
+                if index > 0 { out.append(UInt8(ascii: ",")) }
                 Self.writeString(pair.0, into: &out)
-                out += ":"
+                out.append(UInt8(ascii: ":"))
                 pair.1.write(into: &out)
             }
-            out += "}"
+            out.append(UInt8(ascii: "}"))
         }
     }
 
@@ -151,34 +156,37 @@ extension JSONValue {
         return String(value)
     }
 
-    static func writeString(_ string: String, into out: inout String) {
-        out += "\""
-        var pending = string.unicodeScalars.startIndex
-        let scalars = string.unicodeScalars
-        var index = scalars.startIndex
-        while index != scalars.endIndex {
-            let scalar = scalars[index]
-            let escape: String? =
-                switch scalar {
-                case "\"": "\\\""
-                case "\\": "\\\\"
-                case "\n": "\\n"
-                case "\r": "\\r"
-                case "\t": "\\t"
-                case "\u{08}": "\\b"
-                case "\u{0C}": "\\f"
+    private static let hexDigits = Array("0123456789abcdef".utf8)
+
+    /// Escapes like `JSON.stringify`: quote, backslash and control characters; everything else is copied as UTF-8.
+    static func writeString(_ string: String, into out: inout [UInt8]) {
+        out.append(UInt8(ascii: "\""))
+        var copy = string
+        copy.withUTF8 { bytes in
+            var pending = 0
+            for index in 0..<bytes.count {
+                let byte = bytes[index]
+                guard byte < 0x20 || byte == UInt8(ascii: "\"") || byte == UInt8(ascii: "\\") else { continue }
+                out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[pending..<index]))
+                pending = index + 1
+                out.append(UInt8(ascii: "\\"))
+                switch byte {
+                case UInt8(ascii: "\""): out.append(UInt8(ascii: "\""))
+                case UInt8(ascii: "\\"): out.append(UInt8(ascii: "\\"))
+                case 0x0A: out.append(UInt8(ascii: "n"))
+                case 0x0D: out.append(UInt8(ascii: "r"))
+                case 0x09: out.append(UInt8(ascii: "t"))
+                case 0x08: out.append(UInt8(ascii: "b"))
+                case 0x0C: out.append(UInt8(ascii: "f"))
                 default:
-                    scalar.value < 0x20 ? String(format: "\\u%04x", scalar.value) : nil
+                    out.append(contentsOf: "u00".utf8)
+                    out.append(hexDigits[Int(byte >> 4)])
+                    out.append(hexDigits[Int(byte & 0xF)])
                 }
-            if let escape {
-                out.unicodeScalars.append(contentsOf: scalars[pending..<index])
-                out += escape
-                pending = scalars.index(after: index)
             }
-            index = scalars.index(after: index)
+            out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[pending..<bytes.count]))
         }
-        out.unicodeScalars.append(contentsOf: scalars[pending..<scalars.endIndex])
-        out += "\""
+        out.append(UInt8(ascii: "\""))
     }
 }
 
