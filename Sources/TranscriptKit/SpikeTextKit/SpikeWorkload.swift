@@ -71,6 +71,12 @@ public struct SpikeMessage: Sendable, Identifiable, Hashable {
     public let id: String
     public let role: SpikeRole
     public let parts: [SpikePart]
+
+    public init(id: String, role: SpikeRole, parts: [SpikePart]) {
+        self.id = id
+        self.role = role
+        self.parts = parts
+    }
 }
 
 public struct SpikeWorkloadStats: Sendable {

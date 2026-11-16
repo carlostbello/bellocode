@@ -73,6 +73,8 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // G1-A spike harness (docs/spikes/G1-A-textkit.md). Not shipped.
+        .executableTarget(name: "TranscriptSpikeA", dependencies: ["TranscriptKit"], swiftSettings: swiftSettings),
     ]
 
 let package = Package(

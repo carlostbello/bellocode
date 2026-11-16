@@ -23,6 +23,8 @@ public actor SpikeStreamPipeline {
     private var lastSentCommittedLength = 0
     private var producing = true
     public private(set) var stats = Stats()
+    /// The full streamed Markdown so far (for the end-of-stream equivalence check).
+    public var streamedSource: String { source }
 
     public init(script: String, seed: UInt64 = 7) {
         self.script = Array(script)

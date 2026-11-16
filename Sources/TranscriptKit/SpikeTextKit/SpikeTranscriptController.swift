@@ -292,6 +292,22 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
 
     public var visibleRect: CGRect { scrollView.contentView.bounds }
 
+    /// Text-view point at the vertical middle of the line holding `offset`, at that character's x position.
+    public func characterPoint(at offset: Int) -> CGPoint? {
+        guard let location = textLocation(offset) else { return nil }
+        layoutManager.ensureLayout(for: NSTextRange(location: location))
+        guard let fragment = layoutManager.textLayoutFragment(for: location) else { return nil }
+        let inFragment = contentStorage.offset(from: fragment.rangeInElement.location, to: location)
+        let origin = textView.textContainerOrigin
+        for line in fragment.textLineFragments where line.characterRange.contains(inFragment) || line === fragment.textLineFragments.last {
+            let x = line.locationForCharacter(at: inFragment).x
+            let bounds = line.typographicBounds
+            return CGPoint(x: fragment.layoutFragmentFrame.minX + origin.x + x + 1,
+                           y: fragment.layoutFragmentFrame.minY + origin.y + bounds.midY)
+        }
+        return nil
+    }
+
     public struct Anchor: Sendable { public var location: Int; public var screenY: CGFloat }
 
     /// The first layout fragment at the top of the viewport: its document offset and on-screen Y.
