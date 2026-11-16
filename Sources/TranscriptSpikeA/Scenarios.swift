@@ -296,9 +296,7 @@ final class Scenarios {
         let pipeline = SpikeStreamPipeline(script: SpikeWorkload.streamScript())
         var latencies: [Double] = []
         let controller = c
-        let previousTick = h.frames.onTick
-        h.frames.onTick = { link in
-            previousTick?(link)
+        h.frames.auxTick = { link in
             if !controller.pendingVisibleStamps.isEmpty {
                 for stamp in controller.pendingVisibleStamps { latencies.append((link.targetTimestamp - stamp) * 1_000) }
                 controller.pendingVisibleStamps.removeAll(keepingCapacity: true)
@@ -311,6 +309,7 @@ final class Scenarios {
         if let during { await during() }
         await streaming.value
         await h.sleep(0.1)
+        h.frames.auxTick = nil
         report.cpuPercent = (Probe.cpuSeconds() - cpu0) / (CACurrentMediaTime() - wall0) * 100
         report.seconds = CACurrentMediaTime() - wall0
         let stats = await pipeline.stats
@@ -374,6 +373,9 @@ final class Scenarios {
         var stalls: StallStats?
         var scrollSegments: [JumpStats] = []
         var pauseDriftsPT: [Double] = []
+        /// Pixel ground truth: on-screen shift of the viewport content across each 1 s pause while streaming.
+        var pausePixelShiftsPT: [Double] = []
+        var maxAbsPausePixelShiftPT = 0.0
         var maxAbsPauseDriftPT = 0.0
         var releasedOnScrollUp = false
         var stayedReleasedWhileStreaming = true
@@ -402,10 +404,15 @@ final class Scenarios {
                 r.scrollSegments.append(segment)
                 if self.c.isFollowing { r.stayedReleasedWhileStreaming = false }
                 direction = -direction
+                await self.h.sleep(0.05)
                 let anchor = self.c.captureTopAnchor()
+                let pixelsBefore = self.windowSignature()
                 await self.h.sleep(1)
                 let drift = self.c.drift(of: anchor, shiftedBy: 0)
                 r.pauseDriftsPT.append(drift)
+                if let a = pixelsBefore, let b = self.windowSignature() {
+                    r.pausePixelShiftsPT.append(self.pixelShift(a, b).shiftPT)
+                }
                 if self.c.isFollowing { r.stayedReleasedWhileStreaming = false }
             }
             Output.snapshot(self.h.window.contentView!, "S4-released")
@@ -424,6 +431,7 @@ final class Scenarios {
         r.frames = h.frames.stop()
         r.stalls = h.watchdog.stop()
         r.maxAbsPauseDriftPT = r.pauseDriftsPT.map(abs).max() ?? 0
+        r.maxAbsPausePixelShiftPT = r.pausePixelShiftsPT.map(abs).max() ?? 0
         Output.snapshot(h.window.contentView!, "S4-rejoined")
         // Release again, then rejoin by scrolling down to the bottom.
         _ = await h.driveScroll(velocity: -2_000, maxSeconds: 0.5) { _ in false }
@@ -443,6 +451,7 @@ final class Scenarios {
         var driftImmediatePT: Double
         var driftSettledPT: Double
         var heightChangePT: Double
+        var pixelShiftPT = 0.0
         var note = ""
     }
 
@@ -477,15 +486,18 @@ final class Scenarios {
         let heightBefore = c.textView.frame.height
         let lengthBefore = c.storage.length
         let topMessageBefore = anchor.map { $0.location } ?? 0
+        let pixelsBefore = windowSignature()
         edit()
         // Shift only matters when the edit is above the anchor; callers edit above, so shift = length delta.
         let shift = c.storage.length - lengthBefore
         let immediate = c.drift(of: anchor, shiftedBy: shift)
         let settled = await c.settledDrift(of: anchor, shiftedBy: shift)
         _ = topMessageBefore
+        var pixel = Double.nan
+        if let a = pixelsBefore, let b = windowSignature() { pixel = pixelShift(a, b).shiftPT }
         c.compensateAnchors = true
         return AnchorCase(name: name, compensated: compensated, driftImmediatePT: immediate, driftSettledPT: settled,
-                          heightChangePT: c.textView.frame.height - heightBefore, note: note)
+                          heightChangePT: c.textView.frame.height - heightBefore, pixelShiftPT: pixel, note: note)
     }
 
     func s5() async -> S5Report {
@@ -533,13 +545,16 @@ final class Scenarios {
             c.reveal(messageAt: 30 + n * 10, offset: 0)
             await h.sleep(0.5)
             c.compensateAnchors = compensated
+            let pixelsBefore = windowSignature()
             let result = await c.prependOlder(SpikeWorkload.olderPage(seed: UInt64(4_242 + n)).map {
                 SpikeMessage(id: "\($0.id)-\(n)", role: $0.role, parts: $0.parts)
             })
             c.compensateAnchors = true
             r.cases.append(AnchorCase(name: "prepend 100 older messages", compensated: compensated,
                                       driftImmediatePT: result.driftImmediate, driftSettledPT: result.driftSettled,
-                                      heightChangePT: 0))
+                                      heightChangePT: 0,
+                                      pixelShiftPT: pixelsBefore.flatMap { a in windowSignature().map { pixelShift(a, $0).shiftPT } } ?? .nan,
+                                      note: "main-thread insert \(String(format: "%.1f", c.loadMarks["lastPrependMS"] ?? 0)) ms"))
         }
         // Click a tool card header in the viewport (behaviour 5): the header must stay put.
         c.reveal(messageAt: count - 2_000, offset: 0)
@@ -562,7 +577,7 @@ final class Scenarios {
             r.clickToggle = ["headerDriftAfterExpandPT": Double(afterExpand - before),
                              "headerDriftAfterCollapsePT": Double(afterCollapse - before)]
         }
-        r.passes2PT = r.cases.filter(\.compensated).allSatisfy { abs($0.driftSettledPT) <= 2 && abs($0.driftImmediatePT) <= 2 }
+        r.passes2PT = r.cases.filter(\.compensated).allSatisfy { abs($0.pixelShiftPT) <= 2 }
         r.environment = environment()
         return r
     }
@@ -574,6 +589,7 @@ final class Scenarios {
         var frames: FrameStats?
         var stalls: StallStats?
         var anchorDriftAfterRoundTripPT = 0.0
+        var pixelShiftAfterRoundTripPT = 0.0
         var anchorMessageStillTop = false
         var containerTracksWidth = false
         var widths: [String: Double] = [:]
@@ -603,6 +619,7 @@ final class Scenarios {
         let anchor = c.captureTopAnchor()
         let topIndex = c.messages.count - 1_500
         Output.snapshot(h.window.contentView!, "S6-900")
+        let pixelsBefore = windowSignature()
         h.watchdog.start()
         h.frames.start()
         await animateWidth(from: 900, to: 1_400, seconds: 1)
@@ -618,6 +635,7 @@ final class Scenarios {
         r.containerTracksWidth = abs((r.widths["container1400"] ?? 0) - (r.widths["textView1400"] ?? 0) + 32) < 1
             && abs((r.widths["container900"] ?? 0) - (r.widths["textView900"] ?? 0) + 32) < 1
         r.anchorDriftAfterRoundTripPT = c.drift(of: anchor, shiftedBy: 0)
+        if let a = pixelsBefore, let b = windowSignature() { r.pixelShiftAfterRoundTripPT = pixelShift(a, b).shiftPT }
         if let top = c.captureTopAnchor() {
             let range = c.range(ofMessage: topIndex)
             r.anchorMessageStillTop = NSLocationInRange(top.location, range)

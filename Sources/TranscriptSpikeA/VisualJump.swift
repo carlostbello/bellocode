@@ -102,3 +102,21 @@ extension Scenarios {
         return r
     }
 }
+
+extension Scenarios {
+    /// Pixel ground truth for anchoring: the vertical shift (in points, positive = content moved down on screen)
+    /// that best aligns `after` with `before`, searched over ±`maxPT`.
+    func pixelShift(_ before: (rows: [[Float]], scale: Double), _ after: (rows: [[Float]], scale: Double),
+                    maxPT: Double = 300) -> (shiftPT: Double, error: Float, errorAtZero: Float) {
+        let limit = Int(maxPT * before.scale)
+        var best = (shift: 0, error: Float.infinity)
+        for s in -limit...limit {
+            // Content moved down by s px: after[y + s] == before[y].
+            let e = s >= 0 ? mismatch(after.rows, before.rows, shift: s) : mismatch(before.rows, after.rows, shift: -s)
+            if e < best.error { best = (s, e) }
+        }
+        return (Double(best.shift) / before.scale, best.error, mismatch(after.rows, before.rows, shift: 0))
+    }
+
+    func windowSignature() -> (rows: [[Float]], scale: Double)? { signature(h.window.contentView!) }
+}

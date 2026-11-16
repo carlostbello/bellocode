@@ -16,6 +16,8 @@ final class FrameRecorder: NSObject {
     private var recording = false
     /// Called on every tick (recording or not) with the link, for scroll drivers and latency probes.
     var onTick: ((CADisplayLink) -> Void)?
+    /// A second, independent per-tick hook (stream latency probe) that scroll drivers do not replace.
+    var auxTick: ((CADisplayLink) -> Void)?
     private(set) var lastDuration: Double = 0
 
     func attach(to view: NSView) {
@@ -29,6 +31,7 @@ final class FrameRecorder: NSObject {
         link?.invalidate()
         link = nil
         onTick = nil
+        auxTick = nil
     }
 
     func start() { stamps.removeAll(keepingCapacity: true); recording = true }
@@ -42,6 +45,7 @@ final class FrameRecorder: NSObject {
         lastDuration = link.duration
         if recording { stamps.append(link.timestamp) }
         onTick?(link)
+        auxTick?(link)
     }
 }
 
