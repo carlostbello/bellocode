@@ -1,8 +1,7 @@
 # MockOpenCode (M0-C)
 
-A scriptable fake opencode 2.3.0 server (`Sources/MockOpenCode`), in process on `127.0.0.1:<ephemeral>`, Basic auth
-`opencode:<password>`. It plays scripted turns as real-format events, so UI and engine work runs without a model.
-
+A scriptable fake opencode 2.3.0 server on `127.0.0.1:<ephemeral>` (Basic auth `opencode:<password>`) that plays
+scripted turns as real-format events, so UI and engine work runs without a model.
 ## Coverage
 
 | Endpoint / event | Status |
@@ -16,7 +15,6 @@ A scriptable fake opencode 2.3.0 server (`Sources/MockOpenCode`), in process on 
 | `GET /api/event` (`types` filter, `server.connected`, heartbeats, 4,096-frame drop-on-overflow) | faithful framing and envelope (`id`, `created`, `type`, `location?`, `data`, `durable{aggregateID,seq,version}`) |
 | `session.created/renamed/metadata.updated/permissions/archived/unarchived/deleted`, `permission.*`, `form.*`, `project.updated` | faithful (event shapes checked against the binary) |
 | `session.inbox.*`, `execution.*`, `step.*`, `text.*`, `reasoning.*`, `tool.*`, `usage.updated` | order and shapes follow `Contracts/…/events-sample.sse` and the OpenAPI schemas |
-| Interrupt mid-turn, steer vs queue delivery, sub-agent tool | approximated (see divergences) |
 | Everything else (fs, vcs, pty, worktree, revert, compaction, MCP, plugins, credentials, `exp/*`) | missing: 404 `NotFoundError` |
 
 ## Writing a script
@@ -50,15 +48,13 @@ stdin closes. The app should then skip spawning opencode when `BELLOCODE_SERVER_
   `execution.interrupted{reason:"user"}`; blocked permissions are withdrawn with a synthetic `permission.replied
   {reply:"reject"}` and forms with `form.cancelled`. The real sequence was not observed (it needs a model).
 - A steered prompt is delivered after the current script ends, inside the same execution, not at the next step.
-- Sub-agents: the child runs at once; a background child never wakes its parent with a synthetic message.
-- A permission reply of `reject` fails only that tool; the script continues.
-- `permission.create` always answers `effect: "ask"`; the real one evaluates rules (allow/deny/ask).
+- Sub-agents run at once and never wake the parent. `reject` fails only that tool. `permission.create` always
+  answers `effect: "ask"` (the real one evaluates rules).
 
 ## Verified against the real binary
 
-`BELLOCODE_CONTRACT_REAL=1 swift test --filter RealBinaryContract` starts the pinned 2.3.0 in a temporary sandbox
-(XDG dirs and HOME), runs info, session CRUD and lists, message list, bad `limit`, inbox, idle interrupt, permission
-create/list/get/reply (and 404 on a second reply), form create/list/reply (and 409), catalog, delete, 401, and
-compares every response and event shape with the mock: all match (3 consecutive runs, no process left behind).
-It found and fixed: lists order by `time.updated`, `session.deleted` is durable version 2. Turn events were checked
-against the recorded stream only, because producing them needs a model prompt.
+`BELLOCODE_CONTRACT_REAL=1 swift test --filter RealBinaryContract` runs pinned 2.3.0 in a temporary sandbox (XDG dirs,
+HOME) and the mock through the same sequence (info, session CRUD/lists, messages, bad `limit`, inbox, idle interrupt,
+permission and form create/list/get/reply incl. 404/409, catalog, delete, 401) and compares every response and event
+shape: all match (3 runs, no process left). It found: lists order by `time.updated`; `session.deleted` is durable v2.
+Turn events are checked against the recorded stream only, since producing them needs a model prompt.
