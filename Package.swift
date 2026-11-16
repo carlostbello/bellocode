@@ -73,6 +73,8 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // SPIKE (gate G3): throwaway browser-bridge prototype. See docs/spikes/G3-browser-bridge.md.
+        .executableTarget(name: "BrowserSpike", dependencies: ["BrowserKit"], swiftSettings: swiftSettings),
     ]
 
 let package = Package(
