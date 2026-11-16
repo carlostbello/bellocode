@@ -73,9 +73,17 @@ final class UndoCoordinator {
     }
 
     private var tokens: [ObjectIdentifier: UndoToken] = [:]
+    /// `UndoManager` holds targets weakly; keep every registered token alive (bounded above the window's
+    /// `levelsOfUndo`, 100, so a token the manager can still invoke is never released).
+    private var registered: [UndoToken] = []
+    static let registeredLimit = 200
 
     private func register(_ token: UndoToken, undo: Bool) {
         guard let manager = undoManager() else { return }
+        if !registered.contains(where: { $0 === token }) {
+            registered.append(token)
+            if registered.count > Self.registeredLimit { registered.removeFirst(registered.count - Self.registeredLimit) }
+        }
         manager.registerUndo(withTarget: token) { [weak self] token in
             MainActor.assumeIsolated {
                 if undo {
