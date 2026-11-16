@@ -160,8 +160,23 @@ final class Harness {
     var text: String { textView.string }
 
     /// Text as an input method without composition delivers it.
-    func type(_ string: String) {
+    /// Each call is its own run-loop pass, like a real keystroke, so undo groups match typing.
+    func type(_ string: String) async {
         textView.insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
+        await tick()
+    }
+
+    /// Lets the run loop turn (closes the undo group of the previous "event").
+    /// Ends the current "event": lets the run loop go idle, which closes the undo manager's event group as the end of
+    /// a real key event does.
+    func tick() async {
+        if let event = NSEvent.otherEvent(
+            with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0
+        ) {
+            NSApp.postEvent(event, atStart: false)
+        }
+        try? await Task.sleep(for: .milliseconds(5))
     }
 
     enum Key {
@@ -196,7 +211,7 @@ final class Harness {
 
     /// A real key event through the window: key equivalents, then the first responder's `keyDown`, the input
     /// context and `doCommand(by:)`, as for a keyboard.
-    func press(_ key: Key, _ modifiers: NSEvent.ModifierFlags = []) {
+    func press(_ key: Key, _ modifiers: NSEvent.ModifierFlags = []) async {
         var flags = modifiers
         if [.up, .down, .left, .right].contains(where: { $0 == key }) { flags.insert([.numericPad, .function]) }
         guard let event = NSEvent.keyEvent(
@@ -209,6 +224,7 @@ final class Harness {
         }
         if window.firstResponder !== textView { window.makeFirstResponder(textView) }
         window.sendEvent(event)
+        await tick()
     }
 
     func flags(_ modifiers: NSEvent.ModifierFlags) {
@@ -220,8 +236,15 @@ final class Harness {
         textView.flagsChanged(with: event)
     }
 
-    func undo() { textView.undoManager?.undo() }
-    func redo() { textView.undoManager?.redo() }
+    func undo() async {
+        textView.undoManager?.undo()
+        await tick()
+    }
+
+    func redo() async {
+        textView.undoManager?.redo()
+        await tick()
+    }
 
     func newPasteboard() -> NSPasteboard {
         let pasteboard = NSPasteboard(name: .init("ComposerDemo-\(UUID().uuidString)"))

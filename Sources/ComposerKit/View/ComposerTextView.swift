@@ -31,6 +31,22 @@ public final class ComposerTextView: NSTextView {
         [.fileURL, .png, .tiff, .string]
     }
 
+    /// Copy and drag out as plain text: tokens become their text form, attributes never leave the composer.
+    public override var writablePasteboardTypes: [NSPasteboard.PasteboardType] { [.string] }
+
+    public override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == .string else { return false }
+        let string = string as NSString
+        let text = selectedRanges.map { string.substring(with: $0.rangeValue) }.joined(separator: "\n")
+        return pboard.setString(text, forType: .string)
+    }
+
+    public override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard types.contains(.string) else { return false }
+        pboard.declareTypes([.string], owner: nil)
+        return writeSelection(to: pboard, type: .string)
+    }
+
     public override func keyDown(with event: NSEvent) {
         currentKeyModifiers = event.modifierFlags
         defer { currentKeyModifiers = nil }

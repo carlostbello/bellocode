@@ -64,6 +64,8 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     private let undo = UndoManager()
     private var isApplying = false
     private var isPerformingEdit = false
+    /// Between `shouldChangeText` and `textDidChange`: selection changes there come from the edit itself.
+    private var textEditInProgress = false
     private var alternateHeld = false
     private var heightTask: Task<Void, Never>?
     private var spellTask: Task<Void, Never>?
@@ -624,8 +626,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         let signpost = ComposerSignposts.layout.beginInterval("height")
         defer { ComposerSignposts.layout.endInterval("height", signpost) }
         layoutManager.ensureLayout(for: layoutManager.documentRange)
-        var used = layoutManager.usageBoundsForTextContainer.height
-        if storage.string.hasSuffix("\n") { used += lineHeight }
+        let used = layoutManager.usageBoundsForTextContainer.height
         let inset = textView.textContainerInset.height * 2
         let minimum = minimumTextHeight
         let available = view.window?.contentView?.bounds.height ?? 600
@@ -827,10 +828,14 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
         _ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?
     ) -> Bool {
         guard !isApplying, !isPerformingEdit, !textView.hasMarkedText(), let replacement = replacementString else {
+            textEditInProgress = true
             return true
         }
         let expanded = TokenText.expandedEditRange(affectedCharRange, in: storage)
-        guard expanded != affectedCharRange else { return true }
+        guard expanded != affectedCharRange else {
+            textEditInProgress = true
+            return true
+        }
         // Edit the whole token instead, as one undoable step.
         perform(edit: expanded, with: NSAttributedString(string: replacement, attributes: baseAttributes), actionName: "Typing")
         return false
@@ -852,6 +857,7 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
     }
 
     public func textDidChange(_ notification: Notification) {
+        textEditInProgress = false
         guard !isApplying else { return }
         let signpost = ComposerSignposts.edit.beginInterval("textDidChange")
         defer { ComposerSignposts.edit.endInterval("textDidChange", signpost) }
@@ -872,6 +878,8 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
 
     public func textViewDidChangeSelection(_ notification: Notification) {
         guard !isApplying, !isPerformingEdit else { return }
+        // Undo grouping: a caret move or selection ends the current typing step.
+        if !textEditInProgress { textView.breakUndoCoalescing() }
         updateCompletion()
     }
 
@@ -927,6 +935,8 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
             // An input method that let Return through: confirm the composition, never send.
             textView.unmarkText()
         case .newline:
+            // Each line is its own undo step.
+            textView.breakUndoCoalescing()
             textView.insertNewline(nil)
         case .send(let alternate):
             send(alternate: alternate)
