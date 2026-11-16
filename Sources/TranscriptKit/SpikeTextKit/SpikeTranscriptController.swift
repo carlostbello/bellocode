@@ -366,6 +366,7 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     }
 
     public func scrollToBottom() {
+        navigationGeneration += 1
         programmaticScrollDepth += 1
         // `ensureLayout(for: end)` lays out everything before the end once layout is invalid (2.4 s frames during
         // resize); relocating the viewport to the end only lays out the last screen.
@@ -379,20 +380,18 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     }
 
     public func scrollToTop() {
+        navigationGeneration += 1
         setFollowing(false)
         scrollProgrammatically(toY: 0)
     }
 
     /// Scrolls so the start of message `index` is `offset` points below the top of the viewport.
     public func reveal(messageAt index: Int, offset: CGFloat = 40) {
-        let range = range(ofMessage: index)
-        guard let location = textLocation(range.location) else { return }
-        programmaticScrollDepth += 1
-        layoutManager.textViewportLayoutController.relocateViewport(to: location)
-        if let frame = fragmentFrame(at: range.location) { scrollProgrammatically(toY: frame.minY - offset) }
-        layoutManager.textViewportLayoutController.layoutViewport()
-        if let frame = fragmentFrame(at: range.location) { scrollProgrammatically(toY: frame.minY - offset) }
-        programmaticScrollDepth -= 1
+        // relocateViewport lays out only the target screen; ensureLayout/scrollRangeToVisible laid out everything
+        // before the target (5.3 s to reach message 5,001).
+        setFollowing(false)
+        navigationGeneration += 1
+        relocate(to: Anchor(location: range(ofMessage: index).location, screenY: offset))
         setFollowing(isAtBottom)
     }
 
@@ -473,12 +472,17 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
             anchor.location = max(edit.location, anchor.location + delta)
         }
         relocate(to: anchor)
+        let generation = navigationGeneration
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isFollowing else { return }
+            // A newer navigation (find, reveal, jump) supersedes this re-check.
+            guard let self, !self.isFollowing, generation == self.navigationGeneration else { return }
             self.relocate(to: anchor)
         }
         return anchor
     }
+
+    /// Bumped by every explicit navigation so delayed anchor re-checks from earlier edits are dropped.
+    private var navigationGeneration = 0
 
     /// Puts the fragment at `anchor.location` at `anchor.screenY` using the viewport controller's own origin.
     private func relocate(to anchor: Anchor) {
@@ -663,6 +667,8 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
 
     // MARK: Find
 
+    public private(set) var findMarks: [String: Double] = [:]
+
     public struct FindResult: Sendable {
         public var messageIndex: Int
         public var cardID: String?
@@ -673,8 +679,11 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     /// Finds `needle` in the canonical model (including collapsed card content), expands the card if needed,
     /// then selects and reveals the match.
     public func findAndReveal(_ needle: String) async -> FindResult? {
+        var t = CACurrentMediaTime()
+        func mark(_ name: String) { findMarks[name] = (CACurrentMediaTime() - t) * 1_000; t = CACurrentMediaTime() }
         let snapshot = messages
         let hit = await Self.searchModel(snapshot, needle: needle)
+        mark("searchModelOffMain")
         guard let hit else { return nil }
         let messageID = snapshot[hit.index].id
         guard let index = indexByID[messageID] else { return nil }
@@ -682,24 +691,28 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
             setFollowing(false)
             toggleCard(card, pinned: false)
         }
+        mark("expandCard")
         let messageRange = range(ofMessage: index)
         let found = (storage.string as NSString).range(of: needle, options: [], range: messageRange)
         guard found.location != NSNotFound else { return nil }
+        mark("locateInStorage")
         setFollowing(false)
+        navigationGeneration += 1
+        relocate(to: Anchor(location: found.location, screenY: visibleRect.height / 3))
+        mark("relocate")
+        // Then let NSTextView make the range visible (it lays out as needed); relocate alone landed elsewhere.
         programmaticScrollDepth += 1
-        if let location = textLocation(found.location) {
-            layoutManager.textViewportLayoutController.relocateViewport(to: location)
-        }
-        if let frame = fragmentFrame(at: found.location) {
-            scrollProgrammatically(toY: frame.minY - visibleRect.height / 3)
-            layoutManager.textViewportLayoutController.layoutViewport()
-        }
         textView.scrollRangeToVisible(found)
         programmaticScrollDepth -= 1
+        mark("scrollRangeToVisible")
         textView.setSelectedRange(found)
+        mark("select")
         textView.showFindIndicator(for: found)
-        let frame = fragmentFrame(at: found.location)
-        let visible = frame.map { visibleRect.intersects($0) } ?? false
+        mark("findIndicator")
+        // Visible check by hit-testing the viewport (measured layout), not by far geometry.
+        let probe = textView.characterIndexForInsertion(at: CGPoint(x: textView.textContainerOrigin.x + 4, y: visibleRect.minY + 4))
+        let probeEnd = textView.characterIndexForInsertion(at: CGPoint(x: visibleRect.maxX - 30, y: visibleRect.maxY - 4))
+        let visible = probe <= found.location && found.location <= probeEnd
         return FindResult(messageIndex: index, cardID: hit.cardID, range: found, visible: visible)
     }
 

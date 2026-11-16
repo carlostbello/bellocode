@@ -842,7 +842,10 @@ final class Scenarios {
             let ms = (CACurrentMediaTime() - t) * 1_000
             await h.sleep(0.6)
             let selected = (c.storage.string as NSString).substring(with: c.textView.selectedRange())
-            let visibleAfter = c.fragmentFrame(at: c.textView.selectedRange().location).map { c.visibleRect.intersects($0) } ?? false
+            let probeTop = c.textView.characterIndexForInsertion(at: CGPoint(x: 20, y: c.visibleRect.minY + 4))
+            let probeBottom = c.textView.characterIndexForInsertion(at: CGPoint(x: c.visibleRect.maxX - 30, y: c.visibleRect.maxY - 4))
+            let at = c.textView.selectedRange().location
+            let visibleAfter = probeTop <= at && at <= probeBottom
             r.results.append([
                 "needle": needle,
                 "found": result == nil ? "false" : "true",
@@ -850,8 +853,10 @@ final class Scenarios {
                 "expandedCard": result?.cardID ?? "-",
                 "ms": String(format: "%.1f", ms),
                 "visibleAfterSettle": String(visibleAfter),
+                "visibleImmediately": String(result?.visible ?? false),
                 "selectionMatches": String(selected == needle),
                 "followingAfter": String(c.isFollowing),
+                "stepsMS": c.findMarks.map { "\($0.key)=\(Int($0.value))" }.sorted().joined(separator: " "),
             ])
             Output.snapshot(h.window.contentView!, "find-\(needle)")
         }
