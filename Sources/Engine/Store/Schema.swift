@@ -5,13 +5,13 @@ import GRDB
 ///
 /// Tables holding a cache of opencode state (rebuildable from the server): `project`, `session`, `message`, `part`,
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
-/// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`.
+/// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`.
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -94,6 +94,16 @@ enum ProjectionSchema {
                     settled INTEGER NOT NULL DEFAULT 0,
                     scroll_anchor TEXT,
                     scroll_offset REAL NOT NULL DEFAULT 0
+                );
+                """)
+        }
+        // App-owned preferences as JSON values by key (model favourites, recents and hidden models; onboarding state).
+        migrator.registerMigration("v2-app-preferences") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_preference (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
                 );
                 """)
         }

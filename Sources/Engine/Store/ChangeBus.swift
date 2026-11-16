@@ -30,8 +30,10 @@ public enum ProjectionChange: Sendable {
     case status(SessionAttention)
     case message(Message)
     case messageRemoved(MessageID, sessionID: SessionID)
-    case pending(PendingRequest)
-    case pendingResolved(id: String, sessionID: SessionID)
+    /// A pending request; `ancestors` are the sessions above a child session's request (it is shown in their threads
+    /// too, labelled with the child).
+    case pending(PendingRequest, ancestors: [SessionID] = [])
+    case pendingResolved(id: String, sessionID: SessionID, ancestors: [SessionID] = [])
     case queued(QueuedPrompt)
     case queueRemoved(MessageID, sessionID: SessionID)
     case threadUI(ThreadUIState)
@@ -52,8 +54,8 @@ public enum ProjectionChange: Sendable {
         case .status(let status): [.sessions(status.projectID), .thread(status.sessionID)]
         case .message(let message): [.thread(message.sessionID)]
         case .messageRemoved(_, let sessionID): [.thread(sessionID)]
-        case .pending(let request): [.thread(request.sessionID)]
-        case .pendingResolved(_, let sessionID): [.thread(sessionID)]
+        case .pending(let request, let ancestors): [.thread(request.sessionID)] + ancestors.map(ChangeTopic.thread)
+        case .pendingResolved(_, let sessionID, let ancestors): [.thread(sessionID)] + ancestors.map(ChangeTopic.thread)
         case .queued(let prompt): [.thread(prompt.sessionID)]
         case .queueRemoved(_, let sessionID): [.thread(sessionID)]
         case .threadUI(let state): [.thread(state.sessionID)]
@@ -162,10 +164,10 @@ public struct ChangeSet: Sendable {
         case .messageRemoved(let id, _):
             messages[id] = nil
             removedMessages.insert(id)
-        case .pending(let request):
+        case .pending(let request, _):
             pending[request.id] = request
             resolvedRequests.remove(request.id)
-        case .pendingResolved(let id, _):
+        case .pendingResolved(let id, _, _):
             pending[id] = nil
             resolvedRequests.insert(id)
         case .queued(let prompt):

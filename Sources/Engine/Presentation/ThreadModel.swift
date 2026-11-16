@@ -65,7 +65,8 @@ public final class ThreadModel: Identifiable {
     /// Older messages exist (in the cache or on the server); call `loadOlder()`.
     public private(set) var hasOlder = false
     public private(set) var isLoadingOlder = false
-    /// Approvals and questions blocking this thread, oldest first. Shown pinned above the composer.
+    /// Approvals and questions blocking this thread, oldest first, including those of its child sessions (sub-agents):
+    /// a request whose `sessionID` differs from `sessionID` came from that child. Shown pinned above the composer.
     public private(set) var pendingRequests: [PendingRequest] = []
     /// Requests whose reply is in flight (show them disabled, not gone).
     public private(set) var submittingRequestIDs: Set<String> = []

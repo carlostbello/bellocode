@@ -32,11 +32,14 @@ public struct ProviderEntry: Hashable, Sendable, Codable, Identifiable {
     public var name: String
     /// `auto`, `enabled`, `disabled`.
     public var activation: String
+    /// The integration whose credentials this provider uses (for "Connect…").
+    public var integrationID: String?
 
-    public init(id: String, name: String, activation: String) {
+    public init(id: String, name: String, activation: String, integrationID: String? = nil) {
         self.id = id
         self.name = name
         self.activation = activation
+        self.integrationID = integrationID
     }
 }
 
@@ -55,12 +58,20 @@ public struct ModelEntry: Hashable, Sendable, Codable, Identifiable {
     public var enabled: Bool
     /// True when every listed cost is zero (opencode's free models).
     public var isFree: Bool
+    /// USD per million input and output tokens (base tier), when the catalog lists them.
+    public var inputCost: Double?
+    public var outputCost: Double?
+    public var released: Timestamp?
 
     public init(
         providerID: String, modelID: String, name: String, family: String? = nil, contextLimit: Int = 0,
         outputLimit: Int = 0, variants: [String] = [], supportsTools: Bool = true, inputModalities: [String] = ["text"],
-        status: String = "active", enabled: Bool = true, isFree: Bool = false
+        status: String = "active", enabled: Bool = true, isFree: Bool = false, inputCost: Double? = nil,
+        outputCost: Double? = nil, released: Timestamp? = nil
     ) {
+        self.inputCost = inputCost
+        self.outputCost = outputCost
+        self.released = released
         self.providerID = providerID
         self.modelID = modelID
         self.name = name
