@@ -1,0 +1,148 @@
+{
+  "afterCloseIdle" : {
+    "footprintMB" : 111.2,
+    "mallocInUseMB" : 44.5,
+    "residentMB" : 549.9
+  },
+  "afterCyclesIdle" : {
+    "footprintMB" : 130.7,
+    "mallocInUseMB" : 67.1,
+    "residentMB" : 551.1
+  },
+  "afterScenarios" : {
+    "footprintMB" : 173.7,
+    "mallocInUseMB" : 44.3,
+    "residentMB" : 581.9
+  },
+  "cycles" : [
+    {
+      "footprintMB" : 171.5,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 582
+    },
+    {
+      "footprintMB" : 171.6,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 582.1
+    },
+    {
+      "footprintMB" : 171.7,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 582.1
+    },
+    {
+      "footprintMB" : 171.7,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 582.2
+    },
+    {
+      "footprintMB" : 171.8,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 582.2
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.4
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.4
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.5
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.4
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.4
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.5
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.5
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.5
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.6
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    },
+    {
+      "footprintMB" : 111.2,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    },
+    {
+      "footprintMB" : 111.1,
+      "mallocInUseMB" : 44.5,
+      "residentMB" : 549.7
+    }
+  ],
+  "header" : {
+    "build" : "release",
+    "cores" : 18,
+    "date" : "2026-11-16T22:55:09Z",
+    "displayMaxFPS" : 120,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 4.6,
+    "macOS" : "Version 27.0.1 (Build 26A434)",
+    "machine" : "Apple M5 Max",
+    "scenario" : "S8",
+    "window" : "900x900 pt, backing scale 2.0",
+    "workload" : {
+      "codeBlocks" : 1500,
+      "codeBytes" : 3537858,
+      "diffBytes" : 346528,
+      "diffs" : 200,
+      "hugeCodeBlockBytes" : 102456,
+      "images" : 100,
+      "messages" : 10000,
+      "proseBytes" : 3728188,
+      "reasoningBlocks" : 300,
+      "reasoningBytes" : 144936,
+      "tables" : 400,
+      "toolCalls" : 2000,
+      "toolOutputBytes" : 2564383,
+      "totalUTF8Bytes" : 10382451
+    },
+    "workloadGenerationMs" : 198.05
+  }
+}

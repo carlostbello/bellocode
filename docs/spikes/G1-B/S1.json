@@ -1,0 +1,67 @@
+{
+  "documentHeight" : 3075766,
+  "exactRowsAtOpen" : 17,
+  "header" : {
+    "build" : "release",
+    "cores" : 18,
+    "date" : "2026-11-16T22:34:05Z",
+    "displayMaxFPS" : 120,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 2.5,
+    "macOS" : "Version 27.0.1 (Build 26A434)",
+    "machine" : "Apple M5 Max",
+    "scenario" : "S1",
+    "window" : "900x900 pt, backing scale 2.0",
+    "workload" : {
+      "codeBlocks" : 1500,
+      "codeBytes" : 3537858,
+      "diffBytes" : 346528,
+      "diffs" : 200,
+      "hugeCodeBlockBytes" : 102456,
+      "images" : 100,
+      "messages" : 10000,
+      "proseBytes" : 3728188,
+      "reasoningBlocks" : 300,
+      "reasoningBytes" : 144936,
+      "tables" : 400,
+      "toolCalls" : 2000,
+      "toolOutputBytes" : 2564383,
+      "totalUTF8Bytes" : 10382451
+    },
+    "workloadGenerationMs" : 198.05
+  },
+  "measureAllMs" : 570.34,
+  "measureAllRows" : 9983,
+  "memoryAfterBackgroundWork" : {
+    "footprintMB" : 137.5,
+    "mallocInUseMB" : 60.5,
+    "residentMB" : 187.8
+  },
+  "metrics" : {
+    "asyncLayouts" : 100,
+    "heightFlushes" : 66,
+    "maxFlushMilliseconds" : 5.634916655253619,
+    "maxFlushRows" : 2717,
+    "maxNoteHeightMilliseconds" : 5.268208333291113,
+    "maxRestoreMilliseconds" : 0.36041668499819934,
+    "maxTailApplyMilliseconds" : 0,
+    "measureAllMilliseconds" : 570.338375022402,
+    "measureAllRows" : 9983,
+    "placeholderRows" : 0,
+    "searchIndexMilliseconds" : 81.94237499265,
+    "syncLayouts" : 15,
+    "tailJobs" : 0
+  },
+  "open" : {
+    "launchToFirstFrameMs" : 458.58,
+    "memoryAfterOpen" : {
+      "footprintMB" : 224.2,
+      "mallocInUseMB" : 44.9,
+      "residentMB" : 130.3
+    },
+    "offMainOpenPassMs" : 71.69,
+    "openToFirstFrameMs" : 95.83,
+    "openToInteractiveMs" : 95.93
+  },
+  "searchIndexMs" : 81.94
+}

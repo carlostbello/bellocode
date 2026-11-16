@@ -1,0 +1,69 @@
+{
+  "cases" : [
+    {
+      "changedRowAboveViewport" : true,
+      "driftPt" : 0,
+      "name" : "expand-tool-above",
+      "note" : "tool card in row 5063, viewport top in row 5065",
+      "rowHeightAfter" : 562,
+      "rowHeightBefore" : 110,
+      "visiblePixelsChangedPercent" : 0.02
+    },
+    {
+      "changedRowAboveViewport" : true,
+      "driftPt" : 0,
+      "name" : "late-image-above",
+      "note" : "image 52 in row 5057, held until now",
+      "rowHeightAfter" : 322,
+      "rowHeightBefore" : 127,
+      "visiblePixelsChangedPercent" : 0.02
+    },
+    {
+      "changedRowAboveViewport" : false,
+      "driftPt" : 0,
+      "name" : "prepend-100",
+      "note" : "100 older messages inserted at row 0",
+      "rowHeightAfter" : 0,
+      "rowHeightBefore" : 0,
+      "visiblePixelsChangedPercent" : 0.02
+    },
+    {
+      "changedRowAboveViewport" : true,
+      "driftPt" : 1.0477378964424133e-09,
+      "name" : "expand-tool-above-while-scrolling",
+      "note" : "max |drawn displacement - user scroll distance| of a tracked row over 0.6 s at 900 pt\/s",
+      "rowHeightAfter" : 2460,
+      "rowHeightBefore" : 0,
+      "visiblePixelsChangedPercent" : -1
+    }
+  ],
+  "header" : {
+    "build" : "release",
+    "cores" : 18,
+    "date" : "2026-11-16T22:53:35Z",
+    "displayMaxFPS" : 120,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 2.15,
+    "macOS" : "Version 27.0.1 (Build 26A434)",
+    "machine" : "Apple M5 Max",
+    "scenario" : "S5",
+    "window" : "900x900 pt, backing scale 2.0",
+    "workload" : {
+      "codeBlocks" : 1500,
+      "codeBytes" : 3537858,
+      "diffBytes" : 346528,
+      "diffs" : 200,
+      "hugeCodeBlockBytes" : 102456,
+      "images" : 100,
+      "messages" : 10000,
+      "proseBytes" : 3728188,
+      "reasoningBlocks" : 300,
+      "reasoningBytes" : 144936,
+      "tables" : 400,
+      "toolCalls" : 2000,
+      "toolOutputBytes" : 2564383,
+      "totalUTF8Bytes" : 10382451
+    },
+    "workloadGenerationMs" : 198.05
+  }
+}
