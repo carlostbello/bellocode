@@ -66,7 +66,7 @@ let targets: [Target] =
     )
     + library("DesignSystem", dependencies: ["BelloCore"])
     + library("TranscriptKit", dependencies: uiKitDependencies)
-    + library("ComposerKit", dependencies: uiKitDependencies)
+    + library("ComposerKit", dependencies: uiKitDependencies + ["Engine"])
     + library("DiffKit", dependencies: uiKitDependencies)
     + library("TerminalKit", dependencies: uiKitDependencies + [.product(name: "SwiftTerm", package: "SwiftTerm")])
     + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
@@ -82,6 +82,8 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // M1-C development harness: scripted composer scenarios and snapshots. See docs/features/composer.md.
+        .executableTarget(name: "ComposerDemo", dependencies: ["ComposerKit"], swiftSettings: swiftSettings),
         // SPIKE (gate G3): throwaway browser-bridge prototype. See docs/spikes/G3-browser-bridge.md.
         .executableTarget(name: "BrowserSpike", dependencies: ["BrowserKit"], swiftSettings: swiftSettings),
     ]
