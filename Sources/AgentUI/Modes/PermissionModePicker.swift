@@ -118,7 +118,8 @@ public struct PermissionModePicker: View {
     }
 }
 
-struct PermissionModePopover: View {
+/// The picker's popover content (public for hosts that present it themselves, and for snapshots).
+public struct PermissionModePopover: View {
     @Environment(\.agentUIStyle) private var style
     let current: PermissionMode?
     let agent: String?
@@ -127,6 +128,18 @@ struct PermissionModePopover: View {
     let choose: (PermissionMode) -> Void
     let chooseAgent: (String) -> Void
     @FocusState private var focused: Bool
+
+    public init(
+        current: PermissionMode?, agent: String?, agents: [AgentEntry], highlighted: Binding<PermissionMode>,
+        choose: @escaping (PermissionMode) -> Void, chooseAgent: @escaping (String) -> Void
+    ) {
+        self.current = current
+        self.agent = agent
+        self.agents = agents
+        _highlighted = highlighted
+        self.choose = choose
+        self.chooseAgent = chooseAgent
+    }
 
     private var agentChoices: [(id: String, name: String, detail: String)] {
         let primary = agents.filter { !$0.hidden && $0.mode != .subagent }
@@ -141,7 +154,7 @@ struct PermissionModePopover: View {
         }
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: style.spacing * 2) {
             Text("Permissions").font(style.smallFont.weight(.semibold)).foregroundStyle(style.secondaryText)
             VStack(spacing: 2) {

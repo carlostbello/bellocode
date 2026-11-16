@@ -557,19 +557,28 @@ public final class AuthService {
     /// Whether importing is available (a bundled opencode is known).
     public var canImport: Bool { importer != nil }
 
-    /// Lists what `source` holds (no secrets), for the consent step.
+    /// Lists what `source` holds (no secrets), for the consent step. Throws `EngineError`.
     public func previewImport(from source: CredentialImportSource) async throws -> [ImportableCredential] {
         guard let importer else { throw EngineError.failed("Importing needs the bundled opencode.") }
-        return try await importer.preview(source)
+        do {
+            return try await importer.preview(source)
+        } catch {
+            throw EngineError.from(error)
+        }
     }
 
-    /// Imports every credential of `source` into BelloCode's opencode. Run only after the user confirmed.
+    /// Imports every credential of `source` into BelloCode's opencode. Run only after the user confirmed. Throws
+    /// `EngineError`.
     public func importCredentials(from source: CredentialImportSource) async throws -> CredentialImportResult {
         guard let importer else { throw EngineError.failed("Importing needs the bundled opencode.") }
-        let connection = try await client().connection
-        let result = try await importer.run(source, into: connection)
-        await refresh()
-        return result
+        do {
+            let connection = try await client().connection
+            let result = try await importer.run(source, into: connection)
+            await refresh()
+            return result
+        } catch {
+            throw EngineError.from(error)
+        }
     }
 
     // MARK: Helpers
