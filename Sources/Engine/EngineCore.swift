@@ -775,6 +775,8 @@ actor EngineCore {
     /// Older messages before `key`: from the cache, else the next server page (persisted, then read back).
     func loadOlder(_ sessionID: SessionID, before key: MessageSortKey) async throws -> OlderMessages {
         let limit = configuration.pageSize
+        // Read after pending writes (sync state, the window) reach disk.
+        await flushWrites()
         let cached = try await store.messages(sessionID: sessionID, before: key, limit: limit)
         if cached.messages.count >= limit { return OlderMessages(messages: cached.messages, hasOlder: true) }
         var sync = try await store.syncState(sessionID)
@@ -782,6 +784,7 @@ actor EngineCore {
         guard let client = try? await currentClient() else { return OlderMessages(messages: cached.messages, hasOlder: true) }
         if sync?.olderCursor == nil {
             await refreshWindow(sessionID)
+            await flushWrites()
             sync = try await store.syncState(sessionID)
             if sync?.historyComplete == true {
                 let again = try await store.messages(sessionID: sessionID, before: key, limit: limit)
