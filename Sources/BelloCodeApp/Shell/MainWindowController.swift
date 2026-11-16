@@ -240,6 +240,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             container.composerController?.composer.steerPrompt(nil)
         case .stopRun:
             guard let id = target?.threadID else { return }
+            let model = workspace.threadModel(id)
+            if model.isStatusUnknown {
+                Task { await model.settleUnknownStatus() }
+                return
+            }
             if let composer = container.composerController, container.context?.thread?.sessionID == id, composer.runState == .running {
                 composer.composer.stopAgent(nil)
             } else {

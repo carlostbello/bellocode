@@ -256,7 +256,7 @@ extension MockOpenCodeServer {
     func serverInfo() -> HTTPResponse {
         let url = endpoint?.url.absoluteString ?? ""
         return .json([
-            "version": .string(options.version), "pid": .int(Int(ProcessInfo.processInfo.processIdentifier)),
+            "version": .string(options.version), "pid": .int(Int(ProcessInfo.processInfo.processIdentifier) + pidGeneration * 100_000),
             "hostname": "mock.local", "urls": [.string(url)],
             "paths": ["tmp": .string(FileManager.default.temporaryDirectory.appendingPathComponent("opencode").path)],
             "capabilities": ["persistentPty": true],

@@ -118,6 +118,11 @@ public actor MockOpenCodeServer {
     // MARK: Turns
 
     var turns: [String: TurnHandle] = [:]
+    /// Sessions whose turn was killed by `crashAndRestart()`: their turn ends without any event or idle state, as
+    /// when the real process dies (opencode keeps such sessions busy).
+    var crashedSessions: Set<String> = []
+    /// Added to the reported pid, so a crash restart looks like a new server process.
+    var pidGeneration = 0
     var turnGeneration = 0
     var pendingInbox: [String: [InboxItem]] = [:]
     var waiters: [String: Waiter] = [:]
@@ -181,6 +186,18 @@ public actor MockOpenCodeServer {
     /// client must recover from by re-reading the list endpoints.
     @discardableResult
     public func restart() async throws -> MockOpenCodeEndpoint {
+        closeNetwork()
+        return try await start()
+    }
+
+    /// Simulates the server process dying mid-turn and a new one starting (a new pid, a new port, the same data):
+    /// running turns stop where they are, publish nothing more, and their sessions stay busy.
+    @discardableResult
+    public func crashAndRestart() async throws -> MockOpenCodeEndpoint {
+        crashedSessions.formUnion(turns.keys)
+        for handle in turns.values { handle.task.cancel() }
+        for id in Array(waiters.keys) { resumeWaiter(id, with: .interrupted) }
+        pidGeneration += 1
         closeNetwork()
         return try await start()
     }

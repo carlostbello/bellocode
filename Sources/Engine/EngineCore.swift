@@ -395,6 +395,8 @@ actor EngineCore {
             commit(reduction)
         case .refreshCatalog(let directory):
             await refreshCatalog(directory: directory ?? defaultCatalogDirectory())
+        case .resolveProject(let directory):
+            await resolveProject(directory: directory, client: client)
         }
     }
 
@@ -582,6 +584,15 @@ actor EngineCore {
             state.putRegistry(ProjectEntry(directory: project.directory, projectID: project.id, sortOrder: nextOrder, added: now), into: &reduction)
             nextOrder += 1
         }
+        // Added folders whose project is unknown or gone (a subfolder of a repository lists its threads under the
+        // repository's project): resolve through the server.
+        let projectDirectories = Set(projects.values.map(\.directory))
+        for entry in state.registry.values where !entry.archived {
+            let known = entry.projectID.map { projects[$0] != nil } ?? false
+            if !known, !projectDirectories.contains(entry.directory) {
+                reduction.effects.append(.resolveProject(directory: entry.directory))
+            }
+        }
 
         // Sessions.
         let sessions = snapshot.sessions.map(Mapping.session)
@@ -729,8 +740,16 @@ actor EngineCore {
     }
 
     private func mergeSession(local: Session?, server: Session) -> Session {
-        guard let local else { return server }
         var merged = server
+        if let settled = pipeline.state.settledOrphans[server.id] {
+            if let busy = server.busySince, busy > settled {
+                pipeline.state.settledOrphans[server.id] = nil
+            } else if server.isRunning {
+                merged.idleAt = settled
+                merged.outcome = .interrupted
+            }
+        }
+        guard let local else { return merged }
         if server.outcome == .failed, server.idleAt == local.idleAt { merged.lastError = local.lastError }
         if merged.permissionMode == nil { merged.permissionMode = local.permissionMode }
         return merged
@@ -1055,6 +1074,30 @@ actor EngineCore {
         throw EngineError.from(lastError ?? EngineError.failed("Send failed."))
     }
 
+    /// A turn whose status is unknown after a server restart (still "busy" on the server, owned by no live process):
+    /// asks the server to interrupt it, then records it as interrupted locally, whatever the server answers (its
+    /// interrupt is a no-op for an execution it does not own). Nothing else is done to the session.
+    func settleOrphan(_ sessionID: SessionID) async throws {
+        guard pipeline.state.orphaned.contains(sessionID) else { return }
+        _ = try? await call { try await $0.interrupt(sessionID: sessionID.rawValue) }
+        let now = serverNow()
+        pipeline.state.orphaned.remove(sessionID)
+        pipeline.state.settledOrphans[sessionID] = now
+        var reduction = Reduction()
+        reduction.statusDirty.insert(sessionID)
+        pipeline.state.openMessage[sessionID] = nil
+        pipeline.state.updateSession(sessionID, into: &reduction) { session in
+            if session.isRunning {
+                session.idleAt = now
+                session.outcome = .interrupted
+            }
+        }
+        commit(reduction)
+    }
+
+    /// Whether the server restarted while this session ran (its live status cannot be known).
+    func isOrphaned(_ sessionID: SessionID) -> Bool { pipeline.state.orphaned.contains(sessionID) }
+
     /// Runs a slash command (`session.command`). No optimistic message: the server's events add what it produces.
     func runCommand(
         _ sessionID: SessionID, name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?
@@ -1302,6 +1345,28 @@ actor EngineCore {
         var update = Reduction()
         for project in projects { pipeline.state.putProject(Mapping.project(project), into: &update) }
         commit(update)
+        await resolveProject(directory: directory, client: client)
+    }
+
+    /// Records the opencode project a folder belongs to (`GET /api/location`). A subfolder of a git repository
+    /// resolves to the repository's project, so its threads (whose `projectID` is the repository's) are listed.
+    func resolveProject(directory: String, client: OpenCodeClient) async {
+        guard var entry = pipeline.state.registry[directory],
+              let info = try? await client.location(directory: directory)
+        else { return }
+        let id = ProjectID(info.project.id)
+        var reduction = Reduction()
+        if pipeline.state.projects[id] == nil, let projects = try? await client.projects() {
+            for project in projects { pipeline.state.putProject(Mapping.project(project), into: &reduction) }
+        }
+        entry = pipeline.state.registry[directory] ?? entry
+        guard entry.projectID != id else {
+            commit(reduction)
+            return
+        }
+        entry.projectID = id
+        pipeline.state.putRegistry(entry, into: &reduction)
+        commit(reduction)
     }
 
     /// Hides a project from the sidebar (opencode data is untouched). Reversible with `addProject`.

@@ -189,6 +189,7 @@ public final class AuthService {
     @ObservationIgnored private let emptyListRetries: Int
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var invalidationActive = false
     @ObservationIgnored private var attempt: (integrationID: String, attemptID: String, isCommand: Bool)?
     @ObservationIgnored private var flowGeneration = 0
 
@@ -210,8 +211,35 @@ public final class AuthService {
         self.emptyListRetries = emptyListRetries
     }
 
+    /// Refreshes the lists whenever `signal` changes (debounced), so sign-ins made elsewhere (another client, the
+    /// CLI, an `integration.updated` or `credential.*` event) show without the user reopening anything. The engine
+    /// wires its catalog revision here; `shutdown()` stops it.
+    public func refreshOnChange(of signal: @escaping @MainActor () -> Int, debounce: Duration = .milliseconds(300)) {
+        invalidationActive = true
+        armInvalidation(signal, debounce: debounce)
+    }
+
+    private func armInvalidation(_ signal: @escaping @MainActor () -> Int, debounce: Duration) {
+        guard invalidationActive else { return }
+        withObservationTracking {
+            _ = signal()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.invalidationActive else { return }
+                self.refreshTask?.cancel()
+                self.refreshTask = Task { [weak self] in
+                    try? await Task.sleep(for: debounce)
+                    guard let self, !Task.isCancelled, self.invalidationActive else { return }
+                    await self.refresh()
+                }
+                self.armInvalidation(signal, debounce: debounce)
+            }
+        }
+    }
+
     /// Cancels polling and any open attempt on the server.
     public func shutdown() {
+        invalidationActive = false
         refreshTask?.cancel()
         Task { await self.cancel() }
     }

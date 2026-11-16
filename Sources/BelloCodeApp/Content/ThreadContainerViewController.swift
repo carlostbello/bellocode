@@ -19,6 +19,7 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var transcript: NSViewController?
     private(set) var composer: NSViewController?
     private(set) var requestStack: NSViewController?
+    private(set) var statusBanner: StatusUnknownBanner?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
@@ -114,6 +115,7 @@ final class ThreadContainerViewController: NSViewController {
         transcript = nil
         composer = nil
         requestStack = nil
+        statusBanner = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -145,7 +147,17 @@ final class ThreadContainerViewController: NSViewController {
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
-        for subview in [header, separator, transcriptView, requests, composerView] { container.addSubview(subview) }
+        let banner: NSView
+        if let thread = context.thread {
+            let unknown = StatusUnknownBanner(thread: thread, engine: workspace.engine)
+            statusBanner = unknown
+            banner = unknown
+        } else {
+            banner = NSView()
+            banner.translatesAutoresizingMaskIntoConstraints = false
+            banner.heightAnchor.constraint(equalToConstant: 0).isActive = true
+        }
+        for subview in [header, separator, transcriptView, requests, banner, composerView] { container.addSubview(subview) }
         let column = DS.Spacing.readableWidth
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.topAnchor),
@@ -158,10 +170,11 @@ final class ThreadContainerViewController: NSViewController {
             transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
-            composerView.topAnchor.constraint(equalTo: requests.bottomAnchor, constant: DS.Spacing.s),
+            banner.topAnchor.constraint(equalTo: requests.bottomAnchor),
+            composerView.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: DS.Spacing.s),
             composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
         ])
-        for docked in [requests, composerView] {
+        for docked in [requests, banner, composerView] {
             let width = docked.widthAnchor.constraint(equalToConstant: column)
             width.priority = .defaultHigh
             NSLayoutConstraint.activate([

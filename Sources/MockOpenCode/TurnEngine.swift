@@ -209,6 +209,8 @@ extension MockOpenCodeServer {
             publish(
                 "session.execution.failed", ["sessionID": .string(sessionID), "error": error.json], durable: sessionID)
         } catch {
+            // A simulated crash: the process "died", so nothing ends the execution.
+            if crashedSessions.remove(sessionID) != nil { return }
             outcome = "interrupted"
             guard state.sessions[sessionID] != nil else { return }
             finishInterrupted(&ctx)
