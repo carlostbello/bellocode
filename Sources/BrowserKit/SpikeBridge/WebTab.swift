@@ -60,8 +60,8 @@ public final class WebTab: NSObject {
     var consoleDropped = 0
     static let consoleLimit = 500
 
-    /// Set when the agent asked for a native click on a file input: the open panel is answered with nothing.
-    var refuseOpenPanelUntil: Date = .distantPast
+    /// Screenshots kept for `files.list` / `files.get`. Bounded.
+    var captures: [BrowserFile] = []
 
     init(id: String, configuration: WKWebViewConfiguration, host: BrowserHost) {
         self.id = id
@@ -145,20 +145,34 @@ public final class WebTab: NSObject {
 
     /// `callAsyncJavaScript` with a deadline and cancellation: WebKit's own call cannot be cancelled and never returns
     /// while a dialog blocks the page, so the continuation is resumed by whichever comes first.
-    func callJS(_ body: String, arguments: [String: Any] = [:], frame: WKFrameInfo?, world: WKContentWorld, timeout: Duration = .seconds(30)) async throws -> JSONValue {
+    func callJS(_ body: String, arguments: [String: Any] = [:], frame: WKFrameInfo?, world: WKContentWorld, timeout: Duration = .seconds(30), program: Bool = false) async throws -> JSONValue {
         let once = OnceContinuation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONValue, any Error>) in
                 once.set(continuation)
-                webView.callAsyncJavaScript(body, arguments: arguments, in: frame, in: world) { result in
+                let completion: (Result<Any, any Error>) -> Void = { result in
                     switch result {
                     case .success(let value): once.resume(returning: JSONValue(foundation: value))
                     case .failure(let error): once.resume(throwing: Self.scriptFailure(error))
                     }
                 }
-                Task { @MainActor in
-                    try? await Task.sleep(for: timeout)
-                    once.resume(throwing: BrowserFailure("timeout", "The page did not answer within \(timeout). It may be blocked by a dialog or busy; call browser.dialog({tabID, action: \"get\"}) or inspect the tab."))
+                if program {
+                    webView.evaluateJavaScript(body, in: frame, in: world, completionHandler: completion)
+                } else {
+                    webView.callAsyncJavaScript(body, arguments: arguments, in: frame, in: world, completionHandler: completion)
+                }
+                // WebKit never answers while a JavaScript dialog blocks the page: stop waiting as soon as one opens.
+                let hadDialog = dialog != nil
+                Task { @MainActor [weak self] in
+                    let deadline = ContinuousClock.now + timeout
+                    while ContinuousClock.now < deadline, !once.finished {
+                        if !hadDialog, let dialog = self?.dialog {
+                            once.resume(throwing: DialogInterrupted(type: dialog.type, message: dialog.message))
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(25))
+                    }
+                    once.resume(throwing: BrowserFailure("timeout", "The page did not answer within \(timeout). It may be busy; call browser.dialog({tabID, action: \"get\"}) or inspect the tab."))
                 }
             }
         } onCancel: {
@@ -296,10 +310,13 @@ final class OnceContinuation {
         }
     }
 
+    private(set) var finished = false
     func resume(returning value: JSONValue) { finish(.success(value)) }
     func resume(throwing error: any Error) { finish(.failure(error)) }
 
     private func finish(_ result: Result<JSONValue, any Error>) {
+        if finished { return }
+        finished = true
         if let continuation {
             self.continuation = nil
             continuation.resume(with: result)
@@ -310,3 +327,9 @@ final class OnceContinuation {
 }
 
 func jsString(_ value: String) -> String { JSONValue.string(value).compactText }
+
+/// A script call was cut short because the page opened a JavaScript dialog. The action itself ran.
+struct DialogInterrupted: Error {
+    var type: String
+    var message: String
+}

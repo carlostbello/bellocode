@@ -32,6 +32,9 @@ public final class BrowserHost: NSObject {
     /// How each pointer/typing operation was delivered: "native" or "script (<reason>)". Bounded.
     public private(set) var deliveryLog: [String] = []
 
+    /// The most recent screenshot bytes, for the spike's own PNG evidence.
+    public var lastScreenshot: Data?
+
     private let highlight = HighlightView()
     private var publishTask: Task<Void, Never>?
     private var highlightTask: Task<Void, Never>?
