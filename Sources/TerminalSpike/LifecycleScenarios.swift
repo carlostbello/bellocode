@@ -141,15 +141,15 @@ extension Scenarios {
             view.nativeBackgroundColor = NSColor(srgbRed: 0.10, green: 0.12, blue: 0.16, alpha: 1)
             view.nativeForegroundColor = NSColor(srgbRed: 0.85, green: 0.87, blue: 0.90, alpha: 1)
             await h.run(terminal, "clear; printf '\\033[31mred-slot\\033[0m \\033[34mblue-slot\\033[0m themed\\n'")
-            let path = h.snapshot(view, "hooks-\(model)-theme")
+            report["themeSnapshot"] = h.snapshot(view, "hooks-\(model)-theme")
+            // The default background is the view's layer colour (cacheDisplay snapshots do not capture layer
+            // backgrounds, so the PNG shows white there); check the layer, and the palette via the PNG.
             var backgroundOK = false
-            if let image = NSImage(contentsOfFile: h.paths.root.appending(path: path).path),
-               let rep = image.representations.first as? NSBitmapImageRep,
-               let pixel = rep.colorAt(x: rep.pixelsWide - 4, y: rep.pixelsHigh / 2)?.usingColorSpace(.sRGB) {
-                backgroundOK = abs(pixel.redComponent - 0.10) < 0.03 && abs(pixel.blueComponent - 0.16) < 0.03
-                report["themeBackgroundPixel"] = [pixel.redComponent, pixel.greenComponent, pixel.blueComponent].map { h.round(Double($0), 3) }
+            if let cg = view.layer?.backgroundColor, let color = NSColor(cgColor: cg)?.usingColorSpace(.sRGB) {
+                backgroundOK = abs(color.redComponent - 0.10) < 0.02 && abs(color.blueComponent - 0.16) < 0.02
+                report["themeLayerBackground"] = [color.redComponent, color.greenComponent, color.blueComponent].map { h.round(Double($0), 3) }
             }
-            checks.record("theme background applied (snapshot pixel)", backgroundOK)
+            checks.record("theme background applied (layer colour)", backgroundOK, report["themeLayerBackground"] ?? "no layer")
 
             // Font and size change -> grid and PTY size follow
             let before = view.terminalDimensions
