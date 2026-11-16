@@ -493,14 +493,21 @@ struct BrowserOperations {
     private static func rasterize(pdf: Data, maxWidth: CGFloat) throws -> NSImage {
         guard let representation = NSPDFImageRep(data: pdf) else { throw BrowserFailure("operation_failed", "Could not render the page.") }
         let bounds = representation.bounds
-        let scale = min(1, maxWidth / max(bounds.width, 1), 16_000 / max(bounds.height, 1))
-        let size = NSSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
-        let image = NSImage(size: size)
-        image.lockFocus()
+        // Pixels, not points: 2x (Retina) density, capped by maxWidth and 16 megapixels like the reference desktop.
+        var scale = min(2, maxWidth / max(bounds.width, 1))
+        scale = min(scale, (16_000_000 / max(bounds.width * bounds.height, 1)).squareRoot())
+        let width = Int((bounds.width * scale).rounded()), height = Int((bounds.height * scale).rounded())
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+                                            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else { throw BrowserFailure("operation_failed", "Could not render the page.") }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
         NSColor.white.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        representation.draw(in: NSRect(origin: .zero, size: size))
-        image.unlockFocus()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        representation.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.addRepresentation(bitmap)
         return image
     }
 

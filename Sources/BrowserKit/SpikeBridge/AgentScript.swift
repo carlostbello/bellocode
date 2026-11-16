@@ -375,7 +375,8 @@ enum AgentScript {
       if (!handler) return;
       const format = (value) => {
         if (typeof value === 'string') return value;
-        if (value instanceof Error) return value.stack || String(value);
+        // WebKit's Error.stack omits the message line that Chromium's includes.
+        if (value instanceof Error) return String(value) + (value.stack ? '\n' + value.stack : '');
         try { return JSON.stringify(value); } catch (_) { return String(value); }
       };
       const send = (level, args, source) => { try { handler.postMessage({ level, text: args.map(format).join(' ').slice(0, 10000), source: source || null }); } catch (_) {} };
@@ -383,7 +384,7 @@ enum AgentScript {
         const original = console[method];
         console[method] = function (...args) { send(level, args); return original.apply(this, args); };
       }
-      addEventListener('error', (event) => send('error', ['Uncaught ' + (event.error && event.error.stack ? event.error.stack : event.message)], event.filename ? { url: event.filename, line: event.lineno || 0, column: event.colno || 0 } : null));
+      addEventListener('error', (event) => send('error', ['Uncaught ' + (event.error instanceof Error ? format(event.error) : event.message)], event.filename ? { url: event.filename, line: event.lineno || 0, column: event.colno || 0 } : null));
       addEventListener('unhandledrejection', (event) => send('error', ['Unhandled promise rejection: ' + format(event.reason)]));
     })();
     """#

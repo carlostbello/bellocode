@@ -51,8 +51,11 @@ enum NativeInput {
 
     static func move(_ webView: WKWebView, css: CGPoint) throws {
         let (window, point) = try windowPoint(webView, css: css)
-        guard let event = mouse(.mouseMoved, window, point, [], clicks: 0) else { throw Unavailable(description: "could not create event") }
-        webView.mouseMoved(with: event)
+        // Approach from one pixel away so the page sees a pointer that moved onto the element.
+        for target in [NSPoint(x: point.x - 1, y: point.y), point] {
+            guard let event = mouse(.mouseMoved, window, target, [], clicks: 0) else { throw Unavailable(description: "could not create event") }
+            webView.mouseMoved(with: event)
+        }
     }
 
     /// Left or right click(s). Middle clicks have no NSEvent factory with a button number; callers fall back to script.

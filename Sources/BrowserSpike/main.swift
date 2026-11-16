@@ -5,9 +5,24 @@ import AppKit
 import BrowserKit
 import Foundation
 
+setvbuf(stdout, nil, _IOLBF, 0)
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 let arguments = Array(CommandLine.arguments.dropFirst())
+
+// A standard Edit menu: unhandled key equivalents from the web view (⌘A, ⌘C, ⌘V, ⌘Z) come back to it, as in the app.
+let mainMenu = NSMenu()
+let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+let editMenu = NSMenu(title: "Edit")
+editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+editItem.submenu = editMenu
+mainMenu.addItem(NSMenuItem(title: "BrowserSpike", action: nil, keyEquivalent: ""))
+mainMenu.addItem(editItem)
+app.mainMenu = mainMenu
 
 @MainActor
 func runSpike() async -> Int32 {
@@ -33,6 +48,12 @@ func runSpike() async -> Int32 {
         return 2
     }
 }
+
+// Watchdog: the spike never outlives a hung run (its opencode child is cleaned up by the stdin lease closing).
+let watchdog = DispatchSource.makeTimerSource(queue: .global())
+watchdog.schedule(deadline: .now() + (arguments.contains("--e2e") ? 600 : 120))
+watchdog.setEventHandler { @Sendable in print("watchdog: timed out"); exit(3) }
+watchdog.resume()
 
 Task { @MainActor in
     let code = await runSpike()

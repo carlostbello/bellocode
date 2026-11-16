@@ -233,8 +233,8 @@ public final class BrowserHost: NSObject {
         if let generation = command.generation, generation != tab.generation, !BrowserContract.retainedOperations.contains(command.type) {
             throw BrowserFailure("document_changed", "The document changed before this operation ran. Call browser.tabs.list({}) to check its current URL, then browser.snapshot({tabID}) for fresh refs.")
         }
-        if let dialog = tab.dialog, !["dialog", "screenshot", "console", "frames", "stop"].contains(command.type) {
-            throw BrowserFailure("dialog_open", "A JavaScript \(dialog.type) is blocking this tab: \"\(dialog.message.prefix(200))\". Call browser.dialog({tabID, action: \"accept\"}) or \"dismiss\" first.")
+        if let dialog = tab.dialog, !["dialog", "console", "stop", "files.list", "files.get"].contains(command.type) {
+            throw BrowserFailure("dialog_open", "A JavaScript \(dialog.type) is blocking this tab (WebKit cannot script or capture it until answered): \"\(dialog.message.prefix(200))\". Call browser.dialog({tabID, action: \"accept\"}) or \"dismiss\" first.")
         }
         return try await BrowserOperations(host: self, tab: tab).run(command)
     }

@@ -43,7 +43,7 @@ final class SelfTest {
 
     func check(_ name: String, _ ok: Bool, _ detail: String = "") {
         let text = String(detail.prefix(300)).replacingOccurrences(of: "\n", with: " ⏎ ")
-        results.append((name, ok, text))
+        results.append((name, ok, ok ? text : detail))
         print("\(ok ? "PASS" : "FAIL")  \(name)\(text.isEmpty ? "" : "  — \(text)")")
     }
 
@@ -59,7 +59,7 @@ final class SelfTest {
 
     /// The ref on the first snapshot line with this role whose name contains `name`.
     func ref(_ content: String, role: String, name: String) -> String? {
-        for line in content.split(separator: "\n") where line.contains("[\(role)]") && line.contains(name) {
+        for line in content.split(separator: "\n") where line.contains("[\(role)]") && (name.isEmpty || line.contains(name)) {
             if let match = line.firstMatch(of: /@(e\d+)/) { return String(match.1) }
         }
         return nil
@@ -162,7 +162,8 @@ final class SelfTest {
             check("native click and typing are isTrusted", trusted.contains("click:true:submit") && trusted.contains("input:true:name") && trusted.contains("mousedown:true:submit"), trusted)
             await save("form-confirmed")
         } else {
-            check("script click and typing are untrusted", trusted.contains("click:false:submit") && !trusted.contains(":true:"), trusted)
+            // HTMLElement.click() is an untrusted click, but the checkbox/radio activation it runs fires trusted input events.
+            check("script click and typing are untrusted", trusted.contains("click:false:submit") && trusted.contains("input:false:name") && !trusted.contains("click:true") && !trusted.contains("input:true:name"), trusted)
         }
     }
 
@@ -196,7 +197,7 @@ final class SelfTest {
         content = await snapshot()
         if let keys = ref(content, role: "textbox", name: "Key log") {
             await call("click", ["ref": .string(keys)])
-            _ = await eval("keylog.textContent = ''")
+            _ = await eval("keylog.textContent = ''; keys.value = ''")
             await call("press", ["key": "a"])
             check("press script mode is untrusted and inserts nothing", (await eval("keylog.textContent")).string == "a- " &&& (await eval("keys.value")).string == "", (await eval("keylog.textContent")).compactText)
         }
@@ -256,7 +257,8 @@ final class SelfTest {
         check("click opening alert returns; dialog get", value(clicked) != nil && pending?["type"]?.string == "alert" && pending?["message"]?.string == "Hello from alert", pending?.compactText ?? "")
         let blocked = await call("snapshot")
         check("other operations refused while a dialog blocks", failureCode(blocked) == "dialog_open")
-        await save("dialog-open")
+        let shot = await call("screenshot")
+        check("screenshot refused while a dialog blocks the page", failureCode(shot) == "dialog_open")
         await call("dialog", ["action": "accept"])
         check("dialog accept", (await eval("out.textContent")).string == "alert:done")
         await call("click", ["ref": .string(confirm)])
