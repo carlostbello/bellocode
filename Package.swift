@@ -75,6 +75,11 @@ let targets: [Target] =
         ),
     ]
 
+// SPIKE G1-B (docs/spikes/G1-B-rows.md): row-based transcript prototype and its measurement harness.
+let transcriptSpikeB: Target = .executableTarget(
+    name: "TranscriptSpikeB", dependencies: ["TranscriptKit"], swiftSettings: swiftSettings
+)
+
 let package = Package(
     name: "BelloCode",
     platforms: [.macOS(.v15)],
@@ -82,6 +87,6 @@ let package = Package(
         .executable(name: "BelloCode", targets: ["BelloCodeApp"]),
     ],
     dependencies: packageDependencies,
-    targets: targets,
+    targets: targets + [transcriptSpikeB],
     swiftLanguageModes: [.v6]
 )
