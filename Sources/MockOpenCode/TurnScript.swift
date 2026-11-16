@@ -297,7 +297,7 @@ extension TurnStep: Codable {
         case .tool: self = .tool(try ToolStep(from: decoder))
         case .question: self = .question(try QuestionStep(from: decoder))
         case .subagent: self = .subagent(try SubagentStep(from: decoder))
-        case .fail: self = .fail(try StructuredError(from: decoder))
+        case .fail: self = .fail(try keyed.decode(StructuredError.self, forKey: .error))
         case .delay: self = .delay(milliseconds: try keyed.decode(Int.self, forKey: .milliseconds))
         case .interrupt: self = .interrupt
         case .dropEventStreams: self = .dropEventStreams
@@ -332,7 +332,7 @@ extension TurnStep: Codable {
             try step.encode(to: encoder)
         case let .fail(error):
             try keyed.encode(Kind.fail, forKey: .type)
-            try error.encode(to: encoder)
+            try keyed.encode(error, forKey: .error)
         case let .delay(milliseconds):
             try keyed.encode(Kind.delay, forKey: .type)
             try keyed.encode(milliseconds, forKey: .milliseconds)

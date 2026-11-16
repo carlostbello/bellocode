@@ -1,0 +1,11 @@
+{
+  "name": "flaky-stream",
+  "steps": [
+    { "type": "text", "text": "Streaming before the drop. ", "chunkSize": 4, "rate": 200 },
+    { "type": "dropEventStreams" },
+    { "type": "delay", "milliseconds": 50 },
+    { "type": "duplicateNextEvent" },
+    { "type": "text", "text": "Streaming after the drop; a client must resync from the list endpoints.", "chunkSize": 4, "rate": 200 },
+    { "type": "tool", "name": "shell", "input": { "command": "false" }, "error": { "type": "tool", "message": "exit status 1" } }
+  ]
+}

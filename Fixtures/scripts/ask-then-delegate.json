@@ -1,0 +1,22 @@
+{
+  "name": "ask-then-delegate",
+  "steps": [
+    { "type": "text", "text": "Before I start, one question." },
+    {
+      "type": "question", "title": "Which package manager?",
+      "fields": [
+        { "key": "pm", "title": "Package manager", "type": "string",
+          "options": [ { "value": "swiftpm", "label": "SwiftPM" }, { "value": "cocoapods", "label": "CocoaPods" } ] }
+      ]
+    },
+    {
+      "type": "subagent", "agent": "explore", "description": "Survey dependencies", "prompt": "List the dependencies",
+      "wait": true,
+      "script": { "steps": [
+        { "type": "tool", "name": "glob", "input": { "pattern": "**/Package.swift" }, "output": "Package.swift\n" },
+        { "type": "text", "text": "One manifest, no dependencies." }
+      ] }
+    },
+    { "type": "text", "text": "The project has no third-party dependencies." }
+  ]
+}
