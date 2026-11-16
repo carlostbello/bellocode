@@ -17,7 +17,7 @@ public final class SpikeServer: Sendable {
 
     public struct LaunchError: Error, CustomStringConvertible {
         public let description: String
-        init(_ description: String) { self.description = description }
+        public init(_ description: String) { self.description = description }
     }
 
     private init(baseURL: URL, directory: URL, password: String, process: Process, stdinLease: FileHandle, root: URL, stderrTail: StderrTail) {
