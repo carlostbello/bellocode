@@ -1,0 +1,8 @@
+{
+  "name": "provider-error",
+  "steps": [
+    { "type": "reasoning", "text": "Thinking about the request." },
+    { "type": "text", "text": "Let me check" },
+    { "type": "fail", "error": { "type": "provider", "message": "Upstream provider returned 503", "status": 503 } }
+  ]
+}

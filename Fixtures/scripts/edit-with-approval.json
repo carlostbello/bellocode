@@ -1,0 +1,17 @@
+{
+  "name": "edit-with-approval",
+  "steps": [
+    { "type": "reasoning", "text": "I should read the file before editing it.", "chunkSize": 8, "rate": 80 },
+    { "type": "tool", "name": "read", "input": { "path": "README.md" }, "output": "# Demo\n\nHello\n", "duration": 30 },
+    { "type": "text", "text": "I'll update the greeting in `README.md`." },
+    {
+      "type": "tool", "name": "edit",
+      "input": { "path": "README.md", "old": "Hello", "new": "Hello, world" },
+      "output": "Edited README.md",
+      "metadata": { "diff": "--- a/README.md\n+++ b/README.md\n@@ -3 +3 @@\n-Hello\n+Hello, world\n" },
+      "permission": { "action": "edit", "resources": ["README.md"], "save": ["README.md"] },
+      "duration": 40
+    },
+    { "type": "text", "text": "Done. The greeting now says **Hello, world**.", "chunkSize": 4, "rate": 120 }
+  ]
+}
