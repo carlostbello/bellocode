@@ -1,0 +1,87 @@
+// swift-tools-version: 6.4
+//
+// BelloCode module layout (docs/PLAN.md, section 4).
+//
+// Add new source files inside an existing target directory; SwiftPM picks them up without edits here.
+// Edit this manifest only to add a module, a dependency edge, a resource, or a third-party package.
+
+import Foundation
+import PackageDescription
+
+// MARK: - Shared settings
+
+/// Swift 6 language mode already implies complete strict-concurrency checking.
+let swiftSettings: [SwiftSetting] = [
+    .enableUpcomingFeature("ExistentialAny"),
+]
+
+/// Command Line Tools (no Xcode) ship Swift Testing, but the default `swiftbuild` build system does not pass the
+/// Testing macro plugin to every compile job, so `@Test` fails with "plugin for module 'TestingMacros' not found".
+/// Pointing the compiler at the plugin directory fixes it. The flag is added only when that directory exists; if Xcode
+/// becomes the active toolchain and this causes trouble, drop it. See docs/spikes/G4-packaging.md.
+let commandLineToolsTestingPlugins = "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
+let testSwiftSettings: [SwiftSetting] = swiftSettings + (
+    FileManager.default.fileExists(atPath: commandLineToolsTestingPlugins)
+        ? [.unsafeFlags(["-plugin-path", commandLineToolsTestingPlugins])]
+        : []
+)
+
+// MARK: - Third-party packages
+
+// Later work packages add their dependencies here, each pinned to an exact or up-to-next-minor version,
+// and then reference them from the targets below.
+//
+//   .package(url: "https://github.com/groue/GRDB.swift", ...)                        // Engine: projection store
+//   .package(url: "https://github.com/swiftlang/swift-markdown", ...)                // TranscriptKit: Markdown
+//   .package(url: "https://github.com/tree-sitter/swift-tree-sitter", ...)  // TranscriptKit, DiffKit: highlighting
+//   .package(url: "https://github.com/migueldeicaza/SwiftTerm", ...)                // TerminalKit
+let packageDependencies: [Package.Dependency] = []
+
+// MARK: - Targets
+
+/// A library target plus its test target (`Tests/<Name>Tests`).
+func library(_ name: String, dependencies: [Target.Dependency] = [], testDependencies: [Target.Dependency] = []) -> [Target] {
+    [
+        .target(name: name, dependencies: dependencies, swiftSettings: swiftSettings),
+        .testTarget(
+            name: "\(name)Tests",
+            dependencies: [.target(name: name)] + testDependencies,
+            swiftSettings: testSwiftSettings
+        ),
+    ]
+}
+
+let uiKitDependencies: [Target.Dependency] = ["BelloCore", "DesignSystem"]
+
+let targets: [Target] =
+    library("BelloCore")
+    + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
+    + library("Engine", dependencies: ["BelloCore", "OpenCodeKit"], testDependencies: ["MockOpenCode"])
+    + library("DesignSystem", dependencies: ["BelloCore"])
+    + library("TranscriptKit", dependencies: uiKitDependencies)
+    + library("ComposerKit", dependencies: uiKitDependencies)
+    + library("DiffKit", dependencies: uiKitDependencies)
+    + library("TerminalKit", dependencies: uiKitDependencies)
+    + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
+    + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
+    + [
+        .executableTarget(
+            name: "BelloCodeApp",
+            dependencies: [
+                "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
+                "TerminalKit", "BrowserKit", "MockOpenCode",
+            ],
+            swiftSettings: swiftSettings
+        ),
+    ]
+
+let package = Package(
+    name: "BelloCode",
+    platforms: [.macOS(.v15)],
+    products: [
+        .executable(name: "BelloCode", targets: ["BelloCodeApp"]),
+    ],
+    dependencies: packageDependencies,
+    targets: targets,
+    swiftLanguageModes: [.v6]
+)

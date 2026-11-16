@@ -1,0 +1,14 @@
+# SwiftPM and build output
+.build/
+.swiftpm/
+build/
+DerivedData/
+*.xcodeproj/
+xcuserdata/
+
+# Vendored binaries fetched by Scripts/fetch-opencode.sh
+Vendor/
+
+# macOS
+.DS_Store
+*.swp
