@@ -18,9 +18,7 @@ public actor SpikeStreamPipeline {
     private var rng: SpikeRNG
     private var source = ""
     private var pendingStamps: [Double] = []
-    private var committedSourceOffset = 0 // UTF-8 offset in `source` of the first uncommitted block
-    private var committedRenderedLength = 0 // UTF-16 length of committed rendered blocks
-    private var lastSentCommittedLength = 0
+    private var parser = SpikeTailParser()
     private var producing = true
     public private(set) var stats = Stats()
     /// The full streamed Markdown so far (for the end-of-stream equivalence check).
@@ -80,19 +78,33 @@ public actor SpikeStreamPipeline {
         }
     }
 
-    /// Re-parses only the uncommitted tail of the source. Blocks that are closed and followed by another block are
-    /// committed and never parsed again; the update replaces the view's text from the previously sent boundary.
     private func makeUpdate(generation: Int) -> SpikeTailUpdate? {
         let started = CACurrentMediaTime()
+        let (replaceFrom, rich) = parser.update(source: source)
+        let update = SpikeTailUpdate(generation: generation, replaceFrom: replaceFrom, rich: rich, deltaStamps: pendingStamps)
+        pendingStamps.removeAll(keepingCapacity: true)
+        stats.parseMS.append((CACurrentMediaTime() - started) * 1_000)
+        return update
+    }
+}
+
+/// Tail-only incremental Markdown: blocks that are closed and followed by another block are committed and never
+/// parsed again; each update re-parses from the last committed block boundary and says where (UTF-16, relative to
+/// the message body) the view's text must be replaced from.
+public struct SpikeTailParser: Sendable {
+    private var committedSourceOffset = 0 // UTF-8 offset in the source of the first uncommitted block
+    private var committedRenderedLength = 0 // UTF-16 length of committed rendered blocks
+
+    public init() {}
+
+    public mutating func update(source: String) -> (replaceFrom: Int, rich: SpikeRich) {
         let utf8 = source.utf8
-        let tailStart = utf8.index(utf8.startIndex, offsetBy: committedSourceOffset)
-        let tail = source[tailStart...]
+        let tail = source[utf8.index(utf8.startIndex, offsetBy: committedSourceOffset)...]
         let blocks = SpikeMarkdown.blocks(tail)
         var rich = SpikeRich()
         var newSourceOffset = committedSourceOffset
         var newRenderedLength = committedRenderedLength
         var allClosed = true
-        // Blocks committed since the last update are re-sent once (they were open in the view until now).
         for (i, block) in blocks.enumerated() {
             SpikeMarkdown.render(block, into: &rich)
             if allClosed, block.closed, i < blocks.count - 1 {
@@ -102,15 +114,9 @@ public actor SpikeStreamPipeline {
                 allClosed = false
             }
         }
-        let replaceFrom = lastSentCommittedLength
-        // The rich text covers everything from the old committed boundary; prefix it with nothing (the view still
-        // holds the previously committed blocks up to `replaceFrom`).
-        let update = SpikeTailUpdate(generation: generation, replaceFrom: replaceFrom, rich: rich, deltaStamps: pendingStamps)
-        pendingStamps.removeAll(keepingCapacity: true)
+        let replaceFrom = committedRenderedLength
         committedSourceOffset = newSourceOffset
         committedRenderedLength = newRenderedLength
-        lastSentCommittedLength = newRenderedLength
-        stats.parseMS.append((CACurrentMediaTime() - started) * 1_000)
-        return update
+        return (replaceFrom, rich)
     }
 }

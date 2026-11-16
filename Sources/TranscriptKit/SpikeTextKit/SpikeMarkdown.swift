@@ -64,7 +64,9 @@ public enum SpikeMarkdown {
                     blocks.append(Block(kind: kind, lines: Array(lines[(start + 1)..<i]), closed: closed, sourceEnd: ends[i]))
                     i += 1
                 } else {
-                    blocks.append(Block(kind: kind, lines: Array(lines[(start + 1)...lastIndex]), closed: false, sourceEnd: ends[lastIndex]))
+                    // Unclosed fence (valid to end of input); the opening line itself may be the partial last line.
+                    let body = start + 1 <= lastIndex ? Array(lines[(start + 1)...lastIndex]) : []
+                    blocks.append(Block(kind: kind, lines: body, closed: false, sourceEnd: ends[lastIndex]))
                 }
                 continue
             } else if isTableStart(i) {

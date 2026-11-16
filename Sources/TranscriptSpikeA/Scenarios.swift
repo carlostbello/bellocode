@@ -87,7 +87,6 @@ final class Scenarios {
     /// Opens a fresh window with the full transcript loaded and settled.
     func openLoaded(autoDeliverImages: Bool = true, width: CGFloat = 1_100) async {
         h.makeWindow(width: width, autoDeliverImages: autoDeliverImages)
-        if arguments.contains("--stabiliser") { c.stabiliseViewport = true }
         if arguments.contains("--no-images") { c.autoDeliverImages = false }
         if let screens = argument("--prefetch").flatMap(Double.init) { c.prefetchScreens = CGFloat(screens) }
         log("window up, loading")

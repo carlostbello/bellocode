@@ -2,6 +2,7 @@
 // writes build/spikes/G1-A/<scenario>.json and build/snapshots/G1-A-*.png, then exits.
 
 import AppKit
+import ObjectiveC
 import QuartzCore
 import TranscriptKit
 
@@ -13,6 +14,15 @@ func argument(_ name: String) -> String? {
 }
 let scenario = argument("--scenario") ?? "look"
 if let root = argument("--root") { Output.root = URL(fileURLWithPath: root) }
+
+// Log Objective-C exceptions (AppKit swallows the reason when it crashes on an exception in a display flush).
+_ = objc_setExceptionPreprocessor { exception in
+    if let exception = exception as? NSException {
+        let stack = Thread.callStackSymbols.prefix(30).joined(separator: "\n")
+        FileHandle.standardError.write(Data("[G1-A] EXCEPTION \(exception.name.rawValue): \(exception.reason ?? "")\n\(stack)\n".utf8))
+    }
+    return exception
+}
 
 let application = NSApplication.shared
 application.setActivationPolicy(.regular)

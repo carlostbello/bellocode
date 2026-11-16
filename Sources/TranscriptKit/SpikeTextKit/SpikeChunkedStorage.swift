@@ -40,7 +40,10 @@ public final class SpikeChunkedStorage: NSTextStorage {
 
     private func revalidateStarts(through index: Int) {
         guard startsValid <= index else { return }
-        if starts.count != chunks.count { starts = Array(repeating: 0, count: chunks.count) }
+        // Resize without discarding the valid prefix (edits only invalidate from the edited chunk onwards).
+        if starts.count < chunks.count { starts += Array(repeating: 0, count: chunks.count - starts.count) }
+        if starts.count > chunks.count { starts.removeLast(starts.count - chunks.count) }
+        startsValid = min(startsValid, chunks.count)
         var location = startsValid == 0 ? 0 : starts[startsValid - 1] + chunks[startsValid - 1].length
         for i in startsValid..<chunks.count {
             starts[i] = location

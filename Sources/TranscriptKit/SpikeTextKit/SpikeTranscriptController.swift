@@ -112,8 +112,6 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         materializer.imageRequest = { [weak self] id in self?.imageRequested(id) }
 
         scrollView.onUserScroll = { [weak self] delta in self?.userScrolled(deltaY: delta) }
-        textView.willLayout = { [weak self] in self?.captureLayoutAnchor() }
-        textView.didLayout = { [weak self] in self?.stabiliseAfterLayout() }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSTextView.willSwitchToNSLayoutManagerNotification, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.textKit1Fallback = true }
@@ -419,39 +417,13 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         layoutManager.ensureLayout(for: rect)
     }
 
-    // MARK: Viewport stabiliser
-
-    /// TextKit 2 positions unlaid content by estimate. When viewport layout replaces estimates with measured
-    /// fragments, the same text can land thousands of points away from where it was drawn a frame earlier (measured:
-    /// 9,700 pt jumps while scrolling down). Before each layout pass the top visible fragment is recorded; after it,
-    /// the clip view is shifted so that fragment keeps its screen position.
-    public var stabiliseViewport = false
-    public private(set) var stabiliserCorrections = 0
-    public private(set) var stabiliserMaxCorrectionPT: CGFloat = 0
-    private var layoutAnchor: Anchor?
-
-    private func captureLayoutAnchor() {
-        layoutAnchor = nil
-        guard stabiliseViewport, !isFollowing, programmaticScrollDepth == 0, historyLoaded || loadTask == nil else { return }
-        layoutAnchor = captureTopAnchor()
-    }
-
-    private func stabiliseAfterLayout() {
-        guard let anchor = layoutAnchor else { return }
-        layoutAnchor = nil
-        guard let location = textLocation(anchor.location),
-              let fragment = layoutManager.textLayoutFragment(for: location) else { return }
-        let origin = textView.textContainerOrigin
-        let screenY = fragment.layoutFragmentFrame.minY + origin.y - visibleRect.minY
-        let correction = screenY - anchor.screenY
-        guard abs(correction) > 0.5 else { return }
-        stabiliserCorrections += 1
-        stabiliserMaxCorrectionPT = max(stabiliserMaxCorrectionPT, abs(correction))
-        programmaticScrollDepth += 1
-        scrollProgrammatically(toY: visibleRect.minY + correction)
-        layoutManager.textViewportLayoutController.layoutViewport()
-        programmaticScrollDepth -= 1
-    }
+    // MARK: Viewport stabiliser (removed)
+    //
+    // An experiment captured the top fragment before NSTextView.layout() and restored its screen position after.
+    // It did not catch the large geometry jumps and added 1,171 small ones while scrolling up, so it was removed.
+    public let stabiliseViewport = false
+    public let stabiliserCorrections = 0
+    public let stabiliserMaxCorrectionPT: CGFloat = 0
 
     // MARK: Anchored edits
 
