@@ -53,10 +53,24 @@ struct ShellDriver {
         }
     }
 
+    /// Settles from inside a main-actor task: a nested run loop cannot drain the main queue while a task runs on it,
+    /// so this sleeps (letting observation loops, SwiftUI and the engine's updates run) between layout passes.
+    func idle(_ rounds: Int = 5) async {
+        for _ in 0..<rounds {
+            try? await Task.sleep(for: .milliseconds(30))
+            settle(1)
+        }
+    }
+
     /// Windows shown above the main window (popovers, the completion panel, utility windows), front last.
     var overlayWindows: [NSWindow] {
-        NSApp.orderedWindows.reversed().filter { other in
+        // `orderedWindows` leaves out popovers and panels; utility windows first, then popovers and panels on top.
+        NSApp.windows.filter { other in
             other !== window && other.isVisible && other.frame.intersects(window.frame) && other.alphaValue > 0
+        }.sorted { lhs, rhs in
+            let left = lhs is NSPanel || lhs.className.contains("Popover")
+            let right = rhs is NSPanel || rhs.className.contains("Popover")
+            return !left && right
         }
     }
 

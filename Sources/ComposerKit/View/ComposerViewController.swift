@@ -289,6 +289,8 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
             lastLayoutWidth = width
             lastWindowHeight = windowHeight
             scheduleHeightUpdate()
+            // An open completion popover follows the caret when the window or column resizes.
+            if completion.isOpen { renderCompletion() }
         }
     }
 

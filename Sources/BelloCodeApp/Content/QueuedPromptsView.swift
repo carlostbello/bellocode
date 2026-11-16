@@ -13,6 +13,7 @@ final class QueuedPromptsView: NSView {
     private var collapsed: NSLayoutConstraint!
     private var loop: ObservationLoop?
     private var shown: [QueuedPrompt] = []
+    private var shownRunning = false
 
     init(thread: ThreadModel) {
         self.thread = thread
@@ -45,8 +46,10 @@ final class QueuedPromptsView: NSView {
 
     private func render() {
         let queue = thread.queue
-        guard queue != shown else { return }
+        let running = thread.isRunning
+        guard queue != shown || running != shownRunning else { return }
         shown = queue
+        shownRunning = running
         for view in stack.arrangedSubviews { view.removeFromSuperview() }
         isHidden = queue.isEmpty
         collapsed.isActive = queue.isEmpty
@@ -58,10 +61,12 @@ final class QueuedPromptsView: NSView {
     }
 
     private func row(for prompt: QueuedPrompt) -> NSView {
-        let state: String = switch (prompt.state, prompt.delivery) {
-        case (.sending, _): "Sending…"
-        case (.queued, .steer): "Steering"
-        case (.queued, _): "Queued"
+        // After Stop, opencode keeps queued prompts parked until the next message (it does not send them alone).
+        let state: String = switch (prompt.state, prompt.delivery, shownRunning) {
+        case (.sending, _, _): "Sending…"
+        case (.queued, _, false): "Parked"
+        case (.queued, .steer, true): "Steering"
+        case (.queued, _, true): "Queued"
         }
         let icon = NSImageView(image: NSImage(
             systemSymbolName: prompt.delivery == .steer ? "arrow.turn.down.right" : "text.badge.plus",
@@ -89,6 +94,9 @@ final class QueuedPromptsView: NSView {
         row.setAccessibilityElement(true)
         row.setAccessibilityRole(.row)
         row.setAccessibilityLabel("\(state): \(prompt.text)")
+        if state == "Parked" {
+            row.toolTip = "The turn was stopped. This message waits and goes with your next one; Steer Now sends it now."
+        }
         return row
     }
 

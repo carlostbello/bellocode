@@ -27,9 +27,10 @@ final class ThreadContainerViewController: NSViewController {
     /// Called when the displayed selection changed (window title, focus).
     var onDisplay: ((ThreadSurfaceContext?) -> Void)?
 
-    /// The content column's preferred width: below every split-view holding priority (250-260), so it never moves a
-    /// divider; the column takes `readableWidth` when the window has room and shrinks with it otherwise.
-    static let columnPreference = NSLayoutConstraint.Priority.defaultLow - 20
+    /// The content column's preferred width: above the controls' hugging (250) so the composer and cards fill the
+    /// column, below the side panels' holding priority (270) so it never moves a divider; it takes `readableWidth`
+    /// when the window has room and shrinks with it otherwise.
+    static let columnPreference = NSLayoutConstraint.Priority(255)
 
     init(workspace: WorkspaceController, surfaces: ShellSurfaces) {
         self.workspace = workspace
@@ -182,8 +183,11 @@ final class ThreadContainerViewController: NSViewController {
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             transcriptView.topAnchor.constraint(equalTo: separator.bottomAnchor),
-            transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            // Full width by preference only: a transcript's own preferred column width (stronger than a split view's
+            // holding priority) then narrows it, centred, instead of pushing the sidebar divider.
+            transcriptView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            transcriptView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
+            transcriptView.widthAnchor.constraint(equalTo: container.widthAnchor).withPriority(Self.columnPreference - 2),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
             banner.topAnchor.constraint(equalTo: requests.bottomAnchor),
             composerView.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: DS.Spacing.s),
@@ -210,7 +214,7 @@ final class ThreadContainerViewController: NSViewController {
         heading.lineBreakMode = .byTruncatingTail
         heading.translatesAutoresizingMaskIntoConstraints = false
         // The header and the composer's context line already show where the agent acts; no third path here.
-        let path = NSTextField(labelWithString: "A new thread starts when you send. Free built-in models work without signing in.")
+        let path = NSTextField(labelWithString: "Free built-in models work without signing in. Choose another with ⇧⌘M.")
         path.font = DS.Typography.current.caption
         path.textColor = DS.Palette.secondaryText
         path.alignment = .center

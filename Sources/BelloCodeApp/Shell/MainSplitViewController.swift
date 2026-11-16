@@ -23,16 +23,16 @@ final class MainSplitViewController: NSSplitViewController {
         sidebarItem.maximumThickness = 420
         sidebarItem.canCollapse = true
         // Window resizes go to the content, never the side panels (they stay as the user set them; restored by
-        // autosave). Above the content's own width preferences (750), so a surface's preferred column width can never
-        // push a divider.
-        sidebarItem.holdingPriority = .defaultHigh + 10
+        // autosave). Above the content column's width preference (255) and below the window's own size (500), so a
+        // surface can neither move a divider nor resize the window.
+        sidebarItem.holdingPriority = Self.sideHoldingPriority
         contentItem = NSSplitViewItem(viewController: content)
         contentItem.minimumThickness = 420
         panelItem = NSSplitViewItem(inspectorWithViewController: panel)
         panelItem.minimumThickness = 280
         panelItem.maximumThickness = 760
         panelItem.canCollapse = true
-        panelItem.holdingPriority = .defaultHigh + 10
+        panelItem.holdingPriority = Self.sideHoldingPriority
         panelItem.isCollapsed = true
         self.autosaveName = autosaveName
         super.init(nibName: nil, bundle: nil)
@@ -57,6 +57,7 @@ final class MainSplitViewController: NSSplitViewController {
 
     private var needsDefaultWidths = false
     static let defaultSidebarWidth: CGFloat = 260
+    static let sideHoldingPriority = NSLayoutConstraint.Priority(270)
 
     override func viewDidAppear() {
         super.viewDidAppear()

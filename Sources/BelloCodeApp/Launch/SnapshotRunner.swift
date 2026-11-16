@@ -44,13 +44,13 @@ struct SnapshotRunner {
         controller.showWindow(nil)
         let driver = ShellDriver(controller: controller)
         var written: [String] = []
-        func shoot(_ state: String) {
+        func shoot(_ state: String) async {
             guard only.isEmpty || only.contains(state) else { return }
-            written += render(driver, state: state)
+            written += await render(driver, state: state)
         }
 
         // Empty: the window before the engine has loaded anything (no projects yet).
-        shoot("empty")
+        await shoot("empty")
 
         await engine.start()
         guard await waitUntil(timeout: .seconds(20), { engine.root.connection == .live && !engine.root.projects.isEmpty }) else {
@@ -78,7 +78,7 @@ struct SnapshotRunner {
                 content: AgentUIFactories.onboarding(auth: runtime.auth, engine: engine, importSource: nil, style: AppStyle.agentUI) { _ in },
                 size: NSSize(width: 520, height: 500))
             onboarding.showWindow(nil)
-            written += render(driver, state: "onboarding") { frame in
+            written += await render(driver, state: "onboarding") { frame in
                 guard let panel = onboarding.window else { return }
                 panel.setFrameOrigin(NSPoint(x: frame.midX - panel.frame.width / 2, y: frame.midY - panel.frame.height / 2))
             }
@@ -86,7 +86,7 @@ struct SnapshotRunner {
         }
 
         // Draft: the hero composer.
-        shoot("draft")
+        await shoot("draft")
 
         // Attachments: a pasted image, a large paste and a file mention in the draft.
         if let composer = driver.composer {
@@ -99,7 +99,7 @@ struct SnapshotRunner {
             ])
             await composer.settle()
         }
-        shoot("attachments")
+        await shoot("attachments")
 
         // Completion: "@Pa" asks the server's file search; the popover sits above the card.
         if let composer = driver.composer {
@@ -108,7 +108,7 @@ struct SnapshotRunner {
             await composer.settle()
             driver.settle()
         }
-        shoot("completion")
+        await shoot("completion")
         driver.composer?.completion.close()
         driver.settle()
 
@@ -126,17 +126,17 @@ struct SnapshotRunner {
         driver.send()
         _ = await waitUntil(timeout: .seconds(5)) { running.queue.contains { $0.state == .queued } }
         driver.settle()
-        shoot("running-queued")
+        await shoot("running-queued")
 
         // The model picker and the permission-mode popover, opened from their menu commands.
         driver.perform(.chooseModel)
         driver.settle(10)
-        shoot("model-picker")
+        await shoot("model-picker")
         driver.closeOverlays()
         driver.settle()
         driver.perform(.permissionMode)
         driver.settle(10)
-        shoot("mode-popover")
+        await shoot("mode-popover")
         driver.closeOverlays()
         driver.perform(.stopRun)
         _ = await waitUntil(timeout: .seconds(5)) { !running.isRunning }
@@ -150,9 +150,11 @@ struct SnapshotRunner {
         await runtime.enqueueMockScript(Self.shellApproval, for: shellID)
         driver.type("Clean the build folder and rebuild.")
         driver.send()
-        _ = await waitUntil(timeout: .seconds(10)) { shell.pendingRequests.contains { $0.isPermission } }
+        _ = await waitUntil(timeout: .seconds(10)) {
+            shell.pendingRequests.contains { $0.isPermission } && shell.status?.status == .awaitingApproval
+        }
         driver.settle()
-        shoot("approval-shell")
+        await shoot("approval-shell")
 
         // A question from the agent.
         let questionID = threads.count > 2 ? threads[2] : shellID
@@ -162,9 +164,11 @@ struct SnapshotRunner {
         await runtime.enqueueMockScript(Self.question, for: questionID)
         driver.type("Set up continuous integration for this package.")
         driver.send()
-        _ = await waitUntil(timeout: .seconds(10)) { question.pendingRequests.contains { !$0.isPermission } }
+        _ = await waitUntil(timeout: .seconds(10)) {
+            question.pendingRequests.contains { !$0.isPermission } && question.status?.status == .awaitingAnswer
+        }
         driver.settle()
-        shoot("question")
+        await shoot("question")
 
         // A child agent's approval, shown in the parent thread.
         let parentID = threads.count > 3 ? threads[3] : questionID
@@ -175,9 +179,11 @@ struct SnapshotRunner {
         await runtime.enqueueMockScript(Self.childApproval, for: parentID)
         driver.type("Ask a helper to fix the typo in the docs.")
         driver.send()
-        _ = await waitUntil(timeout: .seconds(10)) { parent.pendingRequests.contains { $0.sessionID != parentID } }
+        _ = await waitUntil(timeout: .seconds(10)) {
+            parent.pendingRequests.contains { $0.sessionID != parentID } && parent.status?.status == .awaitingApproval
+        }
         driver.settle()
-        shoot("child-approval")
+        await shoot("child-approval")
 
         // Offline with cached content, and a send that failed (text and error back in the composer).
         _ = await driver.select(.thread(runningID))
@@ -190,7 +196,7 @@ struct SnapshotRunner {
         driver.send()
         _ = await waitUntil(timeout: .seconds(10)) { driver.composer?.visibleError != nil }
         driver.settle()
-        shoot("error-offline")
+        await shoot("error-offline")
 
         workspace.close()
         controller.close()
@@ -251,7 +257,7 @@ struct SnapshotRunner {
 
     /// Renders the window (and overlays above it) in light and dark at both sizes. `place` positions extra windows
     /// after each resize.
-    private func render(_ driver: ShellDriver, state: String, place: ((NSRect) -> Void)? = nil) -> [String] {
+    private func render(_ driver: ShellDriver, state: String, place: ((NSRect) -> Void)? = nil) async -> [String] {
         var paths: [String] = []
         let window = driver.window
         for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
@@ -260,7 +266,7 @@ struct SnapshotRunner {
             for size in Self.sizes {
                 window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
                 place?(window.frame)
-                driver.settle()
+                await driver.idle()
                 guard let frameView = window.contentView?.superview,
                       let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds)
                 else { continue }
