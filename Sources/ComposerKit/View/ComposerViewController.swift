@@ -71,6 +71,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     private var spellTask: Task<Void, Never>?
     private var dismissedQueryLocation: Int?
     private var lastLayoutWidth: CGFloat = 0
+    private var lastWindowHeight: CGFloat = 0
     private var observers: [any NSObjectProtocol] = []
     private var lastAnnouncedCompletion: String?
 
@@ -281,9 +282,12 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     public override func viewDidLayout() {
         super.viewDidLayout()
+        // Text reflows with width; the height cap follows the window height.
         let width = scrollView.bounds.width
-        if abs(width - lastLayoutWidth) > 0.5 {
+        let windowHeight = view.window?.contentView?.bounds.height ?? 0
+        if abs(width - lastLayoutWidth) > 0.5 || abs(windowHeight - lastWindowHeight) > 0.5 {
             lastLayoutWidth = width
+            lastWindowHeight = windowHeight
             scheduleHeightUpdate()
         }
     }

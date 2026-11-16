@@ -371,9 +371,7 @@ struct Scenarios {
         await h.composer.settle()
         h.expectEqual(h.textView.selectedRange(), selection, "growth keeps the selection")
         await h.type(String(repeating: "\nmore", count: 60))
-        let start = ContinuousClock.now
         await h.composer.settle()
-        h.metrics["growth.measure-62-lines"] = "\(start.duration(to: .now))"
         h.expectEqual(h.composer.textAreaHeight, h.composer.textAreaMaximumHeight, "capped at the maximum")
         h.expect(h.composer.textAreaHeight < h.window.contentView!.bounds.height * 0.5, "cap is a fraction of the window")
         h.expect(h.textView.visibleRect.maxY >= h.textView.bounds.maxY - 2, "caret line stays visible when capped")
@@ -491,6 +489,29 @@ struct Scenarios {
         h.metrics["typing.p95"] = ms(sorted[sorted.count * 95 / 100])
         h.metrics["typing.max"] = ms(sorted.last!)
         h.expect(sorted[sorted.count * 95 / 100] < .milliseconds(16), "p95 keystroke (insert + height + layout + display) under one frame")
+
+        // A large inline draft (2,000 lines, ~90 KB): keystroke cost at the end, and the full height measurement.
+        let big = (0..<2000).map { "line \($0): the quick brown fox jumps over the lazy dog" }.joined(separator: "\n")
+        h.textView.insertText(big, replacementRange: NSRange(location: NSNotFound, length: 0))
+        await h.composer.settle()
+        var bigSamples: [Duration] = []
+        for _ in 0..<100 {
+            let start = clock.now
+            h.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+            h.composer.updateTextHeight()
+            h.window.contentView?.layoutSubtreeIfNeeded()
+            h.window.contentView?.displayIfNeeded()
+            bigSamples.append(start.duration(to: clock.now))
+        }
+        let bigSorted = bigSamples.sorted()
+        h.metrics["typing.2000-lines.p50"] = ms(bigSorted[bigSorted.count / 2])
+        h.metrics["typing.2000-lines.p95"] = ms(bigSorted[bigSorted.count * 95 / 100])
+        h.textView.selectAll(nil)
+        h.textView.insertText("", replacementRange: h.textView.selectedRange())
+        let start = clock.now
+        h.textView.insertText(big, replacementRange: NSRange(location: NSNotFound, length: 0))
+        h.composer.updateTextHeight()
+        h.metrics["growth.insert-and-measure-2000-lines"] = ms(start.duration(to: clock.now))
     }
 
     func snapshots() async {

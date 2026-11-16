@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Runs completion queries for the composer: debounced, cancellable, one in flight, results applied only for the
 /// query that asked for them. Keeps the previous rows while a refinement loads, and keeps the selected row by
@@ -23,6 +24,7 @@ public final class CompletionSession {
     /// Called after every visible change.
     public var onChange: (() -> Void)?
 
+    private static let signposter = OSSignposter(subsystem: "app.bellocode", category: "ComposerCompletion")
     private var task: Task<Void, Never>?
     private var generation = 0
 
@@ -76,11 +78,13 @@ public final class CompletionSession {
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled else { return }
             let result: Result<[CompletionItem], any Error>
+            let signpost = Self.signposter.beginInterval("query")
             do {
                 result = .success(try await provider.completions(for: newQuery.text))
             } catch {
                 result = .failure(error)
             }
+            Self.signposter.endInterval("query", signpost)
             guard !Task.isCancelled, let self, self.generation == expected else { return }
             self.apply(result, for: newQuery)
         }
