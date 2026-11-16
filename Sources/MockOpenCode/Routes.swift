@@ -152,12 +152,20 @@ extension MockOpenCodeServer {
                 response = createForm(c[0], request)
             } else if let c = match("api/session/:id/form/:fid/reply") {
                 response = replyForm(c[0], c[1], request)
+            } else if let c = match("api/session/:id/view") {
+                response = viewSession(c[0], request)
+            } else if let c = match("api/session/:id/agent") {
+                response = switchAgent(c[0], request)
+            } else if let c = match("api/session/:id/model") {
+                response = switchModel(c[0], request)
             } else {
                 response = Self.notFound(request)
             }
         case "PATCH":
             if let c = match("api/session/:id") {
                 response = updateSession(c[0], request)
+            } else if let c = match("api/session/:id/inbox/:iid") {
+                response = updateInboxItem(c[0], c[1], request)
             } else {
                 response = Self.notFound(request)
             }
@@ -166,6 +174,8 @@ extension MockOpenCodeServer {
                 response = deleteSession(c[0])
             } else if let c = match("api/session/:id/form/:fid") {
                 response = cancelForm(c[0], c[1])
+            } else if let c = match("api/session/:id/inbox/:iid") {
+                response = cancelInboxItem(c[0], c[1])
             } else {
                 response = Self.notFound(request)
             }

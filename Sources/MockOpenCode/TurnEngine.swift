@@ -14,10 +14,10 @@ import Foundation
 struct InboxItem: Sendable {
     let id: String
     let text: String
-    let delivery: String
+    var delivery: String
     let script: TurnScript
     /// The `Session.Inbox.Item` JSON returned by `prompt` and `GET …/inbox`.
-    let json: JSONValue
+    var json: JSONValue
     /// Set by an interrupt without `resume`: the item waits for the next prompt instead of starting a new run.
     var held = false
 }
