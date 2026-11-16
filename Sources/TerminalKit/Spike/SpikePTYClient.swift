@@ -264,12 +264,16 @@ public final class SpikePTYConnection: Sendable {
     /// Output byte offset of the next byte we expect (the `cursor` to reconnect with).
     private let offsetState = SpikeLocked(0)
     private let bytesReceived = SpikeLocked(0)
+    /// The first text (control) frames verbatim, for the contract table. Bounded.
+    public let rawControl = SpikeLocked<[String]>([])
+    /// Bytes of binary frames received before `replay_complete`.
+    public let replayBytes = SpikeLocked(0)
 
     init(task: URLSessionWebSocketTask, attachmentID: String, sink: @escaping @Sendable (SpikePTYEvent) -> Void) {
         self.task = task
         self.attachmentID = attachmentID
         task.resume()
-        let receive = Task { [task, offsetState, bytesReceived] in
+        let receive = Task { [task, offsetState, bytesReceived, rawControl, replayBytes] in
             var replaying = true
             while !Task.isCancelled {
                 let message: URLSessionWebSocketTask.Message
@@ -282,9 +286,10 @@ public final class SpikePTYConnection: Sendable {
                 switch message {
                 case .data(let data):
                     bytesReceived.withLock { $0 += data.count }
-                    if !replaying { offsetState.withLock { $0 += data.count } }
+                    if replaying { replayBytes.withLock { $0 += data.count } } else { offsetState.withLock { $0 += data.count } }
                     sink(.output(data))
                 case .string(let text):
+                    rawControl.withLock { if $0.count < 32 { $0.append(String(text.prefix(600))) } }
                     let event = SpikePTYConnection.decodeControl(text)
                     switch event {
                     case .attached(_, _, _, _, let end, _): offsetState.withLock { $0 = end }
