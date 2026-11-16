@@ -53,3 +53,41 @@ struct SessionControlRouteTests {
         await server.stop()
     }
 }
+
+@Suite("Cursor paging")
+struct CursorPagingTests {
+    /// Following `cursor.next` keeps the first page's order (a cursor must not be combined with `order`).
+    @Test func ascendingPagesDoNotRepeat() async throws {
+        let server = MockOpenCodeServer(scenario: .demo(), options: .testing)
+        let client = TestClient(try await server.start())
+        let sessions = try await client.get("/api/session?limit=100")["data"]?.arrayValue ?? []
+        let id = try #require(sessions.first?["id"]?.stringValue)
+        var seen: [String] = []
+        var path = "/api/session/\(id)/message?limit=3&order=asc"
+        for _ in 0..<10 {
+            let page = try await client.get(path)
+            let ids = (page["data"]?.arrayValue ?? []).compactMap { $0["id"]?.stringValue }
+            if ids.isEmpty { break }
+            seen += ids
+            guard let next = page["cursor"]?["next"]?.stringValue else { break }
+            path = "/api/session/\(id)/message?limit=3&cursor=\(next)"
+        }
+        #expect(seen.count == Set(seen).count)
+        #expect(seen.count == 8)
+        #expect(seen == seen.sorted())
+
+        var ascending: [String] = []
+        var sessionPath = "/api/session?limit=2&order=asc"
+        for _ in 0..<10 {
+            let page = try await client.get(sessionPath)
+            let ids = (page["data"]?.arrayValue ?? []).compactMap { $0["id"]?.stringValue }
+            if ids.isEmpty { break }
+            ascending += ids
+            guard let next = page["cursor"]?["next"]?.stringValue else { break }
+            sessionPath = "/api/session?limit=2&cursor=\(next)"
+        }
+        #expect(ascending.count == Set(ascending).count)
+        #expect(ascending.count == sessions.count)
+        await server.stop()
+    }
+}
