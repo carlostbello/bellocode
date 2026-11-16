@@ -122,13 +122,25 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         textView.postsFrameChangedNotifications = true
         observers.append(center.addObserver(forName: NSView.frameDidChangeNotification, object: textView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.isFollowing, self.programmaticScrollDepth == 0, !self.isAtBottom else { return }
-                self.scrollToBottom()
+                guard let self, self.programmaticScrollDepth == 0 else { return }
+                let width = self.textView.frame.width
+                defer { self.lastWidth = width }
+                if self.isFollowing {
+                    if !self.isAtBottom { self.scrollToBottom() }
+                } else if self.anchorOnResize, width != self.lastWidth, let anchor = self.viewportAnchor {
+                    // Re-wrap: keep the top visible text at the same screen position. Off by default: after a width
+                    // change all layout is invalid and relocateViewport cost 3.4 s per resize step (measured).
+                    self.relocate(to: anchor)
+                }
             }
         })
         scrollView.contentView.postsBoundsChangedNotifications = true
         observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.prefetchLayout() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.prefetchLayout()
+                if !self.inLiveResize { self.viewportAnchor = self.captureTopAnchor() }
+            }
         })
         observers.append(center.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.userScrolled(deltaY: 0) }
@@ -355,9 +367,14 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
 
     public func scrollToBottom() {
         programmaticScrollDepth += 1
+        // `ensureLayout(for: end)` lays out everything before the end once layout is invalid (2.4 s frames during
+        // resize); relocating the viewport to the end only lays out the last screen.
         let end = contentStorage.documentRange.endLocation
-        layoutManager.ensureLayout(for: NSTextRange(location: end))
-        textView.scrollToEndOfDocument(nil)
+        let controller = layoutManager.textViewportLayoutController
+        _ = controller.relocateViewport(to: end)
+        controller.layoutViewport()
+        scrollProgrammatically(toY: textView.frame.height - visibleRect.height)
+        controller.layoutViewport()
         programmaticScrollDepth -= 1
     }
 
@@ -407,6 +424,14 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     /// are replaced by measured ones off-screen instead of under the user's eyes.
     public var prefetchScreens: CGFloat = 0
     private var lastPrefetchY: CGFloat = -.greatestFiniteMagnitude
+
+    /// The top visible text location and its screen offset, refreshed on every scroll (resize anchor).
+    private var viewportAnchor: Anchor?
+    private var lastWidth: CGFloat = 0
+    private var inLiveResize: Bool { textView.inLiveResize || resizing }
+    /// Set by a driver that resizes programmatically (no live-resize session).
+    public var resizing = false
+    public var anchorOnResize = false
 
     private func prefetchLayout() {
         guard prefetchScreens > 0, programmaticScrollDepth == 0 else { return }

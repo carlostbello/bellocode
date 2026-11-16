@@ -614,6 +614,8 @@ final class Scenarios {
     }
 
     func animateWidth(from: CGFloat, to: CGFloat, seconds: Double) async {
+        c.resizing = true
+        defer { c.resizing = false }
         let start = CACurrentMediaTime()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             h.frames.onTick = { [weak self] _ in
