@@ -169,7 +169,7 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
 
     /// Opens the transcript at the bottom: the newest `tailWindow` messages are rendered and shown first, then
     /// older history is rendered off the main actor and prepended in pages while the bottom stays pinned.
-    public func load(_ all: [SpikeMessage], tailWindow: Int = 150, pageSize: Int = 1_000,
+    public func load(_ all: [SpikeMessage], tailWindow: Int = 150, pageSize: Int = 250,
                      firstContent: @escaping @MainActor () -> Void) {
         let t0 = CACurrentMediaTime()
         let tailStart = max(0, all.count - tailWindow)

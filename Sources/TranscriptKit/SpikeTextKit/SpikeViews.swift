@@ -36,20 +36,23 @@ final class SpikeBlockFragment: NSTextLayoutFragment {
     }
 
     private var fillColor: CGColor? {
+        // Neutral fills are black-on-light and white-on-dark.
+        let dark = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        func gray(_ alpha: CGFloat) -> CGColor { CGColor(gray: dark ? 1 : 0, alpha: dark ? alpha * 1.4 : alpha) }
         switch block {
         case .none, .roleLabel, .image: return nil
         case .user: return CGColor(srgbRed: 0.20, green: 0.45, blue: 0.95, alpha: 0.08)
-        case .code: return CGColor(gray: 0, alpha: 0.045)
-        case .toolHeader: return CGColor(gray: 0, alpha: 0.06)
-        case .toolBody: return CGColor(gray: 0, alpha: 0.03)
+        case .code: return gray(0.045)
+        case .toolHeader: return gray(0.06)
+        case .toolBody: return gray(0.03)
         case .reasoningHeader: return CGColor(srgbRed: 0.55, green: 0.35, blue: 0.85, alpha: 0.08)
         case .reasoningBody: return CGColor(srgbRed: 0.55, green: 0.35, blue: 0.85, alpha: 0.04)
-        case .diffHeader: return CGColor(gray: 0, alpha: 0.07)
+        case .diffHeader: return gray(0.07)
         case .diffHunk: return CGColor(srgbRed: 0.1, green: 0.55, blue: 0.6, alpha: 0.10)
         case .diffAdd: return CGColor(srgbRed: 0.1, green: 0.7, blue: 0.2, alpha: 0.15)
         case .diffDel: return CGColor(srgbRed: 0.9, green: 0.2, blue: 0.2, alpha: 0.13)
-        case .diffContext: return CGColor(gray: 0, alpha: 0.03)
-        case .table: return isFirst ? CGColor(gray: 0, alpha: 0.07) : CGColor(gray: 0, alpha: 0.03)
+        case .diffContext: return gray(0.03)
+        case .table: return isFirst ? gray(0.07) : gray(0.03)
         }
     }
 

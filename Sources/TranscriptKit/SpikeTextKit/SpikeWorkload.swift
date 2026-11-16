@@ -399,7 +399,7 @@ private struct Generator {
         default: title = sentence(&rng, words: 3...6)
         }
         let status = rng.chance(0.88) ? "completed" : (rng.chance(0.7) ? "failed" : "cancelled")
-        let count = 1 + Int(pow(rng.unit(), 2.2) * 199)
+        let count = 1 + Int(pow(rng.unit(), 3.6) * 199)
         var output: [String] = []
         output.reserveCapacity(count)
         for i in 0..<count {
