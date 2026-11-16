@@ -123,6 +123,16 @@ final class AppRuntime {
         await mockServer.enqueueScript(script)
     }
 
+    /// Plays `script` on the next prompt to `sessionID` (any session when nil). No effect outside mock mode.
+    func enqueueMockScript(_ script: TurnScript, for sessionID: SessionID? = nil) async {
+        await mockServer?.enqueueScript(script, for: sessionID?.rawValue)
+    }
+
+    /// Takes the mock server off the network (snapshots of the offline state). No effect outside mock mode.
+    func takeMockOffline() async {
+        await mockServer?.stop()
+    }
+
     /// A short description for the window's connection item ("Mock (demo)", "Attached", …); nil for the bundled server.
     var sourceLabel: String? {
         switch source {

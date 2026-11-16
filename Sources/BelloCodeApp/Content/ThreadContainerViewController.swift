@@ -20,11 +20,16 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var composer: NSViewController?
     private(set) var requestStack: NSViewController?
     private(set) var statusBanner: StatusUnknownBanner?
+    private(set) var queuedPrompts: QueuedPromptsView?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
     /// Called when the displayed selection changed (window title, focus).
     var onDisplay: ((ThreadSurfaceContext?) -> Void)?
+
+    /// The content column's preferred width: below every split-view holding priority (250-260), so it never moves a
+    /// divider; the column takes `readableWidth` when the window has room and shrinks with it otherwise.
+    static let columnPreference = NSLayoutConstraint.Priority.defaultLow - 20
 
     init(workspace: WorkspaceController, surfaces: ShellSurfaces) {
         self.workspace = workspace
@@ -116,6 +121,7 @@ final class ThreadContainerViewController: NSViewController {
         composer = nil
         requestStack = nil
         statusBanner = nil
+        queuedPrompts = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -151,7 +157,16 @@ final class ThreadContainerViewController: NSViewController {
         if let thread = context.thread {
             let unknown = StatusUnknownBanner(thread: thread, engine: workspace.engine)
             statusBanner = unknown
-            banner = unknown
+            let queued = QueuedPromptsView(thread: thread)
+            queuedPrompts = queued
+            let column = NSStackView(views: [unknown, queued])
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 0
+            column.detachesHiddenViews = true
+            column.translatesAutoresizingMaskIntoConstraints = false
+            for view in [unknown, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
+            banner = column
         } else {
             banner = NSView()
             banner.translatesAutoresizingMaskIntoConstraints = false
@@ -176,7 +191,7 @@ final class ThreadContainerViewController: NSViewController {
         ])
         for docked in [requests, banner, composerView] {
             let width = docked.widthAnchor.constraint(equalToConstant: column)
-            width.priority = .defaultHigh
+            width.priority = Self.columnPreference
             NSLayoutConstraint.activate([
                 docked.centerXAnchor.constraint(equalTo: container.centerXAnchor),
                 docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
@@ -194,7 +209,8 @@ final class ThreadContainerViewController: NSViewController {
         heading.alignment = .center
         heading.lineBreakMode = .byTruncatingTail
         heading.translatesAutoresizingMaskIntoConstraints = false
-        let path = NSTextField(labelWithString: (context.directory as NSString).abbreviatingWithTildeInPath)
+        // The header and the composer's context line already show where the agent acts; no third path here.
+        let path = NSTextField(labelWithString: "A new thread starts when you send. Free built-in models work without signing in.")
         path.font = DS.Typography.current.caption
         path.textColor = DS.Palette.secondaryText
         path.alignment = .center
@@ -204,7 +220,7 @@ final class ThreadContainerViewController: NSViewController {
         let composerView = adopt(composer)
         for subview in [header, heading, path, composerView] { container.addSubview(subview) }
         let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
-        width.priority = .defaultHigh
+        width.priority = Self.columnPreference
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.topAnchor),
             header.leadingAnchor.constraint(equalTo: container.leadingAnchor),

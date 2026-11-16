@@ -22,12 +22,17 @@ final class MainSplitViewController: NSSplitViewController {
         sidebarItem.minimumThickness = 200
         sidebarItem.maximumThickness = 420
         sidebarItem.canCollapse = true
+        // Window resizes go to the content, never the side panels (they stay as the user set them; restored by
+        // autosave). Above the content's own width preferences (750), so a surface's preferred column width can never
+        // push a divider.
+        sidebarItem.holdingPriority = .defaultHigh + 10
         contentItem = NSSplitViewItem(viewController: content)
         contentItem.minimumThickness = 420
         panelItem = NSSplitViewItem(inspectorWithViewController: panel)
         panelItem.minimumThickness = 280
         panelItem.maximumThickness = 760
         panelItem.canCollapse = true
+        panelItem.holdingPriority = .defaultHigh + 10
         panelItem.isCollapsed = true
         self.autosaveName = autosaveName
         super.init(nibName: nil, bundle: nil)
@@ -39,6 +44,9 @@ final class MainSplitViewController: NSSplitViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         splitView.dividerStyle = .thin
+        // The first-launch widths: split items start at their view's frame size, and the side panels hold it.
+        sidebarItem.viewController.view.setFrameSize(NSSize(width: Self.defaultSidebarWidth, height: 600))
+        panelItem.viewController.view.setFrameSize(NSSize(width: 340, height: 600))
         addSplitViewItem(sidebarItem)
         addSplitViewItem(contentItem)
         addSplitViewItem(panelItem)
@@ -48,17 +56,23 @@ final class MainSplitViewController: NSSplitViewController {
     }
 
     private var needsDefaultWidths = false
+    static let defaultSidebarWidth: CGFloat = 260
 
     override func viewDidAppear() {
         super.viewDidAppear()
         applyDefaultWidthsIfNeeded()
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        if needsDefaultWidths, view.window?.isVisible == true { applyDefaultWidthsIfNeeded() }
+    }
+
     /// First launch (no autosaved layout): a 260 pt sidebar and a 340 pt panel.
     func applyDefaultWidthsIfNeeded() {
-        guard needsDefaultWidths, splitView.bounds.width > 0 else { return }
+        guard needsDefaultWidths, splitView.bounds.width > 400 else { return }
         needsDefaultWidths = false
-        splitView.setPosition(260, ofDividerAt: 0)
+        splitView.setPosition(Self.defaultSidebarWidth, ofDividerAt: 0)
         if !panelItem.isCollapsed { splitView.setPosition(splitView.bounds.width - 340, ofDividerAt: 1) }
     }
 
