@@ -225,9 +225,18 @@ public actor MockOpenCodeServer {
         self.pieceDelay = pieceDelay
     }
 
-    /// Drops every event stream abruptly (no terminating chunk). New subscriptions work normally.
+    /// Drops every open event stream: frames already published are flushed, then the connection closes without the
+    /// terminating chunk, as when the server dies mid-stream. Later events never reach those streams. New
+    /// subscriptions work normally.
     public func dropEventStreams() {
-        for id in Array(subscribers.keys) { closeSubscriber(id, abrupt: true) }
+        for id in Array(subscribers.keys) {
+            guard var subscriber = subscribers[id] else { continue }
+            subscriber.dropRequested = true
+            let waiter = subscriber.waiter
+            subscriber.waiter = nil
+            subscribers[id] = subscriber
+            waiter?.resume(returning: takeBatch(id))
+        }
     }
 
     /// Drops each event stream after it has been sent `frames` more frames; `nil` turns this off.
@@ -331,7 +340,7 @@ public actor MockOpenCodeServer {
     static let heartbeatFrame = Data(": heartbeat\n\n".utf8)
 
     private func enqueue(_ frame: Data, to id: Int) {
-        guard var subscriber = subscribers[id], !subscriber.closed else { return }
+        guard var subscriber = subscribers[id], !subscriber.closed, !subscriber.dropRequested else { return }
         if subscriber.pending.count >= options.subscriberQueueLimit {
             log.notice("event subscriber \(id) overflowed; dropping its connection")
             closeSubscriber(id, abrupt: true)
@@ -349,10 +358,10 @@ public actor MockOpenCodeServer {
 
     private func takeBatch(_ id: Int) -> EventBatch? {
         guard var subscriber = subscribers[id] else { return nil }
-        if subscriber.pending.isEmpty { return nil }
+        if subscriber.pending.isEmpty, !subscriber.dropRequested { return nil }
         var frames = subscriber.pending
         subscriber.pending.removeAll(keepingCapacity: true)
-        var dropAfter = false
+        var dropAfter = subscriber.dropRequested
         if let limit = subscriber.remainingBeforeDrop {
             if frames.count >= limit {
                 frames = Array(frames.prefix(limit))
@@ -368,7 +377,7 @@ public actor MockOpenCodeServer {
     /// The next frames for a subscriber, waiting if there are none; `nil` once the subscriber is closed.
     func nextBatch(_ id: Int) async -> EventBatch? {
         guard let subscriber = subscribers[id] else { return nil }
-        if !subscriber.pending.isEmpty { return takeBatch(id) }
+        if !subscriber.pending.isEmpty || subscriber.dropRequested { return takeBatch(id) }
         if subscriber.closed { return nil }
         return await withCheckedContinuation { continuation in
             subscribers[id]?.waiter = continuation
@@ -518,7 +527,9 @@ public actor MockOpenCodeServer {
                     if let delay = batch.pieceDelay { try await Task.sleep(for: delay) }
                 }
                 if batch.dropAfter {
-                    await server.closeSubscriber(subscriberID, abrupt: true)
+                    // Flushed frames stay delivered; the body just stops without its terminating chunk.
+                    await server.closeSubscriber(subscriberID, abrupt: false)
+                    io.finish()
                     return
                 }
             }
@@ -545,6 +556,7 @@ struct Subscriber {
     var remainingBeforeDrop: Int?
     var waiter: CheckedContinuation<EventBatch?, Never>?
     var closed = false
+    var dropRequested = false
 
     func accepts(_ type: String) -> Bool { types?.contains(type) ?? true }
 }
