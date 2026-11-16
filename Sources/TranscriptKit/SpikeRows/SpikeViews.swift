@@ -45,7 +45,7 @@ final class SpikeRowView: NSTableRowView {
 /// very tall rows, so a 40,000-point row (the 100 KB code block) never gets a 40,000-point backing layer.
 final class SpikeItemView: NSView {
     static let identifier = NSUserInterfaceItemIdentifier("SpikeItem")
-    static let tallRowThreshold: CGFloat = 2_400
+    static let tallRowThreshold: CGFloat = 1_000
 
     var itemID = 0
     var layout: SpikeItemLayout?

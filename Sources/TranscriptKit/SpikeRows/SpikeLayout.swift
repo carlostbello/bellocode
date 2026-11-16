@@ -432,6 +432,16 @@ public final class SpikeItemLayout {
 
     func blockFrame(_ index: Int) -> CGRect { CGRect(origin: origins[index], size: blocks[index].size) }
 
+    /// Approximate memory cost in CTLines (prose lines plus a bounded share of lazily realised mono lines).
+    public lazy var cost: Int = blocks.reduce(0) { total, block in
+        total + block.fragments.reduce(0) { sum, fragment in
+            switch fragment.content {
+            case .lines(let lines): sum + lines.count
+            case .mono(let mono): sum + min(mono.lineCount, 120)
+            }
+        }
+    } + 1
+
     /// Item-local point -> (block, offset).
     func hitTest(_ point: CGPoint) -> (block: Int, offset: Int) {
         guard !blocks.isEmpty else { return (0, 0) }

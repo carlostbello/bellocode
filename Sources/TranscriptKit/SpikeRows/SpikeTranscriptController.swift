@@ -84,7 +84,15 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
     private var layouts: [Int: SpikeItemLayout] = [:]
     private var layoutTick: [Int: UInt64] = [:]
     private var tick: UInt64 = 0
-    public var layoutCacheLimit = 500
+    /// Cache bounds: count and approximate CTLine cost (~1-2 KB each). The first S2 runs used a 500-layout count
+    /// limit that grew the footprint to 520 MB and evicted 100 layouts at once (60-100 ms frames).
+    public var layoutCacheLimit = Int(ProcessInfo.processInfo.environment["SPIKE_CACHE"] ?? "") ?? 300
+    public var layoutCacheCostLimit = 25_000
+    private var layoutCacheCost = 0
+    private var scrollVelocity: CGFloat = 0
+    private var lastBoundsY: CGFloat = 0
+    private var lastBoundsTime: Double = 0
+    private let maxInflightPrefetch = 8
 
     private var inflight: [Int: SpikeLayoutKey] = [:]
     private var layoutTasks: [Int: Task<Void, Never>] = [:]
@@ -414,18 +422,21 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
 
     private func store(_ layout: SpikeItemLayout) {
         tick += 1
+        if let old = layouts[layout.key.id] { layoutCacheCost -= old.cost }
         layouts[layout.key.id] = layout
+        layoutCacheCost += layout.cost
         layoutTick[layout.key.id] = tick
-        if layouts.count > layoutCacheLimit { evictLayouts() }
+        if layouts.count > layoutCacheLimit || layoutCacheCost > layoutCacheCostLimit { evictLayouts() }
     }
 
+    /// Evicts least recently used layouts just until the cache is back under its bounds (a few per call), so
+    /// deallocation cost is spread out instead of arriving in one burst.
     private func evictLayouts() {
-        let visible = Set(visibleItemViews().map { items[$0.row].id })
-        let excess = layouts.count - layoutCacheLimit * 4 / 5
-        let victims = layoutTick.filter { !visible.contains($0.key) && $0.key != tail?.id }
-            .sorted { $0.value < $1.value }.prefix(excess)
-        for (id, _) in victims {
-            layouts[id] = nil
+        let keep = Set(availableItemViews().map { items[$0.row].id })
+        let candidates = layoutTick.filter { !keep.contains($0.key) && $0.key != tail?.id }.sorted { $0.value < $1.value }
+        for (id, _) in candidates {
+            guard layouts.count > layoutCacheLimit || layoutCacheCost > layoutCacheCostLimit else { break }
+            if let old = layouts.removeValue(forKey: id) { layoutCacheCost -= old.cost }
             layoutTick[id] = nil
         }
     }
@@ -479,6 +490,7 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
             inflight[id] = nil
             layoutTasks[id] = nil
         }
+        defer { if inflight.count < maxInflightPrefetch / 2 { updatePrefetch(force: true) } }
         guard let row = rowByID[id], currentKey(row: row) == layout.key else { return }  // stale: drop
         store(layout)
         acceptHeight(layout, row: row)
@@ -495,17 +507,31 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
         }
     }
 
+    /// Visible rows are always requested; then rows ahead in the scroll direction (lookahead grows with velocity:
+    /// 0.35 s of travel, at least 1.5 viewports), then one viewport behind. At most `maxInflightPrefetch` prefetch
+    /// layouts run at once so prefetch never saturates the cores (which delays display-link delivery).
     private func updatePrefetch(force: Bool = false) {
         let visible = tableView.visibleRect
         guard visible.height > 0 else { return }
-        let range = tableView.rows(in: visible.insetBy(dx: 0, dy: -visible.height * 1.5))
+        let ahead = max(visible.height * 1.5, abs(scrollVelocity) * 0.35)
+        let down = scrollVelocity >= 0
+        let window = CGRect(x: 0, y: visible.minY - (down ? visible.height : ahead), width: visible.width,
+                            height: visible.height * 2 + ahead)
+        let range = tableView.rows(in: window)
         let rows = range.location..<(range.location + range.length)
         if !force, rows == lastPrefetchRange { return }
         lastPrefetchRange = rows
-        // Visible rows first, then the margin.
-        let visibleRange = tableView.rows(in: visible)
-        for row in visibleRange.location..<(visibleRange.location + visibleRange.length) { requestLayout(row: row) }
-        for row in rows { requestLayout(row: row) }
+        let visibleNS = tableView.rows(in: visible)
+        let visibleRows = visibleNS.location..<(visibleNS.location + visibleNS.length)
+        for row in visibleRows { requestLayout(row: row) }
+        let aheadRows: [Int] = down ? Array(visibleRows.upperBound..<rows.upperBound)
+            : Array((rows.lowerBound..<visibleRows.lowerBound).reversed())
+        let behindRows: [Int] = down ? Array((rows.lowerBound..<visibleRows.lowerBound).reversed())
+            : Array(visibleRows.upperBound..<rows.upperBound)
+        for row in aheadRows + behindRows {
+            if inflight.count >= maxInflightPrefetch { break }
+            requestLayout(row: row)
+        }
     }
 
     // MARK: Height changes and anchoring
@@ -630,6 +656,12 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
     // MARK: Scrolling, follow and release
 
     private func boundsChanged() {
+        let now = CACurrentMediaTime()
+        let y = scrollView.contentView.bounds.minY
+        if now - lastBoundsTime > 0.2 { scrollVelocity = 0 }
+        else if now > lastBoundsTime { scrollVelocity = 0.7 * scrollVelocity + 0.3 * (y - lastBoundsY) / CGFloat(now - lastBoundsTime) }
+        lastBoundsY = y
+        lastBoundsTime = now
         for (_, view) in visibleItemViews() where view.bounds.height > SpikeItemView.tallRowThreshold {
             view.updateCanvas()
         }
@@ -1417,6 +1449,7 @@ public final class SpikeTranscriptController: NSObject, NSTableViewDataSource, N
     public func rowRect(_ row: Int) -> CGRect { tableView.rect(ofRow: row) }
 
     public var layoutCacheCount: Int { layouts.count }
+    public var inflightLayouts: Int { inflight.count }
 
     /// Our own prefix sum of row heights (to compare with NSTableView's geometry).
     public func modelOffset(ofRow row: Int) -> CGFloat { heights[0..<row].reduce(0, +) }

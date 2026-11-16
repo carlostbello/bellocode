@@ -204,6 +204,7 @@ final class ScenarioRunner {
         case "S6": await runS6()
         case "S7": await runS7()
         case "S8": await runS8()
+        case "S2r": await runS2Realistic()
         default: print("unknown scenario \(name)")
         }
     }
@@ -276,11 +277,15 @@ final class ScenarioRunner {
         watchdog.start()
         recorder.start()
         await perFrame { [self] dt, _ in
+            if dt > 0.06 {
+                let rows = controller.visibleRows
+                FileHandle.standardError.write(Data("S2 long frame \(Int(dt * 1000)) ms y=\(Int(controller.scrollView.contentView.bounds.minY)) rows=\(rows) sync=\(controller.metrics.syncLayouts) flushes=\(controller.metrics.heightFlushes) heights=\(rows.map { Int(controller.rowRect($0).height) })\n".utf8))
+            }
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: d)
             travelled += d
             duration += dt
-            progress("S2 down y=\(Int(controller.scrollView.contentView.bounds.minY)) doc=\(Int(controller.rowRect(controller.items.count - 1).maxY)) model=\(Int(controller.modelOffset(ofRow: controller.items.count))) r5000=\(Int(controller.rowRect(5000).minY))/\(Int(controller.modelOffset(ofRow: 5000))) flushes=\(controller.metrics.heightFlushes) sync=\(controller.metrics.syncLayouts) dist=\(Int(controller.distanceFromBottom)) frames=\(recorder.intervals.count)")
+            progress("S2 down y=\(Int(controller.scrollView.contentView.bounds.minY)) doc=\(Int(controller.rowRect(controller.items.count - 1).maxY)) model=\(Int(controller.modelOffset(ofRow: controller.items.count))) r5000=\(Int(controller.rowRect(5000).minY))/\(Int(controller.modelOffset(ofRow: 5000))) flushes=\(controller.metrics.heightFlushes) sync=\(controller.metrics.syncLayouts) mem=\(Memory.now().footprintMB) cache=\(controller.layoutCacheCount) dist=\(Int(controller.distanceFromBottom)) frames=\(recorder.intervals.count)")
             return controller.distanceFromBottom > 1
         }
         let downIntervals = recorder.stop()
@@ -289,11 +294,14 @@ final class ScenarioRunner {
         recorder.start()
         flick = Flick()
         await perFrame { [self] dt, _ in
+            if dt > 0.06 {
+                FileHandle.standardError.write(Data("S2 up long frame \(Int(dt * 1000)) ms y=\(Int(controller.scrollView.contentView.bounds.minY)) rows=\(controller.visibleRows)\n".utf8))
+            }
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: -d)
             travelled += d
             duration += dt
-            progress("S2 up y=\(Int(controller.scrollView.contentView.bounds.minY))")
+            progress("S2 up y=\(Int(controller.scrollView.contentView.bounds.minY)) mem=\(Memory.now().footprintMB) cache=\(controller.layoutCacheCount) frames=\(recorder.intervals.count)")
             return controller.scrollView.contentView.bounds.minY > 0.5
         }
         let upIntervals = recorder.stop()
@@ -363,6 +371,39 @@ final class ScenarioRunner {
                               hugeRowHeight: hugeRow >= 0 ? controller.rowRect(hugeRow).height : 0,
                               tableGeometryErrorPt: geometryError())
         Report.write(report, name: "S2")
+    }
+
+    /// Diagnostic: 60 s of realistic flicks only, logging every long frame.
+    func runS2Realistic() async {
+        await openTranscript()
+        guard let controller else { return }
+        await waitForMeasureAll()
+        await sleep(5.5)
+        release()
+        controller.scrollTo(y: controller.rowRect(controller.items.count - 1).maxY / 4)
+        await sleep(0.5)
+        var flick = Flick()
+        var goingDown = true
+        var lastSync = controller.metrics.syncLayouts
+        var maxInflight = 0
+        watchdog.start()
+        recorder.start()
+        await perFrame { [self] dt, elapsed in
+            let sync = controller.metrics.syncLayouts
+            maxInflight = max(maxInflight, controller.inflightLayouts)
+            if dt > 0.025 {
+                FileHandle.standardError.write(Data("long \(Int(dt * 1000)) ms at \(round2(elapsed)) s; sync +\(sync - lastSync); inflight \(controller.inflightLayouts); rows \(controller.visibleRows)\n".utf8))
+            }
+            lastSync = sync
+            let d = flick.step(dt, rng: &rng, scale: 1)
+            if controller.distanceFromBottom < 2_000 { goingDown = false }
+            if controller.scrollView.contentView.bounds.minY < 2_000 { goingDown = true }
+            controller.userScroll(by: goingDown ? d : -d)
+            return elapsed < 60
+        }
+        let stats = FrameStats(intervals: recorder.stop(), nominal: nominal)
+        let wd = watchdog.stop()
+        FileHandle.standardError.write(Data("S2r p99 \(stats.p99Ms) over33 \(stats.over33ms) over16 \(stats.over16_7ms) max \(stats.maxMs) maxInflight \(maxInflight) sync \(controller.metrics.syncLayouts) watchdog max \(wd.maxStallMs) footprint \(Memory.now().footprintMB) malloc \(Memory.now().mallocInUseMB) cache \(controller.layoutCacheCount)\n".utf8))
     }
 
     // MARK: Streaming helpers

@@ -193,10 +193,15 @@ enum ProcessStats {
 struct Memory: Codable {
     var residentMB: Double
     var footprintMB: Double
+    /// Live malloc bytes (all zones). Footprint also counts freed-but-retained allocator pages.
+    var mallocInUseMB: Double
 
     static func now() -> Memory {
         let m = ProcessStats.memory()
-        return Memory(residentMB: (m.resident * 10).rounded() / 10, footprintMB: (m.footprint * 10).rounded() / 10)
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return Memory(residentMB: (m.resident * 10).rounded() / 10, footprintMB: (m.footprint * 10).rounded() / 10,
+                      mallocInUseMB: (Double(stats.size_in_use) / 104_857.6).rounded() / 10)
     }
 }
 
