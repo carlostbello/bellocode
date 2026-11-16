@@ -85,6 +85,13 @@ let targets: [Target] =
         // SPIKE (gate G3): throwaway browser-bridge prototype. See docs/spikes/G3-browser-bridge.md.
         .executableTarget(name: "BrowserSpike", dependencies: ["BrowserKit"], swiftSettings: swiftSettings),
     ]
+    + [
+        // Window shell logic (sidebar tree, commands, restoration, undo, switch timing). `@testable import BelloCodeApp`.
+        .testTarget(
+            name: "BelloCodeAppTests", dependencies: ["BelloCodeApp", "Engine", "MockOpenCode"],
+            swiftSettings: testSwiftSettings
+        ),
+    ]
 
 let package = Package(
     name: "BelloCode",
