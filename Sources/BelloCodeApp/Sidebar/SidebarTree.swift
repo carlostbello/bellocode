@@ -106,6 +106,8 @@ struct ThreadRowPresentation: Equatable, Sendable {
     var glyphStatus: SessionStatus?
     var status: SessionStatus
     var isUnread: Bool
+    /// Unread, or blocked on the user / failed: the only rows drawn with emphasis.
+    var isEmphasized: Bool { isUnread || [.awaitingApproval, .awaitingAnswer, .failed].contains(status) }
     var timeText: String
     var childCount: Int
     /// For "Needs you" rows: the project, shown as detail.

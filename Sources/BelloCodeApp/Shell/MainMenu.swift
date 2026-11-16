@@ -1,4 +1,5 @@
 import AppKit
+import ComposerKit
 
 /// Builds the main menu in code. App commands come from `ShellCommand` and use a nil target, so they travel the
 /// responder chain (text views first, then the window controller) and are validated there. Standard items use the
@@ -29,6 +30,9 @@ enum MainMenu {
     private static func applicationMenu(appName: String) -> NSMenu {
         let menu = NSMenu(title: appName)
         menu.addItem(title: "About \(appName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), key: "")
+        menu.addItem(.separator())
+        menu.add(.showSettings)
+        menu.add(.connectProvider)
         menu.addItem(.separator())
         let services = NSMenu(title: "Services")
         menu.addItem(submenu: services, title: "Services")
@@ -70,6 +74,8 @@ enum MainMenu {
         menu.addItem(
             title: "Paste and Match Style", action: #selector(NSTextView.pasteAsPlainText(_:)), key: "v",
             modifiers: [.command, .option, .shift])
+        // The composer turns a large paste into a text attachment; this keeps it in the text.
+        menu.addItem(title: "Paste Inline", action: #selector(ComposerTextView.pasteInline(_:)), key: "v", modifiers: [.command, .option])
         menu.addItem(title: "Delete", action: #selector(NSText.delete(_:)), key: "")
         menu.addItem(title: "Select All", action: #selector(NSText.selectAll(_:)), key: "a")
         menu.addItem(.separator())
@@ -110,7 +116,20 @@ enum MainMenu {
     private static func threadMenu() -> NSMenu {
         let menu = NSMenu(title: "Thread")
         menu.add(.sendMessage)
+        menu.add(.queueFollowUp)
+        menu.add(.steerFollowUp)
         menu.add(.stopRun)
+        menu.addItem(.separator())
+        menu.add(.chooseModel)
+        menu.add(.permissionMode)
+        menu.add(.togglePlan)
+        menu.addItem(.separator())
+        let requests = NSMenu(title: "Requests")
+        for command in [ShellCommand.allowOnce, .allowAlways, .denyRequest, .submitAnswer] { requests.add(command) }
+        requests.addItem(.separator())
+        requests.add(.previousRequest)
+        requests.add(.nextRequest)
+        menu.addItem(submenu: requests, title: "Approvals and Questions")
         menu.addItem(.separator())
         menu.add(.renameThread)
         menu.add(.markUnread)
@@ -133,6 +152,7 @@ enum MainMenu {
     private static func helpMenu(appName: String) -> NSMenu {
         let menu = NSMenu(title: "Help")
         menu.addItem(title: "\(appName) Help", action: #selector(NSApplication.showHelp(_:)), key: "?")
+        menu.add(.showWelcome)
         return menu
     }
 

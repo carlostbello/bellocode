@@ -11,7 +11,11 @@ public struct ProjectItem: Hashable, Sendable, Identifiable {
     public var id: String { entry.directory }
     public var directory: String { entry.directory }
     public var projectID: ProjectID? { project?.id ?? entry.projectID }
-    public var name: String { project?.displayName ?? (entry.directory as NSString).lastPathComponent }
+    /// The project's name, or the folder's when the folder is inside a larger project (a repository subfolder).
+    public var name: String {
+        if let project, project.directory == entry.directory { return project.displayName }
+        return (entry.directory as NSString).lastPathComponent
+    }
     public var isPinned: Bool { entry.pinned }
 }
 
@@ -128,10 +132,13 @@ public final class Engine {
         if executable == nil, case .supervised(let supervisor) = configuration.server {
             executable = supervisor.configuration.executableURL
         }
-        return AuthService(
+        let service = AuthService(
             client: { try await core.currentClient() },
             directory: { [weak self] in self?.root.catalog.current?.directory ?? self?.configuration.defaultDirectory },
             openURL: openURL, importer: executable.map { CredentialImporter(bundledExecutableURL: $0) })
+        // Integration and credential events refresh the catalog; its revision refreshes the sign-in lists.
+        service.refreshOnChange(of: { [weak self] in self?.root.catalog.revision ?? 0 })
+        return service
     }
 
     /// Loads the cache into `root`, then connects. Returns once cached content is shown (it does not wait for the
@@ -223,8 +230,10 @@ public final class Engine {
     public func setArchived(_ id: SessionID, _ archived: Bool) async throws { try await core.setArchived(id, archived: archived) }
 
     /// Sends a prompt to a thread that may not be open. See `ThreadModel.send` for the open-thread variant.
-    public func send(_ text: String, to id: SessionID, delivery: PromptDelivery? = nil) async throws -> MessageID {
-        try await core.sendPrompt(id, text: text, delivery: delivery)
+    public func send(
+        _ text: String, to id: SessionID, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async throws -> MessageID {
+        try await core.sendPrompt(id, text: text, attachments: attachments, delivery: delivery)
     }
 
     public func stop(_ id: SessionID) async throws { try await core.interrupt(id) }

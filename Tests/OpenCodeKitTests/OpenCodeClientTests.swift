@@ -113,13 +113,31 @@ struct OpenCodeClientTests {
             .init(status: 200, body: #"{"data":{"id":"msg_1","sessionID":"ses_1","time":{"created":1},"type":"user","payload":{"text":"hi"},"delivery":"queue"}}"#)
         )
         let item = try await client.prompt(
-            sessionID: "ses_1", PromptRequest(text: "hi", id: "msg_1", agents: ["plan"], delivery: .queue)
+            sessionID: "ses_1",
+            PromptRequest(
+                text: "hi @a.swift", id: "msg_1",
+                files: [
+                    .init(uri: "file:///r/a.swift", name: "a.swift", source: .uri("file:///r/a.swift"),
+                          mention: .init(start: 3, end: 11, text: "@a.swift")),
+                    .init(uri: "file:///tmp/x.png"),
+                ],
+                agents: [.init(name: "plan")], skills: [], delivery: .queue)
         )
         #expect(item.delivery == .queue)
         let body = try #require(transport.requests.first?.httpBody)
         let json = try JSONDecoder().decode(JSONValue.self, from: body)
+        // Shapes from Contracts/opencode-2.3.0 (PromptInput.FileAttachment, Prompt.FileSource, Prompt.Mention); an
+        // empty list is left out.
         #expect(json == .object([
-            "id": .string("msg_1"), "text": .string("hi"), "delivery": .string("queue"),
+            "id": .string("msg_1"), "text": .string("hi @a.swift"), "delivery": .string("queue"),
+            "files": .array([
+                .object([
+                    "uri": .string("file:///r/a.swift"), "name": .string("a.swift"),
+                    "source": .object(["type": .string("uri"), "uri": .string("file:///r/a.swift")]),
+                    "mention": .object(["start": .number(3), "end": .number(11), "text": .string("@a.swift")]),
+                ]),
+                .object(["uri": .string("file:///tmp/x.png")]),
+            ]),
             "agents": .array([.object(["name": .string("plan")])]),
         ]))
     }

@@ -18,11 +18,19 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var header: ThreadHeaderView?
     private(set) var transcript: NSViewController?
     private(set) var composer: NSViewController?
+    private(set) var requestStack: NSViewController?
+    private(set) var statusBanner: StatusUnknownBanner?
+    private(set) var queuedPrompts: QueuedPromptsView?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
     /// Called when the displayed selection changed (window title, focus).
     var onDisplay: ((ThreadSurfaceContext?) -> Void)?
+
+    /// The content column's preferred width: above the controls' hugging (250) so the composer and cards fill the
+    /// column, below the side panels' holding priority (270) so it never moves a divider; it takes `readableWidth`
+    /// when the window has room and shrinks with it otherwise.
+    static let columnPreference = NSLayoutConstraint.Priority(255)
 
     init(workspace: WorkspaceController, surfaces: ShellSurfaces) {
         self.workspace = workspace
@@ -112,6 +120,9 @@ final class ThreadContainerViewController: NSViewController {
         header = nil
         transcript = nil
         composer = nil
+        requestStack = nil
+        statusBanner = nil
+        queuedPrompts = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -137,11 +148,32 @@ final class ThreadContainerViewController: NSViewController {
         let transcript = surfaces.transcript(context)
         self.transcript = transcript
         let transcriptView = adopt(transcript)
-        let requests = adopt(surfaces.requestStack(context))
+        let requestStack = surfaces.requestStack(context)
+        self.requestStack = requestStack
+        let requests = adopt(requestStack)
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
-        for subview in [header, separator, transcriptView, requests, composerView] { container.addSubview(subview) }
+        let banner: NSView
+        if let thread = context.thread {
+            let unknown = StatusUnknownBanner(thread: thread, engine: workspace.engine)
+            statusBanner = unknown
+            let queued = QueuedPromptsView(thread: thread)
+            queuedPrompts = queued
+            let column = NSStackView(views: [unknown, queued])
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 0
+            column.detachesHiddenViews = true
+            column.translatesAutoresizingMaskIntoConstraints = false
+            for view in [unknown, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
+            banner = column
+        } else {
+            banner = NSView()
+            banner.translatesAutoresizingMaskIntoConstraints = false
+            banner.heightAnchor.constraint(equalToConstant: 0).isActive = true
+        }
+        for subview in [header, separator, transcriptView, requests, banner, composerView] { container.addSubview(subview) }
         let column = DS.Spacing.readableWidth
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.topAnchor),
@@ -151,18 +183,22 @@ final class ThreadContainerViewController: NSViewController {
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             transcriptView.topAnchor.constraint(equalTo: separator.bottomAnchor),
-            transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            // Full width by preference only: a transcript's own preferred column width (stronger than a split view's
+            // holding priority) then narrows it, centred, instead of pushing the sidebar divider.
+            transcriptView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            transcriptView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
+            transcriptView.widthAnchor.constraint(equalTo: container.widthAnchor).withPriority(Self.columnPreference - 2),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
-            composerView.topAnchor.constraint(equalTo: requests.bottomAnchor, constant: DS.Spacing.s),
-            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.l),
+            banner.topAnchor.constraint(equalTo: requests.bottomAnchor),
+            composerView.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: DS.Spacing.s),
+            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
         ])
-        for docked in [requests, composerView] {
+        for docked in [requests, banner, composerView] {
             let width = docked.widthAnchor.constraint(equalToConstant: column)
-            width.priority = .defaultHigh
+            width.priority = Self.columnPreference
             NSLayoutConstraint.activate([
                 docked.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
+                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
                 width,
             ])
         }
@@ -177,7 +213,8 @@ final class ThreadContainerViewController: NSViewController {
         heading.alignment = .center
         heading.lineBreakMode = .byTruncatingTail
         heading.translatesAutoresizingMaskIntoConstraints = false
-        let path = NSTextField(labelWithString: (context.directory as NSString).abbreviatingWithTildeInPath)
+        // The header and the composer's context line already show where the agent acts; no third path here.
+        let path = NSTextField(labelWithString: "Free built-in models work without signing in. Choose another with ⇧⌘M.")
         path.font = DS.Typography.current.caption
         path.textColor = DS.Palette.secondaryText
         path.alignment = .center
@@ -186,8 +223,8 @@ final class ThreadContainerViewController: NSViewController {
         self.composer = composer
         let composerView = adopt(composer)
         for subview in [header, heading, path, composerView] { container.addSubview(subview) }
-        let width = composerView.widthAnchor.constraint(equalToConstant: 640)
-        width.priority = .defaultHigh
+        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
+        width.priority = Self.columnPreference
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.topAnchor),
             header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -199,7 +236,7 @@ final class ThreadContainerViewController: NSViewController {
             composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Spacing.xl),
             composerView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Spacing.xl),
-            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
+            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
             width,
         ])
         return container
@@ -230,4 +267,12 @@ final class ThreadContainerViewController: NSViewController {
     }
 
     var composerSurface: (any ComposerSurface)? { composer as? any ComposerSurface }
+
+    /// The real composer, when mounted (menu commands forward to it).
+    var composerController: ComposerSurfaceController? { composer as? ComposerSurfaceController }
+
+    /// The displayed thread's request stack (menu commands act on its front request).
+    var requestStackController: RequestStackSurfaceController? { requestStack as? RequestStackSurfaceController }
+
+    var requestFocusView: NSView? { (requestStack as? any FocusableSurface)?.preferredFocusView }
 }

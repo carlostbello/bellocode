@@ -16,6 +16,9 @@ struct ProjectionState: Sendable {
     /// Sessions the server reports busy although their execution belonged to a server process that has since died
     /// (opencode keeps `time.busy` set after a crash). Shown as "Status unknown" until a new execution event arrives.
     var orphaned: Set<SessionID> = []
+    /// Orphaned turns the user marked stopped, with the time: the server still lists them busy (nothing it runs owns
+    /// them), so merges keep them idle until the server starts a newer execution.
+    var settledOrphans: [SessionID: Timestamp] = [:]
     /// The assistant message currently streaming in each session.
     var openMessage: [SessionID: MessageID] = [:]
 
@@ -102,6 +105,9 @@ enum SyncEffect: Hashable, Sendable {
     case fetchSession(SessionID)
     /// The provider, model or agent catalog changed for a location (nil: the default location).
     case refreshCatalog(directory: String?)
+    /// An added folder has no opencode project of its own directory (a subfolder of a repository, or not used yet):
+    /// ask the server which project it belongs to (`GET /api/location`) and record that ID.
+    case resolveProject(directory: String)
 }
 
 /// What one reduction produced: changes to publish, writes to persist, effects to run.

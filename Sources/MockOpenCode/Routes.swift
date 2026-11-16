@@ -77,6 +77,7 @@ extension MockOpenCodeServer {
         }
 
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
+        if let response = routeWorkspace(method, parts, request) { return .response(response) }
         let response: HTTPResponse
         switch method {
         case "GET":
@@ -255,7 +256,7 @@ extension MockOpenCodeServer {
     func serverInfo() -> HTTPResponse {
         let url = endpoint?.url.absoluteString ?? ""
         return .json([
-            "version": .string(options.version), "pid": .int(Int(ProcessInfo.processInfo.processIdentifier)),
+            "version": .string(options.version), "pid": .int(Int(ProcessInfo.processInfo.processIdentifier) + pidGeneration * 100_000),
             "hostname": "mock.local", "urls": [.string(url)],
             "paths": ["tmp": .string(FileManager.default.temporaryDirectory.appendingPathComponent("opencode").path)],
             "capabilities": ["persistentPty": true],
@@ -541,9 +542,10 @@ extension MockOpenCodeServer {
             return .json(["data": existing])
         }
         let delivery = body["delivery"]?.stringValue ?? "steer"
+        recordedPrompts.append(body)
         let item = admit(
             sessionID: sessionID, id: body["id"]?.stringValue, text: text, delivery: delivery,
-            script: selectScript(sessionID: sessionID, text: text))
+            script: selectScript(sessionID: sessionID, text: text), attachments: Self.echoedAttachments(body))
         return .json(["data": item])
     }
 

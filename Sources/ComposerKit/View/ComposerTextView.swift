@@ -58,6 +58,20 @@ public final class ComposerTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    /// Command-Return (and Command-Option-Return) belong to the composer while it has focus: they are handled here,
+    /// before the main menu sees them as key equivalents (a host's "Send ⌘↩" or "Submit ⌥⌘↩" items), so the composer's
+    /// send-key policy (send, or the alternate follow-up) applies exactly as typed.
+    public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, Self.returnKeyCodes.contains(event.keyCode), event.modifierFlags.contains(.command),
+           window?.firstResponder === self, !hasMarkedText()
+        {
+            currentKeyModifiers = event.modifierFlags
+            defer { currentKeyModifiers = nil }
+            if owner?.composerTextView(self, handleReturn: KeyModifiers(event.modifierFlags)) == true { return true }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     public override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         owner?.composerTextViewModifiersChanged(self, flags: event.modifierFlags)

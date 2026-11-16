@@ -179,3 +179,14 @@ final class ViewState<Value>: ObservableObject {
 
     init(_ value: Value) { self.value = value }
 }
+
+/// Lets a host open a control's popover from a menu item (for example "Permission Mode…" in the Thread menu):
+/// each `fire()` toggles the popover open once.
+@MainActor
+public final class PopoverTrigger: ObservableObject {
+    @Published public private(set) var count = 0
+
+    public init() {}
+
+    public func fire() { count += 1 }
+}

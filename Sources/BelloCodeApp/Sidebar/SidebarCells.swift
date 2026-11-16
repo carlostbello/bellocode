@@ -34,7 +34,7 @@ final class ThreadCell: SidebarRowView {
         self.workspace = workspace
         self.showsProject = showsProject
         // "Needs you" rows: the title wins; the "project · age" detail truncates from its head (keeping the age).
-        detail.setContentCompressionResistancePriority(showsProject ? .defaultLow - 1 : .required, for: .horizontal)
+        detail.setContentCompressionResistancePriority(showsProject ? .defaultLow - 11 : .required, for: .horizontal)
         detail.lineBreakMode = showsProject ? .byTruncatingHead : .byClipping
         loop = ObservationLoop { [weak self] in self?.render() }
     }
@@ -62,7 +62,8 @@ final class ThreadCell: SidebarRowView {
         guard presentation != self.presentation else { return }
         self.presentation = presentation
         if title.currentEditor() == nil { title.stringValue = presentation.title }
-        title.font = presentation.isUnread ? DS.Typography.current.bodyEmphasized : DS.Typography.current.body
+        // Regular weight; emphasis only for unread rows and rows that need the user.
+        title.font = presentation.isEmphasized ? DS.Typography.current.bodyEmphasized : DS.Typography.current.body
         // One leading slot: the status glyph, else the unread dot, so titles stay aligned.
         if let status = presentation.glyphStatus {
             leading.image = StatusGlyph(status).image()

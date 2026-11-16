@@ -159,7 +159,9 @@ final class WorkspaceController {
         switch selection {
         case .thread(let id):
             guard let session = session(id) else { return nil }
-            let running = openThreads[id]?.isRunning ?? row(id)?.status.map { $0.status == .running || $0.status == .stopping } ?? session.isRunning
+            // Unknown (a turn orphaned by a server restart) counts: Stop settles it.
+            let running = openThreads[id].map { $0.isRunning || $0.isStatusUnknown }
+                ?? row(id)?.status.map { [.running, .stopping, .unknown].contains($0.status) } ?? session.isRunning
             return .thread(id, directory: session.directory, isRunning: running)
         case .draft(let directory):
             return .draft(directory: directory, isPinned: projectItem(directory: directory)?.isPinned ?? false)

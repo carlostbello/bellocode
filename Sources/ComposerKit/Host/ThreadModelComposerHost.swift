@@ -2,6 +2,7 @@ import BelloCore
 import Engine
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 /// The slice of an Engine thread the composer adapter uses. `ThreadModel` conforms; tests use a fake.
 @MainActor
@@ -14,7 +15,9 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     var composerErrorMessage: String? { get }
     /// Earlier user prompts, oldest first.
     var composerPromptHistory: [String] { get }
-    func send(_ text: String?, delivery: PromptDelivery?) async -> MessageID?
+    func send(_ text: String?, attachments: PromptAttachments, delivery: PromptDelivery?) async -> MessageID?
+    /// Runs a server slash command; true when the server accepted it.
+    func runCommand(_ name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?) async -> Bool
     func stop() async
     func clearError()
 }
@@ -55,18 +58,24 @@ public final class ComposerDraftCache {
 
 /// Adapts an Engine `ThreadModel` (or any `ComposerThreadSource`) to `ComposerHost`.
 ///
-/// Attachments: `ThreadModel.send` takes text only, so `supportsAttachments` is false and the composer refuses such a
-/// send visibly (the draft stays). See docs/features/composer.md for what the prompt request needs.
+/// A send becomes opencode prompt input (`PromptSubmissionMapper`): attachments as `file://` URIs (pasted images and
+/// large pastes are written to `fileStore` first), `@` file tokens as file mentions, agent and skill tokens as their
+/// mentions, and a leading `/command` token as a server command run with the rest as its arguments.
 @MainActor
 public final class ThreadModelComposerHost: ComposerHost {
     public let source: any ComposerThreadSource
     public var defaultFollowUp: ComposerDelivery
+    public let fileStore: AttachmentFileStore
     private let cache: ComposerDraftCache
 
-    public init(_ source: any ComposerThreadSource, defaultFollowUp: ComposerDelivery = .queue, cache: ComposerDraftCache? = nil) {
+    public init(
+        _ source: any ComposerThreadSource, defaultFollowUp: ComposerDelivery = .queue, cache: ComposerDraftCache? = nil,
+        fileStore: AttachmentFileStore = .applicationDefault
+    ) {
         self.source = source
         self.defaultFollowUp = defaultFollowUp
         self.cache = cache ?? .shared
+        self.fileStore = fileStore
     }
 
     public var draftKey: String { source.sessionID.rawValue }
@@ -83,15 +92,24 @@ public final class ThreadModelComposerHost: ComposerHost {
     }
 
     public func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {
-        guard submission.attachments.isEmpty else {
-            return .failed("This thread can't take attachments yet.")
-        }
         let delivery: PromptDelivery? = switch submission.delivery {
         case .now: nil
         case .queue: .queue
         case .steer: .steer
         }
-        if await source.send(submission.text, delivery: delivery) != nil { return .accepted }
+        let input: PromptSubmissionMapper.Input
+        do {
+            input = try await PromptSubmissionMapper.map(submission, store: fileStore)
+        } catch {
+            return .failed("An attachment could not be prepared: \(error.localizedDescription)")
+        }
+        if let command = input.command {
+            if await source.runCommand(command.name, arguments: input.text, attachments: input.attachments, delivery: delivery) {
+                return .accepted
+            }
+            return .failed(source.composerErrorMessage ?? "The command was not run.")
+        }
+        if await source.send(input.text, attachments: input.attachments, delivery: delivery) != nil { return .accepted }
         return .failed(source.composerErrorMessage ?? "The message was not sent.")
     }
 
@@ -102,7 +120,7 @@ public final class ThreadModelComposerHost: ComposerHost {
         return source.isRunning ? .running : .idle
     }
 
-    public var supportsAttachments: Bool { false }
+    public var supportsAttachments: Bool { true }
     public var errorMessage: String? { source.composerErrorMessage }
     public func clearError() { source.clearError() }
     public func recentPrompts() -> [String] { source.composerPromptHistory }
@@ -111,6 +129,67 @@ public final class ThreadModelComposerHost: ComposerHost {
         let tracker = ObservationTracker(source: source, onChange: onChange)
         tracker.arm()
         return ComposerObservation { tracker.active = false }
+    }
+}
+
+/// Turns a composer submission into opencode prompt input. Pure except for writing in-memory attachments to files.
+public enum PromptSubmissionMapper {
+    public struct Input: Hashable, Sendable {
+        /// The prompt text, or the command's argument text when `command` is set.
+        public var text: String
+        public var attachments: PromptAttachments
+        public var command: (name: String, token: ComposerToken)? {
+            get { commandToken.map { ($0.value, $0) } }
+            set { commandToken = newValue?.token }
+        }
+        var commandToken: ComposerToken?
+    }
+
+    public static func map(_ submission: ComposerSubmission, store: AttachmentFileStore) async throws -> Input {
+        var text = submission.text
+        var tokens = submission.tokens.sorted { $0.location < $1.location }
+        var commandToken: ComposerToken?
+        // A command token at the start of the prompt: run it with the rest as arguments; shift later mentions.
+        if let first = tokens.first, first.token.kind == .command,
+           (text as NSString).substring(to: first.location).allSatisfy(\.isWhitespace)
+        {
+            commandToken = first.token
+            let rest = (text as NSString).substring(from: first.location + first.length)
+            let trimmed = String(rest.drop { $0 == " " || $0 == "\t" })
+            let shift = first.location + first.length + ((rest as NSString).length - (trimmed as NSString).length)
+            text = trimmed
+            tokens = tokens.dropFirst().map { placed in
+                PlacedToken(token: placed.token, range: NSRange(location: placed.location - shift, length: placed.length))
+            }
+        }
+        var attachments = PromptAttachments()
+        for placed in tokens {
+            let mention = PromptAttachments.Mention(
+                start: placed.location, end: placed.location + placed.length, text: placed.token.text)
+            switch placed.token.kind {
+            case .file:
+                let url = URL(filePath: placed.token.value)
+                attachments.files.append(
+                    PromptAttachments.File(
+                        uri: url.absoluteString, name: url.lastPathComponent, mime: mimeType(for: url), mention: mention))
+            case .agent:
+                attachments.agents.append(PromptAttachments.Agent(name: placed.token.value, mention: mention))
+            case .skill:
+                attachments.skills.append(PromptAttachments.Skill(id: placed.token.value, mention: mention))
+            case .command, .other:
+                continue
+            }
+        }
+        for attachment in submission.attachments {
+            let url = try await store.materialize(attachment)
+            attachments.files.append(
+                PromptAttachments.File(uri: url.absoluteString, name: attachment.name, mime: attachment.mimeType))
+        }
+        return Input(text: text, attachments: attachments, commandToken: commandToken)
+    }
+
+    static func mimeType(for url: URL) -> String {
+        UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "text/plain"
     }
 }
 

@@ -159,7 +159,8 @@ open class SidebarRowView: NSTableCellView {
         title.font = typography.body
         title.lineBreakMode = .byTruncatingTail
         title.cell?.truncatesLastVisibleLine = true
-        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // Below every split-view holding priority (250-260): a long title truncates instead of widening the sidebar.
+        title.setContentCompressionResistancePriority(.defaultLow - 10, for: .horizontal)
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
         detail.font = typography.caption
         detail.textColor = DS.Palette.secondaryText

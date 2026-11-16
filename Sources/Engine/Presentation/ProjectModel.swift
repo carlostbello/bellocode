@@ -144,13 +144,19 @@ public final class CatalogModel {
     public private(set) var catalogs: [String: Catalog] = [:]
     /// The catalog of the default location (the first project), if loaded.
     public private(set) var current: Catalog?
+    /// Increases each time a catalog is fetched (also when its content did not change): a server-side change to
+    /// providers, models, agents, integrations or credentials. Observers refresh what derives from them.
+    public private(set) var revision = 0
 
     init() {}
 
     public func catalog(for directory: String) -> Catalog? { catalogs[directory] ?? current }
 
     func apply(_ catalog: Catalog, isDefault: Bool) {
-        if catalogs[catalog.directory] != catalog { catalogs[catalog.directory] = catalog }
+        if catalogs[catalog.directory] != catalog {
+            catalogs[catalog.directory] = catalog
+            revision += 1
+        }
         if isDefault || current == nil || current?.directory == catalog.directory, current != catalog { current = catalog }
     }
 }

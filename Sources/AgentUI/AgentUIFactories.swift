@@ -137,6 +137,63 @@ public enum AgentUIFactories {
     }
 }
 
+/// The request actions a host exposes as menu commands; they act on the front request of a stack.
+public enum RequestCommand: String, CaseIterable, Sendable {
+    case allowOnce, allowAlways, deny, submitAnswer, previous, next
+
+    public var title: String {
+        switch self {
+        case .allowOnce: "Allow Once"
+        case .allowAlways: "Always Allow"
+        case .deny: "Deny or Dismiss"
+        case .submitAnswer: "Submit Answer"
+        case .previous: "Previous Request"
+        case .next: "Next Request"
+        }
+    }
+
+    public var shortcut: AgentShortcut {
+        switch self {
+        case .allowOnce: .allowOnce
+        case .allowAlways: .allowAlways
+        case .deny: .deny
+        case .submitAnswer: .submitAnswer
+        case .previous: .previousRequest
+        case .next: .nextRequest
+        }
+    }
+}
+
+extension PendingRequestStackModel {
+    /// Whether `command` applies to the front request now (nothing while its reply is being sent).
+    public func canPerform(_ command: RequestCommand) -> Bool {
+        guard let current, !isSubmitting(current) else { return false }
+        let permission: PermissionRequest? = if case .permission(let p) = current { p } else { nil }
+        switch command {
+        case .allowOnce: return permission != nil
+        case .allowAlways: return permission.map { presentation($0).allowAlways.isAvailable } ?? false
+        case .deny: return true
+        case .submitAnswer: if case .question = current { return true } else { return false }
+        case .previous, .next: return requests.count > 1
+        }
+    }
+
+    /// Performs `command` on the front request (no-op when it does not apply).
+    public func perform(_ command: RequestCommand) {
+        guard canPerform(command), let current else { return }
+        switch (command, current) {
+        case (.allowOnce, .permission(let p)): Task { await reply(.once, to: p) }
+        case (.allowAlways, .permission(let p)): Task { await reply(.always, to: p) }
+        case (.deny, .permission(let p)): Task { await reply(.reject, to: p) }
+        case (.deny, .question(let q)): Task { await dismiss(q) }
+        case (.submitAnswer, .question(let q)): Task { _ = await submit(q) }
+        case (.previous, _): showPrevious()
+        case (.next, _): showNext()
+        default: break
+        }
+    }
+}
+
 /// Target for `requestMenuItems`; validates items against the front request.
 @MainActor
 final class MenuActionTarget: NSObject, NSMenuItemValidation {
@@ -146,30 +203,22 @@ final class MenuActionTarget: NSObject, NSMenuItemValidation {
         self.model = model
     }
 
-    private var permission: PermissionRequest? { if case .permission(let p)? = model.current { p } else { nil } }
-    private var question: QuestionRequest? { if case .question(let q)? = model.current { q } else { nil } }
-
-    @objc func allowOnce() { if let permission { Task { await model.reply(.once, to: permission) } } }
-    @objc func allowAlways() {
-        if let permission, model.presentation(permission).allowAlways.isAvailable { Task { await model.reply(.always, to: permission) } }
-    }
-    @objc func deny() {
-        if let permission { Task { await model.reply(.reject, to: permission) } }
-        if let question { Task { await model.dismiss(question) } }
-    }
-    @objc func submit() { if let question { Task { await model.submit(question) } } }
-    @objc func previous() { model.showPrevious() }
-    @objc func next() { model.showNext() }
+    @objc func allowOnce() { model.perform(.allowOnce) }
+    @objc func allowAlways() { model.perform(.allowAlways) }
+    @objc func deny() { model.perform(.deny) }
+    @objc func submit() { model.perform(.submitAnswer) }
+    @objc func previous() { model.perform(.previous) }
+    @objc func next() { model.perform(.next) }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard let current = model.current, !model.isSubmitting(current) else { return false }
         switch menuItem.action {
-        case #selector(allowOnce): return permission != nil
-        case #selector(allowAlways): return permission.map { model.presentation($0).allowAlways.isAvailable } ?? false
-        case #selector(deny): return true
-        case #selector(submit): return question != nil
-        case #selector(previous), #selector(next): return model.requests.count > 1
-        default: return false
+        case #selector(allowOnce): model.canPerform(.allowOnce)
+        case #selector(allowAlways): model.canPerform(.allowAlways)
+        case #selector(deny): model.canPerform(.deny)
+        case #selector(submit): model.canPerform(.submitAnswer)
+        case #selector(previous): model.canPerform(.previous)
+        case #selector(next): model.canPerform(.next)
+        default: false
         }
     }
 }

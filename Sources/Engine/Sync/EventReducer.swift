@@ -75,7 +75,12 @@ enum EventReducer {
         case .projectUpdated(let project):
             state.putProject(Mapping.project(project), into: &reduction)
         case .resourcesChanged(let type):
-            if ["provider.updated", "model.updated", "agent.updated", "integration.updated", "models-dev.refreshed"].contains(type) {
+            // Credentials change which models are usable, so they refresh the catalog too (and, through its revision,
+            // the AuthService's integration and credential lists).
+            if [
+                "provider.updated", "model.updated", "agent.updated", "integration.updated", "models-dev.refreshed",
+                "credential.updated", "credential.switched",
+            ].contains(type) {
                 reduction.effects.append(.refreshCatalog(directory: envelope.directory))
             }
 

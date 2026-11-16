@@ -14,6 +14,8 @@ import Foundation
 struct InboxItem: Sendable {
     let id: String
     let text: String
+    /// `files`, `agents`, `skills` as the server echoes them on the user message (nil when none).
+    var attachments: JSONValue?
     var delivery: String
     let script: TurnScript
     /// The `Session.Inbox.Item` JSON returned by `prompt` and `GET …/inbox`.
@@ -71,17 +73,21 @@ extension MockOpenCodeServer {
 
     /// Admits a prompt into the session inbox (`session.inbox.enqueued`) and starts a runner if the session is idle.
     /// Returns the inbox item JSON the real `prompt` route returns.
-    func admit(sessionID: String, id: String?, text: String, delivery: String, script: TurnScript) -> JSONValue {
+    func admit(
+        sessionID: String, id: String?, text: String, delivery: String, script: TurnScript, attachments: JSONValue? = nil
+    ) -> JSONValue {
         let inboxID = id ?? makeID("msg")
         let created = now()
-        let payload: JSONValue = ["text": .string(text)]
+        var fields: [(String, JSONValue?)] = [("text", .string(text))]
+        for key in ["files", "agents", "skills"] { fields.append((key, attachments?[key])) }
+        let payload = JSONValue.compact(fields)
         let json: JSONValue = [
             "id": .string(inboxID), "sessionID": .string(sessionID), "time": ["created": .int(Int(created))],
             "type": "user", "payload": payload, "delivery": .string(delivery),
         ]
         state.inbox[sessionID, default: [:]][inboxID] = json
         pendingInbox[sessionID, default: []].append(
-            InboxItem(id: inboxID, text: text, delivery: delivery, script: script, json: json))
+            InboxItem(id: inboxID, text: text, attachments: attachments, delivery: delivery, script: script, json: json))
         publish(
             "session.inbox.enqueued",
             [
@@ -203,6 +209,8 @@ extension MockOpenCodeServer {
             publish(
                 "session.execution.failed", ["sessionID": .string(sessionID), "error": error.json], durable: sessionID)
         } catch {
+            // A simulated crash: the process "died", so nothing ends the execution.
+            if crashedSessions.remove(sessionID) != nil { return }
             outcome = "interrupted"
             guard state.sessions[sessionID] != nil else { return }
             finishInterrupted(&ctx)
@@ -224,7 +232,8 @@ extension MockOpenCodeServer {
         publish(
             "session.inbox.delivered", ["sessionID": .string(ctx.sessionID), "inboxID": .string(item.id)],
             location: ctx.directory, durable: ctx.sessionID)
-        state.messages[ctx.sessionID, default: []].append(.user(id: item.id, text: item.text, time: now()))
+        state.messages[ctx.sessionID, default: []].append(
+            .user(id: item.id, text: item.text, time: now(), attachments: item.attachments))
     }
 
     // MARK: Steps

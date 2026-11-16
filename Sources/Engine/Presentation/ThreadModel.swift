@@ -128,6 +128,23 @@ public final class ThreadModel: Identifiable {
         }
     }
 
+    /// The server restarted while a turn ran: it still lists the session as busy, but no process runs it. The UI
+    /// offers `settleUnknownStatus()` (Stop) and `resumeAfterRestart()` (Resume) instead of acting on its own.
+    public var isStatusUnknown: Bool { status?.status == .unknown }
+
+    /// Stop for a turn whose status is unknown: asks the server to interrupt, then shows it as interrupted.
+    public func settleUnknownStatus() async { await run { try await $0.settleOrphan(self.sessionID) } }
+
+    /// Resume for a turn whose status is unknown: marks it interrupted, then sends `prompt` so the agent continues.
+    @discardableResult
+    public func resumeAfterRestart(
+        prompt: String = "Continue where you left off. Your previous run was interrupted when opencode restarted."
+    ) async -> MessageID? {
+        await settleUnknownStatus()
+        guard lastError == nil else { return nil }
+        return await send(prompt)
+    }
+
     /// The user asked to stop and the server has not confirmed yet.
     public var isStopping: Bool { status?.status == .stopping }
 
@@ -139,19 +156,36 @@ public final class ThreadModel: Identifiable {
     /// Sends `text` (default: the draft). Idle: appears at once as `.sending`. Running: queued (or steered). On
     /// failure the text returns to the draft and `lastError` is set. Returns the message ID once the server admitted it.
     @discardableResult
-    public func send(_ text: String? = nil, delivery: PromptDelivery? = nil) async -> MessageID? {
+    public func send(
+        _ text: String? = nil, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async -> MessageID? {
         let text = text ?? draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
         let fromDraft = text == draft
         if fromDraft { draft = "" }
         do {
-            let id = try await core.sendPrompt(sessionID, text: text, delivery: delivery)
+            let id = try await core.sendPrompt(sessionID, text: text, attachments: attachments, delivery: delivery)
             lastError = nil
             return id
         } catch {
             lastError = EngineError.from(error)
             if fromDraft, draft.isEmpty { draft = text }
             return nil
+        }
+    }
+
+    /// Runs a server slash command (`/name arguments`). Returns whether the server accepted it; `lastError` otherwise.
+    @discardableResult
+    public func runCommand(
+        _ name: String, arguments: String, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
+    ) async -> Bool {
+        do {
+            try await core.runCommand(sessionID, name: name, arguments: arguments, attachments: attachments, delivery: delivery)
+            lastError = nil
+            return true
+        } catch {
+            lastError = EngineError.from(error)
+            return false
         }
     }
 

@@ -81,6 +81,12 @@ public final class ModelPickerModel {
         return catalog()?.models.first { $0.providerID == selection.providerID && $0.modelID == selection.modelID }
     }
 
+    /// Incremented by `requestOpen()`; the button opens its popover when it changes (menu item "Choose Model…").
+    public private(set) var openRequests = 0
+
+    /// Asks the model button to open its popover.
+    public func requestOpen() { openRequests += 1 }
+
     /// Called when the popover opens: highlight the current model, clear the query.
     public func prepareForOpen() {
         query = ""
