@@ -136,7 +136,8 @@ enum AgentScript {
           if (el.getAttribute('aria-hidden') === 'true' || el.hidden) return;
           const style = getComputedStyle(el);
           if (style.display === 'none') return;
-          const role = style.visibility === 'hidden' ? null : roleOf(el);
+          let role = style.visibility === 'hidden' ? null : roleOf(el);
+          if (!role && style.visibility !== 'hidden' && el.hasAttribute('tabindex') && el.tabIndex >= 0) role = 'generic';
           let next = level;
           if (role) {
             if (level > ctx.depth) { ctx.truncated = true; return; }

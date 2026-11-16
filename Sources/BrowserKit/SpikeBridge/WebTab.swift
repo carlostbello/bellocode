@@ -288,6 +288,14 @@ extension WebTab: WKNavigationDelegate, WKUIDelegate {
         return answer
     }
 
+    public var pendingDialog: (type: String, message: String)? { dialog.map { ($0.type, $0.message) } }
+
+    /// The person's answer from the dialog banner.
+    public func respondToDialog(accept: Bool) {
+        answerDialog(accept: accept, text: nil)
+        host?.show("You \(accept ? "accepted" : "dismissed") the page dialog")
+    }
+
     func answerDialog(accept: Bool, text: String?) {
         guard let dialog else { return }
         self.dialog = nil
