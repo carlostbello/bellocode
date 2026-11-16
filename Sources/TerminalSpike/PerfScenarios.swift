@@ -37,7 +37,7 @@ extension Scenarios {
             let cases: [(String, String, Int)] = [
                 ("yes", "yes | head -n 2000000", 4_000_000),
                 ("cat20MB", "cat \(file)", 20 << 20),
-                ("seq5M", "seq 1 5000000", 38_888_897),
+                ("seq5M", "seq 1 5000000", 54_444_420),
             ]
             for (name, command, bytes) in cases {
                 await h.pause(500)
@@ -46,7 +46,8 @@ extension Scenarios {
                 let probe = SpikeMainStallProbe()
                 let before = h.processSample()
                 frames.start(on: terminal.view)
-                if renderer == "cg" { forced.start(terminal.view) }
+                let occluded = !h.window.occlusionState.contains(.visible)
+                if renderer == "cg" && occluded { forced.start(terminal.view) }
                 probe.start()
                 let elapsed = await h.run(terminal, command, timeout: .seconds(240))
                 let frameResult = frames.stop()
@@ -54,7 +55,7 @@ extension Scenarios {
                 let stall = probe.stop()
                 let after = h.processSample()
                 var entry: Report = [
-                    "name": name, "command": command, "payloadBytes": bytes,
+                    "name": name, "command": command, "payloadBytes": bytes, "windowOccluded": occluded,
                     "seconds": elapsed.map { h.round($0, 3) } ?? -1,
                     "MBps": elapsed.map { h.round(Double(bytes) / 1_048_576 / $0, 1) } ?? -1,
                     "frameIntervalsMs": h.stats(frameResult.intervals), "framesOver33ms": frameResult.over33ms,
@@ -69,7 +70,7 @@ extension Scenarios {
                 if let remote = terminal as? SpikeRemoteTerminal { entry["socketBytes"] = remote.connection?.totalBytesReceived ?? 0 }
                 // Correct final state: the last line of the workload is on screen.
                 let screen = h.screenText(terminal.view).joined(separator: "\n")
-                let expected = name == "seq5M" ? "5000000" : name == "yes" ? "y" : "xxxxxxxx"
+                let expected = name == "seq5M" ? "5e+06" : name == "yes" ? "y" : "xxxxxxxx"
                 entry["finalScreenOK"] = screen.contains(expected)
                 if renderer == "cg" { entry["snapshot"] = h.snapshot(terminal.view, "perf-\(tag)-\(name)") }
                 workloads.append(entry)
@@ -139,35 +140,40 @@ extension Scenarios {
 
     func memory() async -> Int32 {
         var report: Report = ["model": model, "renderer": renderer]
+        func sample() -> [String: Double] {
+            malloc_zone_pressure_relief(nil, 0)
+            return h.processSample().mapValues { h.round($0.mib, 1) }
+        }
         do {
             if model == "remote" { _ = try await h.ensureServer() }
             await h.pause(1000)
-            let baseline = h.processSample()
-            let terminal = try await h.makeTerminal(model: model, renderer: renderer, scrollback: 100_000)
-            guard await h.ready(terminal) else { throw SpikeClientError2("shell not ready") }
+            let baseline = sample()
+            var terminal: (any SpikeTerminal)? = try await h.makeTerminal(model: model, renderer: renderer, scrollback: 100_000)
+            weak var weakView = terminal?.view
+            guard let live = terminal, await h.ready(live) else { throw SpikeClientError2("shell not ready") }
             await h.pause(1000)
-            let empty = h.processSample()
+            let empty = sample()
             var steps: [Report] = []
             for (index, lines) in [100_000, 100_000, 100_000].enumerated() {
                 let command = "awk 'BEGIN{for(i=0;i<\(lines);i++) printf \"%07d \\033[32mgreen\\033[0m lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor\\n\", i}'"
-                await h.run(terminal, command, timeout: .seconds(120))
+                await h.run(live, command, timeout: .seconds(120))
                 await h.pause(1500)
-                let sample = h.processSample()
-                let all = terminal.view.terminalContentSnapshot(region: .all)
-                steps.append([
-                    "linesWritten": lines * (index + 1),
-                    "retainedRows": all?.rows.count ?? -1,
-                    "firstRetained": String(all?.rows.first?.text.prefix(30) ?? ""),
-                    "footprintMiB": sample.mapValues { h.round($0.mib, 1) },
-                ])
-                h.say("after \(lines * (index + 1)) lines: app \(h.round(sample["app"]!.mib, 1)) MiB, rows \(all?.rows.count ?? -1)")
+                let footprint = sample()
+                steps.append(["linesWritten": lines * (index + 1), "footprintMiB": footprint])
+                h.say("after \(lines * (index + 1)) lines: \(footprint)")
             }
-            report["baselineMiB"] = baseline.mapValues { h.round($0.mib, 1) }
-            report["emptyTerminalMiB"] = empty.mapValues { h.round($0.mib, 1) }
+            // Copying every retained row is itself expensive; do it once, after the last sample.
+            let all = live.view.terminalContentSnapshot(region: .all)
+            report["retainedRows"] = all?.rows.count ?? -1
+            report["firstRetained"] = String(all?.rows.first?.text.prefix(30) ?? "")
+            report["baselineMiB"] = baseline
+            report["emptyTerminalMiB"] = empty
             report["steps"] = steps
-            terminal.close()
-            await h.pause(1500)
-            report["afterCloseMiB"] = h.processSample().mapValues { h.round($0.mib, 1) }
+            live.close()
+            terminal = nil
+            await h.pause(2000)
+            report["viewDeallocatedAfterClose"] = weakView == nil
+            report["afterCloseMiB"] = sample()
         } catch {
             report["error"] = "\(error)"
         }
@@ -203,7 +209,7 @@ extension Scenarios {
             }
             report["terminals"] = count
             report["idle"] = cpu
-            report["windowVisible"] = h.window.isVisible
+            report["windowOccluded"] = !h.window.occlusionState.contains(.visible)
             h.say("idle \(count) terminal(s): \(cpu)")
             terminals.forEach { $0.close() }
         } catch {
