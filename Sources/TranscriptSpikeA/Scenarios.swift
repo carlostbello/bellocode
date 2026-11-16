@@ -893,10 +893,13 @@ final class Scenarios {
         h.watchdog.start()
         h.frames.start()
         let speed = 3_000.0
-        r.down = await h.driveScroll(velocity: speed, maxSeconds: 120) { $0.visibleRect.minY >= bottom }
+        // Scroll the block's measured height plus one screen down, then back (geometry-based stop conditions
+        // proved unreliable: TextKit's estimate of the block's end kept moving).
+        let seconds = (r.blockHeightPT + c.visibleRect.height) / speed
+        r.down = await h.driveScroll(velocity: speed, maxSeconds: seconds) { _ in false }
         r.framesDown = h.frames.stop()
         h.frames.start()
-        r.up = await h.driveScroll(velocity: -speed, maxSeconds: 120) { $0.visibleRect.minY <= top }
+        r.up = await h.driveScroll(velocity: -speed, maxSeconds: seconds) { _ in false }
         r.framesUp = h.frames.stop()
         r.stalls = h.watchdog.stop()
         r.environment = environment()
