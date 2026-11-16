@@ -103,6 +103,23 @@ struct FaultTests {
         }
     }
 
+    @Test func pieceDelaySlowsTheStream() async throws {
+        try await withServer(options: Self.realTime) { server, client in
+            let reader = EventReader(client)
+            try await reader.connected()
+            await server.setEventSplitting(.fixed(16), pieceDelay: .milliseconds(10))
+            let clock = ContinuousClock()
+            let start = clock.now
+            _ = try await client.createSession()
+            let event = try #require(try await reader.next())
+            #expect(event.type == "session.created")
+            // About 700 bytes in 16-byte pieces with 10 ms between them.
+            #expect(clock.now - start > .milliseconds(200))
+            await server.setEventSplitting(.none)
+            reader.cancel()
+        }
+    }
+
     @Test func duplicateEventKeepsItsID() async throws {
         try await withServer { server, client in
             let reader = EventReader(client)
