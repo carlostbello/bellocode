@@ -45,7 +45,7 @@ enum Fixtures {
     <script>
       window.trust = [];
       const log = (e) => { if (trust.length < 400) trust.push(e.type + ':' + e.isTrusted + ':' + (e.target.id || e.target.localName)); };
-      for (const t of ['click', 'mousedown', 'keydown', 'beforeinput', 'input']) document.addEventListener(t, log, true);
+      for (const t of ['click', 'mousedown', 'keydown', 'beforeinput', 'input', 'mousemove', 'mouseover']) document.addEventListener(t, log, true);
       const f = document.getElementById('f');
       f.addEventListener('submit', (e) => {
         e.preventDefault();

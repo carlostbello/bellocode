@@ -361,7 +361,7 @@ enum AgentScript {
       const api = { snapshot, point, prepareType, fillScript, selectOptions, clickScript, hoverScript, dragScript, filesScript,
         checkedState, waitText, iframes, scrollPage, network,
         frameInfo: () => ({ frameId, url: location.href, name: window.name, top: window === window.top }),
-        valueOf: (input) => valueOf(resolve(input.ref)) ?? null };
+        valueOf: (input) => valueOf(resolve(input.ref)) ?? null, isHovered: (input) => resolve(input.ref).matches(':hover') };
       window.__bc = { frameId, resolve, call: (name, input) => api[name](input) };
       post({ kind: 'frame', frameId, url: location.href, name: window.name, top: window === window.top });
     })();

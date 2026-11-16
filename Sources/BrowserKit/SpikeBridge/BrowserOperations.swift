@@ -363,8 +363,11 @@ struct BrowserOperations {
                 do {
                     try NativeInput.move(tab.webView, css: point.css)
                     await settle()
-                    host.logDelivery("hover", "native")
-                    return
+                    if try await agentCall("isHovered", ["ref": .string(target.id)], frame: target.frame).bool == true {
+                        host.logDelivery("hover", "native")
+                        return
+                    }
+                    reason = "WebKit ignored mouseMoved (window not key)"
                 } catch let error as NativeInput.Unavailable { reason = error.description }
             } else { reason = "frame offset unknown" }
         }

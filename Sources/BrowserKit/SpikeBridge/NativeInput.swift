@@ -125,7 +125,8 @@ enum NativeInput {
             throw BrowserFailure("invalid_key", "Unknown key \"\(key)\". Use Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, PageUp/Down, Home, End, Space, F1-F12, or one character. Use browser.fill for text.")
         }
         let lower = Character(character.lowercased())
-        let shifted = character.isUppercase ? modifiers.union(.shift) : modifiers
+        // "B" alone types a capital (Shift); in a chord, "Control+A" means the A key, as in the reference desktop.
+        let shifted = character.isUppercase && parts.isEmpty ? modifiers.union(.shift) : modifiers
         let typed = modifiers.contains(.command) || modifiers.contains(.control) ? String(lower) : String(character)
         return Key(keyCode: characterCodes[lower] ?? 0, characters: typed, charactersIgnoringModifiers: String(lower), flags: shifted)
     }
@@ -141,12 +142,33 @@ enum NativeInput {
                 charactersIgnoringModifiers: key.charactersIgnoringModifiers, isARepeat: false, keyCode: key.keyCode
             ) else { throw Unavailable(description: "could not create key event") }
             if type == .keyDown {
-                // Command chords travel as key equivalents first, as AppKit does for real input.
-                if key.flags.contains(.command), webView.performKeyEquivalent(with: event) { continue }
+                // Command chords travel as key equivalents first, as AppKit does for real input. WebKit claims them,
+                // lets the page see a trusted keydown, and hands unhandled ones back to the app's menu - which only
+                // works in the key window. When the app is inactive, run the standard editing action directly.
+                if key.flags.contains(.command) {
+                    if !webView.performKeyEquivalent(with: event) { webView.keyDown(with: event) }
+                    if !NSApp.isActive || !window.isKeyWindow, let action = editingAction(key) {
+                        _ = NSApp.sendAction(action, to: webView, from: nil)
+                    }
+                    continue
+                }
                 webView.keyDown(with: event)
             } else {
                 webView.keyUp(with: event)
             }
+        }
+    }
+
+    static func editingAction(_ key: Key) -> Selector? {
+        guard key.flags.intersection([.command, .control, .option]) == .command else { return nil }
+        switch (key.charactersIgnoringModifiers, key.flags.contains(.shift)) {
+        case ("a", false): return #selector(NSText.selectAll(_:))
+        case ("c", false): return #selector(NSText.copy(_:))
+        case ("x", false): return #selector(NSText.cut(_:))
+        case ("v", false): return #selector(NSText.paste(_:))
+        case ("z", false): return Selector(("undo:"))
+        case ("z", true): return Selector(("redo:"))
+        default: return nil
         }
     }
 

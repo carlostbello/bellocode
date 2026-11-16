@@ -83,6 +83,8 @@ final class SelfTest {
     // MARK: Run
 
     func run() async -> Bool {
+        let window = host.contentView.window
+        print("window key=\(window?.isKeyWindow ?? false) main=\(window?.isMainWindow ?? false) app active=\(NSApp.isActive)")
         await tabs()
         await form(mode: .native)
         await form(mode: .script)
@@ -174,8 +176,12 @@ final class SelfTest {
         guard let box = ref(content, role: "generic", name: "") ?? content.split(separator: "\n").first(where: { $0.contains("Hover target") }).flatMap({ $0.firstMatch(of: /@(e\d+)/).map { String($0.1) } }),
               let keys = ref(content, role: "textbox", name: "Key log")
         else { return check("hover/press refs", false, content) }
+        _ = await eval("trust.length = 0")
         await call("hover", ["ref": .string(box)])
-        check("hover (native mouseMoved)", (await eval("hovered.textContent")).string == "hovered:true", (await eval("hovered.textContent")).compactText)
+        // Native when the window is key; otherwise WebKit drops synthesized mouseMoved and hover falls back to script.
+        let hovered = (await eval("hovered.textContent")).string ?? ""
+        let active = NSApp.isActive
+        check("hover (\(active ? "native" : "script fallback, app inactive"))", hovered == (active ? "hovered:true" : "hovered:false"), "\(hovered) via \(host.deliveryLog.last ?? "")")
         await call("click", ["ref": .string(keys)])
         await call("press", ["key": "a"])
         await call("press", ["key": "Shift+B"])
