@@ -1,8 +1,11 @@
+import AgentUI
 import AppKit
 import BelloCore
 
 /// Action methods the window answers. Menu items and toolbar items use a nil target, so these travel the responder
-/// chain (first responder → … → window → `MainWindowController`); text views see Edit commands first.
+/// chain (first responder → … → window → `MainWindowController`); text views see Edit commands first. The composer's
+/// own actions (`sendPrompt:`, `queuePrompt:`, `steerPrompt:`, `stopAgent:`, `focusComposer:`) have the same names, so
+/// a focused composer answers them itself and the window forwards them otherwise.
 @MainActor
 @objc protocol ShellActions {
     func newThread(_ sender: Any?)
@@ -20,18 +23,33 @@ import BelloCore
     func focusNextRegion(_ sender: Any?)
     func focusPreviousRegion(_ sender: Any?)
     func toggleTerminal(_ sender: Any?)
-    func sendMessage(_ sender: Any?)
-    func stopRun(_ sender: Any?)
+    func sendPrompt(_ sender: Any?)
+    func queuePrompt(_ sender: Any?)
+    func steerPrompt(_ sender: Any?)
+    func stopAgent(_ sender: Any?)
+    func chooseModel(_ sender: Any?)
+    func choosePermissionMode(_ sender: Any?)
+    func togglePlanMode(_ sender: Any?)
+    func allowRequestOnce(_ sender: Any?)
+    func allowRequestAlways(_ sender: Any?)
+    func denyRequest(_ sender: Any?)
+    func submitRequestAnswer(_ sender: Any?)
+    func showPreviousRequest(_ sender: Any?)
+    func showNextRequest(_ sender: Any?)
 }
 
-/// Every app command with its menu title and shortcut (docs/research/03-ux-patterns.md, section D). The menu, the
-/// context menus, validation and docs/features/shell.md all come from this one table.
+/// Every app command with its menu title and shortcut (docs/research/03-ux-patterns.md, section D), including the
+/// composer's and AgentUI's. The menu, the context menus, validation and docs/features/shell.md all come from this one
+/// table; `everyCommandHasAUniqueSelectorAndShortcut` checks it has no conflicts.
 enum ShellCommand: String, CaseIterable, Sendable {
     case newThread, addProject
     case renameThread, archiveThread, deleteThread, markUnread
     case togglePinProject, removeProject, revealInFinder, copyPath
     case nextNeedsAttention, focusComposer, focusNextRegion, focusPreviousRegion, toggleTerminal
-    case sendMessage, stopRun
+    case sendMessage, queueFollowUp, steerFollowUp, stopRun
+    case chooseModel, permissionMode, togglePlan
+    case allowOnce, allowAlways, denyRequest, submitAnswer, previousRequest, nextRequest
+    case showSettings, connectProvider, showWelcome
 
     @MainActor var selector: Selector {
         switch self {
@@ -50,8 +68,22 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .focusNextRegion: #selector(MainWindowController.focusNextRegion(_:))
         case .focusPreviousRegion: #selector(MainWindowController.focusPreviousRegion(_:))
         case .toggleTerminal: #selector(MainWindowController.toggleTerminal(_:))
-        case .sendMessage: #selector(MainWindowController.sendMessage(_:))
-        case .stopRun: #selector(MainWindowController.stopRun(_:))
+        case .sendMessage: #selector(MainWindowController.sendPrompt(_:))
+        case .queueFollowUp: #selector(MainWindowController.queuePrompt(_:))
+        case .steerFollowUp: #selector(MainWindowController.steerPrompt(_:))
+        case .stopRun: #selector(MainWindowController.stopAgent(_:))
+        case .chooseModel: #selector(MainWindowController.chooseModel(_:))
+        case .permissionMode: #selector(MainWindowController.choosePermissionMode(_:))
+        case .togglePlan: #selector(MainWindowController.togglePlanMode(_:))
+        case .allowOnce: #selector(MainWindowController.allowRequestOnce(_:))
+        case .allowAlways: #selector(MainWindowController.allowRequestAlways(_:))
+        case .denyRequest: #selector(MainWindowController.denyRequest(_:))
+        case .submitAnswer: #selector(MainWindowController.submitRequestAnswer(_:))
+        case .previousRequest: #selector(MainWindowController.showPreviousRequest(_:))
+        case .nextRequest: #selector(MainWindowController.showNextRequest(_:))
+        case .showSettings: #selector(AppDelegate.showSettings(_:))
+        case .connectProvider: #selector(AppDelegate.connectProvider(_:))
+        case .showWelcome: #selector(AppDelegate.showWelcome(_:))
         }
     }
 
@@ -77,15 +109,32 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .focusPreviousRegion: "Move Focus to Previous Region"
         case .toggleTerminal: "Show Terminal"
         case .sendMessage: "Send"
-        case .stopRun: "Stop"
+        case .queueFollowUp: "Queue After This Turn"
+        case .steerFollowUp: "Steer at Next Step"
+        case .stopRun: "Stop Agent"
+        case .chooseModel: "Choose Model…"
+        case .permissionMode: "Permission Mode…"
+        case .togglePlan: "Plan Mode"
+        case .allowOnce: "Allow Once"
+        case .allowAlways: "Always Allow"
+        case .denyRequest: "Deny or Dismiss"
+        case .submitAnswer: "Submit Answer"
+        case .previousRequest: "Previous Request"
+        case .nextRequest: "Next Request"
+        case .showSettings: "Settings…"
+        case .connectProvider: "Connect Provider…"
+        case .showWelcome: "Welcome to BelloCode…"
         }
     }
 
     /// Key equivalent and modifiers. Empty key: no shortcut (still reachable from the menu, and by keyboard in the
-    /// sidebar where noted in docs/features/shell.md).
+    /// sidebar where noted in docs/features/shell.md). Request and picker shortcuts are AgentUI's (`AgentShortcut`).
     var shortcut: (key: String, modifiers: NSEvent.ModifierFlags) {
         let f6 = String(UnicodeScalar(UInt16(NSF6FunctionKey))!)
         let backspace = String(UnicodeScalar(UInt16(NSBackspaceCharacter))!)
+        func agent(_ shortcut: AgentShortcut) -> (String, NSEvent.ModifierFlags) {
+            (shortcut.menuKeyEquivalent, shortcut.menuModifierMask)
+        }
         return switch self {
         case .newThread: ("n", .command)
         case .addProject: ("o", [.command, .shift])
@@ -101,8 +150,23 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .focusNextRegion: (f6, [])
         case .focusPreviousRegion: (f6, .shift)
         case .toggleTerminal: ("`", .control)
+        // While the composer has focus it handles ⌘↩ itself (its send-key policy); this applies elsewhere.
         case .sendMessage: ("\r", .command)
+        // No default shortcut (research 03, section D): Return/⌘↩ in the composer do the default follow-up.
+        case .queueFollowUp, .steerFollowUp: ("", [])
+        // Not Escape: Escape only dismisses transient UI.
         case .stopRun: (".", .command)
+        case .chooseModel: agent(.modelPicker)
+        case .permissionMode: agent(.permissionMode)
+        case .togglePlan: agent(.togglePlan)
+        case .allowOnce: agent(.allowOnce)
+        case .allowAlways: agent(.allowAlways)
+        case .denyRequest: agent(.deny)
+        case .submitAnswer: agent(.submitAnswer)
+        case .previousRequest: agent(.previousRequest)
+        case .nextRequest: agent(.nextRequest)
+        case .showSettings: (",", .command)
+        case .connectProvider, .showWelcome: ("", [])
         }
     }
 
@@ -112,6 +176,19 @@ enum ShellCommand: String, CaseIterable, Sendable {
         switch self {
         case .archiveThread, .deleteThread: true
         default: false
+        }
+    }
+
+    /// The AgentUI request action behind a request command.
+    var requestCommand: RequestCommand? {
+        switch self {
+        case .allowOnce: .allowOnce
+        case .allowAlways: .allowAlways
+        case .denyRequest: .deny
+        case .submitAnswer: .submitAnswer
+        case .previousRequest: .previous
+        case .nextRequest: .next
+        default: nil
         }
     }
 }
@@ -144,7 +221,11 @@ struct CommandContext: Equatable, Sendable {
     var attentionCount = 0
     var composerVisible = false
     var composerHasText = false
+    /// The displayed thread runs (the composer offers queue, steer and stop).
+    var composerRunning = false
     var isTerminalVisible = false
+    /// Request commands the displayed thread's front request accepts now.
+    var availableRequestCommands: Set<RequestCommand> = []
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -156,9 +237,14 @@ struct CommandContext: Equatable, Sendable {
         case .nextNeedsAttention: return attentionCount > 0
         case .focusComposer: return composerVisible
         case .sendMessage: return composerVisible && composerHasText
+        case .queueFollowUp, .steerFollowUp: return composerVisible && composerHasText && composerRunning
         case .stopRun:
             if case .thread(_, _, true) = target { return true }
             return false
+        case .chooseModel, .permissionMode, .togglePlan: return composerVisible
+        case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
+            return command.requestCommand.map(availableRequestCommands.contains) ?? false
+        case .showSettings, .connectProvider, .showWelcome: return true
         }
     }
 

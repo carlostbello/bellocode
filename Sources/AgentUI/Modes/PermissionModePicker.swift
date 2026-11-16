@@ -63,9 +63,13 @@ public struct PermissionModePicker: View {
     @StateObject private var pending = ViewState<PermissionMode?>(nil)
     @StateObject private var highlighted = ViewState(PermissionMode.ask)
 
-    public init(source: any AgentModeSource, agents: [AgentEntry] = []) {
+    @ObservedObject private var trigger: PopoverTrigger
+
+    /// - Parameter trigger: lets the host open the popover from a menu item.
+    public init(source: any AgentModeSource, agents: [AgentEntry] = [], trigger: PopoverTrigger = PopoverTrigger()) {
         self.source = source
         self.agents = agents
+        self.trigger = trigger
     }
 
     private var current: PermissionMode? { pending.value ?? source.session?.permissionMode }
@@ -90,6 +94,10 @@ public struct PermissionModePicker: View {
         }
         .buttonStyle(.borderless)
         .keyboardShortcut(.permissionMode)
+        .onChange(of: trigger.count) {
+            highlighted.value = current ?? .ask
+            isOpen.value = true
+        }
         .help("Permission mode (\(AgentShortcut.permissionMode.display))")
         .accessibilityLabel("Permission mode")
         .accessibilityValue(current.map { PermissionModeOption.option($0).title } ?? PermissionModeOption.unset.title)

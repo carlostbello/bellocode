@@ -2,6 +2,7 @@ import BelloCore
 import Foundation
 import Observation
 import Testing
+import UniformTypeIdentifiers
 @testable import ComposerKit
 
 @MainActor
@@ -198,13 +199,21 @@ final class FakeThread: ComposerThreadSource {
     var composerErrorMessage: String?
     var composerPromptHistory: [String] = ["earlier"]
     @ObservationIgnored var sent: [(String?, PromptDelivery?)] = []
+    @ObservationIgnored var sentAttachments: [PromptAttachments] = []
+    @ObservationIgnored var commands: [(name: String, arguments: String, attachments: PromptAttachments)] = []
     @ObservationIgnored var nextResult: MessageID? = MessageID("msg_1")
     @ObservationIgnored var stops = 0
 
-    func send(_ text: String?, delivery: PromptDelivery?) async -> MessageID? {
+    func send(_ text: String?, attachments: PromptAttachments, delivery: PromptDelivery?) async -> MessageID? {
         sent.append((text, delivery))
+        sentAttachments.append(attachments)
         if nextResult == nil { composerErrorMessage = "BelloCode is not connected to opencode. Nothing was sent." }
         return nextResult
+    }
+
+    func runCommand(_ name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?) async -> Bool {
+        commands.append((name, arguments, attachments))
+        return nextResult != nil
     }
 
     func stop() async { stops += 1 }
@@ -246,13 +255,79 @@ final class FakeThread: ComposerThreadSource {
         thread.nextResult = nil
         let failed = await host.send(ComposerSubmission(text: "d", tokens: [], attachments: [], delivery: .now))
         #expect(failed == .failed("BelloCode is not connected to opencode. Nothing was sent."))
-        let withFiles = await host.send(ComposerSubmission(text: "e", tokens: [], attachments: [.text("x")], delivery: .now))
-        guard case .failed = withFiles else {
-            Issue.record("attachments must not be dropped silently")
-            return
-        }
         #expect(thread.sent.count == 4)
-        #expect(!host.supportsAttachments)
+        #expect(host.supportsAttachments)
+    }
+
+    @Test func attachmentsAndMentionsBecomePromptInput() async throws {
+        let thread = FakeThread()
+        let directory = FileManager.default.temporaryDirectory.appending(path: "composer-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AttachmentFileStore(directory: directory)
+        let host = ThreadModelComposerHost(thread, cache: ComposerDraftCache(), fileStore: store)
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let image = ComposerAttachment.image(png, type: .png)
+        let onDisk = ComposerAttachment.file(at: URL(filePath: "/tmp/notes.md"))
+        let text = "Look at @src/a.swift with @explore"
+        let file = ComposerToken(kind: .file, text: "@src/a.swift", value: "/repo/src/a.swift")
+        let agent = ComposerToken(kind: .agent, text: "@explore", value: "explore")
+        let submission = ComposerSubmission(
+            text: text,
+            tokens: [
+                PlacedToken(token: file, range: NSRange(location: 8, length: 12)),
+                PlacedToken(token: agent, range: NSRange(location: 26, length: 8)),
+            ],
+            attachments: [image, onDisk], delivery: .now)
+        #expect(await host.send(submission) == .accepted)
+        let sent = try #require(thread.sentAttachments.last)
+        #expect(sent.files.count == 3)
+        #expect(sent.files[0] == PromptAttachments.File(
+            uri: "file:///repo/src/a.swift", name: "a.swift", mime: sent.files[0].mime,
+            mention: .init(start: 8, end: 20, text: "@src/a.swift")))
+        #expect(sent.agents == [.init(name: "explore", mention: .init(start: 26, end: 34, text: "@explore"))])
+        // The pasted image was written to the store; the file on disk is sent as it is.
+        let written = try #require(URL(string: sent.files[1].uri))
+        #expect(written.path.hasPrefix(directory.path))
+        #expect(try Data(contentsOf: written) == png)
+        #expect(sent.files[1].mime == "image/png")
+        #expect(sent.files[2].uri == "file:///tmp/notes.md")
+        // A retry writes the same file again (named by attachment ID), not a second one.
+        _ = await host.send(submission)
+        #expect(thread.sentAttachments.last?.files[1].uri == sent.files[1].uri)
+    }
+
+    @Test func leadingCommandTokenRunsTheServerCommand() async {
+        let thread = FakeThread()
+        let host = ThreadModelComposerHost(thread, cache: ComposerDraftCache())
+        let command = ComposerToken(kind: .command, text: "/review", value: "review")
+        let file = ComposerToken(kind: .file, text: "@a.swift", value: "/r/a.swift")
+        let submission = ComposerSubmission(
+            text: "/review  focus on @a.swift",
+            tokens: [
+                PlacedToken(token: command, range: NSRange(location: 0, length: 7)),
+                PlacedToken(token: file, range: NSRange(location: 18, length: 8)),
+            ],
+            attachments: [], delivery: .now)
+        #expect(await host.send(submission) == .accepted)
+        #expect(thread.sent.isEmpty)
+        #expect(thread.commands.first?.name == "review")
+        #expect(thread.commands.first?.arguments == "focus on @a.swift")
+        #expect(thread.commands.first?.attachments.files.first?.mention == .init(start: 9, end: 17, text: "@a.swift"))
+    }
+
+    @Test func fileStoreCleanUpIsBounded() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "composer-clean-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AttachmentFileStore(directory: directory, maxAge: .seconds(3600), maxTotalBytes: 10)
+        for index in 0..<3 {
+            _ = try await store.materialize(.text(String(repeating: "x", count: 6), name: "t\(index).txt"))
+        }
+        // 18 bytes > 10: the oldest go until the total fits.
+        let removed = await store.cleanUp()
+        #expect(removed == 2)
+        let old = AttachmentFileStore(directory: directory, maxAge: .seconds(1), maxTotalBytes: 1_000)
+        #expect(await old.cleanUp(now: Date().addingTimeInterval(10)) == 1)
+        #expect(AttachmentFileStore.safeComponent("../a/b") == ".._a_b")
     }
 
     @Test func runStateAndObservation() async {

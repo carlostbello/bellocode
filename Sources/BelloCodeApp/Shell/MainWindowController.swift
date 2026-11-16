@@ -1,3 +1,4 @@
+import AgentUI
 import AppKit
 import BelloCore
 import DesignSystem
@@ -159,7 +160,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             hasProjects: !root.projects.isEmpty, target: target, targetProjectPinned: pinned,
             textInputFocused: window?.firstResponder is NSText, attentionCount: root.attention.items.count,
             composerVisible: container.composerSurface != nil, composerHasText: container.composerSurface?.hasSendableText ?? false,
-            isTerminalVisible: !split.contentSplit.drawerItem.isCollapsed)
+            composerRunning: container.composerController.map { $0.runState != .idle } ?? false,
+            isTerminalVisible: !split.contentSplit.drawerItem.isCollapsed,
+            availableRequestCommands: Set(RequestCommand.allCases.filter { container.requestStackController?.model?.canPerform($0) ?? false }))
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -230,9 +233,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             split.setCollapsed(split.contentSplit.drawerItem, !split.contentSplit.drawerItem.isCollapsed)
             recordLayout()
         case .sendMessage:
-            container.composerSurface?.performSend()
+            container.composerController?.composer.sendPrompt(nil) ?? container.composerSurface?.performSend()
+        case .queueFollowUp:
+            container.composerController?.composer.queuePrompt(nil)
+        case .steerFollowUp:
+            container.composerController?.composer.steerPrompt(nil)
         case .stopRun:
-            if let id = target?.threadID { Task { await workspace.threadModel(id).stop() } }
+            guard let id = target?.threadID else { return }
+            if let composer = container.composerController, container.context?.thread?.sessionID == id, composer.runState == .running {
+                composer.composer.stopAgent(nil)
+            } else {
+                Task { await workspace.threadModel(id).stop() }
+            }
+        case .chooseModel:
+            container.composerController?.openModelPicker()
+        case .permissionMode:
+            container.composerController?.openPermissionMode()
+        case .togglePlan:
+            container.composerController?.togglePlan()
+        case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
+            if let request = command.requestCommand { container.requestStackController?.model?.perform(request) }
+        case .showSettings, .connectProvider, .showWelcome:
+            // Answered by the app delegate (they reach it through the responder chain before this window).
+            NSApp.sendAction(command.selector, to: nil, from: nil)
         }
     }
 
@@ -253,8 +276,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func focusNextRegion(_ sender: Any?) { perform(.focusNextRegion) }
     @objc func focusPreviousRegion(_ sender: Any?) { perform(.focusPreviousRegion) }
     @objc func toggleTerminal(_ sender: Any?) { perform(.toggleTerminal) }
-    @objc func sendMessage(_ sender: Any?) { perform(.sendMessage) }
-    @objc func stopRun(_ sender: Any?) { perform(.stopRun) }
+    @objc func sendPrompt(_ sender: Any?) { perform(.sendMessage) }
+    @objc func queuePrompt(_ sender: Any?) { perform(.queueFollowUp) }
+    @objc func steerPrompt(_ sender: Any?) { perform(.steerFollowUp) }
+    @objc func stopAgent(_ sender: Any?) { perform(.stopRun) }
+    @objc func chooseModel(_ sender: Any?) { perform(.chooseModel) }
+    @objc func choosePermissionMode(_ sender: Any?) { perform(.permissionMode) }
+    @objc func togglePlanMode(_ sender: Any?) { perform(.togglePlan) }
+    @objc func allowRequestOnce(_ sender: Any?) { perform(.allowOnce) }
+    @objc func allowRequestAlways(_ sender: Any?) { perform(.allowAlways) }
+    @objc func denyRequest(_ sender: Any?) { perform(.denyRequest) }
+    @objc func submitRequestAnswer(_ sender: Any?) { perform(.submitAnswer) }
+    @objc func showPreviousRequest(_ sender: Any?) { perform(.previousRequest) }
+    @objc func showNextRequest(_ sender: Any?) { perform(.nextRequest) }
 
     // MARK: - Helpers
 
@@ -266,12 +300,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
-    /// F6 / ⇧F6: sidebar → transcript → composer (regions that exist and are visible).
-    private func cycleFocus(forward: Bool) {
+    /// F6 / ⇧F6: sidebar → transcript → requests (when any are pending) → composer (regions that exist and are
+    /// visible).
+    func cycleFocus(forward: Bool) {
         guard let window else { return }
         var regions: [NSView] = []
         if !split.sidebarItem.isCollapsed { regions.append(sidebar.outlineView) }
         if let transcript = container.transcriptFocusView { regions.append(transcript) }
+        if let requests = container.requestFocusView { regions.append(requests) }
         if let composer = container.composerFocusView { regions.append(composer) }
         guard !regions.isEmpty else { return }
         let responder = window.firstResponder as? NSView

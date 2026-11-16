@@ -1,3 +1,4 @@
+import AppKit
 import BelloCore
 import Engine
 import Foundation
@@ -23,6 +24,9 @@ final class AppRuntime {
     }
 
     let engine: Engine
+    /// The app's one provider sign-in service (Settings, onboarding and the model picker share it). Shut down before
+    /// the engine stops.
+    let auth: AuthService
     let source: Source
     /// Restoration defaults: the user's for real data, a separate suite for mock data so it never mixes.
     let defaults: UserDefaults
@@ -37,6 +41,7 @@ final class AppRuntime {
         temporaryDirectory: URL?
     ) {
         self.engine = engine
+        auth = engine.makeAuthService(openURL: { url in NSWorkspace.shared.open(url) })
         self.source = source
         self.defaults = defaults
         self.autosaveSuffix = autosaveSuffix
@@ -105,6 +110,8 @@ final class AppRuntime {
     func stop() async {
         guard !isStopped else { return }
         isStopped = true
+        auth.shutdown()
+        await auth.cancel()
         await engine.stop()
         if let mockServer { await mockServer.stop() }
         if let temporaryDirectory { try? FileManager.default.removeItem(at: temporaryDirectory) }

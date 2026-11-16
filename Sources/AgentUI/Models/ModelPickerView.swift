@@ -34,6 +34,10 @@ public struct ModelPickerButton: View {
         }
         .buttonStyle(.borderless)
         .keyboardShortcut(.modelPicker)
+        .onChange(of: model.openRequests) {
+            if !isOpen.value { model.prepareForOpen() }
+            isOpen.value = true
+        }
         .help(model.error.map { "The model was not changed: \($0)" } ?? "Choose model (\(AgentShortcut.modelPicker.display))")
         .accessibilityLabel("Model")
         .accessibilityValue(

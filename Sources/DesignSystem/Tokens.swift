@@ -28,6 +28,24 @@ extension DS {
         public static let groupFill = NSColor.quaternarySystemFill
         /// Hairlines between regions.
         public static let separator = NSColor.separatorColor
+        /// Raised surfaces in the content column: the composer card, request cards, popovers. White in light mode, a
+        /// step above the window background in dark mode (so the card reads as one object, not a hole).
+        public static let cardBackground = NSColor(name: "BelloCodeCardBackground") { appearance in
+            switch appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) {
+            case .darkAqua: NSColor(white: 0.165, alpha: 1)
+            case .accessibilityHighContrastDarkAqua: NSColor(white: 0.12, alpha: 1)
+            default: .white
+            }
+        }
+        /// The card's border: a hairline that is visible on both backgrounds.
+        public static let cardBorder = NSColor(name: "BelloCodeCardBorder") { appearance in
+            switch appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) {
+            case .darkAqua: NSColor(white: 1, alpha: 0.11)
+            case .accessibilityHighContrastDarkAqua: NSColor(white: 1, alpha: 0.5)
+            case .accessibilityHighContrastAqua: NSColor(white: 0, alpha: 0.5)
+            default: NSColor(white: 0, alpha: 0.12)
+            }
+        }
 
         /// Status meanings. Always shown with a glyph and text, never by colour alone (AGENTS.md UX rule 4).
         public static let attention = NSColor.systemOrange
@@ -90,14 +108,18 @@ extension DS {
         public static let sidebarRowHeight: CGFloat = 24
         /// The sidebar's leading inset for thread rows under a project.
         public static let sidebarIndent: CGFloat = 14
-        /// Readable transcript width; wider windows centre the column.
+        /// The content column's maximum width (transcript, request cards, composer); wider windows centre it.
         public static let readableWidth: CGFloat = 760
+        /// Side margin of the content column when the window is narrower than `readableWidth`.
+        public static let columnMargin: CGFloat = 24
     }
 
     public enum Radius {
         public static let small: CGFloat = 4
         public static let medium: CGFloat = 6
         public static let large: CGFloat = 10
+        /// Cards in the content column (composer, request cards): one radius so they read as one family.
+        public static let card: CGFloat = 12
         /// Capsules (badges): half the height.
         public static func capsule(height: CGFloat) -> CGFloat { height / 2 }
     }

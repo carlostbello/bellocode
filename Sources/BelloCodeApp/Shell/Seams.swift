@@ -9,8 +9,8 @@ import SwiftUI
 // owns its own view controller. To integrate a real module, change `ShellSurfaces.builtIn` below (one file):
 //
 //   transcript   → TranscriptKit   (replaces TemporaryTranscriptViewController)
-//   requestStack → AgentUI         (replaces TemporaryRequestStackViewController)
-//   composer     → ComposerKit     (replaces TemporaryComposerViewController)
+//   requestStack → AgentUI         (RequestStackSurfaceController, Content/RequestStackSurface.swift)
+//   composer     → ComposerKit     (ComposerSurfaceController, Content/ComposerSurface.swift)
 //   rightPanel   → DiffKit / BrowserKit tabs (replaces the placeholder tabs)
 //   terminal     → TerminalKit     (replaces the placeholder drawer)
 //
@@ -33,11 +33,13 @@ struct ShellSurfaces {
     /// The bottom drawer (terminal).
     var terminalDrawer: @MainActor () -> NSViewController
 
-    static var builtIn: ShellSurfaces {
+    static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
+
+    static func builtIn(services: AppServices) -> ShellSurfaces {
         ShellSurfaces(
             transcript: { TemporaryTranscriptViewController(context: $0) },
-            requestStack: { TemporaryRequestStackViewController(context: $0) },
-            composer: { TemporaryComposerViewController(context: $0) },
+            requestStack: { RequestStackSurfaceController(context: $0) },
+            composer: { ComposerSurfaceController(context: $0, services: services) },
             rightPanelTabs: [
                 RightPanelTab(id: "changes", title: "Changes", symbolName: "plusminus") {
                     placeholder("Changes", symbol: "plusminus", detail: "Diffs for this thread appear here.")
@@ -82,6 +84,13 @@ protocol FocusableSurface: AnyObject {
 protocol ComposerSurface: FocusableSurface {
     var hasSendableText: Bool { get }
     func performSend()
+}
+
+/// Choices made in a new-thread draft, applied when its thread is created.
+struct DraftThreadOptions: Hashable, Sendable {
+    var agent: String?
+    var model: ModelSelection?
+    var permissionMode: PermissionMode?
 }
 
 /// Everything a surface needs about what is displayed, plus the actions a composer performs.
@@ -158,20 +167,30 @@ final class ThreadSurfaceContext {
             thread.draft = text
             return await thread.send() != nil
         }
+        guard let model = await createThread() else { return false }
+        // Through the model's draft so a failed send returns the text to the new thread's composer.
+        model.draft = text
+        return await model.send() != nil
+    }
+
+    /// Creates the thread for a draft with the agent, model and permission mode chosen in the draft, clears the
+    /// draft text, and asks the shell to show it. Returns the open model, or nil (with `errorMessage` set).
+    func createThread(_ options: DraftThreadOptions = DraftThreadOptions()) async -> ThreadModel? {
+        guard thread == nil, !isCreatingThread else { return nil }
+        errorMessage = nil
         isCreatingThread = true
         defer { isCreatingThread = false }
         do {
-            let session = try await engine.createThread(in: projectDirectory)
-            guard let model = openThread?(session.id) else { return false }
+            let session = try await engine.createThread(in: projectDirectory, agent: options.agent, model: options.model)
+            guard let model = openThread?(session.id) else { return nil }
+            if let mode = options.permissionMode { await model.setPermissionMode(mode) }
             newThreadDraft = ""
             onNewThreadDraftChange?("")
             onThreadCreated?(session.id)
-            // Through the model's draft so a failed send returns the text to the new thread's composer.
-            model.draft = text
-            return await model.send() != nil
+            return model
         } catch {
             errorMessage = (error as? EngineError)?.userMessage ?? "The thread could not be created."
-            return false
+            return nil
         }
     }
 

@@ -18,6 +18,7 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var header: ThreadHeaderView?
     private(set) var transcript: NSViewController?
     private(set) var composer: NSViewController?
+    private(set) var requestStack: NSViewController?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
@@ -112,6 +113,7 @@ final class ThreadContainerViewController: NSViewController {
         header = nil
         transcript = nil
         composer = nil
+        requestStack = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -137,7 +139,9 @@ final class ThreadContainerViewController: NSViewController {
         let transcript = surfaces.transcript(context)
         self.transcript = transcript
         let transcriptView = adopt(transcript)
-        let requests = adopt(surfaces.requestStack(context))
+        let requestStack = surfaces.requestStack(context)
+        self.requestStack = requestStack
+        let requests = adopt(requestStack)
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
@@ -155,14 +159,14 @@ final class ThreadContainerViewController: NSViewController {
             transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
             composerView.topAnchor.constraint(equalTo: requests.bottomAnchor, constant: DS.Spacing.s),
-            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.l),
+            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
         ])
         for docked in [requests, composerView] {
             let width = docked.widthAnchor.constraint(equalToConstant: column)
             width.priority = .defaultHigh
             NSLayoutConstraint.activate([
                 docked.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
+                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
                 width,
             ])
         }
@@ -186,7 +190,7 @@ final class ThreadContainerViewController: NSViewController {
         self.composer = composer
         let composerView = adopt(composer)
         for subview in [header, heading, path, composerView] { container.addSubview(subview) }
-        let width = composerView.widthAnchor.constraint(equalToConstant: 640)
+        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
         width.priority = .defaultHigh
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.topAnchor),
@@ -199,7 +203,7 @@ final class ThreadContainerViewController: NSViewController {
             composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Spacing.xl),
             composerView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Spacing.xl),
-            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
+            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
             width,
         ])
         return container
@@ -230,4 +234,12 @@ final class ThreadContainerViewController: NSViewController {
     }
 
     var composerSurface: (any ComposerSurface)? { composer as? any ComposerSurface }
+
+    /// The real composer, when mounted (menu commands forward to it).
+    var composerController: ComposerSurfaceController? { composer as? ComposerSurfaceController }
+
+    /// The displayed thread's request stack (menu commands act on its front request).
+    var requestStackController: RequestStackSurfaceController? { requestStack as? RequestStackSurfaceController }
+
+    var requestFocusView: NSView? { (requestStack as? any FocusableSurface)?.preferredFocusView }
 }
