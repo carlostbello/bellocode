@@ -35,7 +35,10 @@ let testSwiftSettings: [SwiftSetting] = swiftSettings + (
 //   .package(url: "https://github.com/swiftlang/swift-markdown", ...)                // TranscriptKit: Markdown
 //   .package(url: "https://github.com/tree-sitter/swift-tree-sitter", ...)  // TranscriptKit, DiffKit: highlighting
 //   .package(url: "https://github.com/migueldeicaza/SwiftTerm", ...)                // TerminalKit
-let packageDependencies: [Package.Dependency] = []
+let packageDependencies: [Package.Dependency] = [
+    // G5 spike: terminal emulator (MIT). Exact pin; 1.99.x is the pre-2.0 line. See docs/spikes/G5-terminal.md.
+    .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.99.3"),
+]
 
 // MARK: - Targets
 
@@ -61,10 +64,12 @@ let targets: [Target] =
     + library("TranscriptKit", dependencies: uiKitDependencies)
     + library("ComposerKit", dependencies: uiKitDependencies)
     + library("DiffKit", dependencies: uiKitDependencies)
-    + library("TerminalKit", dependencies: uiKitDependencies)
+    + library("TerminalKit", dependencies: uiKitDependencies + [.product(name: "SwiftTerm", package: "SwiftTerm")])
     + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     + [
+        // G5 spike harness (docs/spikes/G5-terminal.md).
+        .executableTarget(name: "TerminalSpike", dependencies: ["TerminalKit"], swiftSettings: swiftSettings),
         .executableTarget(
             name: "BelloCodeApp",
             dependencies: [
