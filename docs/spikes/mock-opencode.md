@@ -36,9 +36,8 @@ Large data: `FixtureGenerator(seed:)`, `Scenario.large(...)` (10,000-message ses
 
 ## Pointing the app at it (convention only; the app is not changed)
 
-Run `MockOpenCodeServer.runStandalone(scenario:)` in a host process; it prints `{"url":…,"password":…}` and stops when
-stdin closes. The app should then skip spawning opencode when `BELLOCODE_SERVER_URL` is set and use it with
-`BELLOCODE_SERVER_PASSWORD` (user `opencode`).
+`MockOpenCodeServer.runStandalone(scenario:)` prints `{"url":…,"password":…}` and stops when stdin closes. When
+`BELLOCODE_SERVER_URL` is set the app should not spawn opencode and use that URL with `BELLOCODE_SERVER_PASSWORD`.
 
 ## Known divergences
 
