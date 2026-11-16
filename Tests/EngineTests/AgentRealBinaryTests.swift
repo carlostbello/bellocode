@@ -66,34 +66,29 @@ struct AgentRealBinaryTests {
 
     @Test func integrationListAndFakeKeyConnect() async throws {
         let sandbox = try await Sandbox.start("auth")
-        do {
-            let client = sandbox.client
-            let service = AuthService(
-                client: { client }, directory: { sandbox.project.path }, openURL: { _ in }, pollInterval: .milliseconds(500),
-                emptyListRetries: 20)
-            await service.refresh()
-            print("M1-D real: \(service.integrations.count) integrations")
-            #expect(service.integrations.count > 100)
-            let kinds = Set(service.integrations.flatMap { $0.methods.map { "\($0.kind)" } })
-            print("M1-D real: method kinds \(kinds.sorted())")
-            #expect(kinds.isSuperset(of: ["key", "oauth", "environment"]))
-            #expect(service.integration("openai")?.methods.contains { $0.kind == .oauth } == true)
+        let client = sandbox.client
+        let service = AuthService(
+            client: { client }, directory: { sandbox.project.path }, openURL: { _ in }, pollInterval: .milliseconds(500),
+            emptyListRetries: 20)
+        await service.refresh()
+        print("M1-D real: \(service.integrations.count) integrations")
+        #expect(service.integrations.count > 100)
+        let kinds = Set(service.integrations.flatMap { $0.methods.map { "\($0.kind)" } })
+        print("M1-D real: method kinds \(kinds.sorted())")
+        #expect(kinds.isSuperset(of: ["key", "oauth", "environment"]))
+        #expect(service.integration("openai")?.methods.contains { $0.kind == .oauth } == true)
 
-            // 2.3.0 stores any key without contacting the provider (recorded in docs/features/agent-ui.md).
-            await service.connectKey(integrationID: "openrouter", key: "sk-bellocode-obviously-fake-0000")
-            print("M1-D real: fake key connect -> \(String(describing: service.flow?.phase))")
-            #expect(service.flow?.phase == .succeeded)
-            #expect(service.credentials(for: "openrouter").first?.isActive == true)
-            // A missing required form field is refused with the server's reason.
-            await service.connectKey(integrationID: "azure", key: "sk-bellocode-obviously-fake-0000")
-            #expect(service.flow?.phase == .failed(message: "Missing required form field: resourceName"))
-            // Clean up the fake credential.
-            for credential in service.credentials { await service.remove(credential.id) }
-            #expect(service.credentials.isEmpty)
-        } catch {
-            await sandbox.stop()
-            throw error
-        }
+        // 2.3.0 stores any key without contacting the provider (recorded in docs/features/agent-ui.md).
+        await service.connectKey(integrationID: "openrouter", key: "sk-bellocode-obviously-fake-0000")
+        print("M1-D real: fake key connect -> \(String(describing: service.flow?.phase))")
+        #expect(service.flow?.phase == .succeeded)
+        #expect(service.credentials(for: "openrouter").first?.isActive == true)
+        // A missing required form field is refused with the server's reason.
+        await service.connectKey(integrationID: "azure", key: "sk-bellocode-obviously-fake-0000")
+        #expect(service.flow?.phase == .failed(message: "Missing required form field: resourceName"))
+        // Clean up the fake credential.
+        for credential in service.credentials { await service.remove(credential.id) }
+        #expect(service.credentials.isEmpty)
         await sandbox.stop()
     }
 

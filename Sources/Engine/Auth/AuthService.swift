@@ -32,6 +32,18 @@ public struct AuthMethod: Hashable, Sendable, Identifiable {
 
     public var id: String { methodID ?? "\(kind)" }
 
+    public init(
+        kind: Kind, methodID: String?, label: String, fields: [QuestionField] = [], command: [String] = [],
+        environmentNames: [String] = []
+    ) {
+        self.kind = kind
+        self.methodID = methodID
+        self.label = label
+        self.fields = fields
+        self.command = command
+        self.environmentNames = environmentNames
+    }
+
     /// Whether BelloCode can run this method (env only describes variables).
     public var isInteractive: Bool {
         switch kind {
@@ -52,12 +64,27 @@ public struct IntegrationItem: Hashable, Sendable, Identifiable {
         public var method: String?
         /// Set when opencode says the connection needs signing in again.
         public var problem: String?
+
+        public init(id: String, label: String, isCredential: Bool, method: String? = nil, problem: String? = nil) {
+            self.id = id
+            self.label = label
+            self.isCredential = isCredential
+            self.method = method
+            self.problem = problem
+        }
     }
 
     public var id: String
     public var name: String
     public var methods: [AuthMethod]
     public var connections: [Connection]
+
+    public init(id: String, name: String, methods: [AuthMethod], connections: [Connection]) {
+        self.id = id
+        self.name = name
+        self.methods = methods
+        self.connections = connections
+    }
 
     public var isConnected: Bool { connections.contains { $0.problem == nil } }
     public var interactiveMethods: [AuthMethod] { methods.filter(\.isInteractive) }
@@ -71,6 +98,14 @@ public struct CredentialItem: Hashable, Sendable, Identifiable {
     public var isActive: Bool
     /// `key`, `oauth` or `external`.
     public var kind: String
+
+    public init(id: String, integrationID: String, label: String, isActive: Bool, kind: String) {
+        self.id = id
+        self.integrationID = integrationID
+        self.label = label
+        self.isActive = isActive
+        self.kind = kind
+    }
 }
 
 /// The state of one sign-in attempt. Transitions:
