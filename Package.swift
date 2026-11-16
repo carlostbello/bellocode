@@ -71,6 +71,8 @@ let targets: [Target] =
     + library("TerminalKit", dependencies: uiKitDependencies + [.product(name: "SwiftTerm", package: "SwiftTerm")])
     + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
+    // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
+    + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine"], testDependencies: ["MockOpenCode"])
     + [
         // G5 spike harness (docs/spikes/G5-terminal.md).
         .executableTarget(name: "TerminalSpike", dependencies: ["TerminalKit"], swiftSettings: swiftSettings),
@@ -82,6 +84,10 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // AgentUI demo and snapshot harness: `swift run AgentUIDemo --all` (docs/features/agent-ui.md).
+        .executableTarget(
+            name: "AgentUIDemo", dependencies: ["AgentUI", "Engine", "BelloCore", "OpenCodeKit", "MockOpenCode"],
+            swiftSettings: swiftSettings),
         // SPIKE (gate G3): throwaway browser-bridge prototype. See docs/spikes/G3-browser-bridge.md.
         .executableTarget(name: "BrowserSpike", dependencies: ["BrowserKit"], swiftSettings: swiftSettings),
     ]
