@@ -3,23 +3,18 @@
 Result: **pass, with conditions.** SwiftTerm 1.99.3 (MIT) handles vim, top, fast output, resize, Unicode and
 every protocol checked, with no main-thread stalls. Recommended model: **(b) opencode owns the PTY.** The view is
 an emulator fed from the WebSocket. (a) stays as a fallback behind the same protocol. Confidence: medium-high.
-Not verified: on-screen frame pacing and Metal draw cost (the Mac was locked, see "Limits"), tmux and htop (not installed).
+Not verified: on-screen frame pacing and Metal cost (Mac locked, see Limits); tmux, htop (not installed).
 
-Prototype: `Sources/TerminalKit/Spike/` (throwaway PTY client, both models, metrics) and `Sources/TerminalSpike/`
-(one scenario per process). Reports are in `build/spikes/G5/*.json` and snapshots in `build/snapshots/G5-*.png`. Run:
+Prototype: `Sources/TerminalKit/Spike/` (throwaway client, both models, metrics), `Sources/TerminalSpike/`. Reports are in `build/spikes/G5/*.json` and snapshots in `build/snapshots/G5-*.png`. Run:
 `swift build -c release --product TerminalSpike -Xswiftc -enable-testing -Xswiftc -DSPIKE_FORCE_FRAMES`, then
 `.build/release/TerminalSpike <contract|perf|latency|memory|idle|compat|hooks|restart1|restart2|diag> [--model local|remote] [--renderer cg|metal]`.
 
 ## SwiftTerm facts
 
-- Pinned `exact: "1.99.3"`. Licence MIT. Its manifest is tools 6.2 with `swiftLanguageModes: [.v6]`. TerminalKit
-  builds against it in strict Swift 6 mode with **no relaxed-concurrency wrapper**.
-- Bytes are parsed off the main thread. Model (a) uses a gather thread and a parse thread, a Ghostty-style
-  pipeline. Model (b) uses `TerminalView.feedSender`, which is `Sendable` and parses on the caller's task under
-  the terminal lock. Rendering is display-link driven and coalesced, and suspends while the window is occluded.
-- Two renderers: CoreGraphics (default) and Metal (`setUseMetal(true)`). Buffer reads are thread-safe copies:
-  `visibleRowsText`, `terminalContentSnapshot`, `terminalInputStateSnapshot`. Also available: `observeOscEvents`,
-  `findNext`/`searchMatchSummary`, `pasteText`, `installColors`, `maximumOscBytes`.
+- Pinned `exact: "1.99.3"`, MIT, tools 6.2, `swiftLanguageModes: [.v6]`; TerminalKit builds in strict Swift 6, **no wrapper**.
+- Parsing is off main ((a): gather and parse threads; (b): `Sendable` `feedSender` on the caller's task). Rendering
+  is display-link driven, coalesced, and suspended while occluded. Renderers: CoreGraphics and Metal
+  (`setUseMetal`). Thread-safe copies: `visibleRowsText`, `terminalContentSnapshot`, `terminalInputStateSnapshot`.
 
 ## Results (release build, M5 Max, 120x37 grid, occluded window; another agent's process used ~100% of one core)
 
@@ -33,19 +28,17 @@ Prototype: `Sources/TerminalKit/Spike/` (throwaway PTY client, both models, metr
 | Display-link intervals over 33 ms (120 Hz) | 0 | 0 | 0 | 0 | |
 | Keystroke to buffer p50 / p95 / max (240 keys) | 1.6 / 1.8 / 5.7 ms | 1.4 / 1.8 / 8.6 ms | 2.7 / 3.6 / 9.7 ms | 5.3 / 6.4 / 9.6 ms | |
 
-- The macOS pty is the throughput limit. The same commands run through `script` with no emulator are *slower*.
-  The app used 0.5 CPU-s during the 1.6 s `yes` run. Model (b) is 10–15% slower on bulk output and 2× slower on `cat`.
+- The macOS pty is the limit: `script` with no emulator is *slower*; the app used 0.5 CPU-s in the 1.6 s `yes` run.
+  Model (b) is 10–15% slower on bulk output and 2× slower on `cat`.
 - CG draw cost was measured with a forced 60 Hz `frameTick()` and `display()` on the main thread (see Limits):
   p95 about 1.0 ms and max 4 ms per frame during all workloads. Metal draws on its own render thread, so main is idle.
-- In model (b) the cost is opencode's `opencode-pty` daemon. It runs its own headless emulator, which uses
-  ~1.5 cores during sustained output (6.9 CPU-s for `seq`). Fine for interactive use. Note it for log-heavy builds.
+- Model (b)'s cost is the `opencode-pty` daemon's own headless emulator: ~1.5 cores during sustained output.
 - Memory, 100,000-line scrollback: an empty terminal adds 13 MiB, and 100k rows of 100 columns add **117 MiB**
   (≈1.2 KiB per row). This stays flat after 300k lines (capped at 100,037 rows). Both models are identical in the app.
   The daemon is 15 MiB and keeps a **2 MiB replay ring** per PTY. `terminalContentSnapshot(.all)` on a full buffer
   briefly costs about 500 MiB: never use it for agent reads.
-- Idle (occluded, 20 s): app 0.00–0.02% CPU for 1 or 4 terminals. Server 0.4–0.5%, daemon 0%.
-- 8 terminals in one window cost +26 MiB. After close, 8/8 views were deallocated and 0 shells remained, provided the
-  window's first responder is released. The memory run without that kept one view alive.
+- Idle (occluded, 20 s): app ≤0.02% CPU for 1 or 4 terminals; server 0.4–0.5%, daemon 0%. 8 terminals: +26 MiB;
+  after close 8/8 views freed and 0 shells left, once the window's first responder is released (else one view leaks).
 
 ## PTY contract as observed (opencode 2.3.0; matches `Contracts/opencode-2.3.0/openapi.json`)
 
@@ -87,22 +80,18 @@ Cleanup: with stdin-lease shutdown, the server, daemon and shells all exit, and 
 
 In model (b), vim scrolled by one line on two shrinks, likely because it saw an intermediate size. A Ctrl-L repaint
 changed nothing, so the emulator and vim agreed. Resize ordering is worth a production test.
-Hooks (both models): find in scrollback, select-all with `getSelection`, a send-to-composer callback, implicit URL
-detection, palette, foreground and background from a colour table, and a font change all pass. The font change
-resizes the grid and the PTY (120x37 to 81x25 at 18 pt).
+Hooks (both models) pass: find in scrollback, `getSelection`, send-to-composer callback, implicit URLs, colour-table
+theme, and font change (grid and PTY 120x37 to 81x25 at 18 pt).
 
 ## SwiftTerm problems found
 
-1. `LocalProcessTerminalView` writes **OSC 52 to `NSPasteboard.general`**. `clipboardCopy` is `public`, not
-   `open`, so it cannot be overridden. Production must use a plain `TerminalView` with its own delegate (as (b) does).
-2. Unknown OSC codes are logged to stdout ("Unknown OSC code"). This is harmless but noisy, so route or silence it.
-3. While occluded, frames stop. This is correct, but testing needs the forced clock, which uses `@testable` internals.
-4. `cacheDisplay` snapshots miss the layer background, and Metal views are not captured. Use the window
-   server for on-screen verification later.
-5. A synthesised first click is swallowed while the window is not key, so tests deliver mouse events to the view.
+1. `LocalProcessTerminalView` writes **OSC 52 to `NSPasteboard.general`** (`clipboardCopy` is `public`, not `open`):
+   production must use a plain `TerminalView` with its own delegate, as (b) does. 2. Unknown OSC codes are printed
+   to stdout (noise). 3. While occluded, frames stop (correct); tests need the forced clock (`@testable` internals).
+4. `cacheDisplay` misses the layer background and Metal content. 5. A synthesised first click is swallowed while
+   the window is not key; tests deliver mouse events to the view.
 
-libghostty does not need to be reconsidered. Nothing missed a target, the pty and the daemon cost more than the
-emulator, and SwiftTerm 1.99 already uses a Ghostty-style IO pipeline.
+libghostty need not be reconsidered: nothing missed a target and the pty and daemon cost more than the emulator.
 
 ## Recommended production design (TerminalKit)
 
@@ -118,17 +107,13 @@ emulator, and SwiftTerm 1.99 already uses a Ghostty-style IO pipeline.
 - Persistence: terminals live on the server. On launch, list each session's terminals and attach from cursor 0
   (the ring is ≤2 MiB) for full context. Keep the cursor while attached and reattach from it after a socket drop.
   On `truncated`, reset the emulator first (rule 12). Exited PTYs vanish server-side, so keep a local "exited (code)"
-  row from the `exited` frame.
-- Agent reads: opencode exposes `terminal/read` and `snapshot` to the agent itself. BelloCode only has to create
-  terminals bound to the thread's session. Pass the user's `HOME`/`PATH`/`LANG`/`SSH_AUTH_SOCK`/`TERM` in `env`
+  row from the `exited` frame. Scrollback 10k rows (≈12 MiB) by default, capped at 100k; signposts on feed/frame/attach.
+- Agent reads: the server's `terminal/read` and `snapshot` read the session's terminal (verified over HTTP; that the
+  model's own tool uses them is unverified). BelloCode creates terminals bound to the thread's session. Pass the user's `HOME`/`PATH`/`LANG`/`SSH_AUTH_SOCK`/`TERM` in `env`
   so shells do not see the server's isolated XDG/HOME.
-- Signposts around feed, frame and attach. Scrollback defaults to 10k rows (≈12 MiB), and the setting is capped at 100k (≈120 MiB).
 
 ## Limits of this run and follow-ups
 
-- The Mac was locked for the whole run (`diag`: screen locked, window occluded). Display-link intervals measure
-  main-thread responsiveness, but SwiftTerm itself was not drawing. CG cost comes from the forced clock. **Re-run
-  `perf` and `latency` unlocked** to get on-screen frame pacing and Metal draw cost.
-- Untested: tmux and htop (install them and rerun `compat`); IME and undo through the first responder; the
-  the `persistent-pty/handoff` path across a server restart (whether PTYs survive one is unverified);
-  `OPENCODE_PTY_BIN` with a bundled, signed helper.
+- The Mac was locked throughout (`diag`): display-link intervals show main-thread responsiveness only, and CG cost
+  is from the forced clock. **Re-run `perf`/`latency` unlocked** for on-screen pacing and Metal cost.
+- Untested: tmux, htop, IME/undo, the `handoff` path (PTYs across a server restart), `OPENCODE_PTY_BIN`.
