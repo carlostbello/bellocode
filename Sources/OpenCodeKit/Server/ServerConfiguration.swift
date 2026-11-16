@@ -112,7 +112,7 @@ public protocol ServerInfoProbe: Sendable {
 public struct HTTPServerInfoProbe: ServerInfoProbe {
     private let transport: any HTTPTransport
 
-    public init(transport: any HTTPTransport = URLSessionTransport()) {
+    public init(transport: any HTTPTransport = URLSessionTransport.shared) {
         self.transport = transport
     }
 

@@ -11,6 +11,9 @@ public protocol HTTPTransport: Sendable {
 public struct URLSessionTransport: HTTPTransport {
     public let session: URLSession
 
+    /// One process-wide transport, so building a client per request or per restart does not create sessions.
+    public static let shared = URLSessionTransport()
+
     public init(session: URLSession = URLSessionTransport.makeSession()) {
         self.session = session
     }

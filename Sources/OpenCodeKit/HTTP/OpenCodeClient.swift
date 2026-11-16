@@ -13,7 +13,7 @@ public struct OpenCodeClient: Sendable {
 
     public init(
         connection: ServerConnection,
-        transport: any HTTPTransport = URLSessionTransport(),
+        transport: any HTTPTransport = URLSessionTransport.shared,
         requestTimeout: Duration = .seconds(30)
     ) {
         self.connection = connection
@@ -21,7 +21,7 @@ public struct OpenCodeClient: Sendable {
         self.requestTimeout = requestTimeout
     }
 
-    public init(endpoint: ServerEndpoint, transport: any HTTPTransport = URLSessionTransport()) {
+    public init(endpoint: ServerEndpoint, transport: any HTTPTransport = URLSessionTransport.shared) {
         self.init(connection: endpoint.connection, transport: transport)
     }
 
