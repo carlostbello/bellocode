@@ -368,14 +368,21 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
     public func scrollToBottom() {
         navigationGeneration += 1
         programmaticScrollDepth += 1
-        // `ensureLayout(for: end)` lays out everything before the end once layout is invalid (2.4 s frames during
-        // resize); relocating the viewport to the end only lays out the last screen.
         let end = contentStorage.documentRange.endLocation
-        let controller = layoutManager.textViewportLayoutController
-        _ = controller.relocateViewport(to: end)
-        controller.layoutViewport()
-        scrollProgrammatically(toY: textView.frame.height - visibleRect.height)
-        controller.layoutViewport()
+        if inLiveResize {
+            // After a width change all layout is invalid and `ensureLayout(for: end)` lays out everything before the
+            // end (2.4 s frames); relocating to the end lays out only the last screen.
+            let controller = layoutManager.textViewportLayoutController
+            _ = controller.relocateViewport(to: end)
+            controller.layoutViewport()
+            scrollProgrammatically(toY: textView.frame.height - visibleRect.height)
+            controller.layoutViewport()
+        } else {
+            // Otherwise relocateViewport from far away is the slow path (25 s from mid-document in S8, 4.6 s per
+            // history install), while ensureLayout(end) only extends existing layout.
+            layoutManager.ensureLayout(for: NSTextRange(location: end))
+            textView.scrollToEndOfDocument(nil)
+        }
         programmaticScrollDepth -= 1
     }
 
@@ -467,6 +474,9 @@ public final class SpikeTranscriptController: NSObject, NSTextViewDelegate {
         // layout between edit and anchor changed the document height by up to 147k pt). So the anchor is a text
         // location plus screen offset, restored with TextKit's own `relocateViewport(to:)`.
         guard var anchor = pin.flatMap({ anchor(at: $0) }) ?? captureTopAnchor() else { body(); return nil }
+        // Edits after the anchor (the streaming tail while scrolled up) cannot move it; relocating for them cost up
+        // to 11.8 s per commit in S4.
+        if pin == nil, edit.location > anchor.location { body(); return anchor }
         body()
         if edit.location < anchor.location || (edit.location == anchor.location && edit.length == 0 && pin == nil) {
             anchor.location = max(edit.location, anchor.location + delta)
