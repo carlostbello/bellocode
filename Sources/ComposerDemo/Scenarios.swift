@@ -220,6 +220,14 @@ struct Scenarios {
         h.expect(h.text.hasPrefix("Look at @Sources/App/main.swift"), "undo restores the token")
         h.expectEqual(TokenText.placedTokens(in: h.textView.textStorage!).count, 1, "restored as a token")
 
+        h.textView.setSelectedRange(NSRange(location: h.text.utf16.count, length: 0))
+        if h.text.hasSuffix(" ") { h.textView.deleteBackward(nil); await h.tick() }
+        await h.type("x")
+        let afterToken = TokenText.placedTokens(in: h.textView.textStorage!)
+        h.expect(afterToken.count == 1 && afterToken.first?.token.text == "@Sources/App/main.swift", "typing right after a token does not extend it")
+        h.textView.deleteBackward(nil); await h.tick()
+        await h.type(" ")
+
         h.textView.setSelectedRange(NSRange(location: 0, length: h.textView.string.utf16.count))
         let pasteboard = h.newPasteboard()
         _ = h.textView.writeSelection(to: pasteboard, types: [.string])

@@ -41,13 +41,13 @@ send its `file://` URL (or try a `data:` URI; unverified). File tokens become `f
 `PlacedToken` (UTF-16 offsets, as JavaScript counts). `OpenCodeKit.PromptRequest.FileAttachment` lacks `source` and
 `mention`, and `ThreadModel.send` takes text only: both need extending in Engine/OpenCodeKit before attachments ship.
 
-## Verified by script (`swift run ComposerDemo`: 17 scenarios, 128 checks, all pass; `swift test`: 41 tests)
+## Verified by script (`swift run ComposerDemo`: 17 scenarios, 129 checks, all pass; `swift test`: 42 tests)
 
 Japanese and Chinese composition via `setMarkedText` (Return, Up/Down and `@` inside marked text never send, recall or
 complete; commit then Return sends); emoji and ZWJ deletion; Return / Shift / Option / Command-Return in both send-key
 modes; optimistic clear, failure restore, merge with newer typing; queue / steer / Command flip / steer fallback / Stop /
 Stopping; Escape never sends or stops; `@` and `/` completion with keyboard accept, no-match state, Escape dismissal;
-token insert, undo/redo with stable token ID, caret snapping, whole-token delete, plain-text copy; paste of image +
+token insert, undo/redo with stable token ID, caret snapping, whole-token delete, typing beside a token, plain-text copy; paste of image +
 text, rich text (arrives plain), files, duplicates, large text → chip, undo/redo of chips; history with draft stash and
 Undo; growth, cap, scroll-to-caret, shrink; per-thread drafts with selection, no undo across threads, failure routed to
 its own thread; spell checking off for code; VoiceOver labels on text, chips, remove, send/queue/stop, menu.

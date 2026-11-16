@@ -91,16 +91,27 @@ public enum TokenText {
         return result
     }
 
-    /// Token runs whose characters no longer read as their token (for example after an input method or a
-    /// programmatic edit inside one). The caller removes the token attribute there, leaving plain text.
-    public static func brokenTokenRanges(in text: NSAttributedString) -> [NSRange] {
-        var broken: [NSRange] = []
+    /// Ranges that carry a token attribute but are not that token's text, after an edit. Text typed right before or
+    /// after a token can inherit its attributes: only those extra characters are returned, so the token survives. A
+    /// token edited inside (an input method or a programmatic edit) is returned whole and becomes plain text.
+    public static func strayTokenRanges(in text: NSAttributedString) -> [NSRange] {
+        var stray: [NSRange] = []
         let string = text.string as NSString
         text.enumerateAttribute(.composerToken, in: NSRange(location: 0, length: text.length)) { value, range, _ in
             guard let attribute = value as? TokenAttribute else { return }
-            if string.substring(with: range) != attribute.token.text { broken.append(range) }
+            let runText = string.substring(with: range)
+            let tokenText = attribute.token.text
+            guard runText != tokenText else { return }
+            let tokenLength = (tokenText as NSString).length
+            if runText.hasPrefix(tokenText) {
+                stray.append(NSRange(location: range.location + tokenLength, length: range.length - tokenLength))
+            } else if runText.hasSuffix(tokenText) {
+                stray.append(NSRange(location: range.location, length: range.length - tokenLength))
+            } else {
+                stray.append(range)
+            }
         }
-        return broken
+        return stray
     }
 
     /// The draft value for attributed text.

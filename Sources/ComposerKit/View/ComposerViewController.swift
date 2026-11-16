@@ -870,7 +870,7 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
         let signpost = ComposerSignposts.edit.beginInterval("textDidChange")
         defer { ComposerSignposts.edit.endInterval("textDidChange", signpost) }
         if !textView.hasMarkedText() {
-            for range in TokenText.brokenTokenRanges(in: storage) {
+            for range in TokenText.strayTokenRanges(in: storage) {
                 storage.removeAttribute(.composerToken, range: range)
                 storage.removeAttribute(.composerTokenBackground, range: range)
                 storage.addAttributes(baseAttributes, range: range)

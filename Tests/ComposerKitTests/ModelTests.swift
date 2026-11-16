@@ -50,11 +50,23 @@ private func attributed(_ text: String, tokens: [(String, NSRange)]) -> NSAttrib
         #expect(selection == NSRange(location: 2, length: 12))
     }
 
-    @Test func brokenTokensAreDetected() {
+    @Test func editedTokensBecomePlainText() {
         let mutable = NSMutableAttributedString(attributedString: text)
-        #expect(TokenText.brokenTokenRanges(in: mutable).isEmpty)
+        #expect(TokenText.strayTokenRanges(in: mutable).isEmpty)
         mutable.replaceCharacters(in: NSRange(location: 6, length: 1), with: "X")
-        #expect(TokenText.brokenTokenRanges(in: mutable) == [NSRange(location: 4, length: 10)])
+        #expect(TokenText.strayTokenRanges(in: mutable) == [NSRange(location: 4, length: 10)])
+    }
+
+    @Test func textTypedNextToATokenIsNotPartOfIt() {
+        let after = NSMutableAttributedString(attributedString: text)
+        // "xy" typed at the token's end, inheriting its attributes.
+        after.replaceCharacters(in: NSRange(location: 14, length: 0), with: NSAttributedString(
+            string: "xy", attributes: after.attributes(at: 13, effectiveRange: nil)))
+        #expect(TokenText.strayTokenRanges(in: after) == [NSRange(location: 14, length: 2)])
+        let before = NSMutableAttributedString(attributedString: text)
+        before.replaceCharacters(in: NSRange(location: 4, length: 0), with: NSAttributedString(
+            string: "z", attributes: before.attributes(at: 4, effectiveRange: nil)))
+        #expect(TokenText.strayTokenRanges(in: before) == [NSRange(location: 4, length: 1)])
     }
 
     @Test func draftValidationDropsStaleTokensAndClampsSelection() {
