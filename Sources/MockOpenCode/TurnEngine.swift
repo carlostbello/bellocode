@@ -196,6 +196,10 @@ extension MockOpenCodeServer {
         do {
             while true {
                 deliver(item, &ctx)
+                // A model answers after it is prompted: the step's assistant message must be created strictly after
+                // the user message. Without this tick the virtual clock gives both the same `created`, and their
+                // order falls to the ID tie-break, where the client-minted prompt ID can sort either way.
+                try await sleep(milliseconds: 1)
                 try await play(item.script.steps, &ctx)
                 closeStep(&ctx, finish: "stop")
                 guard let steer = takeNextInbox(sessionID, steerOnly: true) else { break }
