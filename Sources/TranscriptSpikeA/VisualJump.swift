@@ -42,7 +42,7 @@ extension Scenarios {
 
     /// Mean abs difference between a[y + shift] and b[y] over the overlap (lower is better).
     func mismatch(_ a: [[Float]], _ b: [[Float]], shift: Int) -> Float {
-        let n = a.count - shift
+        let n = min(a.count - shift, b.count) // snapshots can differ in height after a resize
         guard n > 100 else { return .infinity }
         var total: Float = 0
         for y in stride(from: 0, to: n, by: 2) {
