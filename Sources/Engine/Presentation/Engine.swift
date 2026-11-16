@@ -1,0 +1,330 @@
+import BelloCore
+import Foundation
+import Observation
+
+/// A project as the sidebar lists it: BelloCode's registry entry joined with opencode's project, if known yet.
+public struct ProjectItem: Hashable, Sendable, Identifiable {
+    public var entry: ProjectEntry
+    public var project: Project?
+
+    /// The directory (a folder has no opencode project ID until first used).
+    public var id: String { entry.directory }
+    public var directory: String { entry.directory }
+    public var projectID: ProjectID? { project?.id ?? entry.projectID }
+    public var name: String { project?.displayName ?? (entry.directory as NSString).lastPathComponent }
+    public var isPinned: Bool { entry.pinned }
+}
+
+/// App-wide presentation state: connection, the project list, the "Needs you" summary and the catalog.
+///
+/// Threading: `@MainActor`, owned by `Engine`. Each property changes only for its own topic: a streaming token never
+/// touches it, a status change updates `attention` and the affected row only.
+@MainActor
+@Observable
+public final class EngineRoot {
+    /// Cached content stays visible in every state; show staleness from this, never a blank pane.
+    public private(set) var connection: ConnectionStatus = .cached
+    /// Unarchived projects: pinned first, then the user's order.
+    public private(set) var projects: [ProjectItem] = []
+    /// Projects the user removed from the sidebar (restorable).
+    public private(set) var hiddenProjects: [ProjectItem] = []
+    /// The global "Needs you" list (urgency, then age) and badge counts.
+    public private(set) var attention: AttentionSummary = .empty
+    public let catalog = CatalogModel()
+
+    @ObservationIgnored private var projectsByID: [ProjectID: Project] = [:]
+    @ObservationIgnored private var registry: [String: ProjectEntry] = [:]
+    @ObservationIgnored fileprivate var projectModels: [ProjectID: ProjectModel] = [:]
+
+    init() {}
+
+    /// The session list of a project. Created on first request (from the cache, synchronously populated by the
+    /// launch snapshot for known projects).
+    public func project(_ id: ProjectID) -> ProjectModel? { projectModels[id] }
+
+    fileprivate func setProjects(_ projects: [Project], registry entries: [ProjectEntry]) {
+        projectsByID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        registry = Dictionary(entries.map { ($0.directory, $0) }, uniquingKeysWith: { $1 })
+        rebuildProjectList()
+    }
+
+    fileprivate func apply(projectsChange change: ChangeSet) {
+        for id in change.removedProjects { projectsByID[id] = nil }
+        for (id, project) in change.projects { projectsByID[id] = project }
+        for directory in change.removedRegistry { registry[directory] = nil }
+        for (directory, entry) in change.registry { registry[directory] = entry }
+        rebuildProjectList()
+    }
+
+    private func rebuildProjectList() {
+        let byDirectory = Dictionary(projectsByID.values.map { ($0.directory, $0) }, uniquingKeysWith: { $1 })
+        let items = registry.values.map { entry in
+            ProjectItem(entry: entry, project: entry.projectID.flatMap { projectsByID[$0] } ?? byDirectory[entry.directory])
+        }.sorted { lhs, rhs in
+            if lhs.entry.pinned != rhs.entry.pinned { return lhs.entry.pinned }
+            if lhs.entry.sortOrder != rhs.entry.sortOrder { return lhs.entry.sortOrder < rhs.entry.sortOrder }
+            return lhs.directory < rhs.directory
+        }
+        let visible = items.filter { !$0.entry.archived }
+        let hidden = items.filter(\.entry.archived)
+        if visible != projects { projects = visible }
+        if hidden != hiddenProjects { hiddenProjects = hidden }
+    }
+
+    fileprivate func setConnection(_ status: ConnectionStatus) {
+        if status != connection { connection = status }
+    }
+
+    fileprivate func setAttention(_ summary: AttentionSummary) {
+        if summary != attention { attention = summary }
+    }
+}
+
+/// The engine facade: wires the server (supervised or attached), the event stream, the projection store and the
+/// presentation models, and exposes the commands UI code calls.
+///
+/// Threading and ownership: `@MainActor`. Create one per app (or per test), call `start()` once and `stop()` before
+/// quitting. All heavy work (network, decoding, reducing, SQLite) runs off the main actor in `EngineCore` and the
+/// store; models receive immutable values.
+///
+/// Lifecycle: `start()` first reads the cache and fills `root` (projects, sessions, attention), so the UI can render
+/// before the server is ready; then it starts the server (if supervised) and the event stream. Every connect resyncs
+/// from the list endpoints.
+///
+/// Commands throw `EngineError` (user-presentable). Optimistic changes appear immediately and roll back on failure;
+/// nothing is reported as delivered before the server acknowledges it.
+@MainActor
+public final class Engine {
+    public let root = EngineRoot()
+    public let store: ProjectionStore
+    public let configuration: EngineConfiguration
+    let core: EngineCore
+
+    private let tasks = TaskBox()
+    private var openThreads: [SessionID: ThreadModel] = [:]
+    private var trackedTasks: [Int: Task<Void, Never>] = [:]
+    private var nextTrackedID = 0
+    private var defaultDirectory: String?
+    private var started = false
+
+    public init(configuration: EngineConfiguration) throws {
+        self.configuration = configuration
+        store = try ProjectionStore(location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
+        core = EngineCore(configuration: configuration, store: store)
+    }
+
+    /// Loads the cache into `root`, then connects. Returns once cached content is shown (it does not wait for the
+    /// server).
+    public func start() async {
+        guard !started else { return }
+        started = true
+        subscribeRoot()
+        if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
+        await core.start()
+    }
+
+    /// Closes open threads, writes pending state, stops the event stream and (if supervised) the server.
+    public func stop() async {
+        for thread in Array(openThreads.values) { thread.close() }
+        openThreads.removeAll()
+        for task in trackedTasks.values { await task.value }
+        trackedTasks.removeAll()
+        await core.stop()
+        for model in root.projectModels.values { model.close() }
+        tasks.cancelAll()
+        root.setConnection(.stopped)
+        started = false
+    }
+
+    // MARK: - Models
+
+    /// The session list of a project (created if this project was not in the launch snapshot).
+    public func project(_ id: ProjectID) async -> ProjectModel {
+        if let model = root.projectModels[id] { return model }
+        let (sessions, statuses) = await core.sessions(projectID: id)
+        if let model = root.projectModels[id] { return model }
+        let model = ProjectModel(projectID: id, sessions: sessions, statuses: statuses, core: core, store: store)
+        root.projectModels[id] = model
+        return model
+    }
+
+    /// Opens a thread: returns its model at once (filled from the cache within milliseconds, then reconciled with the
+    /// server). The same instance is returned while it is open; call `ThreadModel.close()` when done.
+    public func openThread(_ id: SessionID) -> ThreadModel {
+        if let model = openThreads[id] { return model }
+        let model = ThreadModel(sessionID: id, core: core, store: store, engine: self)
+        openThreads[id] = model
+        let core = self.core
+        track(Task { await core.openThread(id) })
+        return model
+    }
+
+    func threadClosed(_ model: ThreadModel) {
+        guard openThreads[model.sessionID] === model else { return }
+        openThreads[model.sessionID] = nil
+        let core = self.core
+        let id = model.sessionID
+        track(Task { await core.closeThread(id) })
+    }
+
+    /// Keeps a short command task alive until it finishes, so `stop()` waits for it.
+    func track(_ task: Task<Void, Never>) {
+        nextTrackedID += 1
+        let id = nextTrackedID
+        trackedTasks[id] = task
+        tasks.set(
+            "track-\(id)",
+            Task { [weak self] in
+                await task.value
+                self?.trackedTasks[id] = nil
+                self?.tasks.remove("track-\(id)")
+            })
+    }
+
+    // MARK: - Commands: threads
+
+    /// Creates a thread in `directory`. It appears in the sidebar at once when the project is known.
+    public func createThread(
+        in directory: String, title: String? = nil, agent: String? = nil, model: ModelSelection? = nil,
+        parent: SessionID? = nil
+    ) async throws -> Session {
+        try await core.createSession(directory: directory, title: title, agent: agent, model: model, parentID: parent)
+    }
+
+    public func renameThread(_ id: SessionID, to title: String) async throws { try await core.renameSession(id, title: title) }
+
+    /// Deletes on the server (not undoable there). The row disappears at once and returns if the server refuses.
+    public func deleteThread(_ id: SessionID) async throws { try await core.deleteSession(id) }
+
+    /// Archives or restores a thread (reversible; prefer this with Undo over delete).
+    public func setArchived(_ id: SessionID, _ archived: Bool) async throws { try await core.setArchived(id, archived: archived) }
+
+    /// Sends a prompt to a thread that may not be open. See `ThreadModel.send` for the open-thread variant.
+    public func send(_ text: String, to id: SessionID, delivery: PromptDelivery? = nil) async throws -> MessageID {
+        try await core.sendPrompt(id, text: text, delivery: delivery)
+    }
+
+    public func stop(_ id: SessionID) async throws { try await core.interrupt(id) }
+
+    public func reply(to request: PermissionRequestID, _ reply: PermissionReply, message: String? = nil) async throws {
+        try await core.replyPermission(request, reply: reply, message: message)
+    }
+
+    public func answer(_ question: QuestionID, _ answers: [String: QuestionAnswer]) async throws {
+        try await core.replyQuestion(question, answers: answers)
+    }
+
+    public func markViewed(_ id: SessionID) async throws { try await core.markViewed(id) }
+    public func setModel(_ model: ModelSelection, for id: SessionID) async throws { try await core.setModel(id, model: model) }
+    public func setAgent(_ agent: String, for id: SessionID) async throws { try await core.setAgent(id, agent: agent) }
+    public func setPermissionMode(_ mode: PermissionMode, for id: SessionID) async throws {
+        try await core.setPermissionMode(id, mode: mode)
+    }
+
+    // MARK: - Commands: projects
+
+    /// Adds a folder to the sidebar (or restores a hidden one).
+    public func addProject(directory: String) async { await core.addProject(directory: directory) }
+    /// Hides a project from the sidebar; reversible with `addProject`.
+    public func removeProject(directory: String) async { await core.removeProject(directory: directory) }
+    public func setProjectPinned(directory: String, _ pinned: Bool) async { await core.setProjectPinned(directory: directory, pinned: pinned) }
+    public func moveProject(directory: String, to index: Int) async { await core.moveProject(directory: directory, to: index) }
+
+    // MARK: - Queries
+
+    /// Full-text search over cached message text.
+    public func search(_ query: String, limit: Int = 50) async throws -> [SearchHit] {
+        try await core.search(query, limit: limit)
+    }
+
+    /// Re-reads the provider, model and agent catalog for a location.
+    public func refreshCatalog(directory: String) async { await core.refreshCatalog(directory: directory) }
+
+    /// Waits until every buffered stream delta is published and every pending write is on disk (tests, shutdown).
+    public func flush() async { await core.flush() }
+
+    // MARK: - Wiring
+
+    private func applyLaunchSnapshot(_ snapshot: EngineSnapshot) {
+        let signpost = EngineSignposts.publish.beginInterval("launchSnapshot")
+        defer { EngineSignposts.publish.endInterval("launchSnapshot", signpost) }
+        root.setProjects(snapshot.projects, registry: snapshot.registry)
+        root.setAttention(snapshot.attention)
+        let byProject = Dictionary(grouping: snapshot.sessions, by: \.projectID)
+        for (projectID, sessions) in byProject where root.projectModels[projectID] == nil {
+            root.projectModels[projectID] = ProjectModel(
+                projectID: projectID, sessions: sessions, statuses: snapshot.statuses, core: core, store: store)
+        }
+        for item in root.projects {
+            if let id = item.projectID, root.projectModels[id] == nil {
+                root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
+            }
+        }
+        defaultDirectory = configuration.defaultDirectory ?? root.projects.first?.directory
+        for catalog in snapshot.catalogs { root.catalog.apply(catalog, isDefault: catalog.directory == defaultDirectory) }
+    }
+
+    private func subscribeRoot() {
+        let topics: [(String, ChangeTopic)] = [
+            ("projects", .projects), ("attention", .attention), ("catalog", .catalog), ("connection", .connection),
+        ]
+        for (key, topic) in topics {
+            let subscription = store.observe(topic)
+            tasks.set(
+                key,
+                Task { [weak self] in
+                    for await change in subscription {
+                        guard let self else { return }
+                        self.applyRoot(change)
+                    }
+                })
+        }
+    }
+
+    private func applyRoot(_ change: ChangeSet) {
+        if let connection = change.connection { root.setConnection(connection) }
+        if let summary = change.attention { root.setAttention(summary) }
+        if let catalog = change.catalog {
+            defaultDirectory = defaultDirectory ?? root.projects.first?.directory
+            root.catalog.apply(catalog, isDefault: catalog.directory == defaultDirectory)
+        }
+        if !change.projects.isEmpty || !change.removedProjects.isEmpty || !change.registry.isEmpty
+            || !change.removedRegistry.isEmpty
+        {
+            root.apply(projectsChange: change)
+            for item in root.projects {
+                if let id = item.projectID, root.projectModels[id] == nil {
+                    root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
+                    let model = root.projectModels[id]!
+                    let core = self.core
+                    track(
+                        Task { [weak model] in
+                            let (sessions, statuses) = await core.sessions(projectID: id)
+                            model?.seed(sessions: sessions, statuses: statuses)
+                        })
+                }
+            }
+        }
+        if change.overflowed {
+            let core = self.core
+            track(
+                Task { [weak self] in
+                    let snapshot = await core.snapshot()
+                    guard let self else { return }
+                    self.root.setProjects(snapshot.projects, registry: snapshot.registry)
+                    self.root.setAttention(snapshot.attention)
+                    self.root.setConnection(snapshot.connection)
+                })
+        }
+    }
+}
+
+extension ProjectModel {
+    /// Fills a model created before its sessions were read (rows already present are kept).
+    func seed(sessions: [Session], statuses: [SessionID: SessionAttention]) {
+        var change = ChangeSet()
+        for session in sessions { change.sessions[session.id] = session }
+        change.statuses = statuses
+        apply(change)
+    }
+}
