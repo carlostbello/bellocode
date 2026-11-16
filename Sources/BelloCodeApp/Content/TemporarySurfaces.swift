@@ -326,7 +326,11 @@ private final class RequestCard: NSView {
         text.spacing = DS.Spacing.xxs
         let buttonRow = NSStackView(views: buttons)
         buttonRow.spacing = DS.Spacing.s
-        let row = NSStackView(views: [icon, text, buttonRow])
+        buttonRow.setContentHuggingPriority(.required, for: .horizontal)
+        text.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let row = NSStackView(views: [icon, text, spacer, buttonRow])
         row.alignment = .centerY
         row.spacing = DS.Spacing.m
         row.edgeInsets = NSEdgeInsets(top: DS.Spacing.m, left: DS.Spacing.l, bottom: DS.Spacing.m, right: DS.Spacing.m)

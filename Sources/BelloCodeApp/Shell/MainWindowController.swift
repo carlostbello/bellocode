@@ -55,6 +55,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.title = "BelloCode"
+        // Title and subtitle are kept current (Window menu, Mission Control, VoiceOver) but not drawn: the thread
+        // header shows them with the project and directory, and drawing both would repeat the title.
+        window.titleVisibility = .hidden
         window.minSize = NSSize(width: 760, height: 460)
         window.isReleasedWhenClosed = false
         window.toolbarStyle = .unified

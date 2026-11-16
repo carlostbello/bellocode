@@ -25,18 +25,28 @@ final class ThreadCell: SidebarRowView {
         setAccessibilityRole(.row)
     }
 
+    private static let unreadImage = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Unread")?
+        .withSymbolConfiguration(.init(pointSize: 7, weight: .regular).applying(.init(paletteColors: [DS.Palette.accent])))
+
     func bind(_ id: SessionID, workspace: WorkspaceController, showsProject: Bool) {
         loop?.cancel()
         sessionID = id
         self.workspace = workspace
         self.showsProject = showsProject
+        // "Needs you" rows: the title wins; the "project · age" detail truncates from its head (keeping the age).
+        detail.setContentCompressionResistancePriority(showsProject ? .defaultLow - 1 : .required, for: .horizontal)
+        detail.lineBreakMode = showsProject ? .byTruncatingHead : .byClipping
         loop = ObservationLoop { [weak self] in self?.render() }
     }
 
     /// Re-applies the presentation (also called by the sidebar's clock to refresh relative times).
     func render() {
         guard let sessionID, let workspace, let row = workspace.row(sessionID) else {
-            title.stringValue = "Thread"
+            // Not loaded yet: observe the project lists so the row fills in when its project's sessions arrive.
+            if let workspace {
+                for item in workspace.engine.root.projects { _ = workspace.projectModel(item)?.sessionIDs }
+            }
+            title.stringValue = ""
             return
         }
         let session = row.session
@@ -53,14 +63,17 @@ final class ThreadCell: SidebarRowView {
         self.presentation = presentation
         if title.currentEditor() == nil { title.stringValue = presentation.title }
         title.font = presentation.isUnread ? DS.Typography.current.bodyEmphasized : DS.Typography.current.body
+        // One leading slot: the status glyph, else the unread dot, so titles stay aligned.
         if let status = presentation.glyphStatus {
             leading.image = StatusGlyph(status).image()
             leading.toolTip = StatusGlyph(status).label
+        } else if presentation.isUnread {
+            leading.image = Self.unreadImage
+            leading.toolTip = "Unread"
         } else {
             leading.image = nil
             leading.toolTip = nil
         }
-        showsUnread = presentation.isUnread
         badge.count = presentation.childCount
         detail.stringValue = [presentation.projectName, presentation.timeText].compactMap { $0 }.joined(separator: " · ")
         setAccessibilityLabel(presentation.accessibilityLabel)

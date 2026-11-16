@@ -51,7 +51,14 @@ public final class CountBadge: NSView {
 
     public override func updateLayer() {
         layer?.cornerRadius = DS.Radius.capsule(height: bounds.height)
-        layer?.backgroundColor = (isProminent ? tint : DS.Palette.groupFill).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isProminent ? tint : NSColor.quaternaryLabelColor.withAlphaComponent(0.25)).cgColor
+        }
+    }
+
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     public override var wantsUpdateLayer: Bool { true }
