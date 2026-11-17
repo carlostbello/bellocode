@@ -71,7 +71,18 @@ private struct AgentUIStyleKey: EnvironmentKey {
     static let defaultValue = AgentUIStyle.standard
 }
 
+private struct AgentUIAttachedOverlapKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
+    /// How far the host overlaps the composer onto the request card (T3's attached look, visual-language.md §6); the
+    /// card adds this much room under its content. 0 when the card stands alone above the composer.
+    public var agentUIAttachedOverlap: CGFloat {
+        get { self[AgentUIAttachedOverlapKey.self] }
+        set { self[AgentUIAttachedOverlapKey.self] = newValue }
+    }
+
     /// The style AgentUI views draw with.
     public var agentUIStyle: AgentUIStyle {
         get { self[AgentUIStyleKey.self] }

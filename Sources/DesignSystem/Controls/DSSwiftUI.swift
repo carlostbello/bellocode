@@ -35,6 +35,12 @@ public struct DSButtonStyle: ButtonStyle {
 private struct DSButtonBody: View {
     let configuration: ButtonStyleConfiguration
     let style: DSButtonStyle
+
+    private var title: some View {
+        configuration.label
+            .font(.ds(style.size == .regular ? .bodyEmph : .labelEmph))
+            .lineLimit(1)
+    }
     @StateObject private var hover = DSHoverState()
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused
@@ -47,20 +53,21 @@ private struct DSButtonBody: View {
         let recipe = DSButtonRecipe(variant: style.variant, state: state, muted: style.isMuted)
         let radius = style.size == .regular ? DS.Radius.md : DS.Radius.sm
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        HStack(spacing: 6) {
-            configuration.label
-                .font(.ds(style.size == .regular ? .bodyEmph : .labelEmph))
-                .lineLimit(1)
-                .layoutPriority(1)
-            if let hint = style.hint {
-                Text(hint)
-                    .font(.ds(.metaEmph))
-                    .kerning(0.5)
-                    .opacity(0.62)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .accessibilityHidden(true)
+        // The hint is dropped before the title truncates (visual-language.md §6 "Buttons").
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                title.fixedSize()
+                if let hint = style.hint {
+                    Text(hint)
+                        .font(.ds(.metaEmph))
+                        .kerning(0.5)
+                        .opacity(0.62)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
             }
+            title
         }
         .foregroundStyle(SwiftUI.Color(nsColor: recipe.text))
         .padding(.horizontal, style.size == .regular ? DS.Space.s10 : DS.Space.s8)
@@ -82,6 +89,39 @@ private struct DSButtonBody: View {
         .focusEffectDisabled()
         .accessibilityHint(style.hint.map { "Shortcut \($0)" } ?? "")
         .transaction { $0.animation = nil }
+    }
+}
+
+/// A text field without the stock bezel, for SwiftUI `TextField` and `SecureField` (the AppKit `DSTextField` recipe):
+/// 28 high, `r.md`, `canvas` fill, `borderStrong` ring; focused = 1 pt accent ring + 3 pt `focusHalo`.
+/// `.textFieldStyle(DSTextFieldStyle())`.
+public struct DSTextFieldStyle: TextFieldStyle {
+    public init() {}
+
+    // swiftlint:disable:next identifier_name
+    public func _body(configuration: TextField<_Label>) -> some View {
+        configuration.modifier(DSTextFieldChrome())
+    }
+}
+
+private struct DSTextFieldChrome: ViewModifier {
+    @FocusState private var focused: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+        return content
+            .textFieldStyle(.plain)
+            .font(.ds(.body))
+            .foregroundStyle(SwiftUI.Color.ds.text)
+            .focused($focused)
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Size.control)
+            .background(shape.fill(SwiftUI.Color.ds.canvas))
+            .overlay(shape.strokeBorder(focused ? SwiftUI.Color.ds.focusRing : SwiftUI.Color.ds.borderStrong, lineWidth: DS.Border.fieldFocusRing))
+            .background(shape.inset(by: -DS.Border.fieldFocusHalo).fill(focused ? SwiftUI.Color.ds.focusHalo : .clear))
+            .opacity(isEnabled ? 1 : DSControlState.disabledOpacity)
+            .transaction { $0.animation = nil }
     }
 }
 

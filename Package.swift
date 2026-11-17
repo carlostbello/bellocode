@@ -127,7 +127,7 @@ let targets: [Target] =
         .executableTarget(name: "ComposerDemo", dependencies: ["ComposerKit", "DesignSystem"], swiftSettings: swiftSettings),
         // AgentUI demo and snapshot harness: `swift run AgentUIDemo --all` (docs/features/agent-ui.md).
         .executableTarget(
-            name: "AgentUIDemo", dependencies: ["AgentUI", "Engine", "BelloCore", "OpenCodeKit", "MockOpenCode"],
+            name: "AgentUIDemo", dependencies: ["AgentUI", "Engine", "BelloCore", "OpenCodeKit", "MockOpenCode", "DesignSystem"],
             swiftSettings: swiftSettings),
         // M4-A browser harness: fixture site, operation self-test, snapshots and the real-agent end-to-end run
         // (docs/features/browser.md).
