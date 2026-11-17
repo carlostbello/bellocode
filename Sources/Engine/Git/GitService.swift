@@ -59,7 +59,8 @@ public final class GitService {
     public static let repositoryLimit = 24
 
     public let runner: GitRunner
-    public let worktrees: WorktreeService
+    /// Settable inside the module so tests can route removed worktree files away from the real Trash.
+    public internal(set) var worktrees: WorktreeService
     let client: @Sendable () async throws -> OpenCodeClient
     let store: ProjectionStore?
     private var models: [String: GitRepositoryModel] = [:]

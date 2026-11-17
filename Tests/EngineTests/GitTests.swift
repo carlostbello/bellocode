@@ -217,7 +217,7 @@ struct GitRepositoryTests {
         let repo = try await TempRepo.make(files: files)
         defer { repo.remove() }
         try repo.write("src/dir0/file0.swift", "let value0 = -1 // local edit\n")
-        let service = WorktreeService(runner: repo.runner)
+        let service = WorktreeService.holding(in: repo)
         let parent = repo.base.appending(path: "worktrees").path
         let created = try await service.create(
             WorktreeCreation(projectDirectory: repo.path, branch: "bellocode/feature", base: "main", parentDirectory: parent, setupScript: "echo ready > setup.txt"))
@@ -241,7 +241,7 @@ struct GitRepositoryTests {
         #expect(try await service.uniqueBranchName("plain", in: repo.path) == "plain-2")
 
         // Dirty worktree: refused without force; nothing touched.
-        await #expect(throws: WorktreeError.uncommittedChanges(count: 1)) {
+        await #expect(throws: WorktreeError.filesAtRisk(WorktreeContents(uncommitted: 1, ignored: 0, examples: ["setup.txt"]))) {
             try await service.remove(directory: created.directory, projectDirectory: repo.path, deleteBranch: true, force: false)
         }
         #expect(FileManager.default.fileExists(atPath: created.directory))

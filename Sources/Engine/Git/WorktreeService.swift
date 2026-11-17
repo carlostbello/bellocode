@@ -62,11 +62,35 @@ public struct RemovedWorktree: Sendable, Hashable {
     public var branch: String?
     public var head: String
     public var branchDeleted: Bool
+    /// Where the worktree's own files (uncommitted, untracked and ignored) were moved on removal, normally a folder in
+    /// the Trash; `restore` moves them back. Nil when the worktree held nothing beyond its commits.
+    public var heldContents: String? = nil
+}
+
+/// Files in a worktree that exist nowhere else: uncommitted changes (including untracked files) and ignored files
+/// such as `.env`, local databases or build output.
+public struct WorktreeContents: Sendable, Hashable {
+    public var uncommitted: Int
+    /// Ignored entries; an ignored folder counts once.
+    public var ignored: Int
+    /// A few of the paths, for the confirmation.
+    public var examples: [String]
+    public var isEmpty: Bool { uncommitted == 0 && ignored == 0 }
+
+    /// "2 uncommitted files and 1 ignored item".
+    public var summary: String {
+        var parts: [String] = []
+        if uncommitted > 0 { parts.append("\(uncommitted) uncommitted file\(uncommitted == 1 ? "" : "s")") }
+        if ignored > 0 { parts.append("\(ignored) ignored item\(ignored == 1 ? "" : "s")") }
+        return parts.isEmpty ? "no files of its own" : parts.joined(separator: " and ")
+    }
 }
 
 public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
-    /// The worktree holds uncommitted or untracked files; removing it would lose them (needs `force`).
-    case uncommittedChanges(count: Int)
+    /// The worktree holds uncommitted, untracked or ignored files; removing it needs `force` (they go to the Trash).
+    case filesAtRisk(WorktreeContents)
+    /// The worktree was restored, but the files moved aside at removal are gone (the Trash was emptied).
+    case heldContentsMissing(String)
     case branchExists(String)
     case directoryExists(String)
     case baseNotFound(String)
@@ -77,7 +101,9 @@ public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
 
     public var userMessage: String {
         switch self {
-        case .uncommittedChanges(let count): "The worktree has \(count) uncommitted file\(count == 1 ? "" : "s")."
+        case .filesAtRisk(let contents): "The worktree has \(contents.summary)."
+        case .heldContentsMissing(let path):
+            "The checkout was restored, but its own files are no longer at \((path as NSString).abbreviatingWithTildeInPath)."
         case .branchExists(let name): "A branch named “\(name)” already exists."
         case .directoryExists(let path): "A folder already exists at \((path as NSString).abbreviatingWithTildeInPath)."
         case .baseNotFound(let ref): "The base “\(ref)” was not found."
@@ -92,8 +118,24 @@ public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
 /// docs/features/diff-git.md). Callers ask opencode to `refreshWorktrees` afterwards so it adopts the folder.
 public struct WorktreeService: Sendable {
     public let runner: GitRunner
+    /// Moves a folder somewhere recoverable and returns its new location. Defaults to the Trash; tests use a holding
+    /// folder of their own.
+    let recycle: @Sendable (URL) throws -> URL
 
-    public init(runner: GitRunner = GitRunner()) { self.runner = runner }
+    public init(runner: GitRunner = GitRunner()) {
+        self.init(runner: runner, recycle: WorktreeService.moveToTrash)
+    }
+
+    init(runner: GitRunner, recycle: @escaping @Sendable (URL) throws -> URL) {
+        self.runner = runner
+        self.recycle = recycle
+    }
+
+    static func moveToTrash(_ url: URL) throws -> URL {
+        var resulting: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
+        return (resulting as URL?) ?? url
+    }
 
     // MARK: Names
 
@@ -240,8 +282,22 @@ public struct WorktreeService: Sendable {
 
     // MARK: Remove and restore
 
-    /// Removes a worktree folder (and optionally its branch). Without `force`, a worktree holding uncommitted or
-    /// untracked files is refused with `WorktreeError.uncommittedChanges`; nothing is touched.
+    /// What removing the worktree would take away besides its commits (uncommitted, untracked and ignored files).
+    public func contents(of directory: String) async throws -> WorktreeContents {
+        let worktree = GitRepository(directory: directory, runner: runner)
+        let dirty = GitStatusParser.split(try await worktree.git(["status", "--porcelain", "-z", "--untracked-files=all"]).stdout)
+            .filter { $0.count > 3 && $0.dropFirst(2).first == " " }
+        // Ignored folders are listed once ("build/"), which keeps the listing small for node_modules and friends.
+        let ignored = GitStatusParser.split(
+            try await worktree.git(["status", "--porcelain", "-z", "--ignored=traditional", "--untracked-files=normal"]).stdout
+        ).filter { $0.hasPrefix("!! ") }
+        let examples = (dirty + ignored).prefix(5).map { String($0.dropFirst(3)) }
+        return WorktreeContents(uncommitted: dirty.count, ignored: ignored.count, examples: examples)
+    }
+
+    /// Removes a worktree folder (and optionally its branch). A worktree holding uncommitted, untracked or ignored files
+    /// is refused without `force` (`WorktreeError.filesAtRisk`, nothing touched); with `force` those files are moved
+    /// to the Trash first (`RemovedWorktree.heldContents`), so `restore` can put them back.
     public func remove(directory: String, projectDirectory: String, deleteBranch: Bool, force: Bool) async throws -> RemovedWorktree {
         let project = GitRepository(directory: projectDirectory, runner: runner)
         let known = try await project.worktrees()
@@ -249,24 +305,68 @@ public struct WorktreeService: Sendable {
         guard let entry = known.first(where: { ($0.path as NSString).standardizingPath == standardized || realPath($0.path) == realPath(directory) }),
               !entry.isMain
         else { throw WorktreeError.notAWorktree(directory) }
-        let worktree = GitRepository(directory: entry.path, runner: runner)
+        var held: URL?
         if FileManager.default.fileExists(atPath: entry.path) {
-            let dirty = try await worktree.git(["status", "--porcelain", "-z", "--untracked-files=all"]).stdout
-            let count = GitStatusParser.split(dirty).count
-            if count > 0, !force { throw WorktreeError.uncommittedChanges(count: count) }
+            let contents = try await contents(of: entry.path)
+            if !contents.isEmpty {
+                guard force else { throw WorktreeError.filesAtRisk(contents) }
+                held = try holdContents(of: entry.path)
+            }
         }
         let head = entry.head ?? ""
-        _ = try await project.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
+        do {
+            _ = try await project.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
+        } catch {
+            if let held { try? putBack(held, into: entry.path) }
+            throw error
+        }
         var deleted = false
         if deleteBranch, let branch = entry.branch {
             _ = try await project.git(["branch", "-D", branch])
             deleted = true
         }
-        return RemovedWorktree(directory: entry.path, projectDirectory: projectDirectory, branch: entry.branch, head: head, branchDeleted: deleted)
+        return RemovedWorktree(
+            directory: entry.path, projectDirectory: projectDirectory, branch: entry.branch, head: head, branchDeleted: deleted,
+            heldContents: held?.path)
     }
 
-    /// Undo of `remove`: recreates the branch at its old commit if it was deleted, then checks it out again in the
-    /// same folder. Uncommitted files of a forced removal cannot be restored.
+    /// Moves everything in the worktree except its `.git` link into a sibling folder (a rename on the same volume),
+    /// then recycles that folder. Any failure puts the files back and throws.
+    private func holdContents(of directory: String) throws -> URL {
+        let fileManager = FileManager.default
+        let root = URL(filePath: directory, directoryHint: .isDirectory)
+        // Named after the worktree, so it is recognisable in the Trash.
+        let staging = root.deletingLastPathComponent().appending(
+            path: "\(root.lastPathComponent) (removed worktree \(UUID().uuidString.prefix(8)))", directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: false)
+        do {
+            for name in try fileManager.contentsOfDirectory(atPath: directory) where name != ".git" {
+                try fileManager.moveItem(at: root.appending(path: name), to: staging.appending(path: name))
+            }
+            return try recycle(staging)
+        } catch {
+            try? putBack(staging, into: directory)
+            throw error
+        }
+    }
+
+    /// Moves every item of `held` into `directory`, replacing what is there, then removes the emptied `held`.
+    private func putBack(_ held: URL, into directory: String) throws {
+        let fileManager = FileManager.default
+        let root = URL(filePath: directory, directoryHint: .isDirectory)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        for name in try fileManager.contentsOfDirectory(atPath: held.path) where name != ".git" {
+            let destination = root.appending(path: name)
+            if (try? fileManager.attributesOfItem(atPath: destination.path)) != nil { try fileManager.removeItem(at: destination) }
+            try fileManager.moveItem(at: held.appending(path: name), to: destination)
+        }
+        try? fileManager.removeItem(at: held)
+    }
+
+    /// Undo of `remove`: recreates the branch at its old commit if it was deleted, checks it out again in the same
+    /// folder, then moves the files held at removal (uncommitted, untracked, ignored) back over the checkout. Their
+    /// bytes come back exactly; what was staged in the index comes back as unstaged changes. Throws
+    /// `heldContentsMissing` (after restoring the checkout) when those files were deleted from the Trash.
     public func restore(_ removed: RemovedWorktree) async throws {
         let project = GitRepository(directory: removed.projectDirectory, runner: runner)
         if removed.branchDeleted, let branch = removed.branch {
@@ -278,6 +378,9 @@ public struct WorktreeService: Sendable {
         } else {
             _ = try await project.git(["worktree", "add", "--quiet", "--detach", removed.directory, removed.head], timeout: .seconds(300))
         }
+        guard let held = removed.heldContents else { return }
+        guard FileManager.default.fileExists(atPath: held) else { throw WorktreeError.heldContentsMissing(held) }
+        try putBack(URL(filePath: held, directoryHint: .isDirectory), into: removed.directory)
     }
 
     private func realPath(_ path: String) -> String {

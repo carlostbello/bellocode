@@ -160,8 +160,10 @@ final class ChangesSurfaces: ChangesPanelHost {
     }
 }
 
-/// Removing the displayed thread's worktree: refuses nothing silently. A clean worktree is removed at once with Undo
-/// (the branch is kept); one with uncommitted files asks first, since those files cannot be brought back.
+/// Removing the displayed thread's worktree: refuses nothing silently. A worktree holding nothing but its commits is
+/// removed at once with Undo (the branch is kept). One holding uncommitted, untracked or ignored files (an `.env`, a
+/// local database, build output) asks first, naming a few of them; those files are moved to the Trash and Undo puts
+/// them back.
 @MainActor
 enum WorktreeRemoval {
     static func run(context: ThreadSurfaceContext, engine: Engine, window: NSWindow?, undo: UndoCoordinator) {
@@ -172,21 +174,28 @@ enum WorktreeRemoval {
             do {
                 let removed = try await engine.git.removeWorktree(
                     directory: directory, projectDirectory: projectDirectory, projectID: projectID, deleteBranch: false, force: false)
-                offerUndo(removed, engine: engine, projectID: projectID, undo: undo)
-            } catch WorktreeError.uncommittedChanges(let count) {
+                offerUndo(removed, engine: engine, projectID: projectID, undo: undo, message: "Removed worktree \(name(removed)) (branch kept)")
+            } catch WorktreeError.filesAtRisk(let contents) {
                 guard let window else { return }
                 let alert = NSAlert()
-                alert.messageText = "Remove the worktree with \(count) uncommitted file\(count == 1 ? "" : "s")?"
-                alert.informativeText = "\((directory as NSString).abbreviatingWithTildeInPath) has changes that were never committed. Removing it deletes them; this cannot be undone. The branch is kept."
+                alert.messageText = "Remove the worktree with \(contents.summary)?"
+                let more = contents.uncommitted + contents.ignored - contents.examples.count
+                let names = contents.examples.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+                alert.informativeText = """
+                    \((directory as NSString).abbreviatingWithTildeInPath) holds files that exist nowhere else: \(names). \
+                    They will be moved to the Trash, and Undo puts them back. The branch is kept.
+                    """
                 alert.alertStyle = .warning
                 alert.addButton(withTitle: "Remove Worktree")
                 alert.addButton(withTitle: "Cancel")
                 alert.buttons.first?.hasDestructiveAction = true
                 guard await alert.beginSheetModal(for: window) == .alertFirstButtonReturn else { return }
                 do {
-                    _ = try await engine.git.removeWorktree(
+                    let removed = try await engine.git.removeWorktree(
                         directory: directory, projectDirectory: projectDirectory, projectID: projectID, deleteBranch: false, force: true)
-                    undo.showNotice("Removed the worktree and its uncommitted files")
+                    offerUndo(
+                        removed, engine: engine, projectID: projectID, undo: undo,
+                        message: "Removed worktree \(name(removed)); its \(contents.summary) are in the Trash")
                 } catch {
                     undo.showNotice("The worktree was not removed: \(describe(error))")
                 }
@@ -196,23 +205,43 @@ enum WorktreeRemoval {
         }
     }
 
-    private static func offerUndo(_ removed: RemovedWorktree, engine: Engine, projectID: ProjectID?, undo: UndoCoordinator) {
+    /// The most recent removal of one worktree (Redo replaces it), for the next Undo.
+    @MainActor private final class LatestRemoval {
+        var value: RemovedWorktree
+        init(_ value: RemovedWorktree) { self.value = value }
+    }
+
+    private static func name(_ removed: RemovedWorktree) -> String {
+        removed.branch ?? (removed.directory as NSString).lastPathComponent
+    }
+
+    private static func offerUndo(_ removed: RemovedWorktree, engine: Engine, projectID: ProjectID?, undo: UndoCoordinator, message: String) {
         var applied = false
-        let name = removed.branch ?? (removed.directory as NSString).lastPathComponent
+        // Redo repeats the removal the user already confirmed; the worktree's own files go to the Trash again, and the
+        // next Undo restores from that new location.
+        let force = removed.heldContents != nil
+        let latest = LatestRemoval(removed)
         undo.perform(
             ReversibleAction(
-                name: "Remove Worktree", message: "Removed worktree \(name) (branch kept)",
-                apply: {
+                name: "Remove Worktree", message: message,
+                apply: { [weak undo] in
                     guard applied else {
                         applied = true
                         return
                     }
-                    Task { _ = try? await engine.git.removeWorktree(
-                        directory: removed.directory, projectDirectory: removed.projectDirectory, projectID: projectID, deleteBranch: false, force: false) }
+                    Task {
+                        do {
+                            latest.value = try await engine.git.removeWorktree(
+                                directory: removed.directory, projectDirectory: removed.projectDirectory, projectID: projectID,
+                                deleteBranch: false, force: force)
+                        } catch {
+                            undo?.showNotice("The worktree was not removed: \(describe(error))")
+                        }
+                    }
                 },
                 revert: { [weak undo] in
                     Task {
-                        do { try await engine.git.restoreWorktree(removed, projectID: projectID) } catch {
+                        do { try await engine.git.restoreWorktree(latest.value, projectID: projectID) } catch {
                             undo?.showNotice("The worktree could not be restored: \(describe(error))")
                         }
                     }

@@ -107,3 +107,88 @@ import Testing
         #expect(try repo.read("f.txt") == "user\n")
     }
 }
+
+extension WorktreeService {
+    /// A service whose removed worktree files go to a holding folder next to the test repository, never the real Trash.
+    static func holding(in repo: TempRepo) -> WorktreeService {
+        let held = repo.base.appending(path: "held", directoryHint: .isDirectory)
+        return WorktreeService(runner: repo.runner) { url in
+            try FileManager.default.createDirectory(at: held, withIntermediateDirectories: true)
+            let destination = held.appending(path: url.lastPathComponent)
+            try FileManager.default.moveItem(at: url, to: destination)
+            return destination
+        }
+    }
+}
+
+@Suite struct WorktreeRemovalSafetyTests {
+    /// M2: a worktree whose only own files are ignored (.env, build/) is not "clean": removal asks first, then keeps
+    /// the files recoverable, and Undo brings them back byte for byte.
+    @Test func ignoredFilesAreReportedHeldAndRestored() async throws {
+        let repo = try await TempRepo.make(files: ["README.md": "hello\n", ".gitignore": ".env\nbuild/\n"])
+        defer { repo.remove() }
+        let service = WorktreeService.holding(in: repo)
+        let created = try await service.create(
+            WorktreeCreation(projectDirectory: repo.path, branch: "wt", base: "main", parentDirectory: repo.base.appending(path: "wt").path, copyOnWrite: false))
+        let secret = Data("API_KEY=local\n".utf8)
+        try secret.write(to: URL(filePath: created.directory + "/.env"))
+        try FileManager.default.createDirectory(atPath: created.directory + "/build/cache", withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: URL(filePath: created.directory + "/build/cache/db.sqlite"))
+        #expect(try await GitRepository(directory: created.directory, runner: repo.runner).status().files.isEmpty, "git status alone calls it clean")
+
+        let contents = try await service.contents(of: created.directory)
+        #expect(contents.uncommitted == 0 && contents.ignored == 2)
+        #expect(Set(contents.examples) == [".env", "build/"])
+        await #expect(throws: WorktreeError.filesAtRisk(contents)) {
+            try await service.remove(directory: created.directory, projectDirectory: repo.path, deleteBranch: false, force: false)
+        }
+        #expect(FileManager.default.contents(atPath: created.directory + "/.env") == secret, "refusal touches nothing")
+
+        let removed = try await service.remove(directory: created.directory, projectDirectory: repo.path, deleteBranch: false, force: true)
+        #expect(!FileManager.default.fileExists(atPath: created.directory))
+        let held = try #require(removed.heldContents)
+        #expect(FileManager.default.contents(atPath: held + "/.env") == secret, "held, not deleted")
+        #expect(try await repo.repository.worktrees().count == 1)
+
+        try await service.restore(removed)
+        #expect(FileManager.default.contents(atPath: created.directory + "/.env") == secret)
+        #expect(FileManager.default.contents(atPath: created.directory + "/build/cache/db.sqlite") == Data([1, 2, 3]))
+        #expect(FileManager.default.contents(atPath: created.directory + "/README.md") == Data("hello\n".utf8))
+        #expect(!FileManager.default.fileExists(atPath: held), "the holding folder is consumed")
+        #expect(try await GitRepository(directory: created.directory, runner: repo.runner).status().branch == "wt")
+    }
+
+    /// M2: uncommitted edits and untracked files also come back exactly; a clean worktree holds nothing.
+    @Test func uncommittedFilesRoundTripAndCleanRemovalHoldsNothing() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "a\n"])
+        defer { repo.remove() }
+        let service = WorktreeService.holding(in: repo)
+        let parent = repo.base.appending(path: "wt").path
+        let dirty = try await service.create(WorktreeCreation(projectDirectory: repo.path, branch: "dirty", base: "main", parentDirectory: parent, copyOnWrite: false))
+        try "edited\n".write(toFile: dirty.directory + "/a.txt", atomically: true, encoding: .utf8)
+        try "new\n".write(toFile: dirty.directory + "/new.txt", atomically: true, encoding: .utf8)
+        let removed = try await service.remove(directory: dirty.directory, projectDirectory: repo.path, deleteBranch: true, force: true)
+        try await service.restore(removed)
+        #expect(try String(contentsOfFile: dirty.directory + "/a.txt", encoding: .utf8) == "edited\n")
+        #expect(try String(contentsOfFile: dirty.directory + "/new.txt", encoding: .utf8) == "new\n")
+
+        let clean = try await service.create(WorktreeCreation(projectDirectory: repo.path, branch: "clean", base: "main", parentDirectory: parent, copyOnWrite: false))
+        let cleanRemoval = try await service.remove(directory: clean.directory, projectDirectory: repo.path, deleteBranch: false, force: false)
+        #expect(cleanRemoval.heldContents == nil)
+    }
+
+    /// M2: when the held files were deleted (Trash emptied), Undo restores the checkout and says what is missing.
+    @Test func restoreReportsMissingHeldFiles() async throws {
+        let repo = try await TempRepo.make(files: ["README.md": "x\n", ".gitignore": ".env\n"])
+        defer { repo.remove() }
+        let service = WorktreeService.holding(in: repo)
+        let created = try await service.create(
+            WorktreeCreation(projectDirectory: repo.path, branch: "gone", base: "main", parentDirectory: repo.base.appending(path: "wt").path, copyOnWrite: false))
+        try "k\n".write(toFile: created.directory + "/.env", atomically: true, encoding: .utf8)
+        let removed = try await service.remove(directory: created.directory, projectDirectory: repo.path, deleteBranch: false, force: true)
+        let held = try #require(removed.heldContents)
+        try FileManager.default.removeItem(atPath: held)
+        await #expect(throws: WorktreeError.heldContentsMissing(held)) { try await service.restore(removed) }
+        #expect(FileManager.default.fileExists(atPath: created.directory + "/README.md"))
+    }
+}
