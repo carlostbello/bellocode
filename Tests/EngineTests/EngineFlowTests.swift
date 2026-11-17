@@ -67,55 +67,61 @@ struct EngineFlowTests {
         try await waitUntil("row") { projectModel.sessionIDs.contains(session.id) }
         let thread = engine.openThread(session.id)
         try await waitUntil("thread ready") { thread.phase == .ready }
+        func expect(_ ok: Bool, _ what: String, sourceLocation: SourceLocation = #_sourceLocation) async {
+            await check(ok, what, harness, engine, thread, sourceLocation: sourceLocation)
+        }
+        do {
+            // Hold the prompt response so the optimistic message is observable before the server answers.
+            await harness.server.injectHTTPFault(HTTPFault(method: "POST", pathPrefix: "/api/session/\(session.id.rawValue)/prompt", action: .delay(.milliseconds(300))))
+            thread.draft = "Give me the tour #script:full-tour"
+            let send = Task { await thread.send() }
+            try await waitUntil("optimistic message") { userMessages(thread).count == 1 }
+            await expect(userMessages(thread).first?.delivery == .sending, "not delivered before the server acknowledged")
+            await expect(thread.draft.isEmpty, "thread.draft.isEmpty")
+            let sentID = await send.value
+            await expect(sentID != nil, "sentID != nil")
 
-        // Hold the prompt response so the optimistic message is observable before the server answers.
-        await harness.server.injectHTTPFault(HTTPFault(method: "POST", pathPrefix: "/api/session/\(session.id.rawValue)/prompt", action: .delay(.milliseconds(300))))
-        thread.draft = "Give me the tour #script:full-tour"
-        let send = Task { await thread.send() }
-        try await waitUntil("optimistic message") { userMessages(thread).count == 1 }
-        #expect(userMessages(thread).first?.delivery == .sending, "not delivered before the server acknowledged")
-        #expect(thread.draft.isEmpty)
-        let sentID = await send.value
-        #expect(sentID != nil)
+            try await waitUntil("approval pending") { !thread.pendingRequests.isEmpty }
+            await expect(thread.status?.status == .awaitingApproval, "thread.status?.status == .awaitingApproval")
+            await expect(engine.root.attention.counts.approvals == 1, "engine.root.attention.counts.approvals == 1")
+            await expect(engine.root.attention.items.first?.sessionID == session.id, "engine.root.attention.items.first?.sessionID == session.id")
+            guard case .permission(let permission) = thread.pendingRequests[0] else { Issue.record("expected a permission"); return }
+            await expect(permission.action == "edit", "permission.action == 'edit'")
+            await expect(permission.alwaysScopes == ["README.md"], "permission.alwaysScopes == ['README.md']")
+            await thread.reply(to: permission.id, .once)
+            await expect(thread.lastError == nil, "thread.lastError == nil")
 
-        try await waitUntil("approval pending") { !thread.pendingRequests.isEmpty }
-        #expect(thread.status?.status == .awaitingApproval)
-        #expect(engine.root.attention.counts.approvals == 1)
-        #expect(engine.root.attention.items.first?.sessionID == session.id)
-        guard case .permission(let permission) = thread.pendingRequests[0] else { Issue.record("expected a permission"); return }
-        #expect(permission.action == "edit")
-        #expect(permission.alwaysScopes == ["README.md"])
-        await thread.reply(to: permission.id, .once)
-        #expect(thread.lastError == nil)
+            try await waitUntil("question pending") { thread.pendingRequests.contains { !$0.isPermission } }
+            await expect(engine.root.attention.counts.questions == 1, "engine.root.attention.counts.questions == 1")
+            guard case .question(let question) = thread.pendingRequests[0] else { Issue.record("expected a question"); return }
+            await expect(question.fields.first?.options.map(\.value) == ["swift test", "make test"], "the question offers the two runners")
+            await thread.answer(question.id, ["runner": .text("swift test")])
+            await expect(thread.lastError == nil, "thread.lastError == nil")
 
-        try await waitUntil("question pending") { thread.pendingRequests.contains { !$0.isPermission } }
-        #expect(engine.root.attention.counts.questions == 1)
-        guard case .question(let question) = thread.pendingRequests[0] else { Issue.record("expected a question"); return }
-        #expect(question.fields.first?.options.map(\.value) == ["swift test", "make test"])
-        await thread.answer(question.id, ["runner": .text("swift test")])
-        #expect(thread.lastError == nil)
+            await harness.server.waitUntilAllIdle()
+            try await waitUntil("turn finished") { thread.status?.status == .finishedUnread }
+            await expect(engine.root.attention.counts.unread == 1, "engine.root.attention.counts.unread == 1")
+            await expect(thread.pendingRequests.isEmpty, "thread.pendingRequests.isEmpty")
 
-        await harness.server.waitUntilAllIdle()
-        try await waitUntil("turn finished") { thread.status?.status == .finishedUnread }
-        #expect(engine.root.attention.counts.unread == 1)
-        #expect(thread.pendingRequests.isEmpty)
+            // Exactly one user message: the optimistic one, now delivered, under the server's ID.
+            let users = userMessages(thread)
+            await expect(users.count == 1, "users.count == 1")
+            await expect(users.first?.id == sentID, "users.first?.id == sentID")
+            await expect(users.first?.delivery == .delivered, "users.first?.delivery == .delivered")
 
-        // Exactly one user message: the optimistic one, now delivered, under the server's ID.
-        let users = userMessages(thread)
-        #expect(users.count == 1)
-        #expect(users.first?.id == sentID)
-        #expect(users.first?.delivery == .delivered)
+            await thread.markViewed()
+            try await waitUntil("viewed") { thread.status?.status == .idle }
+            await expect(engine.root.attention.items.isEmpty, "engine.root.attention.items.isEmpty")
 
-        await thread.markViewed()
-        try await waitUntil("viewed") { thread.status?.status == .idle }
-        #expect(engine.root.attention.items.isEmpty)
-
-        // The live projection and the cache equal the list endpoints.
-        await engine.flush()
-        let listed = try await harness.listedMessages(session.id)
-        let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
-        #expect(normalized(shown) == normalized(listed))
-        #expect(normalized(try await engine.store.allMessages(sessionID: session.id)) == normalized(listed))
+            // The live projection and the cache equal the list endpoints.
+            await engine.flush()
+            let listed = try await harness.listedMessages(session.id)
+            let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
+            await expect(normalized(shown) == normalized(listed), "normalized(shown) == normalized(listed)")
+            #expect(normalized(try await engine.store.allMessages(sessionID: session.id)) == normalized(listed))
+        } catch {
+            Issue.record(Comment(rawValue: "\(error)\n" + (await engineDiagnostics(harness, engine, thread))))
+        }
         thread.close()
         await engine.stop()
         await harness.stop()

@@ -396,6 +396,22 @@ actor EngineCore {
         scheduleDeltaFlush()
     }
 
+    /// The queue as the core sees it, for test failure reports: items, unconfirmed edits and statistics. IDs and
+    /// states only, never prompt text.
+    func queueDiagnostics(_ sessionID: SessionID) -> String {
+        let items = pipeline.state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created }
+        let lines = items.map { "  \($0.id.rawValue) \($0.delivery) \($0.state) created=\($0.created.milliseconds)" }
+        let edits = pipeline.state.queueEdits.map { "\($0.key.rawValue)=\($0.value)" }.sorted()
+        return """
+            core queue (\(items.count)):
+            \(lines.joined(separator: "\n"))
+            unconfirmed edits: \(edits)
+            admitted during sync: \(admittedDuringSync.map(\.rawValue).sorted())
+            session running: \(pipeline.state.sessions[sessionID]?.isRunning ?? false); syncGeneration \(syncGeneration)
+            statistics: \(statistics)
+            """
+    }
+
     /// Publishes changes, queues writes, re-derives attention and queues effects.
     /// `commit` for extensions in other files.
     func commitExternal(_ reduction: Reduction) { commit(reduction) }

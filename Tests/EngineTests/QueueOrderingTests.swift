@@ -80,29 +80,36 @@ struct QueueOrderingTests {
     /// `inbox.enqueued` events arrive. Those events must not put back the old delivery or the withdrawn item.
     @Test func lateEnqueuedEventsDoNotUndoSteerOrCancel() async throws {
         let (harness, engine, thread, _) = try await runningThread()
-        await harness.server.holdEvents(types: Self.inboxEvents)
-        let second = try #require(await thread.send("second"))
-        let third = try #require(await thread.send("third"))
-        #expect(thread.queue.map(\.id) == [second, third])
-        await thread.steer(second)
-        await thread.cancelQueued(third)
-        #expect(thread.lastError == nil)
-        #expect(thread.queue.map(\.id) == [second])
-        #expect(thread.queue.first?.delivery == .steer)
-        // enqueued(second), enqueued(third), delivery.changed(second), cancelled(third), in published order.
-        #expect(await harness.server.heldEventCount == 4)
+        func expect(_ ok: Bool, _ what: String, sourceLocation: SourceLocation = #_sourceLocation) async {
+            await check(ok, what, harness, engine, thread, sourceLocation: sourceLocation)
+        }
+        do {
+            await harness.server.holdEvents(types: Self.inboxEvents)
+            let second = try #require(await thread.send("second"))
+            let third = try #require(await thread.send("third"))
+            await expect(thread.queue.map(\.id) == [second, third], "both queued, in order")
+            await thread.steer(second)
+            await thread.cancelQueued(third)
+            await expect(thread.lastError == nil, "no error")
+            await expect(thread.queue.map(\.id) == [second], "withdrawn at once")
+            await expect(thread.queue.first?.delivery == .steer, "steered at once")
+            // enqueued(second), enqueued(third), delivery.changed(second), cancelled(third), in published order.
+            await expect(await harness.server.heldEventCount == 4, "four inbox events held")
 
-        // Only the two enqueued events: the confirmations of the edits are still on the way.
-        await harness.server.releaseHeldEvents(count: 2)
-        try await settle(harness, thread, "after enqueued")
-        #expect(thread.queue.map(\.id) == [second], "a late enqueued event does not bring back a withdrawn item")
-        #expect(thread.queue.first?.delivery == .steer, "a late enqueued event does not undo a steer")
+            // Only the two enqueued events: the confirmations of the edits are still on the way.
+            await harness.server.releaseHeldEvents(count: 2)
+            try await settle(harness, thread, "after enqueued")
+            await expect(thread.queue.map(\.id) == [second], "a late enqueued event does not bring back a withdrawn item")
+            await expect(thread.queue.first?.delivery == .steer, "a late enqueued event does not undo a steer")
 
-        await harness.server.releaseHeldEvents()
-        try await settle(harness, thread, "after all")
-        #expect(thread.queue.map(\.id) == [second])
-        #expect(thread.queue.first?.delivery == .steer)
-        #expect(thread.queue.first?.state == .queued)
+            await harness.server.releaseHeldEvents()
+            try await settle(harness, thread, "after all")
+            await expect(thread.queue.map(\.id) == [second], "after all events: one item")
+            await expect(thread.queue.first?.delivery == .steer, "after all events: steered")
+            await expect(thread.queue.first?.state == .queued, "after all events: queued")
+        } catch {
+            Issue.record(Comment(rawValue: "\(error)\n" + (await engineDiagnostics(harness, engine, thread))))
+        }
 
         await harness.server.holdEvents(types: [])
         await thread.stop()
