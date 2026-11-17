@@ -24,9 +24,12 @@ Research this plan is built on (read these before implementing an area):
 - **GitLab only**, most likely self-managed. No GitHub. No forge CLI on the host (`glab` and `gh` are not allowed):
   BelloCode talks to the GitLab API directly. Authentication is an access token stored in the macOS Keychain, not
   OAuth. Wherever this plan or a feature note says "pull request" or "GitHub", read "merge request" and "GitLab".
-- **Containers.** Company policy is to run everything in containers where possible, and native Rancher integration is
-  wanted. What exactly runs in a container, and which Rancher product is meant, is being researched
-  ([research/06-containers-rancher.md](research/06-containers-rancher.md)) and needs owner decisions.
+- **Containers (decided 2026-11-16).** Rancher Desktop on the developer's Mac. opencode itself stays a native host
+  process. Everything the agent or user *runs* (tests, builds, dev servers, scripts, terminals) executes in a
+  container, because most runtimes will be banned from the host (no bun, python or npm on the host). BelloCode must
+  therefore not depend on any host runtime or CLI either: it talks to Rancher Desktop's Docker-compatible API over
+  its socket. Background: [research/06-containers-rancher.md](research/06-containers-rancher.md) (which recommended
+  containerising the server too; the owner chose command execution only).
 - **Look and feel.** The first builds looked like a stock Swift app. A design pass now defines the target visual
   language from T3 Code's source and a mock ([design/](design/)); a restyle of every surface follows.
 
