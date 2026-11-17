@@ -81,6 +81,7 @@ extension DS {
         public var bodyEmphasized: NSFont { .systemFont(ofSize: baseSize, weight: .medium) }
         /// Metadata: times, paths, status lines.
         public var caption: NSFont { .systemFont(ofSize: baseSize - 2) }
+        public var captionEmphasized: NSFont { .systemFont(ofSize: baseSize - 2, weight: .medium) }
         /// Section headers in the sidebar ("Needs you", "Projects").
         public var sectionHeader: NSFont { .systemFont(ofSize: baseSize - 2, weight: .semibold) }
         /// Code, paths shown as code, terminal-adjacent text.

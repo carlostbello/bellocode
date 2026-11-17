@@ -29,6 +29,24 @@ final class WorkspaceController {
     private(set) var selection: ShellSelection?
     /// Threads marked unread by the user (local).
     private(set) var manualUnread: Set<SessionID> = []
+    /// Threads deleted in the last few seconds: hidden now, deleted on the server when their Undo window ends.
+    var hiddenThreads: Set<SessionID> = []
+    /// How the sidebar groups threads (restored).
+    private(set) var grouping: SidebarGrouping = .byProject
+    /// The sidebar filter (not restored: a relaunch shows everything).
+    var filterText = ""
+    /// Back and forward through visited threads and drafts (most recent last; bounded).
+    @ObservationIgnored var backStack: [ShellSelection] = []
+    @ObservationIgnored var forwardStack: [ShellSelection] = []
+    /// Threads that left the window (archived, deleted, settled or snoozed while shown), most recent last.
+    @ObservationIgnored var closedThreads: [SessionID] = []
+    @ObservationIgnored var pendingDeletes: [SessionID: DeferredDelete] = [:]
+    /// The next sidebar structure change comes from a user action (pin, settle, snooze from a menu) and may animate
+    /// the rows it moves. Drops and engine updates never animate.
+    @ObservationIgnored var animatesNextStructureChange = false
+    /// A message to reveal when its thread's transcript appears (global search).
+    @ObservationIgnored var pendingReveal: PendingReveal?
+    static let historyLimit = 50
     @ObservationIgnored let undo: UndoCoordinator
     /// The window's undo manager (returned by the window delegate, shared with text views).
     @ObservationIgnored let undoManager: UndoManager
@@ -46,6 +64,7 @@ final class WorkspaceController {
         state = loaded
         selection = loaded.selection
         manualUnread = Set(loaded.manualUnread)
+        grouping = loaded.grouping
         let manager = UndoManager()
         manager.levelsOfUndo = 100
         undoManager = manager
@@ -54,12 +73,20 @@ final class WorkspaceController {
 
     // MARK: - Selection
 
-    /// Shows a thread or draft at once from cached state (never a blank pane), and remembers it for relaunch.
-    func select(_ selection: ShellSelection?) {
+    /// Shows a thread or draft at once from cached state (never a blank pane), and remembers it for relaunch and for
+    /// Back (⌘[).
+    func select(_ selection: ShellSelection?, recordsHistory: Bool = true) {
         guard selection != state.selection else { return }
+        if recordsHistory, let current = state.selection {
+            backStack.removeAll { $0 == current }
+            backStack.append(current)
+            if backStack.count > Self.historyLimit { backStack.removeFirst(backStack.count - Self.historyLimit) }
+            forwardStack.removeAll()
+        }
         if case .thread(let id) = selection {
             _ = threadModel(id)
             if state.manualUnread.contains(id) { state.setManualUnread(id, false) }
+            if engine.organisation(of: id).markedUnread { engine.organise([id], .setMarkedUnread(false)) }
         }
         state.selection = selection
         scheduleSave()
@@ -88,6 +115,12 @@ final class WorkspaceController {
     }
 
     var openThreadCount: Int { openThreads.count }
+
+    /// Closes a thread's model (it was deleted).
+    func forgetThread(_ id: SessionID) {
+        openThreads.removeValue(forKey: id)?.close()
+        recency.removeAll { $0 == id }
+    }
 
     /// A surface context for a selection (nil when it cannot be shown, for example a removed project's draft).
     func makeContext(for selection: ShellSelection) -> ThreadSurfaceContext? {
@@ -193,19 +226,27 @@ final class WorkspaceController {
         select(.draft(directory: directory))
     }
 
-    func archive(_ id: SessionID) {
-        let title = session(id)?.displayTitle ?? "thread"
-        let wasSelected = state.selection == .thread(id)
-        let fallback = wasSelected ? neighbour(of: id) : nil
+    func archive(_ id: SessionID) { archive([id]) }
+
+    func archive(_ ids: [SessionID]) {
+        let ids = ids.filter { !hiddenThreads.contains($0) }
+        guard !ids.isEmpty else { return }
+        let selected = state.selection?.threadID.flatMap { ids.contains($0) ? $0 : nil }
+        let fallback = selected.flatMap { neighbour(of: $0, excluding: Set(ids)) }
         let engine = self.engine
         undo.perform(
             ReversibleAction(
-                name: "Archive Thread", message: "Archived “\(title)”",
+                name: ids.count == 1 ? "Archive Thread" : "Archive Threads", message: "Archived \(describe(ids))",
                 apply: { [weak self] in
-                    if wasSelected { self?.select(fallback) }
-                    self?.run { try await engine.setArchived(id, true) }
+                    guard let self else { return }
+                    if selected != nil { self.select(fallback) }
+                    self.noteClosed(ids)
+                    for id in ids { self.run { try await engine.setArchived(id, true) } }
                 },
-                revert: { [weak self] in self?.run { try await engine.setArchived(id, false) } }))
+                revert: { [weak self] in
+                    for id in ids { self?.run { try await engine.setArchived(id, false) } }
+                    if let selected { self?.select(.thread(selected)) }
+                }))
     }
 
     func rename(_ id: SessionID, to newTitle: String) {
@@ -218,29 +259,6 @@ final class WorkspaceController {
                 name: "Rename Thread", message: "Renamed to “\(trimmed)”",
                 apply: { [weak self] in self?.run { try await engine.renameThread(id, to: trimmed) } },
                 revert: { [weak self] in self?.run { try await engine.renameThread(id, to: previous) } }))
-    }
-
-    /// Deletes on the server (not undoable; the window confirms first).
-    func delete(_ id: SessionID) {
-        if state.selection == .thread(id) { select(neighbour(of: id)) }
-        openThreads.removeValue(forKey: id)?.close()
-        recency.removeAll { $0 == id }
-        run { try await self.engine.deleteThread(id) }
-    }
-
-    func markUnread(_ id: SessionID) {
-        let title = session(id)?.displayTitle ?? "thread"
-        undo.perform(
-            ReversibleAction(
-                name: "Mark as Unread", message: "Marked “\(title)” unread",
-                apply: { [weak self] in
-                    self?.state.setManualUnread(id, true)
-                    self?.scheduleSave()
-                },
-                revert: { [weak self] in
-                    self?.state.setManualUnread(id, false)
-                    self?.scheduleSave()
-                }))
     }
 
     func togglePin(directory: String) {
@@ -261,7 +279,7 @@ final class WorkspaceController {
         let affectsSelection = target(for: previousSelection).flatMap(projectDirectory(for:)) == directory
         undo.perform(
             ReversibleAction(
-                name: "Remove Project", message: "Removed \(project.name) from the sidebar",
+                name: "Archive Project", message: "Archived \(project.name)",
                 apply: { [weak self] in
                     if affectsSelection { self?.select(nil) }
                     Task { await engine.removeProject(directory: directory) }
@@ -294,6 +312,16 @@ final class WorkspaceController {
                     self?.select(previousSelection)
                     Task { for directory in directories { await engine.removeProject(directory: directory) } }
                 }))
+    }
+
+    /// Persists state changed through `mutateState` (sections, scroll position, grouping).
+    func mutateState(_ body: (inout ShellState) -> Void) {
+        var next = state
+        body(&next)
+        guard next != state else { return }
+        state = next
+        if grouping != state.grouping { grouping = state.grouping }
+        scheduleSave()
     }
 
     func setCollapsed(_ directory: String, _ collapsed: Bool) {
@@ -329,9 +357,14 @@ final class WorkspaceController {
     }
 
     /// The thread to show after `id` disappears: the next one in its project, else the previous, else the draft.
-    private func neighbour(of id: SessionID) -> ShellSelection? {
+    func neighbour(of id: SessionID) -> ShellSelection? {
+        neighbour(of: id, excluding: [id])
+    }
+
+    /// The neighbour of `id` among visible threads of its project that are not in `excluded`.
+    func neighbour(of id: SessionID, excluding excluded: Set<SessionID>) -> ShellSelection? {
         guard let session = session(id), let project = projectItem(for: session), let model = projectModel(project) else { return nil }
-        let ids = model.sessionIDs
+        let ids = model.sessionIDs.filter { $0 == id || (!excluded.contains($0) && !hiddenThreads.contains($0)) }
         guard let index = ids.firstIndex(of: id) else { return .draft(directory: project.directory) }
         if index + 1 < ids.count { return .thread(ids[index + 1]) }
         if index > 0 { return .thread(ids[index - 1]) }
@@ -339,7 +372,7 @@ final class WorkspaceController {
     }
 
     /// Runs an engine command; a failure shows a notice (the engine has already rolled back its optimistic change).
-    private func run(_ body: @escaping @MainActor () async throws -> Void) {
+    func run(_ body: @escaping @MainActor () async throws -> Void) {
         Task { @MainActor [weak self] in
             do {
                 try await body()
@@ -352,7 +385,7 @@ final class WorkspaceController {
 
     // MARK: - Persistence
 
-    private func scheduleSave() {
+    func scheduleSave() {
         guard !isClosed else { return }
         saveTask?.cancel()
         saveTask = Task { @MainActor [weak self] in
@@ -367,9 +400,10 @@ final class WorkspaceController {
         stateStore.save(state)
     }
 
-    /// Saves state and closes every open thread model.
+    /// Saves state, carries out deletes still in their Undo window, and closes every open thread model.
     func close() {
         guard !isClosed else { return }
+        commitPendingDeletes()
         saveNow()
         isClosed = true
         for model in openThreads.values { model.close() }

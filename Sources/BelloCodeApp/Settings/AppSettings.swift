@@ -1,6 +1,7 @@
 import AppKit
 import ComposerKit
 import DesignSystem
+import Engine
 import Observation
 import TerminalKit
 
@@ -50,6 +51,13 @@ final class AppSettings {
             save(terminalPreferences.confirmsMultilinePaste, Keys.terminalConfirmPaste)
         }
     }
+    /// Settings ▸ Notifications: mode, sounds, muted projects, the menu-bar item.
+    var notifications: NotificationSettings {
+        didSet {
+            guard notifications != oldValue, let data = try? JSONEncoder().encode(notifications) else { return }
+            save(data, Keys.notifications)
+        }
+    }
     /// Onboarding finished or skipped once; it is then offered from Settings ▸ Accounts only.
     var hasCompletedOnboarding: Bool { didSet { save(hasCompletedOnboarding, Keys.onboarding) } }
 
@@ -65,6 +73,7 @@ final class AppSettings {
         static let terminalClipboardWrites = "BelloCodeTerminalAllowsClipboardWrites"
         static let terminalOptionAsMeta = "BelloCodeTerminalOptionAsMeta"
         static let terminalConfirmPaste = "BelloCodeTerminalConfirmsMultilinePaste"
+        static let notifications = "BelloCodeNotifications"
     }
 
     /// `defaults` nil keeps everything in memory (tests and snapshots).
@@ -75,6 +84,8 @@ final class AppSettings {
         baseFontSize = min(max(size, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         appearance = defaults?.string(forKey: Keys.appearance).flatMap(Appearance.init(rawValue:)) ?? .system
         hasCompletedOnboarding = defaults?.bool(forKey: Keys.onboarding) ?? false
+        notifications = defaults?.data(forKey: Keys.notifications).flatMap { try? JSONDecoder().decode(NotificationSettings.self, from: $0) }
+            ?? NotificationSettings()
         let defaultTerminal = TerminalPreferences()
         terminalPreferences = TerminalPreferences(
             fontSize: CGFloat(defaults?.object(forKey: Keys.terminalFontSize) as? Double ?? Double(defaultTerminal.fontSize)),

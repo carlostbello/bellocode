@@ -291,8 +291,10 @@ extension ProjectionState {
 
     mutating func putThreadUI(_ state: ThreadUIState, into reduction: inout Reduction) {
         guard threadUI[state.sessionID] != state else { return }
+        let previous = threadUI[state.sessionID]?.organisation ?? .none
         threadUI[state.sessionID] = state
         reduction.changes.append(.threadUI(state))
+        if previous != state.organisation { reduction.changes.append(.organisation(state.sessionID, state.organisation)) }
         reduction.writes.threadUI.append(state)
         reduction.statusDirty.insert(state.sessionID)
     }

@@ -123,6 +123,41 @@ public struct AttentionSummary: Hashable, Sendable {
     public static let empty = AttentionSummary()
 }
 
+/// How a thread is organised in the sidebar (docs/features/navigation.md): pinned, snoozed, settled, manual order and
+/// the auto-settle opt-out. App-owned (`app_thread`), restored on relaunch, shared by every window.
+public struct ThreadOrganisation: Hashable, Sendable, Codable {
+    public var pinned: Bool
+    /// Manual order within Pinned and Active, larger first. nil: the thread's creation time (newest first).
+    public var sortKey: Double?
+    /// Snoozed until this time (the thread returns earlier when it needs the user or gets a new turn).
+    public var snoozedUntil: Timestamp?
+    /// When it was snoozed (activity after this wakes it).
+    public var snoozedAt: Timestamp?
+    public var settled: Bool
+    /// When it was settled (activity that needs the user after this un-settles it).
+    public var settledAt: Timestamp?
+    /// Per-thread "Never auto-settle".
+    public var neverAutoSettle: Bool
+    /// Marked unread by the user; cleared when the thread is viewed.
+    public var markedUnread: Bool
+
+    public init(
+        pinned: Bool = false, sortKey: Double? = nil, snoozedUntil: Timestamp? = nil, snoozedAt: Timestamp? = nil,
+        settled: Bool = false, settledAt: Timestamp? = nil, neverAutoSettle: Bool = false, markedUnread: Bool = false
+    ) {
+        self.pinned = pinned
+        self.sortKey = sortKey
+        self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
+        self.settled = settled
+        self.settledAt = settledAt
+        self.neverAutoSettle = neverAutoSettle
+        self.markedUnread = markedUnread
+    }
+
+    public static let none = ThreadOrganisation()
+}
+
 /// Per-thread state that only BelloCode owns. Restored on relaunch.
 public struct ThreadUIState: Hashable, Sendable, Codable {
     public var sessionID: SessionID
@@ -135,10 +170,17 @@ public struct ThreadUIState: Hashable, Sendable, Codable {
     /// The message at the top of the viewport and its offset, for scroll restoration.
     public var scrollAnchor: MessageID?
     public var scrollOffset: Double
+    public var sortKey: Double?
+    public var snoozedAt: Timestamp?
+    public var settledAt: Timestamp?
+    public var neverAutoSettle: Bool
+    public var markedUnread: Bool
 
     public init(
         sessionID: SessionID, draft: String = "", visitWatermark: Timestamp? = nil, pinned: Bool = false,
-        snoozedUntil: Timestamp? = nil, settled: Bool = false, scrollAnchor: MessageID? = nil, scrollOffset: Double = 0
+        snoozedUntil: Timestamp? = nil, settled: Bool = false, scrollAnchor: MessageID? = nil, scrollOffset: Double = 0,
+        sortKey: Double? = nil, snoozedAt: Timestamp? = nil, settledAt: Timestamp? = nil, neverAutoSettle: Bool = false,
+        markedUnread: Bool = false
     ) {
         self.sessionID = sessionID
         self.draft = draft
@@ -148,5 +190,53 @@ public struct ThreadUIState: Hashable, Sendable, Codable {
         self.settled = settled
         self.scrollAnchor = scrollAnchor
         self.scrollOffset = scrollOffset
+        self.sortKey = sortKey
+        self.snoozedAt = snoozedAt
+        self.settledAt = settledAt
+        self.neverAutoSettle = neverAutoSettle
+        self.markedUnread = markedUnread
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionID, draft, visitWatermark, pinned, snoozedUntil, settled, scrollAnchor, scrollOffset, sortKey, snoozedAt
+        case settledAt, neverAutoSettle, markedUnread
+    }
+
+    /// Fields added after the first version decode as their defaults.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sessionID: try c.decode(SessionID.self, forKey: .sessionID),
+            draft: try c.decodeIfPresent(String.self, forKey: .draft) ?? "",
+            visitWatermark: try c.decodeIfPresent(Timestamp.self, forKey: .visitWatermark),
+            pinned: try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false,
+            snoozedUntil: try c.decodeIfPresent(Timestamp.self, forKey: .snoozedUntil),
+            settled: try c.decodeIfPresent(Bool.self, forKey: .settled) ?? false,
+            scrollAnchor: try c.decodeIfPresent(MessageID.self, forKey: .scrollAnchor),
+            scrollOffset: try c.decodeIfPresent(Double.self, forKey: .scrollOffset) ?? 0,
+            sortKey: try c.decodeIfPresent(Double.self, forKey: .sortKey),
+            snoozedAt: try c.decodeIfPresent(Timestamp.self, forKey: .snoozedAt),
+            settledAt: try c.decodeIfPresent(Timestamp.self, forKey: .settledAt),
+            neverAutoSettle: try c.decodeIfPresent(Bool.self, forKey: .neverAutoSettle) ?? false,
+            markedUnread: try c.decodeIfPresent(Bool.self, forKey: .markedUnread) ?? false)
+    }
+
+    /// The sidebar organisation part of this state.
+    public var organisation: ThreadOrganisation {
+        get {
+            ThreadOrganisation(
+                pinned: pinned, sortKey: sortKey, snoozedUntil: snoozedUntil, snoozedAt: snoozedAt, settled: settled,
+                settledAt: settledAt, neverAutoSettle: neverAutoSettle, markedUnread: markedUnread)
+        }
+        set {
+            pinned = newValue.pinned
+            sortKey = newValue.sortKey
+            snoozedUntil = newValue.snoozedUntil
+            snoozedAt = newValue.snoozedAt
+            settled = newValue.settled
+            settledAt = newValue.settledAt
+            neverAutoSettle = newValue.neverAutoSettle
+            markedUnread = newValue.markedUnread
+        }
     }
 }

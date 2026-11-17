@@ -12,7 +12,7 @@ import GRDB
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -117,6 +117,17 @@ enum ProjectionSchema {
                     updated REAL NOT NULL,
                     json BLOB NOT NULL
                 );
+                """)
+        }
+        // M2-D: sidebar organisation (docs/features/navigation.md): manual order, when a thread was snoozed or settled
+        // (activity after it wakes the thread), the per-thread auto-settle opt-out and "Mark as Unread".
+        migrator.registerMigration("v4-thread-organisation") { db in
+            try db.execute(sql: """
+                ALTER TABLE app_thread ADD COLUMN sort_key REAL;
+                ALTER TABLE app_thread ADD COLUMN snoozed_at REAL;
+                ALTER TABLE app_thread ADD COLUMN settled_at REAL;
+                ALTER TABLE app_thread ADD COLUMN never_auto_settle INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE app_thread ADD COLUMN marked_unread INTEGER NOT NULL DEFAULT 0;
                 """)
         }
         return migrator

@@ -147,8 +147,21 @@ import Testing
         let selectors = ShellCommand.allCases.map(\.selector)
         #expect(Set(selectors).count == selectors.count)
         for command in ShellCommand.allCases { #expect(ShellCommand.command(for: command.selector) == command) }
-        let shortcuts = ShellCommand.allCases.map(\.shortcut).filter { !$0.key.isEmpty }.map { "\($0.key)-\($0.modifiers.rawValue)" }
-        #expect(Set(shortcuts).count == shortcuts.count, "no two commands share a shortcut")
+        // Focus-aware: a shortcut may be shared only by commands that are never enabled together (⌘K: Command Palette
+        // outside a terminal, Clear Terminal inside one). Checked over every focus state with everything else enabled.
+        let grouped = Dictionary(grouping: ShellCommand.allCases.filter { !$0.shortcut.key.isEmpty }) {
+            "\($0.shortcut.key)-\($0.shortcut.modifiers.rawValue)"
+        }
+        for (key, commands) in grouped where commands.count > 1 {
+            #expect(commands.count == 2, "\(key) is shared by \(commands)")
+            for terminalFocused in [false, true] {
+                var context = CommandContext.everythingAvailable
+                context.terminalFocused = terminalFocused
+                let enabled = commands.filter(context.isEnabled)
+                #expect(enabled.count <= 1, "\(key): \(enabled) are enabled together (terminal focused: \(terminalFocused))")
+            }
+        }
+        #expect(grouped.values.filter { $0.count > 1 }.map { Set($0) } == [[.commandPalette, .clearTerminal]], "only ⌘K is shared")
         #expect(ShellCommand.newThread.shortcut.key == "n")
         #expect(ShellCommand.nextNeedsAttention.shortcut.modifiers == [.command, .option])
     }
@@ -181,7 +194,8 @@ import Testing
         #expect(tree.map(\.id) == [.needsYouHeader, .projectsHeader])
         #expect(tree[0].children.map(\.id) == [.attention("s2"), .attention("s9")])
         #expect(tree[1].children.map(\.id) == [.project("/a"), .project("/b")])
-        #expect(tree[1].children[0].children.map(\.id) == [.thread("s1"), .thread("s2")])
+        #expect(tree[1].children[0].children.map(\.id) == [.section(scope: "/a", .active)])
+        #expect(tree[1].children[0].children[0].children.map(\.id) == [.thread("s1"), .thread("s2")])
         #expect(tree[1].children[1].children.map(\.id) == [.emptyProject("/b")], "empty projects say so")
     }
 
@@ -220,7 +234,8 @@ import Testing
     @Test func parentsDetectMoves() {
         let one = SidebarTree.build(.init(projects: [.init(directory: "/a", threadIDs: ["s1"]), .init(directory: "/b", threadIDs: [])]))
         let parents = SidebarTree.parents(one)
-        #expect(parents[.thread("s1")] == .some(.project("/a")))
+        #expect(parents[.thread("s1")] == .some(.section(scope: "/a", .active)))
+        #expect(parents[.section(scope: "/a", .active)] == .some(.project("/a")))
         #expect(parents[.projectsHeader] == .some(nil))
     }
 }

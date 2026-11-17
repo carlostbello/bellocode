@@ -12,6 +12,7 @@ final class TranscriptSurfaceController: NSViewController, FocusableSurface, Tra
     let transcript = TranscriptViewController()
     private let settings: AppSettings?
     private var settingsLoop: ObservationLoop?
+    private var revealTask: Task<Void, Never>?
 
     init(context: ThreadSurfaceContext, settings: AppSettings?) {
         self.context = context
@@ -63,6 +64,7 @@ final class TranscriptSurfaceController: NSViewController, FocusableSurface, Tra
     }
 
     isolated deinit {
+        revealTask?.cancel()
         settingsLoop?.cancel()
         transcript.close()
     }
@@ -77,6 +79,26 @@ final class TranscriptSurfaceController: NSViewController, FocusableSurface, Tra
         thread.updateUIState { state in
             state.scrollAnchor = id
             state.scrollOffset = offset
+        }
+    }
+
+    /// Reveals a message (a search hit): scrolls it to the top (paging in older history if needed), then finds the
+    /// query in the transcript so the match is highlighted and centred. Uses TranscriptKit's `restore(anchor:)` and find.
+    func reveal(messageID: MessageID, query: String) {
+        controller.restore(anchor: TranscriptAnchor(messageID: messageID, offset: 0))
+        revealTask?.cancel()
+        let words = query.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard let term = words.max(by: { $0.count < $1.count }), !term.isEmpty else { return }
+        revealTask = Task { @MainActor [weak self] in
+            // Wait (bounded) until the message is in view, so find starts from it.
+            for _ in 0..<40 {
+                guard let self, !Task.isCancelled else { return }
+                if self.controller.scrollAnchor?.messageID == messageID || self.controller.scrollAnchor == nil { break }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.controller.findBarField.stringValue = term
+            self.controller.showFind()
         }
     }
 

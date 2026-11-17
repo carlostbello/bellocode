@@ -17,6 +17,8 @@ public enum ChangeTopic: Hashable, Sendable {
     case catalog
     /// The connection status.
     case connection
+    /// Every thread's sidebar organisation (pinned, snoozed, settled, order). Changes only on user action or a wake.
+    case organisation
 }
 
 /// One change to the projection, as published by the store (after commit) or the engine (live, ahead of disk).
@@ -40,6 +42,8 @@ public enum ProjectionChange: Sendable {
     case unconfirmed(UnconfirmedSend)
     case unconfirmedRemoved(MessageID, sessionID: SessionID)
     case threadUI(ThreadUIState)
+    /// A thread's sidebar organisation changed (published with the `threadUI` change that carries it).
+    case organisation(SessionID, ThreadOrganisation)
     /// The thread's history was replaced (resync found a gap, or the cache was rebuilt): reload its window.
     case threadReset(SessionID)
     /// After the server's newest window was read: whether the server has messages older than it.
@@ -65,6 +69,7 @@ public enum ProjectionChange: Sendable {
         case .unconfirmed(let send): [.thread(send.sessionID)]
         case .unconfirmedRemoved(_, let sessionID): [.thread(sessionID)]
         case .threadUI(let state): [.thread(state.sessionID)]
+        case .organisation: [.organisation]
         case .threadReset(let id), .threadHistory(let id, _): [.thread(id)]
         case .attention: [.attention]
         case .catalog: [.catalog]
@@ -144,6 +149,7 @@ public struct ChangeSet: Sendable {
     public var unconfirmed: [MessageID: UnconfirmedSend] = [:]
     public var removedUnconfirmed: Set<MessageID> = []
     public var threadUI: [SessionID: ThreadUIState] = [:]
+    public var organisation: [SessionID: ThreadOrganisation] = [:]
     public var resetThreads: Set<SessionID> = []
     /// Whether the server has history older than its newest window, per thread.
     public var historyHasOlder: [SessionID: Bool] = [:]
@@ -160,7 +166,7 @@ public struct ChangeSet: Sendable {
         projects.count + removedProjects.count + registry.count + removedRegistry.count + sessions.count
             + removedSessions.count + statuses.count + messages.count + removedMessages.count + pending.count
             + resolvedRequests.count + queue.count + removedQueue.count + unconfirmed.count + removedUnconfirmed.count
-            + threadUI.count + resetThreads.count
+            + threadUI.count + organisation.count + resetThreads.count
             + historyHasOlder.count
     }
 
@@ -218,6 +224,8 @@ public struct ChangeSet: Sendable {
             removedUnconfirmed.insert(id)
         case .threadUI(let state):
             threadUI[state.sessionID] = state
+        case .organisation(let id, let value):
+            organisation[id] = value
         case .threadReset(let id):
             resetThreads.insert(id)
             // A reset supersedes queued message changes for that thread.

@@ -35,6 +35,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     let container: ThreadContainerViewController
     let split: MainSplitViewController
     let rightPanel: RightPanelViewController
+    /// ⌘K / ⌘P / ⇧⌘F (built with the window so the first opening is instant).
+    let palette = PaletteController()
     private let configuration: Configuration
     private var titleLoop: ObservationLoop?
     private let connectionView = ConnectionStatusView()
@@ -83,11 +85,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.toolbar = toolbar
 
         sidebar.delegate = self
-        rightPanel.onTabChange = { [weak self] id in self?.workspace.updateLayout(rightPanelTab: id) }
+        rightPanel.onTabChange = { [weak self] id in
+            self?.workspace.updateLayout(rightPanelTab: id)
+            self?.recordThreadPanel()
+        }
         split.onLayoutChange = { [weak self] in self?.recordLayout() }
         container.onDisplay = { [weak self] context in
             self?.updateTitle()
             self?.terminals?.display(context)
+            self?.applyThreadPanel()
+            self?.applyPendingReveal()
         }
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
@@ -118,6 +125,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         workspace.updateLayout(
             sidebarCollapsed: split.sidebarItem.isCollapsed, rightPanelVisible: !split.panelItem.isCollapsed,
             terminalVisible: !split.contentSplit.drawerItem.isCollapsed)
+        recordThreadPanel()
+    }
+
+    /// Remembers the right panel (shown, tab) for the displayed thread.
+    private func recordThreadPanel() {
+        guard !isRestoringLayout, let id = container.displayed?.threadID else { return }
+        workspace.recordPanel(
+            ThreadPanelState(isRightPanelVisible: !split.panelItem.isCollapsed, rightPanelTab: rightPanel.selectedID), for: id)
+    }
+
+    /// Shows the displayed thread's right panel as it was left there: instantly, without replaying transitions.
+    private func applyThreadPanel() {
+        guard let id = container.displayed?.threadID, let panel = workspace.panel(for: id) else { return }
+        isRestoringLayout = true
+        defer { isRestoringLayout = false }
+        if let tab = panel.rightPanelTab, tab != rightPanel.selectedID { rightPanel.select(tab) }
+        if split.panelItem.isCollapsed == panel.isRightPanelVisible {
+            DS.Motion.withoutAnimation { split.panelItem.isCollapsed = !panel.isRightPanelVisible }
+        }
     }
 
     // MARK: - Title and connection
@@ -140,9 +166,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         } else if root.projects.isEmpty {
             subtitle = "No projects"
         }
+        // Attention in the subtitle (Window menu, Mission Control, VoiceOver): blockers, never colour alone.
+        let blockers = root.attention.counts.dockBadge
+        if blockers > 0 {
+            let needs = blockers == 1 ? "1 needs you" : "\(blockers) need you"
+            subtitle = subtitle.isEmpty ? needs : subtitle + " · " + needs
+        }
         if window.title != title { window.title = title }
         if window.subtitle != subtitle { window.subtitle = subtitle }
-        NSApp.dockTile.badgeLabel = root.attention.counts.dockBadge > 0 ? "\(root.attention.counts.dockBadge)" : nil
     }
 
     // MARK: - NSWindowDelegate
@@ -162,6 +193,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         return workspace.target(for: workspace.selection)
     }
 
+    /// The threads a selection command acts on: `explicit` (a context menu), else the sidebar's selection while it
+    /// has focus, else the target's thread.
+    func threadTargets(explicit: [SessionID] = [], target: CommandTarget?) -> [SessionID] {
+        if !explicit.isEmpty { return explicit }
+        if window?.firstResponder === sidebar.outlineView {
+            let selected = sidebar.selectedThreadIDs
+            if !selected.isEmpty { return selected }
+        }
+        return target?.threadID.map { [$0] } ?? []
+    }
+
     func commandContext(target: CommandTarget? = nil) -> CommandContext {
         let target = target ?? currentTarget
         let root = workspace.engine.root
@@ -179,12 +221,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             terminalSplit: terminals?.terminals?.set.splitSecondary != nil,
             terminalInPanel: terminals?.activePlacement == .panel,
             availableTranscriptCommands: container.transcriptSurface?.availableCommands ?? [])
+            .with(organisationOf: threadTargets(target: target), workspace: workspace, target: target,
+                  terminalFocused: terminals?.focusIsInTerminal ?? false)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let action = menuItem.action, let command = ShellCommand.command(for: action) else { return true }
         let context = commandContext()
-        menuItem.title = context.title(for: command)
+        // Snooze presets keep their submenu titles.
+        if menuItem.menu?.title != "Snooze" || command == .wakeThread {
+            menuItem.title = context.title(for: command)
+        }
+        if let checked = command.isChecked(in: context) { menuItem.state = checked ? .on : .off }
         return context.isEnabled(command)
     }
 
@@ -195,15 +243,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     // MARK: - SidebarDelegate
 
-    func sidebar(_ sidebar: SidebarViewController, perform command: ShellCommand, on target: CommandTarget?) {
-        perform(command, on: target)
+    func sidebar(_ sidebar: SidebarViewController, perform command: ShellCommand, on target: CommandTarget?, threads: [SessionID]) {
+        perform(command, on: target, threads: threads)
     }
 
-    /// Runs a command on an explicit target (context menus, sidebar keys) or the current one (menus, shortcuts).
-    func perform(_ command: ShellCommand, on explicitTarget: CommandTarget? = nil) {
+    /// Runs a command on an explicit target (context menus, sidebar keys, the palette) or the current one (menus,
+    /// shortcuts). Selection commands act on `threads`, else on the sidebar's selection while it has focus.
+    func perform(_ command: ShellCommand, on explicitTarget: CommandTarget? = nil, threads explicitThreads: [SessionID] = []) {
         let context = commandContext(target: explicitTarget)
-        guard context.isEnabled(command) || explicitTarget != nil else { return NSSound.beep() }
+        guard context.isEnabled(command) || explicitTarget != nil || !explicitThreads.isEmpty else { return NSSound.beep() }
         let target = context.target
+        let threads = threadTargets(explicit: explicitThreads, target: target)
+        if command.actsOnSelection, threads.isEmpty { return NSSound.beep() }
         switch command {
         case .newThread:
             workspace.newThread(in: target.flatMap(workspace.projectDirectory(for:)))
@@ -218,11 +269,49 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 container.header?.beginEditingTitle()
             }
         case .archiveThread:
-            if let id = target?.threadID { workspace.archive(id) }
+            workspace.archive(threads)
         case .deleteThread:
-            if let id = target?.threadID { confirmDelete(id) }
+            // Deferred with Undo (5 s) instead of a confirmation: nothing reaches opencode until the toast expires.
+            workspace.delete(threads)
         case .markUnread:
-            if let id = target?.threadID { workspace.markUnread(id) }
+            workspace.markUnread(threads)
+        case .togglePinThread:
+            workspace.togglePin(threads)
+        case .settleThread:
+            workspace.toggleSettle(threads)
+        case .snoozeLaterToday, .snoozeTomorrow, .snoozeNextWeek:
+            if let preset = SnoozePreset(command: command) { workspace.snooze(threads, until: preset.date(from: Date())) }
+        case .snoozeUntil:
+            presentSnoozePicker(for: threads)
+        case .wakeThread:
+            workspace.wake(threads)
+        case .toggleNeverAutoSettle:
+            workspace.toggleNeverAutoSettle(threads)
+        case .groupByProject:
+            workspace.setGrouping(.byProject)
+        case .showThreadsByState:
+            workspace.setGrouping(.byState)
+        case .filterSidebar:
+            if split.sidebarItem.isCollapsed { split.setCollapsed(split.sidebarItem, false) }
+            sidebar.focusFilter()
+        case .moveProjectUp, .moveProjectDown:
+            if let directory = target.flatMap(workspace.projectDirectory(for:)) {
+                workspace.moveProject(directory: directory, by: command == .moveProjectUp ? -1 : 1)
+            }
+        case .commandPalette:
+            presentPalette(.commands)
+        case .quickOpen:
+            presentPalette(.quickOpen)
+        case .globalSearch:
+            presentPalette(.messages)
+        case .goBack:
+            workspace.goBack()
+        case .goForward:
+            workspace.goForward()
+        case .reopenClosedThread:
+            workspace.reopenClosedThread()
+        case .newWindow:
+            NSApp.sendAction(command.selector, to: nil, from: nil)
         case .togglePinProject:
             if let directory = target.flatMap(workspace.projectDirectory(for:)) { workspace.togglePin(directory: directory) }
         case .removeProject:
@@ -362,6 +451,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func restartTerminal(_ sender: Any?) { perform(.restartTerminal) }
     @objc func moveTerminal(_ sender: Any?) { perform(.moveTerminal) }
     @objc func sendTerminalSelectionToComposer(_ sender: Any?) { perform(.sendTerminalSelection) }
+    @objc func togglePinThread(_ sender: Any?) { perform(.togglePinThread) }
+    @objc func settleThread(_ sender: Any?) { perform(.settleThread) }
+    @objc func snoozeLaterToday(_ sender: Any?) { perform(.snoozeLaterToday) }
+    @objc func snoozeTomorrow(_ sender: Any?) { perform(.snoozeTomorrow) }
+    @objc func snoozeNextWeek(_ sender: Any?) { perform(.snoozeNextWeek) }
+    @objc func snoozeUntil(_ sender: Any?) { perform(.snoozeUntil) }
+    @objc func wakeThread(_ sender: Any?) { perform(.wakeThread) }
+    @objc func toggleNeverAutoSettle(_ sender: Any?) { perform(.toggleNeverAutoSettle) }
+    @objc func groupThreadsByProject(_ sender: Any?) { perform(.groupByProject) }
+    @objc func showThreadsByState(_ sender: Any?) { perform(.showThreadsByState) }
+    @objc func filterSidebar(_ sender: Any?) { perform(.filterSidebar) }
+    @objc func moveProjectUp(_ sender: Any?) { perform(.moveProjectUp) }
+    @objc func moveProjectDown(_ sender: Any?) { perform(.moveProjectDown) }
+    @objc func showCommandPalette(_ sender: Any?) { perform(.commandPalette) }
+    @objc func showQuickOpen(_ sender: Any?) { perform(.quickOpen) }
+    @objc func showGlobalSearch(_ sender: Any?) { perform(.globalSearch) }
+    @objc func goBackInHistory(_ sender: Any?) { perform(.goBack) }
+    @objc func goForwardInHistory(_ sender: Any?) { perform(.goForward) }
+    @objc func reopenClosedThread(_ sender: Any?) { perform(.reopenClosedThread) }
 
     // MARK: - TerminalShell
 
@@ -399,6 +507,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func showPreviousTurn(_ sender: Any?) { perform(.previousTurn) }
     @objc func showNextTurn(_ sender: Any?) { perform(.nextTurn) }
     @objc func showLastFailure(_ sender: Any?) { perform(.lastFailure) }
+
+    // MARK: - Search reveal
+
+    /// Shows a search hit: selects its thread and reveals the message in the transcript (with the query found).
+    func reveal(_ reveal: PendingReveal) {
+        workspace.pendingReveal = reveal
+        if workspace.selection == .thread(reveal.sessionID) {
+            applyPendingReveal()
+        } else {
+            workspace.select(.thread(reveal.sessionID))
+        }
+    }
+
+    private func applyPendingReveal() {
+        guard let reveal = workspace.pendingReveal, container.displayed == .thread(reveal.sessionID),
+              let surface = container.transcriptSurface
+        else { return }
+        workspace.pendingReveal = nil
+        surface.reveal(messageID: reveal.messageID, query: reveal.query)
+    }
 
     // MARK: - Helpers
 
@@ -445,21 +573,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
     }
 
-    /// Delete cannot be undone on the server, so it is the one confirmation (scoped; Archive is the undoable route).
-    private func confirmDelete(_ id: SessionID) {
-        guard let window else { return }
-        let title = workspace.session(id)?.displayTitle ?? "this thread"
-        let alert = NSAlert()
-        alert.messageText = "Delete “\(title)”?"
-        alert.informativeText = "The thread and its messages are deleted from opencode. This cannot be undone. Archive keeps it and can be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons.first?.hasDestructiveAction = true
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            MainActor.assumeIsolated { self?.workspace.delete(id) }
+    /// "Snooze Until…": the picker beside the thread's sidebar row (or under the toolbar when the row is not shown).
+    func presentSnoozePicker(for threads: [SessionID]) {
+        guard let window, let content = window.contentView else { return }
+        let title = threads.count == 1 ? (workspace.session(threads[0])?.displayTitle ?? "Thread") : "\(threads.count) threads"
+        let onSnooze: (Date) -> Void = { [weak self] date in self?.workspace.snooze(threads, until: date) }
+        let row = threads.first.map { sidebar.row(of: .thread($0)) } ?? -1
+        if row >= 0, !split.sidebarItem.isCollapsed {
+            let rect = sidebar.outlineView.rect(ofRow: row)
+            SnoozePicker.show(title: "Snooze \(title)", relativeTo: rect, of: sidebar.outlineView, onSnooze: onSnooze)
+        } else {
+            let rect = NSRect(x: content.bounds.midX - 1, y: content.bounds.maxY - 60, width: 2, height: 2)
+            SnoozePicker.show(title: "Snooze \(title)", relativeTo: rect, of: content, preferredEdge: .minY, onSnooze: onSnooze)
         }
+    }
+
+    /// Opens the palette in a mode (filled in by the palette package; see Palette/).
+    func presentPalette(_ mode: PaletteMode) {
+        palette.show(mode, in: self)
     }
 
     // MARK: - NSToolbarDelegate

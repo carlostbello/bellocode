@@ -91,6 +91,7 @@ final class AppRuntime {
         let data: Scenario = switch scenario {
         case .demo: .demo()
         case .large: .large(sessionCount: 500, largeSessionMessages: 2_000)
+        case .workspace: FixtureGenerator(seed: 5).workspace(projectCount: 3, sessionCount: 30, messagesPerSession: 6)
         }
         let server = MockOpenCodeServer(scenario: data, options: MockServerOptions(clock: .realTime))
         let endpoint = try await server.start()

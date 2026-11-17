@@ -26,6 +26,7 @@ struct SnapshotRunner {
     static let sizes = [NSSize(width: 1280, height: 800), NSSize(width: 980, height: 640)]
 
     func run() async -> Bool {
+        if name == "nav" { return await runNavigation() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
@@ -257,7 +258,7 @@ struct SnapshotRunner {
 
     /// Renders the window (and overlays above it) in light and dark at both sizes. `place` positions extra windows
     /// after each resize.
-    private func render(_ driver: ShellDriver, state: String, place: ((NSRect) -> Void)? = nil) async -> [String] {
+    func render(_ driver: ShellDriver, state: String, place: ((NSRect) -> Void)? = nil) async -> [String] {
         var paths: [String] = []
         let window = driver.window
         for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
@@ -309,7 +310,7 @@ struct SnapshotRunner {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func log(_ message: String) {
+    func log(_ message: String) {
         print("snapshot: \(message)")
         fflush(stdout)
     }
