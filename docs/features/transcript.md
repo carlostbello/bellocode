@@ -45,10 +45,29 @@ responder: Find in Thread ⌘F, Find Next/Previous ⌘G/⇧⌘G, Use Selection f
 BENCH_TABLE
 
 ## docs/research/03 section E (by the agent; no human at the screen)
-CHECKLIST
+Purpose/context: pass (prompts, replies, tool lines name verb, target, status and time; sub-agent cards name agent
+and status; the shell's header shows project/branch/worktree). States: empty ("No messages yet"), loading older
+("Loading earlier messages…"), streaming, running ("Working…"), sending, failed tool/turn/provider error,
+interrupted, offline (content kept): pass by test or snapshot. Speed: toggle and copy apply synchronously; open 95 ms
+for 10,000 messages. Keyboard: every command has a menu item (Edit, Find, View); arrows/Page/Home/End scroll,
+Shift+arrows (Option for words, Command for ends) extend, Escape closes find then clears selection, Tab leaves;
+driven programmatically only. Accessibility: rows are static-text elements with label (who/what, time), value (the
+visible text) and custom actions (copy, expand/collapse, open link, open sub-agent); a finished reply is announced
+once; status is glyph + word, never colour only; increased contrast and text size re-resolve the theme; no
+animation (Reduce Motion has nothing to remove). VoiceOver itself: unverified. Streaming and control: following only
+at the bottom, 0 pt drift while reading (S4), pill debounced, selection kept while text arrives: pass. Persistence:
+the scroll anchor is saved per thread and restored (tested round trip). Windows: narrow widths (column re-wraps,
+S6), light/dark. Artifacts: sub-agent card opens the child thread; diff review is DiffKit's (N/A here).
 
 ## Known gaps
-GAPS
+- Reasoning duration is measured live (BelloCore parts carry no timestamps); history shows "Thought" without one.
+- Tree-sitter, Mermaid, math, GitHub alerts, `<details>`, footnotes and image zoom are not rendered (text fallback).
+- Copy puts plain text and Markdown on the pasteboard, not RTF; no drag-out of a selection.
+- Accessibility exposes text per row, not character ranges (no VoiceOver text navigation inside a row yet).
+- Tool calls fetch no detail lazily: inputs/outputs come with the message. Tool-call visibility settings (hide
+  successful, zen) are not offered yet. "Use Selection for Find" uses the transcript's selection even from the composer.
+- The in-process mock cannot sustain 100 deltas/s past ~25 s on the 10,000-message session (its per-delta cost grows
+  with the reply), so S3/S4 stream 20 s; the transcript's own share was measured separately (Engine publish → laid out).
 
 ## Needs a human at the screen
 Real trackpad momentum and rubber-banding (all scrolling here is programmatic), on-screen frame pacing with the display

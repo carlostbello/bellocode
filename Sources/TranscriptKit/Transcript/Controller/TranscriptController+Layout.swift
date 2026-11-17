@@ -255,13 +255,13 @@ extension TranscriptController {
         }
     }
 
-    /// Visible rows first; then rows ahead in the scroll direction (0.35 s of travel, at least 1.5 viewports), then
+    /// Visible rows first; then rows ahead in the scroll direction (0.5 s of travel, at least 1.5 viewports), then
     /// one viewport behind. At most `maxInflightPrefetch` prefetch layouts run at once.
     func updatePrefetch(force: Bool = false) {
         guard !rows.isEmpty else { return }
         let visible = tableView.visibleRect
         guard visible.height > 0 else { return }
-        let ahead = max(visible.height * 1.5, abs(scrollVelocity) * 0.35)
+        let ahead = max(visible.height * 1.5, abs(scrollVelocity) * 0.5)
         let down = scrollVelocity >= 0
         let window = CGRect(
             x: 0, y: visible.minY - (down ? visible.height : ahead), width: visible.width, height: visible.height * 2 + ahead)

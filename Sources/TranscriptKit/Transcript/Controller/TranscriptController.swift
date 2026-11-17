@@ -84,7 +84,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     public var layoutCacheCostLimit = 25_000
     var inflight: [RowID: LayoutKey] = [:]
     var layoutTasks: [RowID: Task<Void, Never>] = [:]
-    let maxInflightPrefetch = 8
+    let maxInflightPrefetch = 10
     var pendingHeights: [RowID: CGFloat] = [:]
     var flushScheduled = false
     var isAdjustingScroll = false
@@ -121,7 +121,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var images: [String: CGImage] = [:]
     var imageOrder: [String] = []
     var imageBytes = 0
-    let imageByteLimit = 192 << 20
+    let imageByteLimit = 96 << 20
     var imageSizes: [String: CGSize] = [:]
     var imageRequests: Set<String> = []
     var imageTasks: [String: Task<Void, Never>] = [:]
@@ -157,6 +157,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     public internal(set) var findCurrent: Int?
     var findIndex: [RowID: FindIndexEntry] = [:]
     var findTask: Task<Void, Never>?
+    var findRefreshScheduled = false
     var findMatchesByRow: [RowID: [(block: Int, range: Range<Int>, index: Int)]] = [:]
 
     // Streaming tails.

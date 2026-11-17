@@ -367,9 +367,10 @@ extension ScenarioRunner {
         guard let controller else { return }
         controller.jumpToLatest()
         await sleep(0.3)
-        controller.userScroll(by: -3 * controller.scrollView.contentView.bounds.height)
-        await sleep(0.4)
-        let released = !controller.following
+        // Sending a prompt jumps to it (the new turn is anchored near the top); the reader scrolls up once the reply
+        // streams, then alternates reading pauses and small scrolls.
+        var released = false
+        var started = false
         var maxDrift = 0.0
         var pauses = 0
         var anchor: (RowID, Double)?
@@ -379,6 +380,14 @@ extension ScenarioRunner {
         var pill = false
         var flick = Flick()
         let stats = await stream(seconds: streamSeconds) { [self] dt, elapsed in
+            if !started {
+                guard elapsed > 1 else { return }
+                controller.userScroll(by: -3 * controller.scrollView.contentView.bounds.height)
+                released = !controller.following
+                started = true
+                phaseStart = elapsed
+                return
+            }
             if controller.following { unexpected = true }
             if controller.isJumpPillVisible { pill = true }
             if reading {
@@ -393,9 +402,11 @@ extension ScenarioRunner {
             } else {
                 // Scroll up and down a little around three viewports from the bottom.
                 let d = flick.step(dt, rng: &rng, scale: 0.15)
-                let target = controller.distanceFromBottom > 4 * controller.scrollView.contentView.bounds.height ? d : -d
-                controller.userScroll(by: target)
-                if controller.following { controller.userScroll(by: -200) }
+                // Stay between two and five viewports above the end (never reaching the bottom, which would rejoin).
+                let viewport = controller.scrollView.contentView.bounds.height
+                let distance = controller.distanceFromBottom
+                let step = distance > 4 * viewport ? d : -d
+                controller.userScroll(by: distance + (step > 0 ? -step : 0) < 2 * viewport ? -abs(d) : step)
                 if elapsed - phaseStart > 1.5 {
                     reading = true
                     phaseStart = elapsed

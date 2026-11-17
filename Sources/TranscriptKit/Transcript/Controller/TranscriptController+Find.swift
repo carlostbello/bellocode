@@ -16,6 +16,8 @@ extension TranscriptController {
 
     public func closeFind() {
         findTask?.cancel()
+        findTask = nil
+        findRefreshScheduled = false
         findBar.isHidden = true
         findMatches = []
         findCurrent = nil
@@ -54,6 +56,7 @@ extension TranscriptController {
             guard !Task.isCancelled, self.observationGeneration == generation else { return }
             let matches = await FindSearch.search(entries, query: query)
             guard !Task.isCancelled, self.findQuery == query, self.observationGeneration == generation else { return }
+            self.findTask = nil
             self.applyMatches(matches, keepCurrent: false)
         }
     }
@@ -191,15 +194,20 @@ extension TranscriptController {
     func invalidateFind(rows ids: [RowID]) {
         guard !ids.isEmpty else { return }
         for id in ids { findIndex[id] = nil }
-        guard !findQuery.isEmpty, isFindBarVisible else { return }
+        // Throttled, not debounced: while a reply streams, rows change every commit; restarting the search each time
+        // would starve it. A running search or a scheduled refresh picks the change up.
+        guard !findQuery.isEmpty, isFindBarVisible, !findRefreshScheduled, findTask == nil || findTask?.isCancelled == true else { return }
         let query = findQuery
-        findTask?.cancel()
+        findRefreshScheduled = true
         findTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
-            guard let self, !Task.isCancelled else { return }
+            guard let self else { return }
+            self.findRefreshScheduled = false
+            guard !Task.isCancelled else { return }
             let entries = await self.findEntries()
             let matches = await FindSearch.search(entries, query: query)
             guard !Task.isCancelled, self.findQuery == query else { return }
+            self.findTask = nil
             self.applyMatches(matches, keepCurrent: true)
         }
     }
