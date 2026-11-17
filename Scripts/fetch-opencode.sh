@@ -113,20 +113,57 @@ else
   fi
 fi
 
-# ripgrep (optional): opencode looks for rg on PATH and would otherwise download one at runtime.
-rg_source="$(command -v rg || true)"
-if [[ -z "$rg_source" ]]; then
-  warn "no local rg found; the bundle will ship without ripgrep"
-else
-  rg_source="$(realpath "$rg_source")"
-  if [[ -f "$RG_DEST" ]] && cmp -s "$rg_source" "$RG_DEST"; then
-    say "ripgrep already present at ${RG_DEST#"$ROOT"/}"
+# ripgrep: opencode looks for rg on PATH and would otherwise download one at runtime. A pinned, checksummed release
+# that links only system libraries (Scripts/ripgrep-checksums); a local rg is used only when the download fails, with
+# a warning when it is not portable.
+RG_VERSION="15.1.0"
+case "$(uname -m)" in
+  arm64) RG_TARGET="aarch64-apple-darwin" ;;
+  *) RG_TARGET="x86_64-apple-darwin" ;;
+esac
+RG_SHA="$(awk -v v="$RG_VERSION" -v t="$RG_TARGET" '!/^#/ && $1 == v && $2 == t { print $3 }' "$ROOT/Scripts/ripgrep-checksums")"
+[[ -n "$RG_SHA" ]] || die "no checksum for ripgrep $RG_VERSION $RG_TARGET in Scripts/ripgrep-checksums"
+RG_STAMP="$(dirname "$RG_DEST")/.version"
+fetch_ripgrep() {
+  local name="ripgrep-$RG_VERSION-$RG_TARGET"
+  local archive="$CACHE/$name.tar.gz"
+  mkdir -p "$CACHE"
+  if [[ ! -f "$archive" || "$(sha256 "$archive")" != "$RG_SHA" ]]; then
+    curl -fsSL --retry 2 -o "$archive.partial" "https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$name.tar.gz" || return 1
+    mv -f "$archive.partial" "$archive"
+  fi
+  local got
+  got="$(sha256 "$archive")"
+  if [[ "$got" != "$RG_SHA" ]]; then
+    warn "ripgrep archive SHA-256 mismatch: expected $RG_SHA, got $got"
+    rm -f "$archive"
+    return 1
+  fi
+  local work
+  work="$(mktemp -d)"
+  tar -xzf "$archive" -C "$work" "$name/rg" || { rm -rf "$work"; return 1; }
+  mkdir -p "$(dirname "$RG_DEST")"
+  cp -f "$work/$name/rg" "$RG_DEST"
+  chmod 755 "$RG_DEST"
+  rm -rf "$work"
+  echo "$RG_VERSION $RG_TARGET $RG_SHA" > "$RG_STAMP"
+  say "installed ripgrep $RG_VERSION ($RG_TARGET, archive SHA-256 verified)"
+}
+if [[ -x "$RG_DEST" && -f "$RG_STAMP" && "$(cat "$RG_STAMP")" == "$RG_VERSION $RG_TARGET $RG_SHA" ]]; then
+  say "ripgrep $RG_VERSION already present at ${RG_DEST#"$ROOT"/}"
+elif ! fetch_ripgrep; then
+  rg_source="$(command -v rg || true)"
+  if [[ -z "$rg_source" ]]; then
+    warn "ripgrep download failed and no local rg found; the bundle will ship without ripgrep"
   else
     mkdir -p "$(dirname "$RG_DEST")"
-    cp -f "$rg_source" "$RG_DEST"
+    cp -f "$(realpath "$rg_source")" "$RG_DEST"
     chmod 755 "$RG_DEST"
-    say "copied ripgrep from $rg_source"
+    rm -f "$RG_STAMP"
+    warn "ripgrep download failed; copied the local rg from $rg_source"
   fi
+fi
+if [[ -x "$RG_DEST" ]]; then
   # A Homebrew rg links Homebrew's libpcre2, so the bundled copy only runs where that library exists.
   nonsystem="$(otool -L "$RG_DEST" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)' || true)"
   if [[ -n "$nonsystem" ]]; then

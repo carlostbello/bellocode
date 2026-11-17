@@ -4,6 +4,7 @@
 //   status                     runtime state, as the app shows it
 //   bench <image> [--repo DIR] production-path measurements (writes docs/features/containers-bench/measurements.json)
 //   cleanup                    remove every container and volume labelled app.bellocode.test=1
+//   plugin-test [DIR]          the opencode plugin's `bun test` in a throwaway container (make plugin-test)
 //
 // It never uses a container CLI and never reads Rancher Desktop's own configuration beyond what RuntimeDiscovery does.
 
@@ -23,8 +24,10 @@ do {
         try await Bench.run(image: arguments[1], repo: repo)
     case "cleanup":
         try await Demo.cleanup()
+    case "plugin-test":
+        exit(try await PluginTest.run(pluginDirectory: arguments.count > 1 ? arguments[1] : "Plugin"))
     default:
-        log("commands: status | bench <image> [--repo DIR] | cleanup")
+        log("commands: status | bench <image> [--repo DIR] | cleanup | plugin-test [DIR]")
         exit(2)
     }
 } catch {

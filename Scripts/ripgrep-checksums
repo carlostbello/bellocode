@@ -1,0 +1,7 @@
+# Pinned ripgrep release archives (BurntSushi/ripgrep, GitHub releases), checked against the release's own .sha256
+# files when pinned. 15.1.0 links only system libraries on both architectures (14.1.1's arm64 build links Homebrew's
+# libpcre2 and is not portable).
+#
+# version  target                  archive-sha256
+15.1.0     aarch64-apple-darwin    378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715
+15.1.0     x86_64-apple-darwin     64811cb24e77cac3057d6c40b63ac9becf9082eedd54ca411b475b755d334882
