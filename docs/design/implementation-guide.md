@@ -21,8 +21,8 @@ Gallery: `swift run DesignGallery` → `build/snapshots/design/{tokens,controls,
   tracking. All scale with `DS.Typography.current.baseSize`. Medium for emphasis; never bold rows.
 - Metrics: `DS.Space.s2…s24`, `DS.Size.*` (header 52, rows 28, controls 28/24, column 736…), `DS.Radius.xs…xl`
   (`DS.Radius.apply(_:to:)` sets continuous corners), `DS.Shadow.*`, `DS.Motion.*`, `DS.Surface` for materials.
-- Legacy `DS.Palette`, `DS.Typography.title/caption/…`, `DS.Spacing`, `DS.Radius.small/…` now alias the new values.
-  Replace them as you touch code; they are deleted in restyle step 10.
+- The legacy `DS.Palette`, `DS.Typography.title/caption/…`, `DS.Spacing`, `DS.Radius.small/…` aliases, `MonogramView`,
+  `SidebarRowView` and `ToolbarButton` were deleted in restyle 4. `DS.Typography.current.baseSize` and `font(_:)` stay.
 
 ## Replacing stock controls
 | Stock | Use |
@@ -31,6 +31,9 @@ Gallery: `swift run DesignGallery` → `build/snapshots/design/{tokens,controls,
 | Icon `NSButton`, toolbar toggles | `DSButton(icon:accessibilityTitle:)`; `isToggle = true` for panel toggles |
 | `NSSegmentedControl` (panel tabs) | `DSTabBar(items:)` with `DSChoiceItem(id:title:symbolName:count:)`; `onSelect` |
 | `NSSegmentedControl` (layout, effort) | `DSSegmented`; SwiftUI `DSSegmentedPicker` |
+| SwiftUI `Picker(.menu)`, `Stepper`, `Slider`, `ProgressView(value:)` | `DSMenuSelect`, `DSStepper`, `DSSlider`, `DSProgressBar` |
+| SwiftUI `.popover` for pickers | `.glassPopover(isPresented:width:)` (DesignSystem; AgentUI wraps it as `agentGlassPopover`) |
+| Custom field with its own behaviour (URL bar) | subclass `DSBareTextField`, pass it to `DSTextField(style:placeholder:field:)`; `leadingSymbolName` for a glyph |
 | `NSPopUpButton` / pull-down | `DSSelectButton(title:symbolName:chevron:)` + `popUpMenu` (plain) or `onOpen` → `DSMenuPanel` |
 | Custom popover lists, pickers, completion | `DSMenuPanel(entries:)` (`show(below:)`), or embed `DSMenuListView` (`look = .palette`) |
 | `NSTextField` with bezel, `NSSearchField` | `DSTextField(style: .standard/.search)`; edit through `.field` |

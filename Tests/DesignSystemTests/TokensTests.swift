@@ -16,24 +16,11 @@ import Testing
 
     @Test func typographyScalesFromOneBaseAndClamps() {
         let large = DS.Typography(baseSize: 17)
-        #expect(large.body.pointSize == 17)
-        #expect(large.caption.pointSize == 15)
-        #expect(large.title.pointSize == 17)  // title role: 13 at base 13 (visual-language.md §2)
+        #expect(large.font(.body).pointSize == 17)
+        #expect(large.font(.meta).pointSize == 15)
+        #expect(large.font(.title).pointSize == 17)  // title role: 13 at base 13 (visual-language.md §2)
         #expect(DS.Typography(baseSize: 2).baseSize == 9)
         #expect(DS.Typography(baseSize: 90).baseSize == 32)
-    }
-
-    @Test func monogramInitials() {
-        #expect(MonogramView.initials("bello code") == "BC")
-        #expect(MonogramView.initials("opencode") == "OP")
-        #expect(MonogramView.initials("my-app_v2") == "MA")
-        #expect(MonogramView.initials("") == "")
-    }
-
-    @Test func monogramColourIsStableAcrossRuns() {
-        // FNV-1a over UTF-8; fixed values guard against accidental use of the per-run seeded `hashValue`.
-        #expect(MonogramView.paletteIndex(for: "bellocode", paletteSize: 12) == MonogramView.paletteIndex(for: "bellocode", paletteSize: 12))
-        #expect(MonogramView.paletteIndex(for: "a", paletteSize: 12) == Int((UInt32(2_166_136_261) ^ 97) &* 16_777_619 % 12))
     }
 
     @Test func relativeTimes() {

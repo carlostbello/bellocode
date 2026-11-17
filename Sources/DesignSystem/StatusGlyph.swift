@@ -82,7 +82,7 @@ public struct StatusLabel: View {
     }
 
     public var body: some View {
-        HStack(spacing: DS.Spacing.xs) {
+        HStack(spacing: DS.Space.s4) {
             DSStatusGlyphRepresentable(status: glyph.status)
                 .frame(width: DS.Size.statusGlyph, height: DS.Size.statusGlyph)
                 .accessibilityHidden(true)

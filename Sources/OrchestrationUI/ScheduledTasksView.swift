@@ -265,10 +265,10 @@ public struct ScheduledTasksView: View {
                 .help("New scheduled task")
                 .accessibilityLabel("New scheduled task")
             }
-            .padding(DS.Spacing.s)
+            .padding(DS.Space.s6)
             if model.tasks.isEmpty {
                 Text("No scheduled tasks yet. Click + to add one, or ask an agent (it uses schedule_task; the first one in a project asks for your approval).")
-                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Spacing.s).fixedSize(horizontal: false, vertical: true)
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Space.s6).fixedSize(horizontal: false, vertical: true)
                 Spacer()
             } else {
                 // DS rows (neutral `rowActive` selection, never accent); ↑/↓ move the selection.
@@ -297,7 +297,7 @@ public struct ScheduledTasksView: View {
                     Text("Deleted “\(deleted.name)”.").font(.ds(.meta)).lineLimit(1)
                     Button("Undo") { Task { await model.undoDelete() } }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                 }
-                .padding(DS.Spacing.s)
+                .padding(DS.Space.s6)
             }
         }
     }
@@ -313,7 +313,7 @@ public struct ScheduledTasksView: View {
         let now = model.now()
         let running = model.scheduler.running.contains(task.id)
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: DS.Spacing.xs) {
+            HStack(spacing: DS.Space.s4) {
                 Image(systemName: task.approval == .pending ? "exclamationmark.shield" : task.isActive ? "calendar.badge.clock" : "pause.circle")
                     .foregroundStyle(task.approval == .pending ? SwiftUI.Color.ds.warningText : SwiftUI.Color.ds.text3)
                     .accessibilityHidden(true)
@@ -328,7 +328,7 @@ public struct ScheduledTasksView: View {
             Text(ScheduleText.state(task, running: running, now: now)).font(.ds(.meta))
                 .foregroundStyle(task.approval == .pending ? SwiftUI.Color.ds.warningText : SwiftUI.Color.ds.text3)
             if let last = ScheduleText.lastRun(task, now: now) {
-                HStack(spacing: DS.Spacing.xs) {
+                HStack(spacing: DS.Space.s4) {
                     Text(last).font(.ds(.meta)).foregroundStyle(task.lastRun?.succeeded == false ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3).lineLimit(1)
                     if let thread = task.lastRun?.sessionID {
                         Button("Open Thread") { model.openThread(thread) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
@@ -466,7 +466,7 @@ public struct ScheduledTasksView: View {
                 .padding(DS.Space.s12)
             }
         } else {
-            VStack(spacing: DS.Spacing.s) {
+            VStack(spacing: DS.Space.s6) {
                 Image(systemName: "calendar.badge.clock").font(.largeTitle).foregroundStyle(SwiftUI.Color.ds.text4).accessibilityHidden(true)
                 Text("Select a task to edit it, or click + to add one.").foregroundStyle(SwiftUI.Color.ds.text3)
             }
@@ -475,11 +475,11 @@ public struct ScheduledTasksView: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+        VStack(alignment: .leading, spacing: DS.Space.s4) {
             Text("Tasks run while BelloCode is open, even with no window (the menu-bar item shows the next run). While it is quit nothing runs; at the next launch an overdue task runs once if “run once at launch” is on, otherwise the run is recorded as skipped. Never a burst.")
                 .fixedSize(horizontal: false, vertical: true)
             if !model.scheduler.grantedProjects.isEmpty {
-                HStack(spacing: DS.Spacing.s) {
+                HStack(spacing: DS.Space.s6) {
                     Text("Agents may schedule without asking in:")
                     ForEach(model.scheduler.grantedProjects.sorted(), id: \.self) { directory in
                         Button("\((directory as NSString).lastPathComponent) ✕") {
@@ -493,7 +493,7 @@ public struct ScheduledTasksView: View {
         }
         .font(.ds(.meta))
         .foregroundStyle(SwiftUI.Color.ds.text3)
-        .padding(DS.Spacing.s)
+        .padding(DS.Space.s6)
     }
 }
 
@@ -511,7 +511,7 @@ public struct SecretsSettingsView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.m) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             Text("Secrets agents asked for are kept in your Keychain. Agents only ever get one-use references or one-read files; values are never shown, logged or sent to a model.")
                 .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             if secrets.labels.isEmpty {
@@ -533,7 +533,7 @@ public struct SecretsSettingsView: View {
                             }
                             .accessibilityLabel("Delete \(label.label)")
                         }
-                        .padding(.vertical, DS.Spacing.xs)
+                        .padding(.vertical, DS.Space.s4)
                         SwiftUI.Color.ds.border.frame(height: 1)
                     }
                 }

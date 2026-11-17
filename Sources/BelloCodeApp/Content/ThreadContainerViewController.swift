@@ -261,17 +261,17 @@ final class ThreadContainerViewController: NSViewController {
         self.composer = composer
         let composerView = adopt(composer)
         for subview in [heading, path, composerView] { container.addSubview(subview) }
-        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
+        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Size.contentMaxWidth)
         width.priority = Self.columnPreference
         NSLayoutConstraint.activate([
             heading.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            heading.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
-            path.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: DS.Spacing.xs),
+            heading.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Space.s16),
+            path.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: DS.Space.s4),
             path.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Spacing.xl),
+            composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Space.s16),
             composerView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Spacing.xl),
-            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
+            composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Space.s16),
+            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Size.gutter),
             width,
         ])
         return container

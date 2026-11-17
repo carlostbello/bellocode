@@ -339,7 +339,7 @@ public final class BrowserPaneController: NSViewController {
             footerIcon.centerYAnchor.constraint(equalTo: footer.centerYAnchor), footerIcon.widthAnchor.constraint(equalToConstant: 12),
             footerLabel.leadingAnchor.constraint(equalTo: footerIcon.trailingAnchor, constant: DS.Space.s6),
             footerLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlLabel.leadingAnchor, constant: -DS.Spacing.m),
+            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlLabel.leadingAnchor, constant: -DS.Space.s8),
             controlLabel.trailingAnchor.constraint(equalTo: controlSwitch.leadingAnchor, constant: -DS.Space.s6),
             controlLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
             controlSwitch.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -DS.Space.s12),

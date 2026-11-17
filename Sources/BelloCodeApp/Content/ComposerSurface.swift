@@ -229,8 +229,8 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     }
 
     private func install(leading: [NSView], trailing: [NSView]) {
-        composer.leadingControls.spacing = DS.Spacing.l
-        composer.trailingControls.spacing = DS.Spacing.l
+        composer.leadingControls.spacing = DS.Space.s12
+        composer.trailingControls.spacing = DS.Space.s12
         for view in leading { composer.leadingControls.addArrangedSubview(view) }
         for view in trailing { composer.trailingControls.addArrangedSubview(view) }
     }

@@ -545,7 +545,7 @@ extension TranscriptController {
     public var exactRowCount: Int { rows.indices.filter { heightKeys[$0] == currentKey(row: $0) }.count }
 }
 
-/// Column geometry shared with the composer: a centred column at most `DS.Spacing.readableWidth` wide.
+/// Column geometry shared with the composer: a centred column at most `DS.Size.contentMaxWidth` wide.
 public enum TranscriptGeometry {
     public static func contentWidth(forTableWidth width: CGFloat) -> CGFloat {
         let margin = DSColumn.margin
@@ -558,8 +558,8 @@ public enum TranscriptGeometry {
 }
 
 enum DSColumn {
-    static let readableWidth = DS.Spacing.readableWidth
-    static let margin = DS.Spacing.columnMargin
+    static let readableWidth = DS.Size.contentMaxWidth
+    static let margin = DS.Size.gutter
 }
 
 extension TranscriptController {
