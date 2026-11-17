@@ -65,7 +65,7 @@ struct SecretRequestCard: View {
                     Text(
                         prompt.delivery == .file
                             ? "Saved in your Keychain. The agent gets a path that yields the value once to the first command that reads it; that command, which the agent chooses, can reveal it."
-                            : "Saved in your Keychain. The agent gets a one-use reference; the value goes only to a command you approve on the next card."
+                            : "Saved in your Keychain. The agent gets a one-use reference, not the value. In a container project you approve the exact command that receives it; any command that receives it can reveal it."
                     )
                     .font(.ds(.label))
                     .foregroundStyle(SwiftUI.Color.ds.text3)

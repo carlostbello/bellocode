@@ -29,16 +29,29 @@ late is on time; later (quit, asleep) → one catch-up run if the task allows it
 burst. Ticks on launch, timer (injected `WallClock`), and `NSWorkspace.didWake`. Destination: a new thread per run in
 the project, or a message into a thread (queued if running; a deleted thread disables the task). Prompts are prefixed
 `[Scheduled task “name”]`. An agent's first task in a project is paused behind an approval card (Allow Once / Always in
-This Project / Deny = delete); agents may only change agent-created tasks and never request a permission mode broader
-than their own. UI: Settings ▸ Scheduled Tasks (Window ▸ Scheduled Tasks… ⌃⌘E): list, switch, next run, last result
+This Project / Deny = delete); agents may only change agent-created tasks of their own project and never request a
+permission mode broader than their own. **Approval binding (M6-B, review C2):** a task stores the definition the user
+approved (name, prompt, rule, time zone, project, destination, agent, model, permission mode, catch-up) and runs (timer,
+catch-up, Run Now) only while its definition equals it; a mismatch found at run time records a failed run and asks
+again. Any agent change to those fields, or an agent turning a paused task back on, makes it pending and replaces its
+card with a before/after card naming the asking thread (no "Always"); the card carries the SHA-256 of the definition
+it shows, and approval applies only to exactly that (a stale card approves nothing). Deny on a change card restores
+the approved version. "Always in This Project" covers creation only, never changes. The user's own edits in Settings
+keep the approval; Settings' Approve binds to the definition the editor shows. UI: Settings ▸ Scheduled Tasks (Window ▸ Scheduled Tasks… ⌃⌘E): list, switch, next run, last result
 with Open Thread, inline editor, Run Now, Delete with Undo, revoke project grants.
 
 ## 2. GitLab merge requests
 `ForgeProvider` (protocol) with one implementation, `GitLabProvider`: REST v4 over an ephemeral URLSession, off the main
 actor; `PRIVATE-TOKEN` header from the Keychain (`app.bellocode.gitlab-tokens`, account = instance URL); ETag
-`If-None-Match` (304 reuses the cached body, bounded cache); `X-Next-Page` pagination (≤ 10 pages); 401 → "token invalid
-or expired" (watch held, re-armed when the token is replaced), 403 scope, 404, 429 waits ≥ `Retry-After`. TLS: system
-trust store only (trust a private CA in Keychain Access); no overrides. Instances may carry a path prefix
+`If-None-Match` (304 reuses the cached body *and* its pagination headers, bounded cache); `X-Next-Page` pagination
+(≤ 10 pages; a list cut at the cap is marked incomplete: "at least N unresolved", a note in the panel and the agent's
+list); 401 → "token invalid or expired" (watch held, re-armed when the token is replaced), 403 scope, 404, 429 waits ≥
+`Retry-After`. TLS: system trust store only (trust a private CA in Keychain Access); no overrides. **Token transport
+(M6-B):** redirects are followed only within the same scheme, host and port; any other is refused before it is followed
+(`ForgeError.redirected`), so the token never reaches another origin or plain HTTP. `http://` instances are refused
+unless the person ticks "Allow unencrypted HTTP for this instance" (stored per instance, warned in the list, forgotten
+on removal); the provider checks before reading the token. Remotes match instances by scheme, host and port (HTTPS);
+an SSH remote resolves only when one configured instance has its host. Instances may carry a path prefix
 (`https://host/gitlab`); remotes (`git@`, `ssh://…:port`, `https://host/prefix/…`) match configured hosts. Refs: MR URL
 or `!iid` in the thread's project. Reads per MR: the MR (`head_pipeline`, `user_notes_count`, draft), `/approvals`,
 pipeline `/jobs`, `/discussions` (unresolved count). Auto-link: the branch's open MR (≤ every 10 min while shown) and MR
@@ -53,7 +66,8 @@ GitLab: add instance + token (secure field, Keychain, never shown again), Test, 
 ## 3. Secrets
 `request_secret` (label, reason, https setup URL, delivery) raises a card and returns at once; the agent ends its turn.
 Save Securely → Keychain → the thread is woken by a synthetic message with a one-use `secretRef` (this thread, 1 h), or
-with delivery `file` a path. `secret_file(secretRef)` → a one-read **named pipe** path. `PUT /session/{id}/environment`
+with delivery `file` a path. `secret_file(secretRef)` → a one-read **named pipe** path (projects without container execution only; the app always
+runs containerised, where `secret_exec` is the path: see "Guarantee" below). `PUT /session/{id}/environment`
 was checked on the binary (in memory, applies to every shell command of the session) and rejected: too broad. Decline
 → a refusal wake. Values longer than 8 KB (the macOS FIFO buffer) are refused at Save.
 
@@ -77,24 +91,29 @@ for reading and for writing (non-blocking, close-on-exec, no SIGPIPE) in `<tmp>/
   any reader blocked on them; `shutdown()` cancels every pipe and removes the instance directory. Finished pipes leave
   the `maxPipes` (16) count, so the bound counts only live pipes.
 
-Guarantees: the value is put into the pipe once, so all readers together receive at most one copy; in the normal case
-the agent's command is the only reader. A reader that loses a race, opens after it was spent, or is attached at expiry or
-cancel gets end-of-file immediately (or ENOENT), never a hang. The value is never in a tool result, wake text, session
-message, event stream, opencode's files, our store or logs (`SecretValue` prints `<secret>`). Limits (accepted): the
-value sits in the pipe's kernel buffer from redemption until read, so any process of the same user that opens the path
-first gets it instead (the agent's command then sees an empty value, which is visible) — same exposure as before, the
-0700 directory keeps other users out; two readers racing with small reads could split the bytes; a same-user process
-could also write into the pipe or hold a write end open (the reader then waits for that process, not for us); after a
-crash, the kernel closes our ends (attached readers get EOF) but a *new* opener of the leftover path blocks until the
-next launch wakes it; a command that prints the value leaks it into the transcript (guidance forbids it); Keychain ACLs
-may prompt after an ad-hoc re-sign. A unix-domain socket was rejected: `cat`, `$(< P)` and redirection cannot read one.
+Pipe mechanics: the value is put into the pipe once, so all readers together receive at most one copy; a reader that
+loses a race, opens after it was spent, or is attached at expiry or cancel gets end-of-file immediately (or ENOENT),
+never a hang. Same-user processes can open the path first; two racing readers could split the bytes; after a crash a
+new opener of a leftover path waits until the next launch wakes it; Keychain ACLs may prompt after an ad-hoc re-sign.
 
-**When commands run in a container** (owner decision: everything the agent runs executes in Rancher Desktop; opencode
-stays on the host), this host path is only readable if `<tmp>/bellocode-secrets` is mounted, and a FIFO across the VM
-file share is not reliable. The next package should deliver by passing the value in the environment of the single
-`exec` that needs it, through the container API (the exec request's env, never a file, never the session environment),
-with the command referring to `$BELLOCODE_SECRET_<NAME>`; the one-use `secretRef` stays the agent-facing handle and is
-redeemed by the exec path, not by `secret_file`. Keep the FIFO only for host-run commands.
+**Guarantee (restated in M6-B after review C3).** What BelloCode guarantees: the value is typed into a private card,
+kept in the Keychain, and **never put into the transcript, a tool result, a wake message, opencode's files, our store
+or logs by BelloCode**; in containerised projects (the app's only mode) it is given **only to a command the person
+approved verbatim** on a card (label, project, folder, variable, command, network and write access), once or "Always
+for This Command" (bound to secret + project + variable + exact command + access; deleting the secret revokes it). That
+command runs in a one-shot container with no network and a read-only project unless the card said otherwise, receives
+the value on stdin (not in any container or exec configuration), and is removed afterwards.
+
+What it does **not** guarantee: that the model cannot obtain the value. The approved command receives it and can print,
+encode, split, write or (with network) send it; the output goes back to the agent, and exact-value redaction
+(`<secret>`) only prevents accidental display. Approving a command means trusting it with the secret. The host pipe
+path (`secret_file`, builds without container execution) is weaker still: the agent chooses whatever reads the pipe,
+so it is disclosure to the agent's command, and the secret card says that a command that receives the value can reveal
+it. Other limits: a process of the same user on the Mac,
+or another Docker API client, can inspect a running container's processes; the value is in the one-shot command's
+environment while it runs. Tests: fake-runtime end to end (nothing runs before Allow, verbatim command, stdin delivery,
+Once vs Always, changed command or access asks again, Deny, revocation) and a live Rancher run (offline, read-only,
+HOME=/tmp, nothing left behind).
 
 Settings ▸ Secrets lists labels and deletes (confirmed).
 
@@ -105,6 +124,11 @@ rules block everything but about:/data:/blob: and approved hosts, plus a CSP met
 only, `frame-src 'none'`); `window.open` refused; every navigation after load cancelled; links open externally only on a
 trusted click (scripted clicks dropped before WebKit pre-connects); theme CSS variables and system fonts injected.
 Hosts in `allowNetwork` need an approval card (once for the visual, or always per host; Settings ▸ Secrets revokes).
+Grant binding (checked in M6-B): "once" is bound to the visual's ID, which is a hash of its HTML, title and thread, so
+changed content is a new visual with no grant; "always" is a per-host decision by design and covers any visual's
+traffic to that host (a data-disclosure decision, see containers.md "For the security team"). Merge-request watches
+are not grants: they read with the person's token what that token can see and wake the thread; linking an MR is not
+approved per MR (policy point).
 Transcript: a `.visual` row draws a cached snapshot through the image loader (virtualised); clicking makes it live (≤ 2
 live web views, dropped off-screen); Open in Browser (built-in browser, data: URL with the same CSP) and Save Image.
 
