@@ -394,32 +394,11 @@ struct MergeRequestServiceTests {
 
 @MainActor
 struct SecretPipeTests {
-    /// Reads a named pipe on a plain thread (opening a pipe for reading blocks until the writer opens it).
-    static func readPipe(_ path: String) async -> String? {
-        await withCheckedContinuation { continuation in
-            Thread.detachNewThread {
-                let fd = open(path, O_RDONLY)
-                guard fd >= 0 else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                var data = Data()
-                var buffer = [UInt8](repeating: 0, count: 256)
-                while true {
-                    let count = read(fd, &buffer, buffer.count)
-                    if count <= 0 { break }
-                    data.append(contentsOf: buffer[0..<count])
-                }
-                close(fd)
-                continuation.resume(returning: String(decoding: data, as: UTF8.self))
-            }
-        }
-    }
-
     @Test func pipeYieldsTheValueOnceThenDisappears() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "bc-secret-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appending(path: "bc-secret-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
         let vault = InMemorySecretVault()
-        let service = SecretService(vault: vault, store: try ProjectionStore(location: .inMemory), clock: SystemWallClock(), directory: directory)
+        let service = SecretService(vault: vault, store: try ProjectionStore(location: .inMemory), clock: SystemWallClock(), root: root)
         let account = try await service.save(label: "npm token", value: SecretValue("s3cr3t-pipe-value"))
         let reference = service.issueReference(account: account, label: "npm token", for: SessionID("ses_a"))
         #expect(throws: ExtrasError.self) { try service.redeem(reference, by: SessionID("ses_other")) }
@@ -427,18 +406,19 @@ struct SecretPipeTests {
         #expect(label == "npm token")
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         #expect((attributes[.posixPermissions] as? Int) == 0o600)
-        #expect(await Self.readPipe(path) == "s3cr3t-pipe-value")
+        #expect(await PipeReader.read(path) == .value("s3cr3t-pipe-value"))
         try await waitUntil("pipe removed") { !FileManager.default.fileExists(atPath: path) }
         #expect(open(path, O_RDONLY | O_NONBLOCK) == -1, "a second reader gets nothing")
         #expect(throws: ExtrasError.self) { try service.redeem(reference, by: SessionID("ses_a")) }
         service.shutdown()
-        #expect(!FileManager.default.fileExists(atPath: directory.path))
+        #expect(!FileManager.default.fileExists(atPath: service.pipeDirectory.path))
     }
 
     @Test func unreadPipeExpires() async throws {
         let clock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
-        let directory = FileManager.default.temporaryDirectory.appending(path: "bc-secret-test-\(UUID().uuidString)")
-        let service = SecretService(vault: InMemorySecretVault(), store: try ProjectionStore(location: .inMemory), clock: clock, directory: directory)
+        let root = FileManager.default.temporaryDirectory.appending(path: "bc-secret-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = SecretService(vault: InMemorySecretVault(), store: try ProjectionStore(location: .inMemory), clock: clock, root: root)
         let account = try await service.save(label: "x", value: SecretValue("v"))
         let path = try service.deliverFile(account: account)
         #expect(FileManager.default.fileExists(atPath: path))
@@ -547,7 +527,7 @@ struct ExtrasToolTests {
         let file = await fixture.call("secret_file", ["secretRef": .string(reference)], session: session.id)
         #expect(!file.isError)
         let path = try #require(file.text.split(separator: "\n").first?.split(separator: " ").last.map(String.init))
-        #expect(await SecretPipeTests.readPipe(path) == sentinel)
+        #expect(await PipeReader.read(path) == .value(sentinel))
         let again = await fixture.call("secret_file", ["secretRef": .string(reference)], session: session.id)
         #expect(again.isError, "one use")
 

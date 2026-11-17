@@ -53,14 +53,50 @@ GitLab: add instance + token (secure field, Keychain, never shown again), Test, 
 ## 3. Secrets
 `request_secret` (label, reason, https setup URL, delivery) raises a card and returns at once; the agent ends its turn.
 Save Securely → Keychain → the thread is woken by a synthetic message with a one-use `secretRef` (this thread, 1 h), or
-with delivery `file` a path. `secret_file(secretRef)` → a **named pipe** (0600 in a 0700 dir) that yields the value to
-the first reader, then is unlinked; unread pipes vanish after 10 min. `PUT /session/{id}/environment` was checked on
-the binary (in memory, applies to every shell command of the session) and rejected: too broad. Decline → a refusal wake.
-Guarantees (tested on mock and real binary): the value is never in a tool result, wake text, session message, event
-stream, opencode's files, our store or logs (`SecretValue` prints `<secret>`). Limits: another process of the user could
-read the pipe first (the agent's command then fails visibly); a command that prints the value leaks it into the
-transcript (guidance forbids it); Keychain ACLs may prompt after an ad-hoc re-sign. Settings ▸ Secrets lists labels and
-deletes (confirmed).
+with delivery `file` a path. `secret_file(secretRef)` → a one-read **named pipe** path. `PUT /session/{id}/environment`
+was checked on the binary (in memory, applies to every shell command of the session) and rejected: too broad. Decline
+→ a refusal wake. Values longer than 8 KB (the macOS FIFO buffer) are refused at Save.
+
+**Delivery (`SecretPipe`, revised 2026-11-17).** The first design polled `open(O_WRONLY|O_NONBLOCK)` until a reader
+appeared, wrote, and unlinked at the deadline or on cancel. A reader blocked in `open` when no writer ever came (racing
+the deadline, a cancel, a second reader, or, in tests, another service instance deleting the shared
+`bellocode-secrets-<pid>` directory) waited forever, and the suite hung. Now, at creation the app opens the FIFO itself
+for reading and for writing (non-blocking, close-on-exec, no SIGPIPE) in `<tmp>/bellocode-secrets/<pid>.<random>/`
+(0700, one directory per service instance; the FIFO is 0600):
+- a reader's blocking `open` returns at once, because a writer always exists while the pipe is live;
+- the value is read from the Keychain off the main thread and written into the pipe's kernel buffer once (never to a
+  file; socket buffers are wired kernel memory, not swapped);
+- the pipe *finishes* when its buffer has been drained (`FIONREAD` on the app's read end, polled every 20 ms on a private
+  dispatch queue, not the cooperative pool), at the 10-minute deadline, or on cancel/quit: unread bytes are discarded,
+  the path is renamed to a hidden `.spent-*` node (new opens get ENOENT) and both ends close, so every attached reader
+  gets end-of-file at once (`cat` returns; `$(cat P)` is empty);
+- a reader that resolved the path just before the rename and reaches `open` after the close would wait for a writer;
+  for 250 ms the app opens the spent node for writing whenever a reader is waiting (a non-blocking write-open succeeds
+  only then), which wakes it to end-of-file; then the node is unlinked;
+- launch (`load()`) removes directories of dead processes (and the old `bellocode-secrets-<pid>` ones), first waking
+  any reader blocked on them; `shutdown()` cancels every pipe and removes the instance directory. Finished pipes leave
+  the `maxPipes` (16) count, so the bound counts only live pipes.
+
+Guarantees: the value is put into the pipe once, so all readers together receive at most one copy; in the normal case
+the agent's command is the only reader. A reader that loses a race, opens after it was spent, or is attached at expiry or
+cancel gets end-of-file immediately (or ENOENT), never a hang. The value is never in a tool result, wake text, session
+message, event stream, opencode's files, our store or logs (`SecretValue` prints `<secret>`). Limits (accepted): the
+value sits in the pipe's kernel buffer from redemption until read, so any process of the same user that opens the path
+first gets it instead (the agent's command then sees an empty value, which is visible) — same exposure as before, the
+0700 directory keeps other users out; two readers racing with small reads could split the bytes; a same-user process
+could also write into the pipe or hold a write end open (the reader then waits for that process, not for us); after a
+crash, the kernel closes our ends (attached readers get EOF) but a *new* opener of the leftover path blocks until the
+next launch wakes it; a command that prints the value leaks it into the transcript (guidance forbids it); Keychain ACLs
+may prompt after an ad-hoc re-sign. A unix-domain socket was rejected: `cat`, `$(< P)` and redirection cannot read one.
+
+**When commands run in a container** (owner decision: everything the agent runs executes in Rancher Desktop; opencode
+stays on the host), this host path is only readable if `<tmp>/bellocode-secrets` is mounted, and a FIFO across the VM
+file share is not reliable. The next package should deliver by passing the value in the environment of the single
+`exec` that needs it, through the container API (the exec request's env, never a file, never the session environment),
+with the command referring to `$BELLOCODE_SECRET_<NAME>`; the one-use `secretRef` stays the agent-facing handle and is
+redeemed by the exec path, not by `secret_file`. Keep the FIFO only for host-run commands.
+
+Settings ▸ Secrets lists labels and deletes (confirmed).
 
 ## 4. HTML visuals
 `html_preview` (height, console, CSP-blocked requests, PNG path for export) and `html_render` (stored, shown inline).
@@ -83,7 +119,7 @@ Mode; WebKit rule regexes reject disjunctions.
 
 ## Verification
 `swift test` (EngineTests incl. ScheduleCalendar 7, Scheduler 6, MR model 6, GitLabProvider 4, MR service 7, secret pipe
-3, extras tools 5; BrowserKit sandbox 4 with a loopback listener: 0 connections; TranscriptKit rows 3), `bun test` 15,
+3 + delivery races 8 + delivery 6, extras tools 5; BrowserKit sandbox 4 with a loopback listener: 0 connections; TranscriptKit rows 3), `bun test` 15,
 `make app`, `make smoke`, shortcut uniqueness. Snapshots: `.build/debug/BelloCode --snapshot extras` (26);
 `docs/snapshots/extras-{schedules-light,mr-panel-dark,secret-card-light,approval-card-dark,visual-light,visual-live-dark}.png`.
 
