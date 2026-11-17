@@ -49,15 +49,20 @@ public struct GitLabProvider: ForgeProvider {
             // Approvals are not available on every edition or token: the section says "No approvals".
         }
         var pipeline: Pipeline?
+        var incomplete: [String] = []
         if let head = mr["head_pipeline"] as? [String: Any] ?? mr["pipeline"] as? [String: Any], let id = head["id"] as? Int {
-            let jobs = try await getPaged("projects/\(Self.encode(ref.projectPath))/pipelines/\(id)/jobs?per_page=100", instance).map { job in
+            let jobList = try await getPaged("projects/\(Self.encode(ref.projectPath))/pipelines/\(id)/jobs?per_page=100", instance)
+            if jobList.truncated { incomplete.append("pipeline jobs") }
+            let jobs = jobList.items.map { job in
                 PipelineJob(
                     id: job["id"] as? Int ?? 0, name: job["name"] as? String ?? "job", stage: job["stage"] as? String ?? "",
                     status: job["status"] as? String ?? "unknown", webURL: job["web_url"] as? String)
             }
             pipeline = Pipeline(id: id, status: head["status"] as? String ?? "unknown", webURL: head["web_url"] as? String, jobs: jobs)
         }
-        let discussions = try await getPaged("\(project)/merge_requests/\(ref.iid)/discussions?per_page=100", instance)
+        let discussionList = try await getPaged("\(project)/merge_requests/\(ref.iid)/discussions?per_page=100", instance)
+        if discussionList.truncated { incomplete.append("discussions") }
+        let discussions = discussionList.items
         let unresolved = discussions.filter { discussion in
             (discussion["notes"] as? [[String: Any]] ?? []).contains { ($0["resolvable"] as? Bool) == true && ($0["resolved"] as? Bool) == false }
         }.count
@@ -67,13 +72,14 @@ public struct GitLabProvider: ForgeProvider {
             draft: (mr["draft"] as? Bool) ?? (mr["work_in_progress"] as? Bool) ?? false, sourceBranch: mr["source_branch"] as? String ?? "",
             targetBranch: mr["target_branch"] as? String ?? "", author: (mr["author"] as? [String: Any])?["username"] as? String ?? "",
             sha: mr["sha"] as? String ?? "", webURL: mr["web_url"] as? String, pipeline: pipeline, approvals: approvals,
-            userNotes: mr["user_notes_count"] as? Int ?? 0, unresolvedDiscussions: unresolved, fetched: now)
+            userNotes: mr["user_notes_count"] as? Int ?? 0, unresolvedDiscussions: unresolved, fetched: now,
+            truncated: incomplete.isEmpty ? nil : incomplete)
     }
 
     @concurrent
     public func openMergeRequests(_ project: ForgeProject, sourceBranch branch: String) async throws -> [MergeRequestRef] {
         let query = "state=opened&source_branch=" + Self.encode(branch)
-        let list = try await getPaged("projects/\(Self.encode(project.projectPath))/merge_requests?\(query)&per_page=20", project.instance)
+        let list = try await getPaged("projects/\(Self.encode(project.projectPath))/merge_requests?\(query)&per_page=20", project.instance).items
         return list.compactMap { ($0["iid"] as? Int).map { MergeRequestRef(instance: project.instance.baseURL, projectPath: project.projectPath, iid: $0) } }
     }
 
@@ -89,18 +95,22 @@ public struct GitLabProvider: ForgeProvider {
         try await response(path, instance, cached: cached).body
     }
 
-    /// Every page (following `X-Next-Page`, at most `maxPages`).
-    func getPaged(_ path: String, _ instance: GitLabInstance) async throws -> [[String: Any]] {
+    /// Every page (following `X-Next-Page`, at most `maxPages`). `truncated` is true when GitLab still advertised a
+    /// next page at the cap: the caller must say the list is incomplete, never present it as complete.
+    func getPaged(_ path: String, _ instance: GitLabInstance) async throws -> (items: [[String: Any]], truncated: Bool) {
         var items: [[String: Any]] = []
         var page = 1
-        while page <= Self.maxPages {
+        var fetched = 0
+        while true {
             let separator = path.contains("?") ? "&" : "?"
             let response = try await response(page == 1 ? path : path + "\(separator)page=\(page)", instance, cached: true)
             items += try Self.array(response.body)
+            fetched += 1
             guard let next = response.headers["x-next-page"].flatMap({ Int($0.trimmingCharacters(in: .whitespaces)) }), next > page else { break }
+            if fetched >= Self.maxPages { return (items, true) }
             page = next
         }
-        return items
+        return (items, false)
     }
 
     private func response(_ path: String, _ instance: GitLabInstance, cached: Bool) async throws -> ForgeResponse {
@@ -113,11 +123,12 @@ public struct GitLabProvider: ForgeProvider {
         let response = try await transport.send(ForgeRequest(url: url, headers: headers))
         switch response.status {
         case 200..<300:
-            if cached, let etag = response.headers["etag"] { await cache.put(key, etag: etag, body: response.body) }
+            if cached, let etag = response.headers["etag"] { await cache.put(key, etag: etag, body: response.body, headers: response.headers) }
             return response
         case 304:
-            guard let body = await cache.body(key) else { throw ForgeError.unexpected("GitLab answered 304 without a cached copy.") }
-            return ForgeResponse(status: 200, headers: response.headers, body: body)
+            guard let entry = await cache.entry(key) else { throw ForgeError.unexpected("GitLab answered 304 without a cached copy.") }
+            // The cached pagination headers, unless the 304 carries its own.
+            return ForgeResponse(status: 200, headers: entry.headers.merging(response.headers) { _, fresh in fresh }, body: entry.body)
         case 401: throw ForgeError.tokenInvalid(instance.baseURL)
         case 403: throw ForgeError.forbidden
         case 404: throw ForgeError.notFound

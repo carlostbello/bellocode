@@ -397,7 +397,8 @@ public final class ExtrasHub {
             let snapshot = await mergeRequests.refresh(link.ref) ?? mergeRequests.snapshots[link.ref.url]
             var line = "- \(link.ref.url)"
             if let snapshot {
-                line += " “\(snapshot.title)”: \(snapshot.stateLabel); \(snapshot.approvals.label); \(snapshot.pipelineSummary.text); \(snapshot.unresolvedDiscussions) unresolved discussions"
+                line += " “\(snapshot.title)”: \(snapshot.stateLabel); \(snapshot.approvals.label); \(snapshot.pipelineSummary.text); \(snapshot.unresolvedText)"
+                if let note = snapshot.truncationNote { line += " (\(note))" }
                 let failed = snapshot.pipeline?.jobs.filter(\.isFailure).map(\.name) ?? []
                 if !failed.isEmpty { line += " (failed jobs: \(failed.prefix(6).joined(separator: ", ")))" }
             } else if let problem = mergeRequests.problems[link.ref.url] {

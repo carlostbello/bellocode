@@ -186,20 +186,31 @@ public final class FixtureForgeTransport: ForgeTransport {
     }
 }
 
-/// Bounded ETag cache: URL → (etag, body). A 304 reuses the body.
+/// Bounded ETag cache: URL → (etag, body, pagination headers). A 304 reuses the body *and* the pagination state it
+/// was stored with (M2 in docs/reviews/M3-M6-review.md: a 304 need not repeat `X-Next-Page`, and without it a
+/// revalidated first page used to end the listing there).
 actor ForgeCache {
-    private var entries: [String: (etag: String, body: Data)] = [:]
+    struct Entry {
+        var etag: String
+        var body: Data
+        var headers: [String: String]
+    }
+
+    /// The response headers kept with a cached body.
+    static let paginationHeaders = ["x-next-page", "x-page", "x-per-page", "x-total", "x-total-pages", "link"]
+
+    private var entries: [String: Entry] = [:]
     private var order: [String] = []
     private let limit: Int
 
     init(limit: Int = 256) { self.limit = limit }
 
     func etag(_ url: String) -> String? { entries[url]?.etag }
-    func body(_ url: String) -> Data? { entries[url]?.body }
+    func entry(_ url: String) -> Entry? { entries[url] }
 
-    func put(_ url: String, etag: String, body: Data) {
+    func put(_ url: String, etag: String, body: Data, headers: [String: String]) {
         if entries[url] == nil { order.append(url) }
-        entries[url] = (etag, body)
+        entries[url] = Entry(etag: etag, body: body, headers: headers.filter { Self.paginationHeaders.contains($0.key) })
         while order.count > limit { entries[order.removeFirst()] = nil }
     }
 }

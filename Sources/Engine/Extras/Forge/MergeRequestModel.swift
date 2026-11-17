@@ -362,12 +362,17 @@ public struct MergeRequestSnapshot: Hashable, Sendable, Codable {
     public var userNotes: Int
     public var unresolvedDiscussions: Int
     public var fetched: Date
+    /// Lists that hit the page cap ("pipeline jobs", "discussions"): what was read is shown as incomplete, and counts
+    /// from them are lower bounds.
+    public var truncated: [String]?
 
     public init(
         ref: MergeRequestRef, title: String, state: MergeRequestState, draft: Bool = false, sourceBranch: String = "",
         targetBranch: String = "", author: String = "", sha: String = "", webURL: String? = nil, pipeline: Pipeline? = nil,
-        approvals: MergeRequestApprovals = MergeRequestApprovals(), userNotes: Int = 0, unresolvedDiscussions: Int = 0, fetched: Date
+        approvals: MergeRequestApprovals = MergeRequestApprovals(), userNotes: Int = 0, unresolvedDiscussions: Int = 0, fetched: Date,
+        truncated: [String]? = nil
     ) {
+        self.truncated = truncated
         self.ref = ref
         self.title = title
         self.state = state
@@ -385,6 +390,15 @@ public struct MergeRequestSnapshot: Hashable, Sendable, Codable {
     }
 
     public var pipelineSummary: PipelineSummary { PipelineSummary(pipeline) }
+    /// "Incomplete: only the first 1000 discussions were read" (nil when complete).
+    public var truncationNote: String? {
+        guard let truncated, !truncated.isEmpty else { return nil }
+        return "Incomplete: GitLab has more \(truncated.joined(separator: " and ")) than BelloCode reads (\(GitLabProvider.maxPages) pages); counts are at least these"
+    }
+    /// "3 unresolved discussions", "at least 3 …" when the discussions list was cut at the cap.
+    public var unresolvedText: String {
+        (truncated?.contains("discussions") == true ? "at least " : "") + "\(unresolvedDiscussions) unresolved discussions"
+    }
     /// "Open", "Draft", "Merged", "Closed".
     public var stateLabel: String { state == .opened && draft ? "Draft" : state.label }
 }

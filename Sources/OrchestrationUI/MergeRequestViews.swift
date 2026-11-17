@@ -28,7 +28,7 @@ public enum MergeRequestText {
     public static func accessibility(_ link: LinkedMergeRequest, _ snapshot: MergeRequestSnapshot?) -> String {
         guard let snapshot else { return "Merge request \(link.ref.iid)" }
         return "Merge request \(link.ref.iid), \(snapshot.title), \(snapshot.stateLabel), \(snapshot.approvals.label), \(snapshot.pipelineSummary.text), "
-            + "\(snapshot.unresolvedDiscussions) unresolved discussions" + (link.watching ? ", watching" : "")
+            + snapshot.unresolvedText + (link.watching ? ", watching" : "") + (snapshot.truncationNote.map { ". \($0)" } ?? "")
     }
 
     public static func source(_ source: MergeRequestLinkSource) -> String {
@@ -234,6 +234,9 @@ struct MergeRequestCard: View {
                     }
                 }
                 .font(.ds(.meta))
+                if let note = snapshot.truncationNote {
+                    Label(note, systemImage: "exclamationmark.triangle").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.warningText)
+                }
                 if let pipeline = snapshot.pipeline, !pipeline.jobs.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(pipeline.jobs.prefix(12)) { job in
