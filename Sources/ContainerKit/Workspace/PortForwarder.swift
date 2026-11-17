@@ -23,16 +23,42 @@ public final class PortForwarder: Sendable {
     public let maxConnections: Int
     private let listener: FileStream
     public let hostPort: Int
-    private let tasks = Mutex<[Int: Task<Void, Never>]>([:])
+    /// One accepted connection: its peer (closed by `stop()`) and, once spawned, its relay task.
+    private struct Slot {
+        var peer: FileStream
+        var task: Task<Void, Never>?
+    }
+
+    /// Connections are registered *before* their relay task starts and removed by the task when it ends; a task that
+    /// ends before it was stored is never stored (M4 in docs/reviews/M3-M6-review.md: the old order inserted after
+    /// spawning, so a connection that finished at once left a stale entry and admission eventually stuck at the limit).
+    private let slots = Mutex<[Int: Slot]>([:])
     private let counter = Mutex(0)
+    /// Relays a connection; injected by tests (the default execs the relay in the container).
+    private let relay: (@Sendable (PortForwarder, FileStream) async -> Void)?
+    /// Test hook run after a relay task was spawned and before it is stored.
+    let afterSpawn: (@Sendable () async -> Void)?
+    /// Test hook run by a relay task after its connection was unregistered.
+    let onEnded: (@Sendable () async -> Void)?
     private let served = Mutex(0)
     private let acceptQueue = DispatchQueue(label: "bellocode.forward.accept")
 
     /// - Parameters:
     ///   - containerHost: where the relay connects inside the container (`127.0.0.1`, or `::1` for an IPv6 listener).
     ///   - hostPort: 0 picks a free port; otherwise the same port number is tried (keeps URLs stable).
-    public init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
-                hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64) throws {
+    public convenience init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
+                            hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64) throws {
+        try self.init(client: client, container: container, containerPort: containerPort, containerHost: containerHost, hostPort: hostPort,
+                      user: user, maxConnections: maxConnections, relay: nil, afterSpawn: nil, onEnded: nil)
+    }
+
+    init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
+         hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64,
+         relay: (@Sendable (PortForwarder, FileStream) async -> Void)?, afterSpawn: (@Sendable () async -> Void)?,
+         onEnded: (@Sendable () async -> Void)? = nil) throws {
+        self.relay = relay
+        self.afterSpawn = afterSpawn
+        self.onEnded = onEnded
         self.client = client
         self.container = container
         self.containerPort = containerPort
@@ -75,19 +101,31 @@ public final class PortForwarder: Sendable {
                 var on: Int32 = 1
                 setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
                 let peer = FileStream(fd: fd, owned: true, isSocket: true)
-                if activeConnections >= maxConnections {
-                    peer.cancel()
-                    continue
-                }
                 let id = counter.withLock { value -> Int in
                     value += 1
                     return value
                 }
-                let task = Task { [self] in
-                    await relayConnection(peer)
-                    _ = tasks.withLock { $0.removeValue(forKey: id) }
+                // Admission and registration in one step, before anything runs.
+                let admitted = slots.withLock { slots -> Bool in
+                    guard slots.count < maxConnections else { return false }
+                    slots[id] = Slot(peer: peer, task: nil)
+                    return true
                 }
-                tasks.withLock { $0[id] = task }
+                guard admitted else {
+                    peer.cancel()
+                    continue
+                }
+                let task = Task { [self] in
+                    if let relay { await relay(self, peer) } else { await relayConnection(peer) }
+                    peer.cancel()
+                    _ = slots.withLock { $0.removeValue(forKey: id) }
+                    await onEnded?()
+                }
+                await afterSpawn?()
+                // Stored only while the connection is still registered (it may already have ended).
+                slots.withLock { slots in
+                    if slots[id] != nil { slots[id]?.task = task }
+                }
             }
         } onCancel: {
             stop()
@@ -144,13 +182,17 @@ public final class PortForwarder: Sendable {
         }
     }
 
-    public var activeConnections: Int { tasks.withLock { $0.count } }
+    public var activeConnections: Int { slots.withLock { $0.count } }
     /// Connections relayed so far.
     public var connectionCount: Int { served.withLock { $0 } }
 
     public func stop() {
         listener.cancel()
         Darwin.shutdown(listener.fd, SHUT_RDWR)
-        for task in tasks.withLock({ Array($0.values) }) { task.cancel() }
+        // Close every active peer (its browser sees the connection end) and cancel the relays.
+        for slot in slots.withLock({ Array($0.values) }) {
+            slot.peer.cancel()
+            slot.task?.cancel()
+        }
     }
 }
