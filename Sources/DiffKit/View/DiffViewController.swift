@@ -126,7 +126,7 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         scrollView.drawsBackground = true
         scrollView.borderType = .noBorder
         scrollView.contentView.postsBoundsChangedNotifications = true
-        content.autoresizingMask = [.width]
+        content.autoresizingMask = []
         scrollView.documentView = content
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         content.onToggleFile = { [weak self] index in self?.toggleFile(index) }
@@ -199,6 +199,13 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         findBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         findBar.translatesAutoresizingMaskIntoConstraints = false
         findBar.heightAnchor.constraint(equalToConstant: 34).isActive = true
+    }
+
+    public override func viewDidLayout() {
+        super.viewDidLayout()
+        let width = scrollView.contentSize.width
+        if content.frame.width != width { content.setFrameSize(NSSize(width: width, height: content.frame.height)) }
+        updateIndicator()
     }
 
     private func updateTheme() {

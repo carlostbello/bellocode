@@ -263,10 +263,6 @@ final class DiffContentView: NSView {
             return
         }
         for index in first...last { drawRow(index, in: context) }
-        if layoutMode == .split {
-            context.setFillColor(theme.base.separator)
-            context.fill(CGRect(x: floor(bounds.width / 2), y: dirtyRect.minY, width: 1, height: dirtyRect.height))
-        }
     }
 
     private func drawEmpty(_ context: CGContext) {}
@@ -385,6 +381,8 @@ final class DiffContentView: NSView {
             let half = floor(rect.width / 2)
             drawCell(row.left, row: row, index: index, side: 1, gutters: [row.left?.number], x: 0, width: half, rect: rect, in: context)
             drawCell(row.right, row: row, index: index, side: 2, gutters: [row.right?.number], x: half + 1, width: rect.width - half - 1, rect: rect, in: context)
+            context.setFillColor(theme.base.separator)
+            context.fill(CGRect(x: half, y: rect.minY, width: 1, height: rect.height))
         }
     }
 
@@ -394,8 +392,22 @@ final class DiffContentView: NSView {
     ) {
         let gutterTotal = CGFloat(gutters.count) * gutterWidth
         guard let cell else {
+            // An empty side: a faint fill with diagonal hatching, so alignment gaps read as "no line here".
+            let area = CGRect(x: x, y: rect.minY, width: width, height: rect.height)
             context.setFillColor(theme.emptyCellFill)
-            context.fill(CGRect(x: x, y: rect.minY, width: width, height: rect.height))
+            context.fill(area)
+            context.saveGState()
+            context.clip(to: area)
+            context.setStrokeColor(theme.emptyCellFill)
+            context.setLineWidth(1)
+            var stripe = x - rect.height - CGFloat(Int(rect.minY) % 8)
+            while stripe < area.maxX {
+                context.move(to: CGPoint(x: stripe, y: area.maxY))
+                context.addLine(to: CGPoint(x: stripe + area.height, y: area.minY))
+                stripe += 8
+            }
+            context.strokePath()
+            context.restoreGState()
             return
         }
         let (fill, gutterFill, markerColor, marker): (CGColor?, CGColor?, CGColor, String) =
