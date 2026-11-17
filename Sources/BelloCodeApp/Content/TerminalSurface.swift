@@ -39,6 +39,8 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
     private(set) var context: ThreadSurfaceContext?
     private(set) var terminals: ThreadTerminals?
     private var settingsLoop: ObservationLoop?
+    /// The window's built-in browser, for terminal links and dev-server offers.
+    weak var browser: BrowserSurfaces?
     /// While applying a thread's saved drawer state, layout callbacks are not recorded as user changes.
     private var isApplyingThreadLayout = false
 
@@ -157,8 +159,15 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
     // MARK: TerminalWorkspaceDelegate
 
     func terminalWorkspace(_ workspace: TerminalWorkspace, open link: TerminalLink) {
-        // The built-in browser (BrowserKit) takes these later; for now the default browser, after SwiftTerm's checks.
+        // The built-in browser by default (Settings ▸ Browser); ⇧ while clicking picks the other one. Anything that is
+        // not an http(s) URL goes through SwiftTerm's checks to the system.
+        let builtIn = services.settings.terminalLinksOpenInBuiltInBrowser != (NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
+        if builtIn, let url = URL(string: link.text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), browser?.open(url) == true { return }
         link.openInDefaultBrowser()
+    }
+
+    func terminalWorkspace(_ workspace: TerminalWorkspace, screenText: String) {
+        browser?.terminalPrinted(screenText)
     }
 
     /// Puts the selection into the composer as a pasted text block (a chip). ComposerKit has no terminal-excerpt

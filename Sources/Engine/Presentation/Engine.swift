@@ -120,6 +120,8 @@ public final class Engine {
     public let frecency: FrecencyModel
     /// Git status, diffs, worktrees and turn revert (docs/features/diff-git.md).
     public let git: GitService
+    /// Per-thread agent control of the built-in browser (`experimental.browser` bridge; docs/features/browser.md).
+    public let browser: BrowserBridgeService
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -154,6 +156,9 @@ public final class Engine {
         frecency = FrecencyModel(store: store)
         terminals = TerminalService(store: store, client: { [core] in try await core.currentClient() })
         git = GitService(client: { [core] in try await core.currentClient() }, store: store)
+        browser = BrowserBridgeService(
+            store: store, client: { [core] in try await core.currentClient() },
+            subscribe: { [core] in await core.subscribeBrowserControl() })
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
     }
 
@@ -206,6 +211,7 @@ public final class Engine {
         await frecency.flush()
         await terminals.shutdown()
         git.shutdown()
+        await browser.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }

@@ -240,6 +240,17 @@ actor EngineCore {
         started = false
     }
 
+    // MARK: - Browser bridge
+
+    /// A subscription to the browser plugin's control events, and whether the stream is connected now (a new
+    /// subscriber gets no `.resync` for a connection that is already open). Nil before `start()`.
+    func subscribeBrowserControl() async -> (EventSubscription, Bool)? {
+        guard let hub else { return nil }
+        let subscription = await hub.subscribe(.types([BrowserContract.controlEventType]), bufferLimit: 1_024)
+        if case .connected = await hub.connectionState { return (subscription, true) }
+        return (subscription, false)
+    }
+
     // MARK: - Server access
 
     /// The current server, or `.offline` without waiting.

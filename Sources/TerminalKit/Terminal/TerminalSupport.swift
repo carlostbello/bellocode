@@ -30,6 +30,8 @@ final class TerminalObservation {
 /// Feeds a SwiftTerm view from the stream's feed task (off the main actor) through its thread-safe feed sender.
 struct TerminalFeedSink: TerminalOutputSink {
     let sender: TerminalFeedSender
+    /// The last few kilobytes of output as text, for dev-server URL detection (bounded; decoded from each chunk's tail).
+    var tail: OutputTail? = nil
 
     func reset(trimmed: Bool) {
         // RIS, then clear scrollback (xterm `CSI 3 J`); the replay that follows rebuilds the screen.
@@ -40,9 +42,32 @@ struct TerminalFeedSink: TerminalOutputSink {
     }
 
     func feed(_ data: Data) {
+        tail?.append(data)
         data.withUnsafeBytes { buffer in
             sender.feed(byteArray: ArraySlice(buffer.bindMemory(to: UInt8.self)))
         }
+    }
+}
+
+/// A bounded tail of terminal output as text (escape sequences included; callers match URLs only).
+final class OutputTail: Sendable {
+    static let limit = 4_096
+    private let text = Mutex("")
+    private let dirty = Mutex(false)
+
+    func append(_ data: Data) {
+        let piece = String(decoding: data.suffix(Self.limit), as: UTF8.self)
+        text.withLock { value in
+            value += piece
+            if value.utf8.count > Self.limit { value = String(value.suffix(Self.limit)) }
+        }
+        dirty.withLock { $0 = true }
+    }
+
+    /// The tail if it changed since the last call.
+    func takeIfChanged() -> String? {
+        guard dirty.withLock({ value in defer { value = false }; return value }) else { return nil }
+        return text.withLock { $0 }
     }
 }
 

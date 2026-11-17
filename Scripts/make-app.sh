@@ -110,8 +110,12 @@ cat > "$CONTENTS/Info.plist" << EOF
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
+	<key>NSCameraUsageDescription</key>
+	<string>A web page in BelloCode's built-in browser asked to use the camera. You allowed it in the browser bar.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>A web page in BelloCode's built-in browser asked to use the microphone. You allowed it in the browser bar.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

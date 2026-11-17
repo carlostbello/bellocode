@@ -1,9 +1,10 @@
-// SPIKE (gate G3). Native input: synthesized NSEvents handed straight to the WKWebView, so the page sees
+// Native input for agent commands: synthesized NSEvents handed straight to the WKWebView, so the page sees
 // `isTrusted == true` events with real default actions (focus, selection, form submission, :hover).
 // Nothing goes through the window server: no Accessibility or Event-posting permission is needed, and the person's own
 // pointer and keyboard are untouched.
 
 import AppKit
+import OpenCodeKit
 import WebKit
 
 @MainActor
@@ -49,26 +50,36 @@ enum NativeInput {
         )
     }
 
-    static func move(_ webView: WKWebView, css: CGPoint) throws {
+    static func move(_ webView: BrowserWebView, css: CGPoint) throws {
         let (window, point) = try windowPoint(webView, css: css)
         // Approach from one pixel away so the page sees a pointer that moved onto the element.
-        for target in [NSPoint(x: point.x - 1, y: point.y), point] {
-            guard let event = mouse(.mouseMoved, window, target, [], clicks: 0) else { throw Unavailable(description: "could not create event") }
-            webView.mouseMoved(with: event)
+        try webView.deliveringAgentInput {
+            for target in [NSPoint(x: point.x - 1, y: point.y), point] {
+                guard let event = mouse(.mouseMoved, window, target, [], clicks: 0) else { throw Unavailable(description: "could not create event") }
+                webView.mouseMoved(with: event)
+            }
         }
     }
 
     /// Left or right click(s). Middle clicks have no NSEvent factory with a button number; callers fall back to script.
-    static func click(_ webView: AgentWebView, css: CGPoint, button: String, count: Int, modifiers: [String]) throws {
+    static func click(_ webView: BrowserWebView, css: CGPoint, button: String, count: Int, modifiers: [String]) throws {
         let (window, point) = try windowPoint(webView, css: css)
         let flags = flags(modifiers)
-        if let moved = mouse(.mouseMoved, window, point, flags, clicks: 0) { webView.mouseMoved(with: moved) }
+        try webView.deliveringAgentInput { try click(webView, window: window, point: point, flags: flags, button: button, count: count) }
+    }
+
+    private static func click(_ webView: BrowserWebView, window: NSWindow, point: NSPoint, flags: NSEvent.ModifierFlags, button: String, count: Int) throws {
+        if let moved = mouse(.mouseMoved, window, point, flags, clicks: 0) {
+            webView.mouseMoved(with: moved)
+        }
         if button == "right" { webView.suppressMenusUntil = Date().addingTimeInterval(1) }
         for click in 1...max(1, count) {
             let (downType, upType): (NSEvent.EventType, NSEvent.EventType) = button == "right" ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
             guard let down = mouse(downType, window, point, flags, clicks: click), let up = mouse(upType, window, point, flags, clicks: click) else {
                 throw Unavailable(description: "could not create event")
             }
+            webView.remember(down)
+            webView.remember(up)
             if button == "right" {
                 webView.rightMouseDown(with: down)
                 webView.rightMouseUp(with: up)
@@ -131,7 +142,11 @@ enum NativeInput {
         return Key(keyCode: characterCodes[lower] ?? 0, characters: typed, charactersIgnoringModifiers: String(lower), flags: shifted)
     }
 
-    static func press(_ webView: WKWebView, _ key: Key) throws {
+    static func press(_ webView: BrowserWebView, _ key: Key) throws {
+        try webView.deliveringAgentInput { try pressKey(webView, key) }
+    }
+
+    private static func pressKey(_ webView: BrowserWebView, _ key: Key) throws {
         guard let window = webView.window else { throw Unavailable(description: "tab is not in a window") }
         if window.firstResponder !== webView { window.makeFirstResponder(webView) }
         for type in [NSEvent.EventType.keyDown, .keyUp] {
@@ -141,6 +156,7 @@ enum NativeInput {
                 windowNumber: window.windowNumber, context: nil, characters: key.characters,
                 charactersIgnoringModifiers: key.charactersIgnoringModifiers, isARepeat: false, keyCode: key.keyCode
             ) else { throw Unavailable(description: "could not create key event") }
+            webView.remember(event)
             if type == .keyDown {
                 // Command chords travel as key equivalents first, as AppKit does for real input. WebKit claims them,
                 // lets the page see a trusted keydown, and hands unhandled ones back to the app's menu - which only
@@ -174,12 +190,14 @@ enum NativeInput {
 
     /// Text input through the web view's text input client: trusted `beforeinput`/`input` events, like
     /// CDP's `Input.insertText`. The target must already be focused with its contents selected.
-    static func insertText(_ webView: WKWebView, _ text: String) throws {
+    static func insertText(_ webView: BrowserWebView, _ text: String) throws {
         guard let window = webView.window else { throw Unavailable(description: "tab is not in a window") }
-        if window.firstResponder !== webView { window.makeFirstResponder(webView) }
         if text.isEmpty {
             try press(webView, try parse("Backspace"))
-        } else {
+            return
+        }
+        webView.deliveringAgentInput {
+            if window.firstResponder !== webView { window.makeFirstResponder(webView) }
             webView.insertText(text)
         }
     }

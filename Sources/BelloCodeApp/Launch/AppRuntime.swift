@@ -134,6 +134,12 @@ final class AppRuntime {
         await mockServer?.setTurnDiff(sessionID: sessionID.rawValue, files: files)
     }
 
+    /// Plays the agent in mock mode: sends one browser command to the session's attached browser (snapshots).
+    func issueMockBrowserCommand(_ sessionID: SessionID, _ action: OpenCodeKit.JSONValue) async -> MockBrowserOutcome? {
+        guard let mockServer, let data = try? action.encodedData(), let value = try? MockOpenCode.JSONValue.parse(data) else { return nil }
+        return await mockServer.issueBrowserCommand(sessionID: sessionID.rawValue, action: value)
+    }
+
     /// Takes the mock server off the network (snapshots of the offline state). No effect outside mock mode.
     func takeMockOffline() async {
         await mockServer?.stop()

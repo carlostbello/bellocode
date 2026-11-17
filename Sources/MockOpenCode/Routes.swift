@@ -77,6 +77,7 @@ extension MockOpenCodeServer {
         }
 
         if let plan = routePTY(method, parts, request, connectionID: connectionID) { return plan }
+        if let plan = routeBrowser(method, parts, request) { return plan }
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
         if let response = routeWorkspace(method, parts, request) { return .response(response) }
         if let response = routeVCS(method, parts, request) { return .response(response) }

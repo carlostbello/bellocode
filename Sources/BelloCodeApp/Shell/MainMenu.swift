@@ -21,6 +21,7 @@ enum MainMenu {
         mainMenu.addItem(submenu: threadMenu())
         mainMenu.addItem(submenu: terminalMenu())
         mainMenu.addItem(submenu: changesMenu())
+        mainMenu.addItem(submenu: BrowserMenu.make())
 
         let windowMenu = windowMenu()
         mainMenu.addItem(submenu: windowMenu)

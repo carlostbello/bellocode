@@ -1,8 +1,16 @@
-// SPIKE (gate G3). Loopback-only static HTTP server for the fixture pages. One response per connection.
+// Loopback-only static HTTP server for the fixture pages. One response per connection.
 
 import Foundation
 import Network
 import Synchronization
+
+/// One fixture response.
+struct FixtureResponse: Sendable {
+    var status = "200 OK"
+    var type = "text/html"
+    var body: String
+    var headers: [String] = []
+}
 
 final class FixtureServer: Sendable {
     let listener: NWListener
@@ -14,8 +22,8 @@ final class FixtureServer: Sendable {
         self.port = port
     }
 
-    /// `route` maps a request path (with query) to (content type, body); nil is a 404.
-    static func start(route: @escaping @Sendable (String) -> (String, String)?) async throws -> FixtureServer {
+    /// `route` maps a request path (with query) and its header lines to a response; nil is a 404.
+    static func start(route: @escaping @Sendable (String, [String]) -> FixtureResponse?) async throws -> FixtureServer {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters)
@@ -37,7 +45,7 @@ final class FixtureServer: Sendable {
         return FixtureServer(listener: listener, port: port)
     }
 
-    private static func receive(_ connection: NWConnection, buffer: Data, route: @escaping @Sendable (String) -> (String, String)?) {
+    private static func receive(_ connection: NWConnection, buffer: Data, route: @escaping @Sendable (String, [String]) -> FixtureResponse?) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, complete, error in
             var buffer = buffer
             if let data { buffer.append(data) }
@@ -46,10 +54,12 @@ final class FixtureServer: Sendable {
                 return
             }
             let head = String(decoding: buffer[..<end.lowerBound], as: UTF8.self)
-            let path = head.split(separator: "\r\n").first?.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
-            let (status, type, body): (String, String, String) = route(path).map { ("200 OK", $0.0, $0.1) } ?? ("404 Not Found", "text/plain", "not found")
-            let bytes = Data(body.utf8)
-            var response = Data("HTTP/1.1 \(status)\r\nContent-Type: \(type); charset=utf-8\r\nContent-Length: \(bytes.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".utf8)
+            let lines = head.split(separator: "\r\n").map(String.init)
+            let path = lines.first?.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            let reply = route(path, Array(lines.dropFirst())) ?? FixtureResponse(status: "404 Not Found", type: "text/plain", body: "not found")
+            let bytes = Data(reply.body.utf8)
+            let extra = reply.headers.map { "\($0)\r\n" }.joined()
+            var response = Data("HTTP/1.1 \(reply.status)\r\nContent-Type: \(reply.type); charset=utf-8\r\nContent-Length: \(bytes.count)\r\nCache-Control: no-store\r\n\(extra)Connection: close\r\n\r\n".utf8)
             response.append(bytes)
             connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
         }

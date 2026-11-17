@@ -1,28 +1,31 @@
-// SPIKE (gate G3). Per-operation implementations of `Browser.Operations` (opencode 2.3.0) over one WebTab.
-// Result shapes follow packages/plugin-browser/src/rpc.ts; the server validates every result against them.
+// Per-operation implementations of `Browser.Operations` (opencode 2.3.0, contract v4) over one tab. Result shapes
+// follow packages/plugin-browser/src/rpc.ts; the server validates every result against them. The support matrix is
+// `OperationSupport`; ownership, pause and generation checks happen before this runs (`BrowserTabSet.perform`).
 
 import AppKit
+import OpenCodeKit
 import WebKit
 
 @MainActor
 struct BrowserOperations {
-    let host: BrowserHost
-    let tab: WebTab
+    let set: BrowserTabSet
+    let tab: BrowserTab
+    let command: BrowserCommand
 
     private var action: JSONValue { command.action }
-    private let command: BrowserCommand
+    private var webView: BrowserWebView { tab.ensureWebView() }
 
-    init(host: BrowserHost, tab: WebTab, command: BrowserCommand = BrowserCommand(action: [:])) {
-        self.host = host
+    init(set: BrowserTabSet, tab: BrowserTab, command: BrowserCommand) {
+        self.set = set
         self.tab = tab
         self.command = command
     }
 
-    func run(_ command: BrowserCommand) async throws -> BrowserResult {
-        try await BrowserOperations(host: host, tab: tab, command: command).execute()
+    func run() async throws -> BrowserResult {
+        try await execute()
     }
 
-    private var tabValue: JSONValue { tab.state.json }
+    private var tabValue: JSONValue { tab.info.json }
     private func page(_ fields: [String: JSONValue] = [:]) -> BrowserResult {
         var fields = fields
         fields["tab"] = tabValue
@@ -33,14 +36,14 @@ struct BrowserOperations {
     private func execute() async throws -> BrowserResult {
         switch command.type {
         case "navigate":
-            try await host.navigate(tab, to: action["url"]?.string ?? "about:blank")
+            try await set.navigate(tab, to: action["url"]?.stringValue ?? "about:blank")
             return tabResult
         case "back", "forward", "reload", "stop":
             switch command.type {
-            case "back": if tab.webView.canGoBack { tab.webView.goBack() }
-            case "forward": if tab.webView.canGoForward { tab.webView.goForward() }
-            case "reload": tab.webView.reload()
-            default: tab.webView.stopLoading()
+            case "back": if webView.canGoBack { webView.goBack() }
+            case "forward": if webView.canGoForward { webView.goForward() }
+            case "reload": webView.reload()
+            default: webView.stopLoading()
             }
             if command.type != "stop" { try await tab.waitForLoad() }
             return tabResult
@@ -51,8 +54,8 @@ struct BrowserOperations {
         case "evaluate":
             return page(["value": try await evaluate()])
         case "click":
-            try await click(ref: try ref("ref"), button: action["button"]?.string ?? "left", count: action["count"]?.int ?? 1,
-                            modifiers: action["modifiers"]?.array?.compactMap(\.string) ?? [])
+            try await click(ref: try ref("ref"), button: action["button"]?.stringValue ?? "left", count: action["count"]?.intValue ?? 1,
+                            modifiers: action["modifiers"]?.arrayValue?.compactMap(\.stringValue) ?? [])
             return tabResult
         case "hover":
             try await hover(try ref("ref"))
@@ -61,36 +64,36 @@ struct BrowserOperations {
             let from = try ref("from"), to = try ref("to")
             guard from.frame == to.frame else { throw BrowserFailure("unsupported", "browser.drag works within one frame in this build.") }
             _ = try await agentCall("dragScript", ["from": .string(from.id), "to": .string(to.id)], frame: from.frame)
-            host.logDelivery("drag", "script (synthetic DragEvent)")
+            set.logDelivery("drag", "script (synthetic DragEvent)")
             return tabResult
         case "fill":
-            try await fill(try ref("ref"), action["text"]?.string ?? "")
+            try await fill(try ref("ref"), action["text"]?.stringValue ?? "")
             return tabResult
         case "fill_form":
-            for field in action["fields"]?.array ?? [] {
+            for field in action["fields"]?.arrayValue ?? [] {
                 try Task.checkCancellation()
-                guard let id = field["ref"]?.string else { continue }
+                guard let id = field["ref"]?.stringValue else { continue }
                 let target = try ref(id: id)
-                switch field["type"]?.string {
-                case "text": try await fill(target, field["value"]?.string ?? "")
-                case "select": try await select(target, field["values"]?.array?.compactMap(\.string) ?? [])
-                case "check": try await check(target, field["checked"]?.bool ?? true)
+                switch field["type"]?.stringValue {
+                case "text": try await fill(target, field["value"]?.stringValue ?? "")
+                case "select": try await select(target, field["values"]?.arrayValue?.compactMap(\.stringValue) ?? [])
+                case "check": try await check(target, field["checked"]?.boolValue ?? true)
                 default: throw BrowserFailure("unsupported", "Unknown fill_form field type.")
                 }
             }
             return tabResult
         case "select":
-            try await select(try ref("ref"), action["values"]?.array?.compactMap(\.string) ?? [])
+            try await select(try ref("ref"), action["values"]?.arrayValue?.compactMap(\.stringValue) ?? [])
             return tabResult
         case "check":
-            try await check(try ref("ref"), action["checked"]?.bool ?? true)
+            try await check(try ref("ref"), action["checked"]?.boolValue ?? true)
             return tabResult
         case "press":
-            try await press(action["key"]?.string ?? "")
+            try await press(action["key"]?.stringValue ?? "")
             return tabResult
         case "scroll":
-            let result = try await agentCall("scrollPage", ["dx": .number(action["deltaX"]?.double ?? 0), "dy": .number(action["deltaY"]?.double ?? 0)], frame: nil)
-            host.logDelivery("scroll", "script (scrollBy, no wheel event); moved to \(result["after"]?.compactText ?? "?")")
+            let result = try await agentCall("scrollPage", ["dx": .number(action["deltaX"]?.numberValue ?? 0), "dy": .number(action["deltaY"]?.numberValue ?? 0)], frame: nil)
+            set.logDelivery("scroll", "script (scrollBy, no wheel event); moved to \(result["after"]?.compactText ?? "?")")
             return tabResult
         case "wait":
             try await wait()
@@ -105,13 +108,23 @@ struct BrowserOperations {
             _ = try await agentCall("filesScript", ["ref": .string(target.id), "files": .array(files), "drop": .bool(command.type == "files.drop")], frame: target.frame)
             return tabResult
         case "files.list":
-            let files: [JSONValue] = tab.captures.map { ["id": .string($0.id), "name": .string($0.name), "mime": .string($0.mime), "bytes": .number(Double($0.data.count)), "state": "completed"] }
+            var files: [JSONValue] = tab.captures.map { ["id": .string($0.id), "name": .string($0.name), "mime": .string($0.mime), "bytes": .number(Double($0.data.count)), "state": "completed"] }
+            for item in set.workspace?.downloads.completed(forTab: tab.id) ?? [] {
+                files.append(["id": .string(item.fileID), "name": .string(item.filename), "mime": .string(Self.mime(for: item.filename)), "bytes": .number(Double(item.bytes)), "state": "completed"])
+            }
             return page(["files": .array(files)])
         case "files.get":
-            guard let file = tab.captures.first(where: { $0.id == action["fileID"]?.string }) else {
-                throw BrowserFailure("file_unavailable", "This file ID is not a completed capture of this tab. Call browser.files.list({tabID}). Downloads are not captured by this build.")
+            let fileID = action["fileID"]?.stringValue
+            if let file = tab.captures.first(where: { $0.id == fileID }) {
+                return BrowserResult(value: ["tab": tabValue], files: [file])
             }
-            return BrowserResult(value: ["tab": tabValue], files: [file])
+            guard let item = set.workspace?.downloads.completed(forTab: tab.id).first(where: { $0.fileID == fileID }), let destination = item.destination else {
+                throw BrowserFailure("file_unavailable", "This file ID is not a completed capture or download of this tab. Call browser.files.list({tabID}) and use an exact returned id.")
+            }
+            guard item.bytes <= Int64(BrowserContract.maxFileBytes), let data = try? Data(contentsOf: destination) else {
+                throw BrowserFailure("too_large", "The download is larger than 5 MiB, so it stays on the user's Mac (\(item.filename) in Downloads). Tell the user where it is.")
+            }
+            return BrowserResult(value: ["tab": tabValue], files: [BrowserFile(id: item.fileID, name: item.filename, mime: Self.mime(for: item.filename), data: data)])
         case "console":
             return page(console())
         case "network.list":
@@ -119,7 +132,7 @@ struct BrowserOperations {
         case "network.get":
             return page(try await networkGet())
         case "trace.start", "trace.stop", "trace.analyze", "cpu.start", "cpu.stop", "cpu.analyze",
-             "heap.snapshot", "heap.summary", "heap.query", "heap.object", "heap.compare", "lighthouse":
+             "heap.snapshot", "heap.summary", "heap.query", "heap.objectValue", "heap.compare", "lighthouse":
             throw BrowserFailure("unsupported", "browser.\(command.type) needs the Chromium DevTools protocol, which the BelloCode WebKit browser does not have. Use browser.evaluate with the Performance API (performance.getEntries, performance.memory is unavailable) or ask the user to profile in Safari Web Inspector.")
         default:
             throw BrowserFailure("unsupported", "This desktop app does not support browser.\(command.type). Ask the user to update the desktop app, or use another operation.")
@@ -135,7 +148,7 @@ struct BrowserOperations {
     }
 
     private func ref(_ key: String) throws -> Target {
-        guard let id = action[key]?.string else { throw BrowserFailure("invalid_ref", "browser.\(command.type) needs \(key).") }
+        guard let id = action[key]?.stringValue else { throw BrowserFailure("invalid_ref", "browser.\(command.type) needs \(key).") }
         return try ref(id: id)
     }
 
@@ -167,51 +180,51 @@ struct BrowserOperations {
         for id in tab.frameOrder {
             guard let entry = tab.frames[id] else { continue }
             let probe = try? await agentCall("frameInfo", [:], frame: entry.isMain ? nil : entry.info, timeout: .seconds(2))
-            guard let probe, probe["frameId"]?.string == id else {
+            guard let probe, probe["frameId"]?.stringValue == id else {
                 if !entry.isMain { tab.frames[id] = nil; tab.frameOrder.removeAll { $0 == id } }
                 continue
             }
-            var fields: [String: JSONValue] = ["id": .string(id), "url": .string(probe["url"]?.string ?? entry.url), "name": .string(String((probe["name"]?.string ?? "").prefix(2_048)))]
+            var fields: [String: JSONValue] = ["id": .string(id), "url": .string(probe["url"]?.stringValue ?? entry.url), "name": .string(String((probe["name"]?.stringValue ?? "").prefix(2_048)))]
             if !entry.isMain { fields["parentID"] = .string(mainID) }
             if entry.isMain { live.insert(.object(fields), at: 0) } else { live.append(.object(fields)) }
         }
-        if live.isEmpty { live = [["id": .string(mainID), "url": .string(tab.state.url), "name": ""]] }
+        if live.isEmpty { live = [["id": .string(mainID), "url": .string(tab.info.url), "name": ""]] }
         return live
     }
 
     // MARK: Observation
 
     private func snapshot() async throws -> [String: JSONValue] {
-        var frameID = action["frameID"]?.string
+        var frameID = action["frameID"]?.stringValue
         var rootRef: String?
-        if command.type == "snapshot", let refID = action["ref"]?.string {
+        if command.type == "snapshot", let refID = action["ref"]?.stringValue {
             let target = try ref(id: refID)
             frameID = target.frameID
             rootRef = target.id
         }
         let frameInfo = try frame(frameID)
-        let depth = command.type == "snapshot" ? (action["depth"]?.int ?? 8) : 8
-        var input: [String: JSONValue] = ["base": .number(Double(tab.refCounter)), "depth": .number(Double(depth)), "boxes": .bool(action["boxes"]?.bool ?? false)]
+        let depth = command.type == "snapshot" ? (action["depth"]?.intValue ?? 8) : 8
+        var input: [String: JSONValue] = ["base": .number(Double(tab.refCounter)), "depth": .number(Double(depth)), "boxes": .bool(action["boxes"]?.boolValue ?? false)]
         if let rootRef { input["rootRef"] = .string(rootRef) }
         let result = try await agentCall("snapshot", .object(input), frame: frameInfo)
         // Refs expire on the next snapshot of any frame of this tab.
         tab.refs.removeAll()
         let owner = frameID ?? tab.mainFrameID ?? "main"
-        for ref in result["refs"]?.array ?? [] { if let ref = ref.string { tab.refs[ref] = owner } }
-        tab.refCounter = result["counter"]?.int ?? tab.refCounter
-        var lines = result["lines"]?.array?.compactMap(\.string) ?? []
-        if command.type == "find", let text = action["text"]?.string?.lowercased() {
+        for ref in result["refs"]?.arrayValue ?? [] { if let ref = ref.stringValue { tab.refs[ref] = owner } }
+        tab.refCounter = result["counter"]?.intValue ?? tab.refCounter
+        var lines = result["lines"]?.arrayValue?.compactMap(\.stringValue) ?? []
+        if command.type == "find", let text = action["text"]?.stringValue?.lowercased() {
             lines = lines.filter { $0.lowercased().contains(text) }
         }
         let content = lines.joined(separator: "\n")
         return [
             "content": .string(String(content.prefix(BrowserContract.maxText))),
-            "truncated": .bool((result["truncated"]?.bool ?? false) || content.count > BrowserContract.maxText),
+            "truncated": .bool((result["truncated"]?.boolValue ?? false) || content.count > BrowserContract.maxText),
         ]
     }
 
     private func evaluate() async throws -> JSONValue {
-        guard let script = action["script"]?.string else { throw BrowserFailure("invalid_script", "browser.evaluate needs a script.") }
+        guard let script = action["script"]?.stringValue else { throw BrowserFailure("invalid_script", "browser.evaluate needs a script.") }
         if action["ref"] != nil, action["frameID"] != nil {
             throw BrowserFailure("invalid_arguments", "Pass either ref or frameID to browser.evaluate, not both. A ref already runs in its element's frame.")
         }
@@ -221,9 +234,9 @@ struct BrowserOperations {
                 // page's own globals are not visible.
                 let target = try ref("ref")
                 let body = AgentScript.source + "\nconst __element = window.__bc.resolve(ref);\nreturn await (\n\(script)\n).call(__element, __element);"
-                return try await tab.callJS(body, arguments: ["ref": target.id], frame: target.frame, world: host.agentWorld)
+                return try await tab.callJS(body, arguments: ["ref": target.id], frame: target.frame, world: tab.agentWorld)
             }
-            let frameInfo = try frame(action["frameID"]?.string)
+            let frameInfo = try frame(action["frameID"]?.stringValue)
             do {
                 return try await tab.callJS("return await (\n\(script)\n);", frame: frameInfo, world: .page)
             } catch let failure as BrowserFailure where failure.message.contains("SyntaxError") {
@@ -236,31 +249,31 @@ struct BrowserOperations {
     }
 
     private func wait() async throws {
-        let condition = action["condition"]?.string ?? "load"
-        let timeout = action["timeoutMs"]?.int ?? 10_000
+        let condition = action["condition"]?.stringValue ?? "load"
+        let timeout = action["timeoutMs"]?.intValue ?? 10_000
         if condition == "load" {
             try await tab.waitForLoad(timeout: .milliseconds(timeout))
             return
         }
-        guard let text = action["text"]?.string, !text.isEmpty else {
+        guard let text = action["text"]?.stringValue, !text.isEmpty else {
             throw BrowserFailure("invalid_arguments", "browser.wait requires non-empty text for condition \"text\" or \"textGone\". Use condition \"load\" without text to wait for loading.")
         }
         let ok = try await agentCall("waitText", ["text": .string(text), "gone": .bool(condition == "textGone"), "timeoutMs": .number(Double(timeout))],
-                                     frame: try frame(action["frameID"]?.string), timeout: .milliseconds(timeout + 2_000))
-        if ok.bool != true {
+                                     frame: try frame(action["frameID"]?.stringValue), timeout: .milliseconds(timeout + 2_000))
+        if ok.boolValue != true {
             throw BrowserFailure("timeout", "browser.wait failed for condition \"\(condition)\" (timeoutMs: \(timeout)). Inspect browser.snapshot({tabID}) and check text/frameID before retrying; timeoutMs can be increased up to 30000 for a genuinely slow page.")
         }
     }
 
     private func console() -> [String: JSONValue] {
         let order = ["debug": 0, "info": 1, "warning": 2, "error": 3]
-        let minimum = order[action["level"]?.string ?? "debug"] ?? 0
-        let limit = action["limit"]?.int ?? 100
+        let minimum = order[action["level"]?.stringValue ?? "debug"] ?? 0
+        let limit = action["limit"]?.intValue ?? 100
         let matching = tab.console.filter { (order[$0.level] ?? 1) >= minimum }
         let messages: [JSONValue] = matching.suffix(limit).map { entry in
             var fields: [String: JSONValue] = ["id": .string(entry.id), "timestampMs": .number(entry.timestampMs), "level": .string(entry.level), "text": .string(entry.text), "textTruncated": .bool(entry.truncated)]
-            if let source = entry.source, source["url"]?.string != nil {
-                fields["source"] = ["url": source["url"] ?? "", "line": .number(source["line"]?.double ?? 0), "column": .number(source["column"]?.double ?? 0)]
+            if let source = entry.source, source["url"]?.stringValue != nil {
+                fields["source"] = ["url": source["url"] ?? "", "line": .number(source["line"]?.numberValue ?? 0), "column": .number(source["column"]?.numberValue ?? 0)]
             }
             return .object(fields)
         }
@@ -276,27 +289,27 @@ struct BrowserOperations {
 
     private func entries() async throws -> [JSONValue] {
         let raw = try await agentCall("network", [:], frame: nil)
-        return (raw.array ?? []).enumerated().map { index, entry in
+        return (raw.arrayValue ?? []).enumerated().map { index, entry in
             var fields: [String: JSONValue] = [
-                "id": .string("req_\(index + 1)"), "url": .string(String((entry["url"]?.string ?? "").prefix(BrowserContract.maxText))),
-                "method": "GET", "resourceType": .string(Self.resourceTypes[entry["initiator"]?.string ?? ""] ?? "other"),
-                "timestampMs": .number(entry["start"]?.double ?? 0), "state": "completed", "durationMs": .number(entry["duration"]?.double ?? 0),
+                "id": .string("req_\(index + 1)"), "url": .string(String((entry["url"]?.stringValue ?? "").prefix(BrowserContract.maxText))),
+                "method": "GET", "resourceType": .string(Self.resourceTypes[entry["initiator"]?.stringValue ?? ""] ?? "other"),
+                "timestampMs": .number(entry["start"]?.numberValue ?? 0), "state": "completed", "durationMs": .number(entry["duration"]?.numberValue ?? 0),
             ]
-            if let status = entry["status"]?.int, status > 0 { fields["statusCode"] = .number(Double(status)) }
+            if let status = entry["status"]?.intValue, status > 0 { fields["statusCode"] = .number(Double(status)) }
             return .object(fields)
         }
     }
 
     private func networkList() async throws -> [String: JSONValue] {
         var requests = try await entries()
-        if let needle = action["urlContains"]?.string { requests = requests.filter { $0["url"]?.string?.contains(needle) == true } }
-        if let type = action["resourceType"]?.string { requests = requests.filter { $0["resourceType"]?.string == type } }
-        let limit = action["limit"]?.int ?? 100
+        if let needle = action["urlContains"]?.stringValue { requests = requests.filter { $0["url"]?.stringValue?.contains(needle) == true } }
+        if let type = action["resourceType"]?.stringValue { requests = requests.filter { $0["resourceType"]?.stringValue == type } }
+        let limit = action["limit"]?.intValue ?? 100
         return ["requests": .array(Array(requests.suffix(limit))), "truncated": .bool(requests.count > limit), "dropped": 0]
     }
 
     private func networkGet() async throws -> [String: JSONValue] {
-        guard let request = try await entries().first(where: { $0["id"]?.string == action["id"]?.string }) else {
+        guard let request = try await entries().first(where: { $0["id"]?.stringValue == action["id"]?.stringValue }) else {
             throw BrowserFailure("request_unavailable", "Network request ID is unknown or expired. Call browser.network.list({tabID}) and use an exact returned id.")
         }
         let unavailable: JSONValue = ["state": "unavailable", "reason": "backendUnavailable"]
@@ -317,33 +330,34 @@ struct BrowserOperations {
     /// the main document's iframe element whose src matches the frame URL; nil when that is ambiguous.
     private func point(_ target: Target) async throws -> Point? {
         let info = try await agentCall("point", ["ref": .string(target.id)], frame: target.frame)
-        let rect = CGRect(x: info["x"]?.double ?? 0, y: info["y"]?.double ?? 0, width: info["width"]?.double ?? 0, height: info["height"]?.double ?? 0)
+        let rect = CGRect(x: info["x"]?.numberValue ?? 0, y: info["y"]?.numberValue ?? 0, width: info["width"]?.numberValue ?? 0, height: info["height"]?.numberValue ?? 0)
         var offset = CGPoint.zero
         if target.frame != nil {
             let url = tab.frames[target.frameID]?.url ?? ""
-            let candidates = (try await agentCall("iframes", [:], frame: nil)).array?.filter { $0["src"]?.string == url } ?? []
+            let candidates = (try await agentCall("iframes", [:], frame: nil)).arrayValue?.filter { $0["src"]?.stringValue == url } ?? []
             guard candidates.count == 1, let match = candidates.first else { return nil }
-            offset = CGPoint(x: match["x"]?.double ?? 0, y: match["y"]?.double ?? 0)
+            offset = CGPoint(x: match["x"]?.numberValue ?? 0, y: match["y"]?.numberValue ?? 0)
         }
-        let css = CGPoint(x: (info["cx"]?.double ?? 0) + offset.x, y: (info["cy"]?.double ?? 0) + offset.y)
-        host.flash(tab, cssRect: rect, offset: offset)
-        return Point(css: css, rect: rect, offset: offset, hit: info["hit"]?.bool ?? false, info: info)
+        let css = CGPoint(x: (info["cx"]?.numberValue ?? 0) + offset.x, y: (info["cy"]?.numberValue ?? 0) + offset.y)
+        set.flash(tab, cssRect: rect, offset: offset)
+        return Point(css: css, rect: rect, offset: offset, hit: info["hit"]?.boolValue ?? false, info: info)
     }
 
     /// Lets the web process drain the events: one script round trip on the same connection, cut short by a dialog.
     private func settle() async {
         try? await Task.sleep(for: .milliseconds(16))
-        _ = try? await tab.callJS("return 1", frame: nil, world: host.agentWorld, timeout: .seconds(3))
+        _ = try? await tab.callJS("return 1", frame: nil, world: tab.agentWorld, timeout: .seconds(3))
     }
 
     private func click(ref target: Target, button: String, count: Int, modifiers: [String]) async throws {
         var reason = "script mode"
-        if host.inputMode == .native, button != "middle" {
+        if set.inputMode == .native, button != "middle" {
             if let point = try await point(target) {
+                set.pointAgentCursor(tab, css: point.css)
                 do {
-                    try NativeInput.click(tab.webView, css: point.css, button: button, count: count, modifiers: modifiers)
+                    try NativeInput.click(webView, css: point.css, button: button, count: count, modifiers: modifiers)
                     await settle()
-                    host.logDelivery("click", point.hit ? "native" : "native (element covered by \(point.info["hitTag"]?.string ?? "?"))")
+                    set.logDelivery("click", point.hit ? "native" : "native (element covered by \(point.info["hitTag"]?.stringValue ?? "?"))")
                     return
                 } catch let error as NativeInput.Unavailable { reason = error.description }
             } else { reason = "frame offset unknown" }
@@ -353,18 +367,18 @@ struct BrowserOperations {
                                                     "alt": .bool(modifiers.contains("Alt")), "ctrl": .bool(modifiers.contains("Control")),
                                                     "meta": .bool(modifiers.contains("Meta")), "shift": .bool(modifiers.contains("Shift"))], frame: target.frame)
         } catch is DialogInterrupted {}
-        host.logDelivery("click", "script (\(reason))")
+        set.logDelivery("click", "script (\(reason))")
     }
 
     private func hover(_ target: Target) async throws {
         var reason = "script mode"
-        if host.inputMode == .native {
+        if set.inputMode == .native {
             if let point = try await point(target) {
                 do {
-                    try NativeInput.move(tab.webView, css: point.css)
+                    try NativeInput.move(webView, css: point.css)
                     await settle()
-                    if try await agentCall("isHovered", ["ref": .string(target.id)], frame: target.frame).bool == true {
-                        host.logDelivery("hover", "native")
+                    if try await agentCall("isHovered", ["ref": .string(target.id)], frame: target.frame).boolValue == true {
+                        set.logDelivery("hover", "native")
                         return
                     }
                     reason = "WebKit ignored mouseMoved (window not key)"
@@ -372,35 +386,35 @@ struct BrowserOperations {
             } else { reason = "frame offset unknown" }
         }
         _ = try await agentCall("hoverScript", ["ref": .string(target.id)], frame: target.frame)
-        host.logDelivery("hover", "script (\(reason))")
+        set.logDelivery("hover", "script (\(reason))")
     }
 
     private func fill(_ target: Target, _ text: String) async throws {
         let info = try await agentCall("point", ["ref": .string(target.id)], frame: target.frame)
-        guard info["editable"]?.bool == true else {
+        guard info["editable"]?.boolValue == true else {
             throw BrowserFailure("not_editable", "Target is not an enabled editable text field. Take a fresh snapshot and choose a textbox; use browser.select for dropdowns, browser.check for checkboxes/radios, or browser.files.upload for file inputs.")
         }
-        let structured = ["date", "time", "datetime-local", "month", "week"].contains(info["type"]?.string ?? "")
-        if host.inputMode == .native, !structured {
+        let structured = ["date", "time", "datetime-local", "month", "week"].contains(info["type"]?.stringValue ?? "")
+        if set.inputMode == .native, !structured {
             do {
                 _ = try await agentCall("prepareType", ["ref": .string(target.id)], frame: target.frame)
-                try NativeInput.insertText(tab.webView, text)
+                try NativeInput.insertText(webView, text)
                 await settle()
                 let value = try await agentCall("valueOf", ["ref": .string(target.id)], frame: target.frame)
-                if value.string == text {
-                    host.logDelivery("fill", "native (insertText)")
+                if value.stringValue == text {
+                    set.logDelivery("fill", "native (insertText)")
                     return
                 }
-                host.logDelivery("fill", "native insertText left \(value.compactText.prefix(40)); retrying by script")
+                set.logDelivery("fill", "native insertText left \(value.compactText.prefix(40)); retrying by script")
             } catch let error as NativeInput.Unavailable {
-                host.logDelivery("fill", "native unavailable: \(error.description)")
+                set.logDelivery("fill", "native unavailable: \(error.description)")
             }
         }
         let value = try await agentCall("fillScript", ["ref": .string(target.id), "text": .string(text)], frame: target.frame)
-        if structured, value.string != text {
-            throw BrowserFailure("invalid_value", "The \(info["type"]?.string ?? "") input rejected this value. Use its required format, for example 2026-09-07 for date or 14:45 for time.")
+        if structured, value.stringValue != text {
+            throw BrowserFailure("invalid_value", "The \(info["type"]?.stringValue ?? "") input rejected this value. Use its required format, for example 2026-09-07 for date or 14:45 for time.")
         }
-        host.logDelivery("fill", "script (\(structured ? "structured input" : "script mode"))")
+        set.logDelivery("fill", "script (\(structured ? "structured input" : "script mode"))")
     }
 
     private func select(_ target: Target, _ values: [String]) async throws {
@@ -409,29 +423,33 @@ struct BrowserOperations {
 
     private func check(_ target: Target, _ checked: Bool) async throws {
         let current = try await agentCall("checkedState", ["ref": .string(target.id)], frame: target.frame)
-        if current.bool == checked { return }
-        if current.bool == true, !checked {
+        if current.boolValue == checked { return }
+        if current.boolValue == true, !checked {
             let info = try await agentCall("point", ["ref": .string(target.id)], frame: target.frame)
-            if info["type"]?.string == "radio" {
+            if info["type"]?.stringValue == "radio" {
                 throw BrowserFailure("invalid_state", "A selected radio cannot be cleared by clicking it. Select a different radio in its group instead.")
             }
         }
         try await click(ref: target, button: "left", count: 1, modifiers: [])
-        if try await agentCall("checkedState", ["ref": .string(target.id)], frame: target.frame).bool != checked {
+        if try await agentCall("checkedState", ["ref": .string(target.id)], frame: target.frame).boolValue != checked {
             throw BrowserFailure("invalid_state", "The page did not keep the requested checked state. Inspect the current snapshot and page validation before retrying; do not blindly toggle the control again.")
         }
     }
 
     private func press(_ chord: String) async throws {
         let key = try NativeInput.parse(chord)
-        if host.inputMode == .native {
+        let trace = ProcessInfo.processInfo.environment["BROWSER_DEMO_TRACE"] != nil
+        if set.inputMode == .native {
             do {
-                try NativeInput.press(tab.webView, key)
+                if trace { print("  press: native start") }
+                try NativeInput.press(webView, key)
+                if trace { print("  press: delivered") }
                 await settle()
-                host.logDelivery("press", "native")
+                if trace { print("  press: settled") }
+                set.logDelivery("press", "native")
                 return
             } catch let error as NativeInput.Unavailable {
-                host.logDelivery("press", "native unavailable: \(error.description)")
+                set.logDelivery("press", "native unavailable: \(error.description)")
             }
         }
         // Untrusted KeyboardEvents run no default action; Enter in a form field submits explicitly.
@@ -444,52 +462,52 @@ struct BrowserOperations {
         if (proceed && init.key === 'Enter' && el.form && el.localName === 'input') el.form.requestSubmit();
         return true;
         """
-        do { _ = try await tab.callJS(script, frame: nil, world: host.agentWorld) } catch is DialogInterrupted {}
-        host.logDelivery("press", "script (untrusted KeyboardEvent)")
+        do { _ = try await tab.callJS(script, frame: nil, world: tab.agentWorld) } catch is DialogInterrupted {}
+        set.logDelivery("press", "script (untrusted KeyboardEvent)")
     }
 
     // MARK: Screenshot and dialogs
 
     private func screenshot() async throws -> BrowserResult {
-        if action["ref"] != nil, action["fullPage"]?.bool == true {
+        if action["ref"] != nil, action["fullPage"]?.boolValue == true {
             throw BrowserFailure("invalid_arguments", "Choose either ref for an element screenshot or fullPage:true for the whole page. Remove the other argument before retrying.")
         }
-        let format = action["format"]?.string ?? "jpeg"
+        let format = action["format"]?.stringValue ?? "jpeg"
         guard format == "png" || format == "jpeg" else {
             throw BrowserFailure("unsupported", "WebP screenshots are not supported by this build. Use format \"png\" or \"jpeg\".")
         }
-        guard host.focusedTabID == tab.id, tab.webView.window?.isVisible == true else {
-            throw BrowserFailure("not_visible", "Screenshot needs a visible tab. Call browser.tabs.focus and keep its desktop window visible.")
+        guard webView.window?.isVisible == true, webView.bounds.width > 0 else {
+            throw BrowserFailure("not_visible", "Screenshot needs a visible tab. Call browser.tabs.focus({tabID}) and ask the user to keep BelloCode's window visible.")
         }
-        let maxWidth = CGFloat(action["maxWidth"]?.int ?? 2_000)
+        let maxWidth = CGFloat(action["maxWidth"]?.intValue ?? 2_000)
         let image: NSImage
-        if action["fullPage"]?.bool == true {
+        if action["fullPage"]?.boolValue == true {
             // takeSnapshot only renders the visible area on macOS; createPDF renders the whole document.
-            let pdf = try await tab.webView.pdf(configuration: WKPDFConfiguration())
+            let pdf = try await webView.pdf(configuration: WKPDFConfiguration())
             image = try Self.rasterize(pdf: pdf, maxWidth: maxWidth)
         } else {
             let configuration = WKSnapshotConfiguration()
-            if let target = action["ref"]?.string {
+            if let target = action["ref"]?.stringValue {
                 guard let point = try await point(try ref(id: target)) else { throw BrowserFailure("unsupported", "Element screenshots inside this frame are not supported; capture the viewport.") }
-                let zoom = tab.webView.pageZoom
+                let zoom = webView.pageZoom
                 let rect = CGRect(x: (point.rect.minX + point.offset.x) * zoom, y: (point.rect.minY + point.offset.y) * zoom, width: point.rect.width * zoom, height: point.rect.height * zoom)
-                    .intersection(tab.webView.bounds)
+                    .intersection(webView.bounds)
                 guard !rect.isEmpty else { throw BrowserFailure("not_visible", "Element or page has no visible screenshot area. Take a fresh snapshot and choose a visible element, or omit ref to capture the viewport.") }
                 configuration.rect = rect
             }
-            let width = configuration.rect.isNull ? tab.webView.bounds.width : configuration.rect.width
+            let width = configuration.rect.isNull ? webView.bounds.width : configuration.rect.width
             if width > maxWidth { configuration.snapshotWidth = NSNumber(value: Double(maxWidth)) }
-            image = try await tab.webView.takeSnapshot(configuration: configuration)
+            image = try await webView.takeSnapshot(configuration: configuration)
         }
         guard let tiff = image.tiffRepresentation else { throw BrowserFailure("operation_failed", "Could not encode the screenshot.") }
-        let data = try await Self.encode(tiff: tiff, format: format, quality: action["quality"]?.int ?? 80)
+        let data = try await Self.encode(tiff: tiff, format: format, quality: action["quality"]?.intValue ?? 80)
         guard data.count <= BrowserContract.maxFileBytes else {
             throw BrowserFailure("too_large", "Screenshot exceeds 5 MiB; capture an element, use jpeg, or a smaller maxWidth.")
         }
         let file = BrowserFile(name: "screenshot.\(format == "jpeg" ? "jpg" : "png")", mime: "image/\(format)", data: data)
         tab.captures.append(file)
-        if tab.captures.count > 20 { tab.captures.removeFirst() }
-        host.lastScreenshot = data
+        if tab.captures.count > BrowserTab.captureLimit { tab.captures.removeFirst() }
+        set.lastScreenshot = data
         return BrowserResult(value: ["tab": tabValue], files: [file])
     }
 
@@ -522,14 +540,27 @@ struct BrowserOperations {
         return data
     }
 
+    static func mime(for filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "png": "image/png"
+        case "jpg", "jpeg": "image/jpeg"
+        case "pdf": "application/pdf"
+        case "json": "application/json"
+        case "txt", "log", "md": "text/plain"
+        case "csv": "text/csv"
+        case "html", "htm": "text/html"
+        case "zip": "application/zip"
+        default: "application/octet-stream"
+        }
+    }
+
     private func dialog() throws -> BrowserResult {
-        let verb = action["action"]?.string ?? "get"
+        let verb = action["action"]?.stringValue ?? "get"
         if verb != "get" {
             guard tab.dialog != nil else {
                 throw BrowserFailure("no_dialog", "This tab has no JavaScript dialog to handle. browser.dialog({tabID,action:\"get\"}) returns null when none is open; continue without accepting or dismissing one.")
             }
-            tab.answerDialog(accept: verb == "accept", text: action["promptText"]?.string)
-            host.show("Agent \(verb == "accept" ? "accepted" : "dismissed") the page dialog")
+            tab.answerDialog(accept: verb == "accept", text: action["promptText"]?.stringValue)
         }
         let dialog: JSONValue = tab.dialog.map { ["type": .string($0.type), "message": .string(String($0.message.prefix(BrowserContract.maxText))), "defaultValue": .string(String($0.defaultValue.prefix(2_048)))] } ?? .null
         return page(["dialog": dialog])

@@ -5,6 +5,8 @@ import ComposerKit
 import DiffKit
 import Engine
 import MockOpenCode
+import OpenCodeKit
+import WebKit
 
 /// `--snapshot <name>`: builds the real window against the mock scenario, drives it through the integrated app's
 /// states with `ShellDriver` (the real composer, request cards and pickers), renders each to PNG in light and dark
@@ -205,6 +207,14 @@ struct SnapshotRunner {
             }
         }
 
+        // The built-in browser beside a thread: the agent is filling a shared tab (banner, cursor, ownership markers).
+        if only.isEmpty || only.contains("browser") {
+            await shootBrowser(driver, controller: controller, threadID: questionID)
+            await shoot("browser")
+            controller.browser?.pane?.set?.stopAgent()
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+
         // Offline with cached content, and a send that failed (text and error back in the composer).
         _ = await driver.select(.thread(runningID))
         await runtime.takeMockOffline()
@@ -323,6 +333,52 @@ struct SnapshotRunner {
         return rep?.representation(using: .png, properties: [:]) ?? Data()
     }
 
+    // MARK: Browser
+
+    static let browserPage = """
+        <!doctype html><html><head><title>Sign up · Preview</title><meta name="color-scheme" content="light dark"><style>
+        body{font:15px -apple-system,system-ui,sans-serif;margin:28px;color:#1d1d1f;background:#fbfbfd}
+        @media (prefers-color-scheme: dark){body{color:#f5f5f7;background:#1c1c1e} input,select{background:#2c2c2e;color:#f5f5f7;border-color:#48484a}}
+        h1{font-size:22px;margin:0 0 16px} label{display:block;margin:10px 0 4px;font-weight:500}
+        input,select{font:inherit;width:280px;padding:7px 9px;border:1px solid #c7c7cc;border-radius:7px}
+        button{margin-top:16px;font:600 14px -apple-system;padding:8px 16px;border-radius:8px;border:0;background:#0a84ff;color:white}
+        </style></head><body><h1>Create your account</h1>
+        <label for=n>Full name</label><input id=n placeholder="Ada Lovelace">
+        <label for=e>Email</label><input id=e placeholder="ada@example.com">
+        <label for=p>Plan</label><select id=p><option>Free</option><option>Pro</option></select>
+        <div><button id=s>Create account</button></div></body></html>
+        """
+
+    /// Opens a preview page in the thread's browser, shares it, and has the (mock) agent fill a field and wait.
+    private func shootBrowser(_ driver: ShellDriver, controller: MainWindowController, threadID: SessionID) async {
+        _ = await driver.select(.thread(threadID))
+        controller.showBrowserPanel()
+        driver.settle()
+        guard let browser = controller.browser,
+              let url = URL(string: "data:text/html;charset=utf-8," + (Self.browserPage.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")),
+              browser.open(url), let set = browser.pane?.set, let tab = set.selectedTab
+        else { return log("browser: could not open the preview page") }
+        set.setShared(true, tab: tab.id)
+        _ = set.newTab(url: URL(string: "data:text/html,<title>Docs</title>"), select: false, owner: .agent)
+        let model = runtime.engine.browser.model(for: threadID)
+        _ = await waitUntil(timeout: .seconds(10)) { model.status == .attached && !tab.isLoading }
+        try? await Task.sleep(for: .milliseconds(400))
+        let snapshot = await runtime.issueMockBrowserCommand(threadID, ["type": "snapshot", "tabID": .string(tab.id)])
+        let content = snapshot?.value?["content"]?.stringValue ?? ""
+        func ref(_ name: String) -> String? {
+            content.split(separator: "\n").first { $0.contains(name) && $0.contains("@e") }.flatMap { $0.firstMatch(of: /@(e\d+)/).map { String($0.1) } }
+        }
+        if let name = ref("Full name") {
+            _ = await runtime.issueMockBrowserCommand(threadID, ["type": "fill", "tabID": .string(tab.id), "ref": .string(name), "text": "Ada Lovelace"])
+        }
+        if let email = ref("Email") {
+            _ = await runtime.issueMockBrowserCommand(threadID, ["type": "click", "tabID": .string(tab.id), "ref": .string(email)])
+        }
+        Task { _ = await runtime.issueMockBrowserCommand(threadID, ["type": "wait", "tabID": .string(tab.id), "condition": "text", "text": "never", "timeoutMs": 20_000]) }
+        _ = await waitUntil(timeout: .seconds(5)) { tab.agentActivity != nil }
+        driver.settle()
+    }
+
     // MARK: Rendering
 
     /// Renders the window (and overlays above it) in light and dark at both sizes. `place` positions extra windows
@@ -341,6 +397,7 @@ struct SnapshotRunner {
                       let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds)
                 else { continue }
                 frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+                await compositeWebViews(in: frameView, onto: bitmap)
                 composite(driver.overlayWindows, onto: bitmap, origin: window.frame.origin)
                 let mode = appearanceName == .darkAqua ? "dark" : "light"
                 let file = directory.appending(path: "\(name)-\(state)-\(mode)-\(Int(size.width))x\(Int(size.height)).png")
@@ -350,6 +407,44 @@ struct SnapshotRunner {
         }
         NSApp.appearance = nil
         return paths
+    }
+
+    /// `cacheDisplay` cannot see WebKit's remote layers: draws each visible web view's own snapshot at its place, then
+    /// the browser's agent overlays above it.
+    private func compositeWebViews(in frameView: NSView, onto bitmap: NSBitmapImageRep) async {
+        var webViews: [WKWebView] = []
+        var overlays: [NSView] = []
+        func collect(_ view: NSView) {
+            if let webView = view as? WKWebView, !webView.isHiddenOrHasHiddenAncestor { webViews.append(webView) }
+            if ["BrowserHighlightView", "AgentCursorView"].contains(String(describing: type(of: view))), !view.isHiddenOrHasHiddenAncestor {
+                overlays.append(view)
+            }
+            for child in view.subviews { collect(child) }
+        }
+        collect(frameView)
+        var layers: [(NSImage, NSRect)] = []
+        for webView in webViews {
+            let configuration = WKSnapshotConfiguration()
+            configuration.afterScreenUpdates = false
+            guard let image = try? await webView.takeSnapshot(configuration: configuration) else { continue }
+            layers.append((image, webView.convert(webView.bounds, to: frameView)))
+        }
+        for overlay in overlays {
+            guard let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
+            overlay.cacheDisplay(in: overlay.bounds, to: rep)
+            let image = NSImage(size: overlay.bounds.size)
+            image.addRepresentation(rep)
+            layers.append((image, overlay.convert(overlay.bounds, to: frameView)))
+        }
+        guard !layers.isEmpty, let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        for (image, rect) in layers {
+            var target = rect
+            if frameView.isFlipped { target.origin.y = frameView.bounds.height - rect.maxY }
+            image.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Draws each overlay window's own rendering (with its transparency) at its place over the main window.

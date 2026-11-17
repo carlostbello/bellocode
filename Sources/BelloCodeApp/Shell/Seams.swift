@@ -11,7 +11,7 @@ import SwiftUI
 //   transcript   → TranscriptKit   (TranscriptSurfaceController, Content/TranscriptSurface.swift)
 //   requestStack → AgentUI         (RequestStackSurfaceController, Content/RequestStackSurface.swift)
 //   composer     → ComposerKit     (ComposerSurfaceController, Content/ComposerSurface.swift)
-//   rightPanel   → DiffKit / BrowserKit tabs (replaces the placeholder tabs)
+//   rightPanel   → DiffKit tabs (placeholders) and BrowserKit (BrowserSurfaces, Content/BrowserSurface.swift)
 //   terminal     → TerminalKit     (TerminalSurfaces, Content/TerminalSurface.swift: drawer + "Terminal" tab)
 //
 // A surface is created for one `ThreadSurfaceContext` (one displayed thread or draft) and released when the
@@ -34,6 +34,8 @@ struct ShellSurfaces {
     var terminalDrawer: @MainActor () -> NSViewController
     /// DiffKit's "Changes" tab (Content/ChangesSurface.swift), bound by the window. nil: the tab is a placeholder.
     var changes: ChangesSurfaces? = nil
+    /// The built-in browser behind the "Browser" tab (BrowserKit, Content/BrowserSurface.swift); nil in tests.
+    var browser: BrowserSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -42,6 +44,8 @@ struct ShellSurfaces {
         let terminals = TerminalSurfaces(services: services)
         // DiffKit (Content/ChangesSurface.swift): the "Changes" tab follows the displayed thread.
         let changes = ChangesSurfaces(services: services)
+        // BrowserKit (Content/BrowserSurface.swift): the "Browser" tab follows the displayed thread.
+        let browser = BrowserSurfaces(services: services)
         return ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
@@ -51,12 +55,10 @@ struct ShellSurfaces {
                 RightPanelTab(id: "files", title: "Files", symbolName: "folder") {
                     placeholder("Files", symbol: "folder", detail: "The project's files appear here.")
                 },
-                RightPanelTab(id: "browser", title: "Browser", symbolName: "globe") {
-                    placeholder("Browser", symbol: "globe", detail: "The built-in browser appears here.")
-                },
+                RightPanelTab(id: "browser", title: "Browser", symbolName: "globe") { browser.makePanelController() },
                 RightPanelTab(id: "terminal", title: "Terminal", symbolName: "terminal") { terminals.makePanelController() },
             ],
-            terminalDrawer: { terminals.makeDrawerController() }, changes: changes)
+            terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser)
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {

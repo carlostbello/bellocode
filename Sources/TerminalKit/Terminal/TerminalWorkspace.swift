@@ -12,12 +12,16 @@ public protocol TerminalWorkspaceDelegate: AnyObject {
     /// its terminals, or nil (with the reason shown by the host).
     func terminalWorkspaceNeedsThread(_ workspace: TerminalWorkspace) async -> ThreadTerminals?
     func terminalWorkspace(_ workspace: TerminalWorkspace, didChange preferences: TerminalPreferences)
+    /// New terminal output arrived: its last 4 KB as text (at most every 400 ms). For detecting dev-server URLs; the
+    /// text is untrusted program output.
+    func terminalWorkspace(_ workspace: TerminalWorkspace, screenText: String)
 }
 
 extension TerminalWorkspaceDelegate {
     public func terminalWorkspace(_ workspace: TerminalWorkspace, open link: TerminalLink) { link.openInDefaultBrowser() }
     public func terminalWorkspaceNeedsThread(_ workspace: TerminalWorkspace) async -> ThreadTerminals? { nil }
     public func terminalWorkspace(_ workspace: TerminalWorkspace, didChange preferences: TerminalPreferences) {}
+    public func terminalWorkspace(_ workspace: TerminalWorkspace, screenText: String) {}
 }
 
 /// TerminalKit's entry point: makes the drawer and panel surfaces and keeps one emulator per terminal in a bounded
