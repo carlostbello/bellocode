@@ -774,9 +774,11 @@ public final class EnvironmentService {
             container: id, argv: [shell, "-c", script], workingDir: worktree,
             environment: ["BELLOCODE_WORKTREE_PATH": worktree, "BELLOCODE_PROJECT_ROOT": projectDirectory], user: spec.user,
             timeout: .seconds(600))
-        let combined = String(decoding: result.stdout + result.stderr, as: UTF8.self)
-        return WorktreeSetupResult(exitCode: Int32(truncatingIfNeeded: result.exitCode), output: String(combined.suffix(8_192)),
-                                   duration: ContinuousClock.now - start)
+        // stdout and stderr each keep their head and tail (marked when cut); the combined text keeps both ends too.
+        let combined = WorktreeSetupResult.headAndTail(
+            String(decoding: result.stdout, as: UTF8.self) + String(decoding: result.stderr, as: UTF8.self), alreadyOmitted: result.omittedBytes)
+        return WorktreeSetupResult(exitCode: Int32(truncatingIfNeeded: result.exitCode), output: combined.text,
+                                   duration: ContinuousClock.now - start, omittedBytes: combined.omitted)
     }
 
     /// Ensures the container runs and returns (id, spec, shell). Throws the blocked message otherwise.

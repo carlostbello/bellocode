@@ -111,3 +111,32 @@ struct PortForwarderTests {
         }
     }
 }
+
+/// M6 (docs/reviews/M3-M6-review.md): exec output is bounded without hiding the start or the cut.
+@Suite
+struct BoundedOutputTests {
+    @Test func keepsHeadAndTailOfEachStreamAndCountsTheCut() {
+        var output = BoundedOutput(limit: 100)
+        output.append(Data("ERROR: first failure\n".utf8), toStderr: false)
+        for _ in 0..<1_000 { output.append(Data("noise noise noise\n".utf8), toStderr: false) }
+        output.append(Data("done\n".utf8), toStderr: false)
+        output.append(Data("warning on stderr\n".utf8), toStderr: true)
+        #expect(output.stdout.isTruncated)
+        #expect(!output.stderr.isTruncated, "streams are bounded separately")
+        #expect(output.stdout.text.hasPrefix("ERROR: first failure"), "the early failure survives")
+        #expect(output.stdout.text.hasSuffix("done\n"))
+        #expect(output.stdout.text.contains("bytes of output omitted"))
+        #expect(output.stdout.total == output.stdout.head.count + output.stdout.tail.count + output.stdout.dropped)
+        let result = ExecResult(exitCode: 0, output: output)
+        #expect(result.isTruncated && result.stdoutOmitted == output.stdout.dropped && result.stderrOmitted == 0)
+        #expect(String(decoding: result.stderr, as: UTF8.self) == "warning on stderr\n")
+    }
+
+    @Test func shortOutputIsUntouched() {
+        var output = BoundedOutput(limit: 1 << 20)
+        output.append(Data("ok\n".utf8), toStderr: false)
+        let result = ExecResult(exitCode: 0, output: output)
+        #expect(!result.isTruncated)
+        #expect(result.stdout == Data("ok\n".utf8))
+    }
+}

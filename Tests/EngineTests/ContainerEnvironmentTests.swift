@@ -70,10 +70,10 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     }
     func touch(container: String, user: String, paths: [String]) async throws {}
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-             timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+             timeout: Duration) async throws -> ExecResult {
         state.withLock { s in
             s.execs.append(Exec(argv: argv, workingDir: workingDir, environment: environment))
-            return (0, s.output, Data())
+            return ExecResult(exitCode: 0, stdout: s.output, stderr: Data())
         }
     }
     struct SecretCall: Sendable {

@@ -215,4 +215,20 @@ struct LiveWorkspaceTests {
         #expect(open.output.stdout.text.contains("wrote"))
         }
     }
+
+    /// M6: sustained output on both streams keeps each stream's start and end and reports the cut.
+    @Test func sustainedOutputIsBoundedVisiblyPerStream() async throws {
+        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await withProject { _, spec in
+        let id = try await manager.ensureRunning(spec)
+        let script = "echo FIRST-OUT; echo FIRST-ERR >&2; head -c 2000000 /dev/zero | tr '\\0' o; head -c 2000000 /dev/zero | tr '\\0' e >&2; echo; echo LAST-OUT; echo LAST-ERR >&2"
+        let result = try await ExecSession.run(client: client, container: id, argv: ["/bin/sh", "-c", script], user: spec.user, limit: 64 << 10)
+        let out = String(decoding: result.stdout, as: UTF8.self)
+        let err = String(decoding: result.stderr, as: UTF8.self)
+        #expect(out.hasPrefix("FIRST-OUT") && out.hasSuffix("LAST-OUT\n"))
+        #expect(err.hasPrefix("FIRST-ERR") && err.hasSuffix("LAST-ERR\n"))
+        #expect(result.stdoutOmitted > 1_900_000 && result.stderrOmitted > 1_900_000)
+        #expect(out.contains("bytes of output omitted") && err.contains("bytes of output omitted"))
+        }
+    }
 }

@@ -25,7 +25,7 @@ public protocol WorkspaceRuntime: Sendable {
     /// Runs one command (non-interactive, wrapped so cancellation stops its group). `environment` is set for this exec
     /// only (secrets); output is bounded.
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-             timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data)
+             timeout: Duration) async throws -> ExecResult
     /// Runs a command that receives a secret in a one-shot sibling container (`WorkspaceManager.runSecretCommand`).
     func runSecretCommand(
         _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
@@ -78,7 +78,7 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         try await manager.touch(container: container, user: user, paths: paths)
     }
     public func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-                    timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+                    timeout: Duration) async throws -> ExecResult {
         try await ExecSession.run(client: client, container: container, argv: argv, workingDir: workingDir, environment: environment,
                                   user: user, wrap: true, limit: 256 * 1024, timeout: timeout)
     }

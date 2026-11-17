@@ -271,3 +271,17 @@ struct IsolationVerdictTests {
         #expect(full.summary.hasPrefix("Isolated"))
     }
 }
+
+/// M6: a setup script's output keeps its beginning (where the first error usually is) and marks the cut.
+@Suite
+struct SetupOutputTests {
+    @Test func headAndTailMarkTheCut() {
+        let text = "fatal: npm ERR! first\n" + String(repeating: "progress line\n", count: 5_000) + "exit summary\n"
+        let (kept, omitted) = WorktreeSetupResult.headAndTail(text, limit: 1_000)
+        #expect(kept.hasPrefix("fatal: npm ERR! first"))
+        #expect(kept.hasSuffix("exit summary\n"))
+        #expect(omitted == text.utf8.count - 1_000)
+        #expect(kept.contains("[… \(omitted) bytes of output omitted …]"))
+        #expect(WorktreeSetupResult.headAndTail("short", limit: 1_000).omitted == 0)
+    }
+}
