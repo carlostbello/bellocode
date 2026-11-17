@@ -17,6 +17,19 @@ Research this plan is built on (read these before implementing an area):
 | [research/04-t3code-feature-inventory.md](research/04-t3code-feature-inventory.md) | 281 T3 Code features classified PORT / ADAPT / DROP, and why T3 Code feels smooth |
 | [research/05-opencode-integration.md](research/05-opencode-integration.md) | opencode 2.3.0 server, API, events, plugins, browser bridge, packaging |
 
+## 0. Scope constraints from the owner (2026-11-16)
+
+- **One enterprise, internal use.** Not a public product.
+- **opencode only.** No other agent backend.
+- **GitLab only**, most likely self-managed. No GitHub. No forge CLI on the host (`glab` and `gh` are not allowed):
+  BelloCode talks to the GitLab API directly. Authentication is an access token stored in the macOS Keychain, not
+  OAuth. Wherever this plan or a feature note says "pull request" or "GitHub", read "merge request" and "GitLab".
+- **Containers.** Company policy is to run everything in containers where possible, and native Rancher integration is
+  wanted. What exactly runs in a container, and which Rancher product is meant, is being researched
+  ([research/06-containers-rancher.md](research/06-containers-rancher.md)) and needs owner decisions.
+- **Look and feel.** The first builds looked like a stock Swift app. A design pass now defines the target visual
+  language from T3 Code's source and a mock ([design/](design/)); a restyle of every surface follows.
+
 ## 1. Facts that shape the plan
 
 1. "opencode2" is opencode major version 2 (2.3.0 locally, MIT). One 224 MB arm64 binary, Bun compiled in.
