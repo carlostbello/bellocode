@@ -1,0 +1,152 @@
+[
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job runs in Linux",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job working directory is the host path",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job runs as the host uid",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "python3 and node come from the container",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "stderr captured",
+    "passed" : true
+  },
+  {
+    "detail" : "exit Optional(7) status exited",
+    "name" : "exit code 7 reported",
+    "passed" : true
+  },
+  {
+    "detail" : "\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
+    "name" : "shell is the helper despite the repository's opencode.json",
+    "passed" : true
+  },
+  {
+    "detail" : "guard plugin listed",
+    "name" : "repository-local plugin not loaded (OPENCODE_DISABLE_PROJECT_CONFIG)",
+    "passed" : true
+  },
+  {
+    "detail" : "\nbellocode-exec: \/private\/tmp is not inside a containerised project; refusing to run on the host\n",
+    "name" : "a directory outside the project is refused (fail closed)",
+    "passed" : true
+  },
+  {
+    "detail" : "status timeout",
+    "name" : "a timed-out job is stopped",
+    "passed" : true
+  },
+  {
+    "detail" : "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for \/<\/title>\n<\/head>\n<body>\n<h1>Directory listing for \/<\/h1>\n<hr>\n<ul>\n",
+    "name" : "user shell job: fetched from the host via 127.0.0.1:65072 → container 127.0.0.1:8766, port never published (request 71 ms, ready after 0.1 s)",
+    "passed" : true
+  },
+  {
+    "detail" : "DELETE 204, running 0",
+    "name" : "deleting the running shell job stopped the server in the container",
+    "passed" : true
+  },
+  {
+    "detail" : "{\"data\":[{\"id\":\"msg_1e8983644001J6WJ5Mocfm26gI\",\"time\":{\"created\":1794903651908},\"type\":\"idle\",\"outcome\":\"succeeded\"},{\"id\":\"msg_1e8982a18001WpNilODaUmt5lq\",\"time\":{\"created\":1794903648794,\"firstToken\":1794903649752,\"streamed\":1794903651890,\"completed\":1794903651905},\"type\":\"assistant\",\"agent\":\"build\",\"model\":{\"id\":\"big-pickle\",\"providerID\":\"opencode\",\"variant\":\"default\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"The tool only reports exit code for nonzero. So command 1 and 2 exited 0 presumably. Report one line each.\n\nNote oddity: platform.system() returned Linux while on darwin — quirk of the s",
+    "name" : "agent: python ran in Linux in the project directory",
+    "passed" : true
+  },
+  {
+    "detail" : "{\"data\":[{\"id\":\"msg_1e8983644001J6WJ5Mocfm26gI\",\"time\":{\"created\":1794903651908},\"type\":\"idle\",\"outcome\":\"succeeded\"},{\"id\":\"msg_1e8982a18001WpNilODaUmt5lq\",\"time\":{\"created\":1794903648794,\"firstToken\":1794903649752,\"streamed\":1794903651890,\"completed\":1794903651905},\"type\":\"assistant\",\"agent\":\"build\",\"model\":{\"id\":\"big-pickle\",\"providerID\":\"opencode\",\"variant\":\"default\"},\"content\":[{\"type\":\"reasoning\",\"text\":\"The tool only reports exit code for nonzero. So command 1 and 2 exited 0 presumably. Report one line each.\n\nNote oddity: platform.system() returned Linux while on darwin — quirk of the s",
+    "name" : "agent: node ran in Linux",
+    "passed" : true
+  },
+  {
+    "detail" : "1. `python3 -c 'import platform, os; print(platform.system(), os.getcwd())'` → output: `Linux \/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj` — exit code 0\n2. `node -e 'console.log(process.platform, process.version)'` → output: `linux v22.23.5` — exit code 0\n3. `python3 -c 'import sys; sys.stderr.write(\"boom\\n\"); sys.exit(3)'` → stderr: `boom`, no stdout — exit code 3\n\nNote: the shell tool only surfaces an exit code when it is nonzero, so 0 for the first two is inferred from their clean success (no error reported).",
+    "name" : "agent: failing command surfaced (stderr and exit 3)",
+    "passed" : true
+  },
+  {
+    "detail" : "def add(a, b):\n    return a + b\n",
+    "name" : "agent: file edited on the host",
+    "passed" : true
+  },
+  {
+    "detail" : "Fixed `calc.py` so `add()` returns `a + b`.\n\nFinal line of the test output: `OK`",
+    "name" : "agent: test in the container saw the edit (OK)",
+    "passed" : true
+  },
+  {
+    "detail" : "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for \/<\/title>\n<\/head>\n<body>\n<h1>Directory listing for \/<\/h1>\n<hr>\n<ul>\n",
+    "name" : "agent's background server: fetched from the host via 127.0.0.1:65125 → container 127.0.0.1:8765, port never published (request 30 ms, ready after 0.0 s)",
+    "passed" : true
+  },
+  {
+    "detail" : "jobs listed 1, running 0",
+    "name" : "deleting the agent's background shell job stopped the server in the container",
+    "passed" : true
+  },
+  {
+    "detail" : "\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
+    "name" : "PTY program is the helper",
+    "passed" : true
+  },
+  {
+    "detail" : "2e\/proj$ uname -a; echo marker-$((6*7)); pwd\r\n\u001b[?2004l\rLinux 7debe6500f0b 6.18.60-0-virt #1-Alpine SMP PREEMPT_DYNAMIC 2026-11-01 07:26:31 aarch64 GNU\/Linux\r\nmarker-42\r\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "name" : "PTY lands in the container (uname)",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "PTY starts in the project path",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "PTY keystroke echo (ms) 20.8",
+    "passed" : true
+  },
+  {
+    "detail" : " x\b\u001b[K\r\u001b[K\rI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ stty size\r\n\u001b[?2004l\r27 91\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "name" : "PTY resize reaches the container",
+    "passed" : true
+  },
+  {
+    "detail" : "ame!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ echo after-ctrl-$((2+3))\r\n\u001b[?2004l\rafter-ctrl-5\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "name" : "Ctrl-C interrupts the foreground process",
+    "passed" : true
+  },
+  {
+    "detail" : "alt-screen true",
+    "name" : "full-screen program (vi) runs and saves",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "agent can read the containerised terminal",
+    "passed" : true
+  },
+  {
+    "detail" : "Optional(Engine.TerminalRunState.exited(code: Optional(5)))",
+    "name" : "PTY exit code reaches opencode",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "opencode server exited",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "no processes left in the workspace container",
+    "passed" : true
+  }
+]

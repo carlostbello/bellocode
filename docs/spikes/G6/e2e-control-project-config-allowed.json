@@ -1,0 +1,72 @@
+[
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job runs in Linux",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job working directory is the host path",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "shell job runs as the host uid",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "python3 and node come from the container",
+    "passed" : true
+  },
+  {
+    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "name" : "stderr captured",
+    "passed" : true
+  },
+  {
+    "detail" : "exit Optional(7) status exited",
+    "name" : "exit code 7 reported",
+    "passed" : true
+  },
+  {
+    "detail" : "\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
+    "name" : "shell is the helper despite the repository's opencode.json",
+    "passed" : true
+  },
+  {
+    "detail" : "guard plugin listed",
+    "name" : "repository-local plugin not loaded (OPENCODE_DISABLE_PROJECT_CONFIG)",
+    "passed" : false
+  },
+  {
+    "detail" : "\nbellocode-exec: \/private\/tmp is not inside a containerised project; refusing to run on the host\n",
+    "name" : "a directory outside the project is refused (fail closed)",
+    "passed" : true
+  },
+  {
+    "detail" : "status timeout",
+    "name" : "a timed-out job is stopped",
+    "passed" : true
+  },
+  {
+    "detail" : "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for \/<\/title>\n<\/head>\n<body>\n<h1>Directory listing for \/<\/h1>\n<hr>\n<ul>\n",
+    "name" : "user shell job: fetched from the host via 127.0.0.1:56595 → container 127.0.0.1:8766, port never published (request 79 ms, ready after 0.1 s)",
+    "passed" : true
+  },
+  {
+    "detail" : "DELETE 204, running 0",
+    "name" : "deleting the running shell job stopped the server in the container",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "opencode server exited",
+    "passed" : true
+  },
+  {
+    "detail" : "",
+    "name" : "no processes left in the workspace container",
+    "passed" : true
+  }
+]

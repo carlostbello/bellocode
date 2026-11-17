@@ -91,7 +91,14 @@ let targets: [Target] =
     + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine", "DesignSystem"], testDependencies: ["MockOpenCode"])
     // M3-A: Agents panel, lineage rows, header strip text (docs/features/orchestration.md). Engine owns the task graph.
     + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
+    // G6 spike: Docker Engine API client over a unix socket, workspace containers (docs/spikes/G6-containers.md).
+    + library("ContainerKit")
     + [
+        // G6: the shell opencode is configured with; forwards every command into the workspace container.
+        .executableTarget(name: "bellocode-exec", dependencies: ["ContainerKit"], swiftSettings: swiftSettings),
+        // G6 harness: measurements and end-to-end checks against Rancher Desktop.
+        .executableTarget(
+            name: "ContainerSpike", dependencies: ["ContainerKit", "OpenCodeKit", "Engine", "BelloCore"], swiftSettings: swiftSettings),
         // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
         .executableTarget(
             name: "TerminalDemo",
