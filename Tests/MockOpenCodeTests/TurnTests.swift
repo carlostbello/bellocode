@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import MockOpenCode
 
@@ -65,6 +66,21 @@ struct TurnTests {
             let info = try await client.get("/api/session/\(session)")["data"]
             #expect(info?["outcome"] == "succeeded")
             #expect(info?["time"]?["idle"]?.intValue != nil)
+        }
+    }
+
+    @Test func deltaObserverSeesEveryStreamedDelta() async throws {
+        try await withStream { server, client, reader in
+            let log = DeltaLog()
+            await server.setDeltaObserver { id, length, time in log.append(id, length, time) }
+            await server.enqueueScript(TurnScript(name: "observe") { TurnStep.text("abcdefghij", chunkSize: 3, rate: 1_000) })
+            let session = try await client.createSession()
+            _ = try await client.prompt(session, "hi")
+            _ = try await reader.collect(until: isType("session.execution.succeeded"))
+            let entries = log.entries
+            #expect(entries.map(\.length) == [3, 6, 9, 10])
+            #expect(Set(entries.map(\.id)).count == 1)
+            #expect(zip(entries, entries.dropFirst()).allSatisfy { $0.time <= $1.time })
         }
     }
 
@@ -372,4 +388,11 @@ struct TurnTests {
         #expect(library.count >= 3)
         for (name, script) in library { #expect(!script.steps.isEmpty, "\(name) is empty") }
     }
+}
+
+/// Collects delta observations from the server's actor.
+final class DeltaLog: Sendable {
+    private let storage = Mutex<[(id: String, length: Int, time: Double)]>([])
+    func append(_ id: String, _ length: Int, _ time: Double) { storage.withLock { $0.append((id, length, time)) } }
+    var entries: [(id: String, length: Int, time: Double)] { storage.withLock { $0 } }
 }
