@@ -25,11 +25,23 @@ import Testing
         let deadline = ContinuousClock.now + .seconds(60)
         while !harness.controller.measureAllComplete, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }
         let controller = harness.controller
-        harness.source.update(
-            Message(
-                id: MessageID("msg_user_cost"), sessionID: TranscriptSamples.session, kind: .user(UserContent(text: "Stream please")),
-                created: Timestamp(milliseconds: 1.9e12)))
-        await harness.settle()
+        // Each update must be committed by its own sync before the next one. `settle()` alone can return before the
+        // observation hop has scheduled that sync on a loaded machine (a full parallel test run); the next update then
+        // lands in the same sync, and the first reply revision's list change (a full rebuild) is attributed to a
+        // streaming revision. Row work per commit does not depend on load; this ordering did.
+        func commit(_ update: () -> Void) async {
+            let syncs = controller.metrics.syncs
+            update()
+            let deadline = ContinuousClock.now + .seconds(30)
+            while controller.metrics.syncs == syncs, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+            await harness.settle()
+        }
+        await commit {
+            harness.source.update(
+                Message(
+                    id: MessageID("msg_user_cost"), sessionID: TranscriptSamples.session, kind: .user(UserContent(text: "Stream please")),
+                    created: Timestamp(milliseconds: 1.9e12)))
+        }
         let id = MessageID("msg_stream_cost")
         var text = ""
         var run = Run(rows: 0, rowWork: [], tailOnly: [], rowsStorageMoved: 0)
@@ -43,8 +55,7 @@ import Testing
                 created: Timestamp(milliseconds: 1.9e12 + 1), parts: [part], revision: revision)
             let before = controller.rows.withUnsafeBufferPointer { UInt(bitPattern: $0.baseAddress) }
             let syncs = controller.metrics.syncs
-            harness.source.update(message)
-            await harness.settle()
+            await commit { harness.source.update(message) }
             guard controller.metrics.syncs > syncs, let sample = controller.lastSync else { continue }
             // The first revision appends the reply's row(s); later ones change the tail in place.
             if revision > 1 {
