@@ -44,7 +44,7 @@ public struct ModelPickerButton: View {
         .accessibilityLabel("Model")
         .accessibilityValue(
             [model.selectedModel?.name ?? model.selection?.modelID, model.selection?.variant].compactMap { $0 }.joined(separator: ", "))
-        .glassPopover(isPresented: $isOpen.value, width: ModelPickerView.width) {
+        .agentGlassPopover(isPresented: $isOpen.value, width: ModelPickerView.width) {
             ModelPickerView(model: model) { isOpen.value = false }
         }
     }
@@ -221,40 +221,8 @@ public struct ModelPickerView: View {
     }
 }
 
-/// The ghost select look of composer controls (visual-language.md §6 "Composer"): 26 high, `label` 12, `text2`,
-/// hover / open = `fillHover` + `text`; keyboard focus draws the accent ring.
-struct ComposerSelectStyle: ButtonStyle {
-    var isOpen = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        ComposerSelectBody(configuration: configuration, isOpen: isOpen)
-    }
-}
-
-private struct ComposerSelectBody: View {
-    let configuration: ButtonStyleConfiguration
-    let isOpen: Bool
-    @StateObject private var hover = ViewState(false)
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.isFocused) private var isFocused
-
-    var body: some View {
-        let active = hover.value || isOpen || configuration.isPressed
-        let shape = RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-        configuration.label
-            .font(.ds(.label))
-            .foregroundStyle(active ? SwiftUI.Color.ds.text : SwiftUI.Color.ds.text2)
-            .padding(.horizontal, DS.Space.s8)
-            .frame(height: DS.Size.composerControl)
-            .background(shape.fill(active ? SwiftUI.Color.ds.fillHover : .clear))
-            .overlay(shape.strokeBorder(isFocused ? SwiftUI.Color.ds.focusRing : .clear, lineWidth: DS.Border.focusRing))
-            .contentShape(shape)
-            .opacity(isEnabled ? 1 : DSControlState.disabledOpacity)
-            .onHover { hover.value = $0 }
-            .focusEffectDisabled()
-            .transaction { $0.animation = nil }
-    }
-}
+/// AgentUI's name for DesignSystem's composer select.
+typealias ComposerSelectStyle = DSComposerSelectStyle
 
 struct ModelPickerRow: View {
     let model: ModelPickerModel

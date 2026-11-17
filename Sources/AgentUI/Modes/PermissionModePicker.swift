@@ -97,7 +97,7 @@ public struct PermissionModePicker: View {
         .help("Permission mode (\(AgentShortcut.permissionMode.display))")
         .accessibilityLabel("Permission mode")
         .accessibilityValue(current.map { PermissionModeOption.option($0).title } ?? PermissionModeOption.unset.title)
-        .glassPopover(isPresented: $isOpen.value, width: 340) {
+        .agentGlassPopover(isPresented: $isOpen.value, width: 340) {
             PermissionModePopover(
                 current: current, agent: source.session?.agent, agents: agents, highlighted: $highlighted.value,
                 choose: { mode in

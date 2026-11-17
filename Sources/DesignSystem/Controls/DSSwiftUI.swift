@@ -303,3 +303,41 @@ extension View {
                 .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(style.hasRing ? SwiftUI.Color.ds.rowRing : .clear)))
     }
 }
+
+/// The ghost select look of composer controls (visual-language.md §6 "Composer"): 26 high, `label` 12, `text2`,
+/// hover / open = `fillHover` + `text`; keyboard focus draws the accent ring.
+public struct DSComposerSelectStyle: ButtonStyle {
+    public var isOpen: Bool
+
+    public init(isOpen: Bool = false) { self.isOpen = isOpen }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        ComposerSelectBody(configuration: configuration, isOpen: isOpen)
+    }
+}
+
+private struct ComposerSelectBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isOpen: Bool
+    @StateObject private var hover = DSHoverState()
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        let active = hover.isHovered || isOpen || configuration.isPressed
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+        configuration.label
+            .font(.ds(.label))
+            .foregroundStyle(active ? SwiftUI.Color.ds.text : SwiftUI.Color.ds.text2)
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Size.composerControl)
+            .background(shape.fill(active ? SwiftUI.Color.ds.fillHover : .clear))
+            .overlay(shape.strokeBorder(isFocused ? SwiftUI.Color.ds.focusRing : .clear, lineWidth: DS.Border.focusRing))
+            .contentShape(shape)
+            .opacity(isEnabled ? 1 : DSControlState.disabledOpacity)
+            .onHover { hover.isHovered = $0 }
+            .focusEffectDisabled()
+            .transaction { $0.animation = nil }
+    }
+}
+
