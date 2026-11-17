@@ -53,10 +53,13 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
     /// The strip above a terminal surface: the blocked banner, or "Container · image" when terminals run there.
     func makeEnvironmentStrip() -> NSView? {
         guard let engine, engine.environments.isEnabled else { return nil }
-        return TerminalEnvironmentStrip(engine: engine) { [weak self] in
+        let strip = TerminalEnvironmentStrip(engine: engine) { [weak self] in
             self?.context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
         }
+        environmentStrips.add(strip)
+        return strip
     }
+    private let environmentStrips = NSHashTable<TerminalEnvironmentStrip>.weakObjects()
 
     func makeDrawerController() -> NSViewController { drawerHost }
     func makePanelController() -> NSViewController { panelHost }
@@ -97,6 +100,7 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
     /// saved drawer state.
     func display(_ context: ThreadSurfaceContext?) {
         self.context = context
+        for strip in environmentStrips.allObjects { strip.refresh() }
         guard let engine, let drawer, let panel else { return }
         let directory = context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
         let terminals = context?.thread.map { engine.terminals.terminals(for: $0.sessionID) }
@@ -239,6 +243,9 @@ final class TerminalHostController: NSViewController, FocusableSurface {
             return
         }
         // Containerised execution (M6-A): where the terminal runs, or why it cannot, above the terminals.
+        // The surface paints its background with the dirty rect, which (clipsToBounds being off by default) can cover
+        // a sibling above it.
+        surface.view.clipsToBounds = true
         let stack = NSStackView(views: [strip, surface.view])
         stack.orientation = .vertical
         stack.alignment = .leading

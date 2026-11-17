@@ -543,14 +543,11 @@ struct EnvironmentSettingsView: View {
             Button("Stop") { service.stopContainer(environment.directory) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
             Button("Clean Up Processes") { Task { _ = await service.cleanUpProcesses(environment.directory) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
                 .help("Ends processes left behind by cancelled commands")
-            Spacer()
-            Button("Verify Isolation") { Task { await service.verifyIsolation(directory: environment.directory, full: true) } }
-                .buttonStyle(DSButtonStyle(.outline, size: .small)).disabled(service.isVerifyingIsolation)
         }
-        if let report = service.isolation, report.directory == environment.directory {
-            IsolationReportView(report: report, running: service.isVerifyingIsolation) {
-                Task { await service.verifyIsolation(directory: environment.directory, full: true) }
-            }
+        SectionLabel("Isolation")
+        IsolationReportView(report: service.isolation.flatMap { $0.directory == environment.directory ? $0 : nil },
+                            running: service.isVerifyingIsolation) {
+            Task { await service.verifyIsolation(directory: environment.directory, full: true) }
         }
         if let logs = model.logs { LogsView(title: environment.containerName, text: logs) { model.logs = nil } }
     }

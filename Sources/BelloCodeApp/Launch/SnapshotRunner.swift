@@ -32,6 +32,7 @@ struct SnapshotRunner {
         if name == "nav" { return await runNavigation() }
         if name == "orch" { return await runOrchestration() }
         if name == "extras" { return await runExtras() }
+        if name == "containers" { return await runContainers() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

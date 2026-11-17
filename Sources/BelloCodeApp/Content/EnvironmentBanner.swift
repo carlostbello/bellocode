@@ -36,6 +36,12 @@ final class EnvironmentBannerHost: NSView {
 
     var isShowing: Bool { notice != nil }
 
+    /// Re-reads the directory (the displayed thread changed) and observes the new project.
+    func refresh() {
+        loop?.cancel()
+        loop = ObservationLoop { [weak self] in self?.render() }
+    }
+
     private var notice: (EnvironmentNotice, ProjectEnvironment)? {
         let service = engine.environments
         guard service.isEnabled, let directory = directory(), let environment = service.project(containing: directory) else { return nil }
@@ -81,48 +87,36 @@ final class EnvironmentBannerHost: NSView {
     }
 }
 
-/// Above the terminals: "Container · <image>" (glyph + text) while terminals open in the project's container, or the
-/// blocked banner when they cannot.
+/// Above the terminals: "Container · <image> · <state>" (glyph + text) while terminals open in the project's
+/// container, or the blocked banner when they cannot.
 @MainActor
 final class TerminalEnvironmentStrip: NSView {
     private let engine: Engine
     private let directory: () -> String?
-    private let banner: EnvironmentBannerHost
-    private let glyph = NSImageView()
-    private let label = NSTextField(labelWithString: "")
-    private let line = NSStackView()
+    private var hosting: NSHostingView<AnyView>?
     private var loop: ObservationLoop?
 
     init(engine: Engine, directory: @escaping () -> String?) {
         self.engine = engine
         self.directory = directory
-        banner = EnvironmentBannerHost(engine: engine, directory: directory)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        glyph.image = NSImage(systemSymbolName: "shippingbox", accessibilityDescription: nil)
-        glyph.contentTintColor = DS.Color.text3
-        label.font = .ds(.meta)
-        label.textColor = DS.Color.text3
-        label.lineBreakMode = .byTruncatingMiddle
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        line.setViews([glyph, label], in: .leading)
-        line.spacing = DS.Space.s4
-        line.edgeInsets = NSEdgeInsets(top: DS.Space.s2, left: DS.Space.s8, bottom: DS.Space.s2, right: DS.Space.s8)
-        let stack = NSStackView(views: [banner, line])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 0
-        stack.detachesHiddenViews = true
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            banner.widthAnchor.constraint(equalTo: stack.widthAnchor),
-        ])
         loop = ObservationLoop { [weak self] in self?.render() }
+    }
+
+    private func show(_ view: AnyView) {
+        if let hosting {
+            hosting.rootView = view
+            return
+        }
+        let hosting = NSHostingView(rootView: view)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: leadingAnchor), hosting.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: topAnchor), hosting.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        self.hosting = hosting
     }
 
     @available(*, unavailable)
@@ -130,16 +124,47 @@ final class TerminalEnvironmentStrip: NSView {
 
     isolated deinit { loop?.cancel() }
 
+    /// The displayed thread changed: follow its project.
+    func refresh() {
+        loop?.cancel()
+        loop = ObservationLoop { [weak self] in self?.render() }
+    }
+
     private func render() {
-        let environment = directory().flatMap { engine.environments.project(containing: $0) }
-        guard let environment, environment.notice == nil else {
-            line.isHidden = true
+        let service = engine.environments
+        guard let environment = directory().flatMap({ service.project(containing: $0) }) else {
+            hosting?.removeFromSuperview()
+            hosting = nil
+            isHidden = true
             return
         }
-        line.isHidden = false
-        let text = "Container · \(environment.image ?? "no image") · \(environment.phase.label)"
-        label.stringValue = text
-        label.setAccessibilityLabel("Terminals run in the project's container: \(environment.image ?? "no image"), \(environment.phase.label)")
+        isHidden = false
+        let engine = engine
+        let directory = environment.directory
+        if let notice = environment.notice {
+            let progress: Double? = if case .pulling(let value) = environment.phase { value.fraction } else { nil }
+            show(AnyView(EnvironmentBannerView(
+                notice: notice, progress: progress,
+                fix: { fix in
+                    EnvironmentSettingsModel.preferredDirectory = directory
+                    EnvironmentFixes.perform(fix, directory: directory, engine: engine, openSettings: { pane in
+                        (NSApp.delegate as? AppDelegate)?.openSettings(pane: pane)
+                    })
+                },
+                retry: { Task { await service.retry(directory) } }
+            ).padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)))
+        } else {
+            let text = "Container · \(environment.image ?? "no image") · \(environment.phase.label)"
+            show(AnyView(
+                HStack(spacing: DS.Space.s4) {
+                    Image(systemName: environment.phase.symbolName).foregroundStyle(DSColor.text3).accessibilityHidden(true)
+                    Text(text).font(.ds(.meta)).foregroundStyle(DSColor.text3).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, DS.Space.s8).frame(height: 22)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Terminals run in the project's container: \(environment.image ?? "no image"), \(environment.phase.label)")))
+        }
     }
 }
 

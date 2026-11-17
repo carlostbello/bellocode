@@ -147,7 +147,8 @@ public enum IsolationCheck {
         let foreign = shells.filter { $0 != helperPath }
         checks.append(.init("Configured shell", foreign.isEmpty && shells.contains(helperPath)
             ? .container("every shell setting is bellocode-exec")
-            : .host("a configuration sets the shell to \(foreign.first ?? "nothing"): commands could run on this Mac")))
+            : .host(foreign.first.map { "a configuration sets the shell to \($0): commands could run on this Mac" }
+                ?? "no configuration sets the shell to bellocode-exec: commands could run on this Mac")))
         checks.append(.init("Formatters", formatterOn ? .host("formatters are on: they run project tooling on this Mac") : .off("off")))
         checks.append(.init("Language servers", lspOn ? .host("language servers are configured: they would run on this Mac") : .off("off")))
         checks.append(.init("Local MCP servers", localMCP.isEmpty ? .off("none configured")

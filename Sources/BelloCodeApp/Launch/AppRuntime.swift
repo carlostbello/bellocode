@@ -51,6 +51,7 @@ final class AppRuntime {
 
     static func make(options: LaunchOptions, bundle: Bundle = .main) async throws -> AppRuntime {
         if let scenario = options.mock {
+            if case .snapshot("containers") = options.mode { return try await makeMock(scenario, containers: true) }
             return try await makeMock(scenario)
         }
         if let source = ServerSource.fromEnvironment(), case .fixed(let connection) = source {
@@ -112,7 +113,7 @@ final class AppRuntime {
         return url
     }
 
-    private static func makeMock(_ scenario: LaunchOptions.MockScenario) async throws -> AppRuntime {
+    private static func makeMock(_ scenario: LaunchOptions.MockScenario, containers: Bool = false) async throws -> AppRuntime {
         let data: Scenario = switch scenario {
         case .demo: .demo()
         case .large: .large(sessionCount: 500, largeSessionMessages: 2_000)
@@ -131,6 +132,15 @@ final class AppRuntime {
         configuration.forgeTokens = MockGitLab.tokens()
         configuration.mergeRequestPoll = .seconds(2)
         configuration.visualsDirectory = directory.appending(path: "visuals", directoryHint: .isDirectory)
+        if containers {
+            // `--snapshot containers`: container execution on a scripted runtime (never Rancher Desktop).
+            let fake = SnapshotWorkspaceRuntime()
+            SnapshotWorkspaceRuntime.current = fake
+            configuration.containers = ContainerConfiguration(
+                helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
+                execConfigURL: directory.appending(path: "bellocode-exec.json"), opencodeDataDirectory: nil, runtime: fake,
+                registryVault: InMemorySecretVault())
+        }
         let suite = "com.bellocode.app.mock"
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .mock(scenario),
