@@ -16,7 +16,10 @@ struct Snapshots {
         var prepare: @MainActor (NSViewController) async -> Void = { _ in }
     }
 
+    static var fixtures: [PanelFixture] = []
+
     func run() async -> Bool {
+        defer { Task { for fixture in Self.fixtures { await fixture.stop() } } }
         try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
         var written = 0
         for item in cases where only.isEmpty || only.contains(item.name) {
@@ -26,21 +29,24 @@ struct Snapshots {
             }
         }
         print("wrote \(written) snapshots to \(Self.directory.path)")
+        for fixture in Self.fixtures { await fixture.stop() }
+        Self.fixtures.removeAll()
         return true
     }
 
     func render(_ item: Case, dark: Bool) async -> Bool {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let controller = item.make()
-        window.contentViewController = controller
+        let backdrop = BackdropController(child: controller)
+        window.contentViewController = backdrop
         window.setContentSize(item.size)
         window.setFrameOrigin(NSPoint(x: 60, y: 60))
         window.orderFrontRegardless()
-        controller.view.layoutSubtreeIfNeeded()
+        backdrop.view.layoutSubtreeIfNeeded()
         await item.prepare(controller)
         try? await Task.sleep(for: .milliseconds(150))
-        controller.view.layoutSubtreeIfNeeded()
-        controller.view.displayIfNeeded()
+        backdrop.view.layoutSubtreeIfNeeded()
+        backdrop.view.displayIfNeeded()
         guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
         view.cacheDisplay(in: view.bounds, to: rep)
         let url = Self.directory.appending(path: "diff-\(item.name)-\(dark ? "dark" : "light").png")
@@ -93,11 +99,56 @@ struct Snapshots {
                 await Self.settle(diff)
                 diff.scroll(toY: diff.contentHeight / 2)
             }),
+            Case(name: "panel-uncommitted", size: NSSize(width: 560, height: 820), make: { ChangesPanelController() }, prepare: { controller in
+                guard let panel = controller as? ChangesPanelController, let fixture = try? await PanelFixture.make() else { return }
+                Snapshots.fixtures.append(fixture)
+                panel.display(fixture.model(scope: .uncommitted))
+                await PanelFixture.settle(panel)
+                if ProcessInfo.processInfo.environment["DIFFDEMO_DEBUG"] != nil { panel.debugDump() }
+            }),
+            Case(name: "panel-turn", size: NSSize(width: 620, height: 820), make: { ChangesPanelController() }, prepare: { controller in
+                guard let panel = controller as? ChangesPanelController, let fixture = try? await PanelFixture.make() else { return }
+                Snapshots.fixtures.append(fixture)
+                panel.display(fixture.model(scope: .turn(nil)))
+                await PanelFixture.settle(panel)
+            }),
             Case(name: "wrap", size: NSSize(width: 700, height: 520), make: { Self.diff([Samples.large(total: 400, changed: 60)], wraps: true) }, prepare: { controller in
                 guard let diff = controller as? DiffViewController else { return }
                 await Self.settle(diff)
             }),
         ]
+    }
+}
+
+/// Hosts a snapshot's view over an opaque window-background view (cacheDisplay does not draw the window's background).
+@MainActor
+final class BackdropController: NSViewController {
+    let child: NSViewController
+    init(child: NSViewController) {
+        self.child = child
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func loadView() {
+        let backdrop = BackdropView()
+        addChild(child)
+        child.view.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(child.view)
+        NSLayoutConstraint.activate([
+            child.view.topAnchor.constraint(equalTo: backdrop.topAnchor), child.view.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor),
+            child.view.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor), child.view.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
+        ])
+        view = backdrop
+    }
+}
+
+final class BackdropView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
     }
 }
 
