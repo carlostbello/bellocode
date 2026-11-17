@@ -205,6 +205,13 @@ public final class BrowserBridgeService {
         removeGuidance(binding)
     }
 
+    /// The window closed: detach but keep the guidance entry (it describes this browser's limits only while the tools
+    /// are present, and the thread reattaches when shown again).
+    public func unbindKeepingGuidance(_ sessionID: SessionID) {
+        guard let binding = bindings.removeValue(forKey: sessionID) else { return }
+        detach(binding, status: .off)
+    }
+
     /// After `replaced`, `unavailable` or a parked binding: attach again on the person's request.
     public func reconnect(_ sessionID: SessionID) {
         guard let binding = bindings[sessionID] else { return }

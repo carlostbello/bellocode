@@ -1,4 +1,4 @@
-// SPIKE (gate G3). Fixture pages. Origin A serves pages; origin B (a different port on `localhost`) is cross-site.
+// Fixture pages for the browser self-test and end-to-end run. Origin A serves pages; origin B (a different port on `localhost`) is cross-site.
 
 enum Fixtures {
     static func route(_ path: String, crossOrigin: String, sameOrigin: String) -> (String, String)? {

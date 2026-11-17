@@ -1,4 +1,4 @@
-// SPIKE (gate G3). Loopback-only static HTTP server for the fixture pages. One response per connection.
+// Loopback-only static HTTP server for the fixture pages. One response per connection.
 
 import Foundation
 import Network

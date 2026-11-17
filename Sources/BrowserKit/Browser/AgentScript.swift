@@ -1,6 +1,8 @@
-// SPIKE (gate G3). JavaScript injected into every frame. The agent script runs in an isolated WKContentWorld, so
-// page scripts cannot see or replace `window.__bc`; it shares the DOM with the page. The console hook must run in the
-// page world to wrap the page's own `console`, so pages can see and spoof it: its entries are untrusted.
+// JavaScript injected into every frame. The agent script runs in an isolated WKContentWorld, so page scripts cannot
+// see or replace `window.__bc` or its message handler; it shares only the DOM with the page. Nothing in it grants the
+// page any app privilege: it reads the DOM and posts frame registrations and pick results to the app.
+// The console hook must run in the page world to wrap the page's own `console`, so pages can see and spoof it: its
+// entries are untrusted, like all page content.
 
 enum AgentScript {
     static let worldName = "bellocode.agent"
@@ -358,8 +360,98 @@ enum AgentScript {
           start: performance.timeOrigin + entry.startTime, duration: entry.duration, status: entry.responseStatus || 0, size: entry.transferSize || 0 }));
       }
 
+      // Inspect mode (pick element and annotate): highlight under the pointer, capture on click, Escape cancels.
+      let pick = null;
+      function cssPath(el) {
+        if (el.id && /^[A-Za-z][\w-]*$/.test(el.id) && el.getRootNode().querySelectorAll('#' + el.id).length === 1) return '#' + el.id;
+        const parts = [];
+        let node = el;
+        while (node && node.nodeType === 1 && parts.length < 6) {
+          let part = node.localName;
+          if (node.id && /^[A-Za-z][\w-]*$/.test(node.id)) { parts.unshift(part + '#' + node.id); break; }
+          const classes = Array.from(node.classList).filter((c) => /^[A-Za-z][\w-]*$/.test(c)).slice(0, 2);
+          if (classes.length) part += '.' + classes.join('.');
+          const parent = node.parentElement;
+          if (parent) {
+            const same = Array.from(parent.children).filter((c) => c.localName === node.localName);
+            if (same.length > 1) part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+          }
+          parts.unshift(part);
+          node = parent;
+        }
+        return parts.join(' > ');
+      }
+      function pickStart() {
+        if (pick) return true;
+        const host = document.createElement('div');
+        host.setAttribute('data-bellocode-pick', '');
+        host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
+        const root = host.attachShadow({ mode: 'closed' });
+        root.innerHTML = '<style>.box{position:fixed;border:2px solid #0a84ff;background:rgba(10,132,255,.14);border-radius:3px;pointer-events:none}' +
+          '.tag{position:fixed;font:600 11px -apple-system,system-ui,sans-serif;color:#fff;background:#0a84ff;padding:2px 6px;border-radius:4px;pointer-events:none;white-space:nowrap}</style>' +
+          '<div class="box"></div><div class="tag"></div>';
+        const box = root.querySelector('.box'), tag = root.querySelector('.tag');
+        document.documentElement.appendChild(host);
+        let current = null;
+        const show = (el) => {
+          current = el;
+          const r = el.getBoundingClientRect();
+          Object.assign(box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', display: 'block' });
+          tag.textContent = el.localName + (el.id ? '#' + el.id : '') + '  ' + Math.round(r.width) + '×' + Math.round(r.height);
+          Object.assign(tag.style, { left: Math.max(0, r.left) + 'px', top: Math.max(0, r.top - 20) + 'px', display: 'block' });
+        };
+        const target = (event) => { const path = event.composedPath(); return path.find((n) => n.nodeType === 1 && n !== host) || event.target; };
+        const move = (event) => { const el = target(event); if (el && el.nodeType === 1) show(el); };
+        const click = (event) => {
+          event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+          const el = current || target(event);
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          const role = roleOf(el) || el.localName;
+          post({ kind: 'pick', selector: cssPath(el), tag: el.localName, role, name: nameOf(el, role).slice(0, 200),
+            text: squash(el.innerText || composedText(el).join(' ')).slice(0, 2000),
+            rect: { x: r.left, y: r.top, width: r.width, height: r.height }, url: location.href, title: document.title });
+        };
+        const swallow = (event) => { event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation(); };
+        const key = (event) => { if (event.key === 'Escape') { swallow(event); post({ kind: 'pickCancel' }); } };
+        addEventListener('mousemove', move, true);
+        addEventListener('click', click, true);
+        for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick', 'dblclick', 'contextmenu']) addEventListener(type, swallow, true);
+        addEventListener('keydown', key, true);
+        pick = { host, stop: () => {
+          removeEventListener('mousemove', move, true); removeEventListener('click', click, true); removeEventListener('keydown', key, true);
+          for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick', 'dblclick', 'contextmenu']) removeEventListener(type, swallow, true);
+          host.remove();
+        } };
+        return true;
+      }
+      function pickStop() { if (pick) { pick.stop(); pick = null; } return true; }
+
+      // Find in page: counts case-insensitive matches in visible text (WebKit's find API reports only found/not found).
+      function countMatches(input) {
+        const needle = String(input.text || '').toLowerCase();
+        if (!needle || !document.body) return 0;
+        let count = 0;
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode() && count < 10000) {
+          const parent = walker.currentNode.parentElement;
+          if (!parent || SKIP.has(parent.localName)) continue;
+          const text = walker.currentNode.data.toLowerCase();
+          let index = text.indexOf(needle);
+          while (index !== -1 && count < 10000) { count++; index = text.indexOf(needle, index + needle.length); }
+        }
+        return count;
+      }
+
+      function favicon() {
+        const links = Array.from(document.querySelectorAll('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]'));
+        const best = links.map((l) => ({ href: l.href, size: parseInt((l.sizes && l.sizes.value || '0').split('x')[0], 10) || 0 }))
+          .filter((l) => /^(https?|data):/.test(l.href)).sort((a, b) => Math.abs(a.size - 32) - Math.abs(b.size - 32));
+        return best.length ? best[0].href : (location.protocol.startsWith('http') ? location.origin + '/favicon.ico' : null);
+      }
+
       const api = { snapshot, point, prepareType, fillScript, selectOptions, clickScript, hoverScript, dragScript, filesScript,
-        checkedState, waitText, iframes, scrollPage, network,
+        checkedState, waitText, iframes, scrollPage, network, pickStart, pickStop, countMatches, favicon,
         frameInfo: () => ({ frameId, url: location.href, name: window.name, top: window === window.top }),
         valueOf: (input) => valueOf(resolve(input.ref)) ?? null, isHovered: (input) => resolve(input.ref).matches(':hover') };
       window.__bc = { frameId, resolve, call: (name, input) => api[name](input) };

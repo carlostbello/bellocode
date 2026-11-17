@@ -78,7 +78,10 @@ let targets: [Target] =
     + library(
         "TerminalKit", dependencies: uiKitDependencies + ["Engine", .product(name: "SwiftTerm", package: "SwiftTerm")],
         testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
-    + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
+    // M4-A: the built-in browser and the agent bridge (docs/features/browser.md). Engine owns the attachments.
+    + library(
+        "BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit", "Engine"],
+        testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
     + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine"], testDependencies: ["MockOpenCode"])
@@ -105,8 +108,12 @@ let targets: [Target] =
         .executableTarget(
             name: "AgentUIDemo", dependencies: ["AgentUI", "Engine", "BelloCore", "OpenCodeKit", "MockOpenCode"],
             swiftSettings: swiftSettings),
-        // SPIKE (gate G3): throwaway browser-bridge prototype. See docs/spikes/G3-browser-bridge.md.
-        .executableTarget(name: "BrowserSpike", dependencies: ["BrowserKit"], swiftSettings: swiftSettings),
+        // M4-A browser harness: fixture site, operation self-test, snapshots and the real-agent end-to-end run
+        // (docs/features/browser.md).
+        .executableTarget(
+            name: "BrowserDemo",
+            dependencies: ["BrowserKit", "Engine", "OpenCodeKit", "MockOpenCode", "BelloCore", "DesignSystem"],
+            swiftSettings: swiftSettings),
     ]
     + [
         // Window shell logic (sidebar tree, commands, restoration, undo, switch timing). `@testable import BelloCodeApp`.
