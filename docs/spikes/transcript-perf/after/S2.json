@@ -1,0 +1,183 @@
+{
+  "display" : {
+    "backingScale" : 1,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 6.66,
+    "maximumFPS" : 165,
+    "screenLocked" : true
+  },
+  "documentHeight" : 2209696,
+  "down" : {
+    "cpuMaxMs" : 300.59,
+    "cpuP99Ms" : 13.66,
+    "durationS" : 410.40024637500755,
+    "frames" : 53121,
+    "maxMs" : 1149.9438749742694,
+    "missedVsyncs" : 14569,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 1052,
+    "over33ms" : 445,
+    "over33msCPUBound" : 2,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 6.110458285547793,
+    "p99Ms" : 26.712708349805325
+  },
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:52:05Z",
+    "memory" : {
+      "footprintMB" : 221.2,
+      "mallocInUseMB" : 142.2,
+      "residentMB" : 367.6
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S2",
+    "window" : "900x900"
+  },
+  "hugeRowHeight" : 23420,
+  "meanVelocityPtPerS" : 6929.1,
+  "memoryAfter" : {
+    "footprintMB" : 221.2,
+    "mallocInUseMB" : 139.9,
+    "residentMB" : 367.6
+  },
+  "metrics" : {
+    "asyncLayouts" : 30018,
+    "heightFlushes" : 1092,
+    "maxFlushMilliseconds" : 722.6258749724366,
+    "maxSyncMilliseconds" : 0,
+    "maxTailApplyMilliseconds" : 0,
+    "measureAllMilliseconds" : 884.117083332967,
+    "measureAllRows" : 13567,
+    "openMilliseconds" : 89.0872500021942,
+    "placeholderRows" : 4,
+    "syncLayouts" : 175,
+    "syncs" : 0,
+    "tailJobs" : 0
+  },
+  "realisticMeanVelocityPtPerS" : 3375.75,
+  "realisticSpeed60s" : {
+    "cpuMaxMs" : 21.69,
+    "cpuP99Ms" : 9.65,
+    "durationS" : 60.00404500000877,
+    "frames" : 9748,
+    "maxMs" : 21.71591663500294,
+    "missedVsyncs" : 148,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 8,
+    "over33ms" : 0,
+    "over33msCPUBound" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 6.110124988481402,
+    "p99Ms" : 9.356666647363454
+  },
+  "tableGeometryErrorPt" : 0,
+  "traversalPeak" : {
+    "atStart" : {
+      "footprintMB" : 200.3,
+      "mallocInUseMB" : 110.6,
+      "residentMB" : 274.4
+    },
+    "cachesAtPeak" : {
+      "availableCellViews" : 7,
+      "canvasBackingBytes" : 95535104,
+      "canvasLayerFormat" : "CALayer RGBA8 contents: true delegate: true",
+      "findIndexEntries" : 0,
+      "findIndexUTF16" : 0,
+      "highlightCacheCost" : 799860,
+      "highlightCacheEntries" : 1221,
+      "imageBytes" : 33177600,
+      "imageCount" : 36,
+      "layoutCost" : 3858,
+      "layoutCostLimit" : 25000,
+      "layoutCount" : 300,
+      "liveCellViews" : 17,
+      "liveRowViews" : 17,
+      "parseCacheCost" : 5033568,
+      "parseCacheCostLimit" : 25165824,
+      "parseCacheEntries" : 3756,
+      "rows" : 13579,
+      "segmentCacheEntries" : 10000
+    },
+    "maxCaches" : {
+      "availableCellViews" : 13,
+      "canvasBackingBytes" : 95535104,
+      "canvasLayerFormat" : "CALayer RGBA8 contents: true delegate: true",
+      "findIndexEntries" : 0,
+      "findIndexUTF16" : 0,
+      "highlightCacheCost" : 799860,
+      "highlightCacheEntries" : 1221,
+      "imageBytes" : 33177600,
+      "imageCount" : 7,
+      "layoutCost" : 4073,
+      "layoutCostLimit" : 25000,
+      "layoutCount" : 300,
+      "liveCellViews" : 17,
+      "liveRowViews" : 17,
+      "parseCacheCost" : 5380837,
+      "parseCacheCostLimit" : 25165824,
+      "parseCacheEntries" : 4090,
+      "rows" : 13579,
+      "segmentCacheEntries" : 10000
+    },
+    "maxSampleMs" : 98.2,
+    "peakAtS" : 593.21,
+    "peakFootprint" : {
+      "footprintMB" : 400.8,
+      "mallocInUseMB" : 145.8,
+      "residentMB" : 555.7
+    },
+    "peakMalloc" : {
+      "footprintMB" : 400.8,
+      "mallocInUseMB" : 145.8,
+      "residentMB" : 555.7
+    },
+    "samples" : 3402
+  },
+  "traversalSpeedMultiplier" : 3,
+  "up" : {
+    "cpuMaxMs" : 351.57,
+    "cpuP99Ms" : 13.8,
+    "durationS" : 370.20488400000613,
+    "frames" : 48965,
+    "maxMs" : 683.595874987077,
+    "missedVsyncs" : 12100,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 1322,
+    "over33ms" : 609,
+    "over33msCPUBound" : 2,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 9.72787500359118,
+    "p99Ms" : 40.988333348650485
+  },
+  "watchdog" : {
+    "maxStallMs" : 992.9350833408535,
+    "p99PingMs" : 99.17833330109715,
+    "pings" : 10696,
+    "stallsOver100ms" : 107,
+    "stallsOver50ms" : 187,
+    "worstStallsMs" : [
+      992.9350833408535,
+      986.8222083314322,
+      964.6512083127163,
+      962.4824166530743,
+      955.657499958761,
+      955.2216667216271,
+      950.4444583435543,
+      832.881125039421
+    ]
+  },
+  "whileHugeRowVisible" : {
+    "durationS" : 6.641041416616645,
+    "frames" : 736,
+    "maxMs" : 352.39050001837313,
+    "missedVsyncs" : 360,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 49,
+    "over33ms" : 8,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 22.61604164959863,
+    "p99Ms" : 33.32495834911242
+  }
+}

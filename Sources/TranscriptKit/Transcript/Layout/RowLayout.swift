@@ -95,7 +95,7 @@ public final class RowLayout {
         total + block.fragments.reduce(1) { sum, fragment in
             switch fragment.content {
             case .lines(let lines): sum + lines.count
-            case .mono(let mono): sum + min(mono.lineCount, 120)
+            case .mono(let mono): sum + min(mono.lineCount, MonoLines.cacheLimit)
             }
         }
     }

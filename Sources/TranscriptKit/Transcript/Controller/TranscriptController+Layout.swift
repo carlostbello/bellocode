@@ -151,8 +151,21 @@ extension TranscriptController {
     func imageSizes(for row: TranscriptRow) -> [String: CGSize] {
         guard !imageSizes.isEmpty else { return [:] }
         var sizes: [String: CGSize] = [:]
-        for source in Self.imageSources(row) { if let size = imageSizes[source] { sizes[source] = size } }
+        for source in imageSources(row) { if let size = imageSizes[source] { sizes[source] = size } }
         return sizes
+    }
+
+    /// A row's image sources, cached by row version: finding them in Markdown means parsing it, which must not
+    /// happen on the main thread per layout request. One entry per row that has images.
+    func imageSources(_ row: TranscriptRow) -> [String] {
+        if case .markdown(let text, _) = row.content {
+            guard text.contains("![") else { return [] }
+            if let cached = imageSourceCache[row.id], cached.version == row.version { return cached.sources }
+            let sources = Self.imageSources(row)
+            imageSourceCache[row.id] = (row.version, sources)
+            return sources
+        }
+        return Self.imageSources(row)
     }
 
     nonisolated static func imageSources(_ row: TranscriptRow) -> [String] {
@@ -180,12 +193,50 @@ extension TranscriptController {
 
     /// Evicts least recently used layouts just until the cache is back under its bounds, so deallocation is spread out.
     func evictLayouts() {
+        TranscriptProfiler.shared.measure(.eviction) { evictLayoutsNow() }
+    }
+
+    private func evictLayoutsNow() {
         let keep = Set(availableCells().map { rows[$0.index].id })
-        let candidates = layoutTick.filter { !keep.contains($0.key) && tails[$0.key] == nil }.sorted { $0.value < $1.value }
-        for (id, _) in candidates {
-            guard layouts.count > layoutCacheLimit || layoutCacheCost > layoutCacheCostLimit else { break }
-            if let old = layouts.removeValue(forKey: id) { layoutCacheCost -= old.cost }
-            layoutTick[id] = nil
+        while layouts.count > layoutCacheLimit || layoutCacheCost > layoutCacheCostLimit {
+            // Least recently used by a linear scan (the cache holds a few hundred entries; sorting it per store
+            // cost more than the scan).
+            var victim: (id: RowID, tick: UInt64)?
+            for (id, tick) in layoutTick where tick < (victim?.tick ?? .max) && !keep.contains(id) && tails[id] == nil {
+                victim = (id, tick)
+            }
+            guard let victim else { break }
+            layoutTick[victim.id] = nil
+            if let old = layouts.removeValue(forKey: victim.id) {
+                layoutCacheCost -= old.cost
+                bury(old)
+            }
+            TranscriptProfiler.shared.count("layoutsEvicted")
+        }
+    }
+
+    /// Evicted layouts are released after the frame, a millisecond's worth per run-loop turn: freeing a layout's
+    /// CTLines inline added up to several milliseconds to the frame that evicted it. Bounded: past
+    /// `graveyardLimit` entries the drain does not stop at its time budget.
+    func bury(_ layout: RowLayout) {
+        graveyard.append(layout)
+        guard !graveyardScheduled else { return }
+        graveyardScheduled = true
+        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.drainGraveyard() } }
+    }
+
+    func drainGraveyard() {
+        graveyardScheduled = false
+        let start = CACurrentMediaTime()
+        TranscriptProfiler.shared.measure(.eviction) {
+            while !graveyard.isEmpty {
+                _ = graveyard.popLast()
+                if graveyard.count <= Self.graveyardLimit, CACurrentMediaTime() - start > 0.001 { break }
+            }
+        }
+        if !graveyard.isEmpty, !graveyardScheduled {
+            graveyardScheduled = true
+            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.drainGraveyard() } }
         }
     }
 
@@ -207,8 +258,11 @@ extension TranscriptController {
             metrics.placeholderRows += 1
             return nil
         }
+        TranscriptProfiler.shared.count(inflight[id] != nil ? "syncLayoutWhileInflight" : layoutTick[id] != nil ? "syncLayoutStale" : "syncLayoutNeverRequested")
         let signpost = transcriptSignposter.beginInterval("syncLayout")
-        let layout = LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+        let layout = TranscriptProfiler.shared.measure(.syncLayout) {
+            LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+        }
         transcriptSignposter.endInterval("syncLayout", signpost)
         metrics.syncLayouts += 1
         store(layout)
@@ -220,9 +274,11 @@ extension TranscriptController {
         guard index < rows.count else { return }
         let row = rows[index]
         if tails[row.id] != nil { return }
-        let input = layoutInput(row: index)
-        let key = input.key
+        // The key first: building an input looks up image sizes, which is not free, and most requests (every
+        // prefetch pass re-requests the whole window) find the layout cached or in flight.
+        let key = currentKey(row: index)
         if layouts[row.id]?.key == key || inflight[row.id] == key { return }
+        let input = layoutInput(row: index)
         inflight[row.id] = key
         layoutTasks[row.id]?.cancel()
         metrics.asyncLayouts += 1
@@ -234,12 +290,16 @@ extension TranscriptController {
     }
 
     func didFinishLayout(_ layout: RowLayout) {
+        TranscriptProfiler.shared.measure(.layoutApply) { applyFinishedLayout(layout) }
+    }
+
+    private func applyFinishedLayout(_ layout: RowLayout) {
         let id = layout.key.rowID
         if inflight[id] == layout.key {
             inflight[id] = nil
             layoutTasks[id] = nil
         }
-        defer { if inflight.count < maxInflightPrefetch / 2 { updatePrefetch(force: true) } }
+        defer { if inflight.count < maxInflightPrefetch / 2 { schedulePrefetch() } }
         guard let index = rowIndex[id], currentKey(row: index) == layout.key else { return }  // stale: drop
         followLiveOutput(row: index, layout: layout)
         store(layout)
@@ -250,14 +310,32 @@ extension TranscriptController {
     func acceptHeight(_ layout: RowLayout, row index: Int) {
         heightKeys[index] = layout.key
         if abs(heights[index] - layout.height) > 0.25 {
+            TranscriptProfiler.shared.count(layout.key.uiVersion == 0 ? "heightChangesContent" : "heightChangesUI")
             pendingHeights[layout.key.rowID] = layout.height
             scheduleFlush()
+        }
+    }
+
+    /// One prefetch pass per run-loop turn for the layouts that finished in it (each used to start a full pass).
+    func schedulePrefetch() {
+        guard !prefetchScheduled else { return }
+        prefetchScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.prefetchScheduled = false
+                self.updatePrefetch(force: true)
+            }
         }
     }
 
     /// Visible rows first; then rows ahead in the scroll direction (0.5 s of travel, at least 1.5 viewports), then
     /// one viewport behind. At most `maxInflightPrefetch` prefetch layouts run at once.
     func updatePrefetch(force: Bool = false) {
+        TranscriptProfiler.shared.measure(.prefetch) { updatePrefetchNow(force: force) }
+    }
+
+    private func updatePrefetchNow(force: Bool) {
         guard !rows.isEmpty else { return }
         let visible = tableView.visibleRect
         guard visible.height > 0 else { return }
@@ -295,6 +373,10 @@ extension TranscriptController {
 
     /// Applies all pending height changes in one table update and restores the anchor.
     public func flushHeights() {
+        TranscriptProfiler.shared.measure(.heightFlush) { flushHeightsNow() }
+    }
+
+    private func flushHeightsNow() {
         flushScheduled = false
         guard !pendingHeights.isEmpty else { return }
         let signpost = transcriptSignposter.beginInterval("flushHeights")
@@ -307,11 +389,19 @@ extension TranscriptController {
             tableRows.insert(index + 1)
         }
         pendingHeights.removeAll()
+        TranscriptProfiler.shared.count("heightFlushRows", tableRows.count)
+        TranscriptProfiler.shared.count("heightFlushes")
+        var t = CACurrentMediaTime()
         withoutAnimation { tableView.noteHeightOfRows(withIndexesChanged: tableRows) }
+        TranscriptProfiler.shared.count("flushNoteMicros", Int((CACurrentMediaTime() - t) * 1e6))
+        t = CACurrentMediaTime()
         forceTableGeometry(from: tableRows.first ?? 0)
+        TranscriptProfiler.shared.count("flushGeometryMicros", Int((CACurrentMediaTime() - t) * 1e6))
         for (index, view) in availableCells() where tableRows.contains(index + 1) { configure(view, index: index) }
+        t = CACurrentMediaTime()
         updateSpacer()
         restore(anchor)
+        TranscriptProfiler.shared.count("flushRestoreMicros", Int((CACurrentMediaTime() - t) * 1e6))
         metrics.heightFlushes += 1
         metrics.maxFlushMilliseconds = max(metrics.maxFlushMilliseconds, (CACurrentMediaTime() - start) * 1000)
         transcriptSignposter.endInterval("flushHeights", signpost)

@@ -21,7 +21,8 @@ public protocol TranscriptImageLoading: Sendable {
 /// main actor. Network loads are limited in size and time.
 public struct DefaultImageLoader: TranscriptImageLoading {
     public static let maxBytes = 25 << 20
-    public static let maxPixelSize = 2_400
+    /// Twice the widest column (760 pt): enough for Retina, and a 14 MB bitmap at most is 6 MB.
+    public static let maxPixelSize = 1_600
 
     public init() {}
 

@@ -1,0 +1,36 @@
+{
+  "documentHeight" : 2209466,
+  "exactRowsAtOpen" : 12,
+  "fullOpenPassMs" : 90.37,
+  "fullOpenToFirstContentFrameMs" : 92.87,
+  "fullRows" : 13579,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:59:50Z",
+    "memory" : {
+      "footprintMB" : 216.6,
+      "mallocInUseMB" : 111.9,
+      "residentMB" : 289
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S1",
+    "window" : "900x900"
+  },
+  "loadAllHistoryMs" : 2075.68,
+  "measureAllMs" : 795.68,
+  "measureAllRows" : 13567,
+  "memoryAtOpen" : {
+    "footprintMB" : 200.7,
+    "mallocInUseMB" : 109.9,
+    "residentMB" : 271.8
+  },
+  "memorySettled" : {
+    "footprintMB" : 216.6,
+    "mallocInUseMB" : 111.9,
+    "residentMB" : 289
+  },
+  "processLaunchToFirstFrameS" : 0.95,
+  "windowOpenToFirstContentFrameMs" : 18.67,
+  "windowRows" : 70
+}

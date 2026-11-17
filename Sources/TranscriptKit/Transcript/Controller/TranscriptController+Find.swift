@@ -9,6 +9,7 @@ extension TranscriptController {
 
     /// Shows the find bar (⌘F) and focuses its field.
     public func showFind() {
+        prewarmFindIndex()
         findBar.isHidden = false
         findBar.window?.makeFirstResponder(findBar.field)
         if !findBar.field.stringValue.isEmpty { setFindQuery(findBar.field.stringValue) }
@@ -27,13 +28,34 @@ extension TranscriptController {
         tableView.window?.makeFirstResponder(tableView)
     }
 
-    /// "Use Selection for Find" (⌘E).
+    /// "Use Selection for Find" (⌘E): the selection of whatever has keyboard focus. When a text view other than the
+    /// transcript is first responder (the composer, the find field's editor), its selection is used, even when empty
+    /// (then nothing happens); the transcript's own selection only when it has focus or no text view does.
     public func useSelectionForFind() {
-        let text = selectedText().trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = focusedTextSelection() ?? selectedText()
+        let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 500 else { NSSound.beep(); return }
         findBar.field.stringValue = text
         findBar.isHidden = false
         setFindQuery(text)
+    }
+
+    /// The selected text of the window's first responder when it is a text input other than the transcript; nil when
+    /// the transcript (or no text input) has focus.
+    func focusedTextSelection() -> String? {
+        guard let responder = tableView.window?.firstResponder, responder !== tableView else { return nil }
+        if let textView = responder as? NSTextView {
+            let range = textView.selectedRange()
+            let string = textView.string as NSString
+            guard range.location != NSNotFound, NSMaxRange(range) <= string.length else { return "" }
+            return string.substring(with: range)
+        }
+        if let client = responder as? any NSTextInputClient {
+            let range = client.selectedRange()
+            guard range.location != NSNotFound, range.length > 0 else { return "" }
+            return client.attributedSubstring(forProposedRange: range, actualRange: nil)?.string ?? ""
+        }
+        return nil
     }
 
     /// Searches for `query` (debounced); the first match at or after the viewport becomes current and is revealed.
@@ -164,19 +186,11 @@ extension TranscriptController {
 
     // MARK: Index
 
-    /// The search index, refreshed for rows whose version changed. A first build of a long thread runs off the main
-    /// actor (it parses every message once; the parse cache keeps the result for layout).
+    /// The search index for every row, current with the rows' versions. Indexing (parsing and folding every row's
+    /// text) runs off the main actor in chunks; the main actor only merges entries (see `updateFindIndex`).
+    /// Streaming tails are indexed from their current parse.
     func findEntries() async -> [FindIndexEntry] {
-        let stale = rows.filter { findIndex[$0.id]?.version != $0.version && tails[$0.id] == nil }
-        if stale.count > 64 {
-            let cache = blockCache
-            let entries = await Self.indexRows(stale, cache: cache)
-            for entry in entries { findIndex[entry.rowID] = entry }
-        } else {
-            for row in stale {
-                findIndex[row.id] = FindIndexEntry(rowID: row.id, version: row.version, blocks: blockCache.blocks(for: row).map(\.plainText))
-            }
-        }
+        await updateFindIndex()
         return rows.map { row in
             if tails[row.id] != nil, let index = rowIndex[row.id] {
                 return FindIndexEntry(rowID: row.id, version: row.version, blocks: blocks(row: index).map(\.plainText))
@@ -185,9 +199,72 @@ extension TranscriptController {
         }
     }
 
+    /// Starts indexing ahead of the query (the find bar opened): typing and the debounce overlap the build.
+    func prewarmFindIndex() {
+        guard findIndexTask == nil, rows.contains(where: { findIndex[$0.id]?.version != $0.version }) else { return }
+        findIndexTask = Task { [weak self] in
+            await self?.indexStaleRows()
+            self?.findIndexTask = nil
+        }
+    }
+
+    /// Brings the index up to date. Callers share one indexing task.
+    func updateFindIndex() async {
+        if let running = findIndexTask {
+            await running.value
+        }
+        await indexStaleRows()
+    }
+
+    /// Indexes rows whose entry is missing or stale: chunks of `findIndexChunk` rows on up to four tasks at utility
+    /// QoS, each merged on the main actor as it arrives (a few hundred dictionary inserts). Checks the generation
+    /// so a rebind drops late results.
+    func indexStaleRows() async {
+        let generation = observationGeneration
+        let stale = rows.filter { findIndex[$0.id]?.version != $0.version && tails[$0.id] == nil }
+        guard !stale.isEmpty else { return }
+        let signpost = transcriptSignposter.beginInterval("findIndex")
+        defer { transcriptSignposter.endInterval("findIndex", signpost) }
+        let chunks = stride(from: 0, to: stale.count, by: Self.findIndexChunk).map {
+            Array(stale[$0..<min($0 + Self.findIndexChunk, stale.count)])
+        }
+        let cache = blockCache
+        await withTaskGroup(of: [FindIndexEntry].self) { group in
+            var next = 0
+            for _ in 0..<min(4, chunks.count) {
+                let chunk = chunks[next]
+                group.addTask(priority: .utility) { await Self.indexRows(chunk, cache: cache) }
+                next += 1
+            }
+            for await entries in group {
+                guard !Task.isCancelled, observationGeneration == generation else {
+                    group.cancelAll()
+                    return
+                }
+                for entry in entries where rowIndex[entry.rowID] != nil { findIndex[entry.rowID] = entry }
+                if next < chunks.count {
+                    let chunk = chunks[next]
+                    group.addTask(priority: .utility) { await Self.indexRows(chunk, cache: cache) }
+                    next += 1
+                }
+            }
+        }
+    }
+
+    static let findIndexChunk = 512
+
+    /// Parsed blocks come from the parse cache when present but are not stored in it: indexing 13,000 rows would
+    /// evict everything layout needs.
     @concurrent
     static func indexRows(_ rows: [TranscriptRow], cache: RenderBlockCache) async -> [FindIndexEntry] {
-        rows.map { row in FindIndexEntry(rowID: row.id, version: row.version, blocks: cache.blocks(for: row).map(\.plainText)) }
+        var result: [FindIndexEntry] = []
+        result.reserveCapacity(rows.count)
+        for row in rows {
+            if Task.isCancelled { break }
+            let blocks = cache.cachedBlocks(for: row) ?? RenderBlocks.blocks(for: row)
+            result.append(FindIndexEntry(rowID: row.id, version: row.version, blocks: blocks.map(\.plainText)))
+        }
+        return result
     }
 
     /// Rows changed: their index entries are stale; an open search refreshes.
@@ -234,15 +311,11 @@ extension TranscriptController {
 
     func imageArrived(_ source: String, _ loaded: LoadedImage?) {
         guard let loaded else { return }  // stays a placeholder (unreachable, unsupported or too large)
-        let bytes = loaded.image.bytesPerRow * loaded.image.height
+        tick += 1
         images[source] = loaded.image
-        imageOrder.append(source)
-        imageBytes += bytes
-        while imageBytes > imageByteLimit, imageOrder.count > 1 {
-            let old = imageOrder.removeFirst()
-            if let image = images.removeValue(forKey: old) { imageBytes -= image.bytesPerRow * image.height }
-            imageRequests.remove(old)
-        }
+        imageTick[source] = tick
+        imageBytes += loaded.image.bytesPerRow * loaded.image.height
+        evictImages()
         let knew = imageSizes[source] != nil
         imageSizes[source] = loaded.pixelSize
         for id in imageRows[source] ?? [] {
@@ -257,7 +330,29 @@ extension TranscriptController {
         }
     }
 
-    func image(_ source: String) -> CGImage? { images[source] }
+    func image(_ source: String) -> CGImage? {
+        guard let image = images[source] else { return nil }
+        tick += 1
+        imageTick[source] = tick
+        return image
+    }
+
+    /// Least recently drawn images go first; images of rows AppKit is displaying stay (they are re-requested when a
+    /// row that lost its image is configured again).
+    func evictImages() {
+        guard imageBytes > imageByteLimit else { return }
+        let visible = Set(availableCells().flatMap { cell in cell.view.layout?.blocks.flatMap { $0.images.map(\.source) } ?? [] })
+        for (source, _) in imageTick.sorted(by: { $0.value < $1.value }) where !visible.contains(source) {
+            guard imageBytes > imageByteLimit else { break }
+            dropImage(source)
+        }
+    }
+
+    func dropImage(_ source: String) {
+        if let image = images.removeValue(forKey: source) { imageBytes -= image.bytesPerRow * image.height }
+        imageTick[source] = nil
+        imageRequests.remove(source)
+    }
 
     /// Harness: whether an image source has loaded.
     public func isImageLoaded(_ source: String) -> Bool { images[source] != nil }

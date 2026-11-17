@@ -62,6 +62,10 @@ extension TranscriptController {
     // MARK: Follow, release, rejoin
 
     func boundsChanged() {
+        TranscriptProfiler.shared.measure(.scroll) { boundsChangedNow() }
+    }
+
+    private func boundsChangedNow() {
         let now = CACurrentMediaTime()
         let y = scrollView.contentView.bounds.minY
         if now - lastBoundsTime > 0.2 {

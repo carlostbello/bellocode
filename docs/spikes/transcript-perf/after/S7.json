@@ -1,0 +1,38 @@
+{
+  "autoscrollFrames" : {
+    "durationS" : 4.450562666694168,
+    "frames" : 734,
+    "maxMs" : 6.110500020440668,
+    "missedVsyncs" : 0,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 0,
+    "over33ms" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 6.1102500185370445,
+    "p99Ms" : 6.110375048592687
+  },
+  "collapsedRevealedAndExpanded" : true,
+  "copiedCharacters" : 16365,
+  "copyMs" : 1.96,
+  "copySurvivesScrolling" : true,
+  "findCollapsedMs" : 33.26,
+  "findCollapsedRowsAway" : 7050,
+  "findProseMainThreadMs" : 25.11,
+  "findProseMaxFrameMs" : 6.11,
+  "findProseMs" : 130.95,
+  "findProseRowsAway" : 3001,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:55:54Z",
+    "memory" : {
+      "footprintMB" : 254.2,
+      "mallocInUseMB" : 146,
+      "residentMB" : 353.5
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S7",
+    "window" : "900x900"
+  },
+  "selectedRows" : 60
+}

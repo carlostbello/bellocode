@@ -1,4 +1,6 @@
 import AppKit
+import QuartzCore
+import Synchronization
 
 /// Single-column, view-based table. Row selection is off: text selection is the controller's transcript-level model.
 /// The table owns all mouse handling; rows are passive renderers configured from controller state, so selection,
@@ -171,6 +173,23 @@ public final class TranscriptTableView: NSTableView, NSMenuItemValidation {
 
 /// Row view without selection drawing; never a hit-test target, so the table receives every mouse event.
 final class TranscriptRowView: NSTableRowView {
+    static let identifier = NSUserInterfaceItemIdentifier("TranscriptRow")
+    /// Live row views, including AppKit's reuse queue and purgatory (cache report; a regression guard).
+    nonisolated static let liveCount = Atomic<Int>(0)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = Self.identifier
+        Self.liveCount.add(1, ordering: .relaxed)
+    }
+
+    convenience init() { self.init(frame: .zero) }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit { Self.liveCount.subtract(1, ordering: .relaxed) }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func drawSelection(in dirtyRect: NSRect) {}
     override func drawBackground(in dirtyRect: NSRect) {}
@@ -223,9 +242,12 @@ final class TranscriptCellView: NSView {
     var drawState = RowLayout.DrawState(selectionColor: NSColor.selectedTextBackgroundColor.cgColor)
     private(set) var isHovered = false
     let canvas = TranscriptCanvasView()
+    /// Live cell views, including AppKit's reuse queue (cache report).
+    nonisolated static let liveCount = Atomic<Int>(0)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        Self.liveCount.add(1, ordering: .relaxed)
         identifier = Self.identifier
         canvas.owner = self
         addSubview(canvas)
@@ -235,6 +257,8 @@ final class TranscriptCellView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { Self.liveCount.subtract(1, ordering: .relaxed) }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -276,13 +300,19 @@ final class TranscriptCellView: NSView {
         return (columnX - Self.gutter, contentWidth + 2 * Self.gutter)
     }
 
+    /// Canvas heights come in 128 pt steps. A reused cell then usually keeps its canvas size, and with it its backing
+    /// store: before, nearly every row drawn while scrolling (2,338 of 2,526) resized its canvas, so Core Animation
+    /// allocated a new surface through the window server for each, and the main thread waited on that IPC under load.
+    /// The part below a short row is transparent and never drawn or hit-tested.
+    static func bucket(_ height: CGFloat) -> CGFloat { max(128, ceil(height / 128) * 128) }
+
     /// Keeps the canvas covering the visible part (plus margin) of tall rows, with hysteresis.
     func updateCanvas(force: Bool = false) {
         let bounds = self.bounds
         let column = columnFrame()
         let target: CGRect
         if bounds.height <= Self.tallRowThreshold {
-            target = CGRect(x: column.x, y: 0, width: column.width, height: bounds.height)
+            target = CGRect(x: column.x, y: 0, width: column.width, height: Self.bucket(bounds.height))
         } else {
             let visible = visibleRect
             if !force, !canvas.frame.isEmpty, !visible.isEmpty, canvas.frame.minX == column.x, canvas.frame.width == column.width,
@@ -294,9 +324,10 @@ final class TranscriptCellView: NSView {
             let center = visible.isEmpty ? CGRect(x: 0, y: 0, width: bounds.width, height: 1) : visible
             let top = max(0, floor(center.minY - margin))
             let bottom = min(bounds.height, ceil(center.maxY + margin))
-            target = CGRect(x: column.x, y: top, width: column.width, height: max(1, bottom - top))
+            target = CGRect(x: column.x, y: top, width: column.width, height: Self.bucket(max(1, bottom - top)))
         }
         if canvas.frame.size != target.size || canvas.frame.minY != target.minY {
+            if canvas.frame.size != target.size { TranscriptProfiler.shared.count("canvasResizes") }
             canvas.frame = target
             canvas.needsDisplay = true
         } else if canvas.frame.origin != target.origin {
@@ -304,12 +335,32 @@ final class TranscriptCellView: NSView {
         }
     }
 
+    /// Accessibility attributes are computed when an accessibility client asks, not on every configure: the value is
+    /// the row's whole visible text (a 100 KB code block for the largest row) and the custom actions allocate objects
+    /// per hotspot. Configure only announces that the element changed, and only to a running client.
     func updateAccessibility() {
-        guard let controller, let row, let index = controller.rowIndex[row.id] else { return }
-        setAccessibilityLabel(controller.accessibilityLabel(row))
-        setAccessibilityValue(controller.accessibilityValue(index))
-        setAccessibilityCustomActions(controller.accessibilityActions(index, layout: layout))
-        setAccessibilityRoleDescription(row.role == .user ? "prompt" : row.role == .system ? "event" : "reply")
+        guard controller?.isVoiceOverRunning == true else { return }
+        NSAccessibility.post(element: self, notification: .valueChanged)
+    }
+
+    override func accessibilityLabel() -> String? {
+        guard let controller, let row else { return nil }
+        return controller.accessibilityLabel(row)
+    }
+
+    override func accessibilityValue() -> Any? {
+        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
+        return controller.accessibilityValue(index)
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
+        return controller.accessibilityActions(index, layout: layout)
+    }
+
+    override func accessibilityRoleDescription() -> String? {
+        guard let row else { return nil }
+        return row.role == .user ? "prompt" : row.role == .system ? "event" : "reply"
     }
 
     // Accessibility text range support for VoiceOver's reading of selected text.
@@ -333,6 +384,30 @@ final class TranscriptCanvasView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        // 8 bits per channel. On a wide-gamut/EDR display the automatic format is 16-bit float (rgba64 in samples
+        // of slow frames): twice the backing-store memory and a slower rasterization path, for text and sRGB fills
+        // that gain nothing from it.
+        layer?.contentsFormat = .RGBA8Uint
+    }
+
+    /// A plain CALayer (AppKit draws into it through the view as the layer's delegate): NSViewBackingLayer resets
+    /// `contentsFormat` to the window's depth, which on this display is 64-bit.
+    override func makeBackingLayer() -> CALayer {
+        let layer = CALayer()
+        layer.contentsFormat = .RGBA8Uint
+        return layer
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        layer?.contentsScale = window?.backingScaleFactor ?? 2
+        needsDisplay = true
+    }
+
+    /// Format of the backing layer (harness check).
+    var backingFormat: String {
+        guard let layer else { return "no layer" }
+        return "\(type(of: layer)) \(layer.contentsFormat.rawValue) contents: \(layer.contents != nil) delegate: \(layer.delegate === self)"
     }
 
     @available(*, unavailable)
@@ -340,6 +415,31 @@ final class TranscriptCanvasView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let owner, let layout = owner.layout, let context = NSGraphicsContext.current?.cgContext else { return }
+        let profiler = TranscriptProfiler.shared
+        if profiler.isEnabled {
+            profiler.count("canvasDraws")
+            profiler.count("canvasDrawKPoints", Int(dirtyRect.width * dirtyRect.height / 1000))
+            profiler.count("canvasDraws." + (owner.row.map { TranscriptCanvasView.kindName($0.content) } ?? "none"))
+        }
+        let start = CACurrentMediaTime()
+        profiler.measure(.draw) { drawNow(dirtyRect, owner: owner, layout: layout, context: context) }
+        if profiler.isEnabled, let row = owner.row {
+            profiler.count("drawMicros." + TranscriptCanvasView.kindName(row.content), Int((CACurrentMediaTime() - start) * 1e6))
+        }
+    }
+
+    static func kindName(_ content: RowContent) -> String {
+        switch content {
+        case .user: "user"
+        case .markdown(let text, _): text.contains("```") ? "markdownCode" : text.contains("\n|") ? "markdownTable" : "markdown"
+        case .reasoning: "reasoning"
+        case .work: "work"
+        case .file: "file"
+        default: "other"
+        }
+    }
+
+    private func drawNow(_ dirtyRect: NSRect, owner: TranscriptCellView, layout: RowLayout, context: CGContext) {
         let signpost = transcriptSignposter.beginInterval("draw")
         defer { transcriptSignposter.endInterval("draw", signpost) }
         // Canvas coordinates: x = 0 is `gutter` points left of the text column; y follows the row.

@@ -1,0 +1,139 @@
+{
+  "afterClose" : {
+    "footprintMB" : 171,
+    "mallocInUseMB" : 103,
+    "residentMB" : 275.1
+  },
+  "afterScenarios" : {
+    "footprintMB" : 149.5,
+    "mallocInUseMB" : 86,
+    "residentMB" : 215.2
+  },
+  "cycles" : [
+    {
+      "footprintMB" : 193,
+      "mallocInUseMB" : 112.7,
+      "residentMB" : 264.2
+    },
+    {
+      "footprintMB" : 194.9,
+      "mallocInUseMB" : 115.2,
+      "residentMB" : 266.9
+    },
+    {
+      "footprintMB" : 195.1,
+      "mallocInUseMB" : 116.8,
+      "residentMB" : 267.9
+    },
+    {
+      "footprintMB" : 198.9,
+      "mallocInUseMB" : 119.9,
+      "residentMB" : 272.5
+    },
+    {
+      "footprintMB" : 169.8,
+      "mallocInUseMB" : 120.5,
+      "residentMB" : 268.3
+    },
+    {
+      "footprintMB" : 172,
+      "mallocInUseMB" : 120.7,
+      "residentMB" : 270.5
+    },
+    {
+      "footprintMB" : 173.1,
+      "mallocInUseMB" : 121.8,
+      "residentMB" : 271.8
+    },
+    {
+      "footprintMB" : 175.8,
+      "mallocInUseMB" : 121.5,
+      "residentMB" : 274.5
+    },
+    {
+      "footprintMB" : 175.1,
+      "mallocInUseMB" : 122,
+      "residentMB" : 273.8
+    },
+    {
+      "footprintMB" : 174.1,
+      "mallocInUseMB" : 122.4,
+      "residentMB" : 272.8
+    },
+    {
+      "footprintMB" : 176.8,
+      "mallocInUseMB" : 121.7,
+      "residentMB" : 276.2
+    },
+    {
+      "footprintMB" : 177,
+      "mallocInUseMB" : 123.1,
+      "residentMB" : 277.8
+    },
+    {
+      "footprintMB" : 180.4,
+      "mallocInUseMB" : 124.2,
+      "residentMB" : 281.1
+    },
+    {
+      "footprintMB" : 178,
+      "mallocInUseMB" : 124,
+      "residentMB" : 278.7
+    },
+    {
+      "footprintMB" : 175.4,
+      "mallocInUseMB" : 124.8,
+      "residentMB" : 276.8
+    },
+    {
+      "footprintMB" : 179.1,
+      "mallocInUseMB" : 125.9,
+      "residentMB" : 281.3
+    },
+    {
+      "footprintMB" : 174.6,
+      "mallocInUseMB" : 125,
+      "residentMB" : 276.8
+    },
+    {
+      "footprintMB" : 175.6,
+      "mallocInUseMB" : 126.1,
+      "residentMB" : 278.5
+    },
+    {
+      "footprintMB" : 177,
+      "mallocInUseMB" : 127.3,
+      "residentMB" : 280.6
+    },
+    {
+      "footprintMB" : 175.3,
+      "mallocInUseMB" : 127.3,
+      "residentMB" : 278.9
+    }
+  ],
+  "display" : {
+    "backingScale" : 1,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 11.62,
+    "maximumFPS" : 165,
+    "screenLocked" : true
+  },
+  "floor" : {
+    "footprintMB" : 149.5,
+    "mallocInUseMB" : 86,
+    "residentMB" : 215.1
+  },
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:56:10Z",
+    "memory" : {
+      "footprintMB" : 171,
+      "mallocInUseMB" : 103,
+      "residentMB" : 275.1
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S8",
+    "window" : "900x900"
+  }
+}

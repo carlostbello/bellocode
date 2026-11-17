@@ -1,0 +1,29 @@
+# heap -s after one 3x downward traversal of the large fixture, before M2-B (commit e2fbcaf); top classes by bytes.
+# TranscriptRowView x 11,615 (with NSISEngine, _NSViewLayoutAux, NSViewBackingLayerContents each): row views retained by
+# NSTableRowData._rowViewPurgatory (leaks --trace). Footprint 407 MB at rest, 580 MB peak; floor (mock + Engine) ~150 MB.
+Physical footprint:         407.5M
+Physical footprint (peak):  580.4M
+   COUNT      BYTES       AVG   CLASS_NAME                                        TYPE    BINARY
+   =====      =====       ===   ==========                                        ====    ======
+  292670  185016000     632.2   non-object                                                
+  119442   61215504     512.5   Swift.StringStorage                               Swift   libswiftCore.dylib
+   11615    8920320     768.0   TranscriptRowView                                 Swift   TranscriptDemo
+   11732    5255936     448.0   _NSViewLayoutAux                                  ObjC    AppKit
+   11635    5212480     448.0   NSISEngine                                        ObjC    CoreAutoLayout
+   11391    4374144     384.0   NSViewBackingLayerContents                        Swift   AppKit
+    6651    3549440     533.7   Swift._ContiguousArrayStorage<BelloCore.Part>     Swift   libswiftCore.dylib
+   10000    3447744     344.8   Swift._ContiguousArrayStorage<TranscriptKit.RowBuilder.Segment>  Swift   libswiftCore.dylib
+     290    3426560   11815.7   Swift._ContiguousArrayStorage<MockOpenCode.MockMessage>  Swift   libswiftCore.dylib
+   10000    3200000     320.0   MessageModel                                      Swift   TranscriptDemo
+   11618    2974208     256.0   NSISObjectiveLinearExpression._priorityMap (struct)  C       CoreAutoLayout
+    1221    2471680    2024.3   Swift._ContiguousArrayStorage<TranscriptKit.TokenRun>  Swift   libswiftCore.dylib
+    7336    2471488     336.9   Swift._ContiguousArrayStorage<MockOpenCode.AssistantPart>  Swift   libswiftCore.dylib
+    1124    2351808    2092.4   _CTNativeGlyphStorage._advanceWidths (double[])   C       CoreText
+   47468    2278464      48.0   NSMutableArray                                    ObjC    CoreFoundation
+    3720    2264544     608.7   Swift._ContiguousArrayStorage<TranscriptKit.RenderBlock>  Swift   libswiftCore.dylib
+    5048    2261504     448.0   CTRun                                             CFType  CoreText
+   46278    2221344      48.0   NSISVariableObservation                           ObjC    CoreAutoLayout
+       1    2015232  2015232.0   Swift._ContiguousArrayStorage<TranscriptKit.TranscriptRow>  Swift   libswiftCore.dylib
+   23329    1866320      80.0   NSLayoutConstraint                                ObjC    CoreAutoLayout
+   23274    1861920      80.0   NSISInlineStorageVariable                         ObjC    CoreAutoLayout
+   11753    1504384     128.0   NSMapTable                                        ObjC    Foundation

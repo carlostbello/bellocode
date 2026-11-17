@@ -87,6 +87,11 @@ extension ScenarioRunner {
         var hugeRowHeight: Double
         var tableGeometryErrorPt: Double
         var memoryAfter: Memory
+        var display: DisplayInfo.Info?
+        /// Footprint and live malloc peaks during the 3× traversal, with the cache report at the footprint peak.
+        var traversalPeak: PeakSampler.Report?
+        /// With `--profile`: main-thread time by phase, all frames and slow frames (both directions).
+        var attribution: FrameAttribution.Report?
     }
 
     func runS2() async {
@@ -105,9 +110,14 @@ extension ScenarioRunner {
         var flick = Flick()
         var travelled = 0.0
         var duration = 0.0
+        let sampler = PeakSampler()
+        let attribution = arguments.contains("--profile") ? FrameAttribution(nominal: nominal) : nil
+        var firstFrame = true
         watchdog.start()
         recorder.start()
         await perFrame { [self] dt, _ in
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame(); _ = TranscriptProfiler.shared.takeFrameCPU() } else { attribution?.frame(interval: dt) }
+            sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: d)
             travelled += d
@@ -115,11 +125,15 @@ extension ScenarioRunner {
             return controller.distanceFromBottom > 1
         }
         let downIntervals = recorder.stop()
+        let downCPU = recorder.cpu
         let downTags = recorder.tags
         log("S2 down done (\(downIntervals.count) frames)")
         recorder.start()
         flick = Flick()
+        firstFrame = true
         await perFrame { [self] dt, _ in
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame(); _ = TranscriptProfiler.shared.takeFrameCPU() } else { attribution?.frame(interval: dt) }
+            sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: -d)
             travelled += d
@@ -127,7 +141,9 @@ extension ScenarioRunner {
             return controller.scrollView.contentView.bounds.minY > 0.5
         }
         let upIntervals = recorder.stop()
+        let upCPU = recorder.cpu
         let upTags = recorder.tags
+        let profile = attribution?.finish()
         recorder.tagProvider = nil
         log("S2 up done (\(upIntervals.count) frames)")
         let huge = zip(downIntervals + upIntervals, downTags + upTags).filter(\.1).map(\.0)
@@ -149,15 +165,17 @@ extension ScenarioRunner {
             return elapsed < 60
         }
         let realistic = recorder.stop()
+        let realisticCPU = recorder.cpu
         Report.write(
             S2Report(
-                header: header("S2"), documentHeight: documentHeight, down: FrameStats(intervals: downIntervals, nominal: nominal),
-                up: FrameStats(intervals: upIntervals, nominal: nominal), whileHugeRowVisible: FrameStats(intervals: huge, nominal: nominal),
-                realisticSpeed60s: FrameStats(intervals: realistic, nominal: nominal),
+                header: header("S2"), documentHeight: documentHeight, down: FrameStats(intervals: downIntervals, nominal: nominal, cpu: downCPU),
+                up: FrameStats(intervals: upIntervals, nominal: nominal, cpu: upCPU), whileHugeRowVisible: FrameStats(intervals: huge, nominal: nominal),
+                realisticSpeed60s: FrameStats(intervals: realistic, nominal: nominal, cpu: realisticCPU),
                 meanVelocityPtPerS: round2(travelled / max(duration, 0.001)),
                 realisticMeanVelocityPtPerS: round2(realTravel / max(realDuration, 0.001)), traversalSpeedMultiplier: scrollSpeed,
                 watchdog: watchdog.stop(), metrics: controller.metrics, hugeRowHeight: Double(controller.rowRect(hugeIndex).height),
-                tableGeometryErrorPt: geometryError(), memoryAfter: Memory.now()),
+                tableGeometryErrorPt: geometryError(), memoryAfter: Memory.now(), display: DisplayInfo.current(window: window),
+                traversalPeak: sampler.report, attribution: profile),
             name: "S2")
     }
 
@@ -586,6 +604,9 @@ extension ScenarioRunner {
         var copiedCharacters: Int
         var copySurvivesScrolling: Bool
         var findProseMs: Double
+        /// Main-thread CPU time of the first query (indexing runs off the main actor) and the longest frame meanwhile.
+        var findProseMainThreadMs: Double?
+        var findProseMaxFrameMs: Double?
         var findProseRowsAway: Int
         var findCollapsedMs: Double
         var findCollapsedRowsAway: Int
@@ -628,23 +649,34 @@ extension ScenarioRunner {
         controller.clearSelection()
 
         // Find: prose ~3,000 rows away; then text inside a collapsed tool output ~2,500 rows away.
+        var lastFindMainMs = 0.0
+        var lastFindMaxFrameMs = 0.0
         func find(_ query: String) async -> Double {
             let start = CACurrentMediaTime()
+            let cpu = ProcessStats.threadCPUMilliseconds()
+            recorder.start()
             controller.showFind()
             controller.setFindQuery(query, debounce: false)
             while controller.findMatches.isEmpty, CACurrentMediaTime() - start < 10 { await sleep(0.005) }
-            log("find “\(query.prefix(40))”: \(controller.findMatches.count) matches")
+            lastFindMainMs = ProcessStats.threadCPUMilliseconds() - cpu
+            lastFindMaxFrameMs = (recorder.stop().max() ?? 0) * 1000
+            let elapsed = (CACurrentMediaTime() - start) * 1000
+            log("find “\(query.prefix(40))”: \(controller.findMatches.count) matches, \(Int(elapsed)) ms, main thread \(Int(lastFindMainMs)) ms")
             await controller.settle()
-            return (CACurrentMediaTime() - start) * 1000
+            return elapsed
         }
         let here = controller.tableView.row(at: NSPoint(x: 1, y: controller.scrollView.contentView.bounds.minY)) - 1
         var proseMs = -1.0
+        var proseMain = -1.0
+        var proseFrame = -1.0
         var proseAway = 0
         if let target = (min(controller.rows.count - 1, here + 3_000)...).lazy.first(where: { if case .markdown = controller.rows[$0].content { true } else { false } }),
             let text = RenderBlocks.blocks(for: controller.rows[target]).first?.plainText
         {
             let words = text.split(separator: " ").prefix(6).joined(separator: " ")
             proseMs = await find(words)
+            proseMain = lastFindMainMs
+            proseFrame = lastFindMaxFrameMs
             proseAway = abs(target - here)
             controller.closeFind()
         }
@@ -670,7 +702,7 @@ extension ScenarioRunner {
             S7Report(
                 header: header("S7"), autoscrollFrames: FrameStats(intervals: autoscroll, nominal: nominal), selectedRows: rows,
                 copyMs: round2(copyMs), copiedCharacters: copied.count, copySurvivesScrolling: again == copied, findProseMs: round2(proseMs),
-                findProseRowsAway: proseAway, findCollapsedMs: round2(collapsedMs), findCollapsedRowsAway: collapsedAway,
+                findProseMainThreadMs: round2(proseMain), findProseMaxFrameMs: round2(proseFrame), findProseRowsAway: proseAway, findCollapsedMs: round2(collapsedMs), findCollapsedRowsAway: collapsedAway,
                 collapsedRevealedAndExpanded: revealed),
             name: "S7")
     }
@@ -682,9 +714,19 @@ extension ScenarioRunner {
         var afterScenarios: Memory
         var cycles: [Memory]
         var afterClose: Memory
+        /// Run alone: the process with the whole history loaded and no transcript ever mounted (mock server, Engine,
+        /// thread). The transcript's own share is afterClose − floor.
+        var floor: Memory?
+        var display: DisplayInfo.Info?
     }
 
     func runS8() async {
+        var floor: Memory?
+        if controller == nil {
+            _ = await loadAll()
+            await sleep(1)
+            floor = Memory.now()
+        }
         let after = Memory.now()
         var cycles: [Memory] = []
         for cycle in 0..<20 {
@@ -699,7 +741,11 @@ extension ScenarioRunner {
         }
         unmount()
         await sleep(1)
-        Report.write(S8Report(header: header("S8"), afterScenarios: after, cycles: cycles, afterClose: Memory.now()), name: "S8")
+        Report.write(
+            S8Report(
+                header: header("S8"), afterScenarios: after, cycles: cycles, afterClose: Memory.now(), floor: floor,
+                display: DisplayInfo.current(window: window)),
+            name: "S8")
     }
 }
 

@@ -91,10 +91,17 @@ final class ScenarioRunner {
     func loadAll() async -> Double {
         guard let thread else { return 0 }
         let start = CACurrentMediaTime()
-        while thread.hasOlder {
-            await thread.loadOlder()
-            if thread.lastError != nil { break }
+        // `hasOlder` can still be false right after the thread opens (the first page has not reported it yet): wait
+        // until every message is present, not just until `hasOlder` is false (a run once traversed 106 rows).
+        while thread.messageIDs.count < messageCount, CACurrentMediaTime() - start < 60 {
+            if thread.hasOlder {
+                await thread.loadOlder()
+                if thread.lastError != nil { break }
+            } else {
+                await sleep(0.02)
+            }
         }
+        if thread.messageIDs.count < messageCount { log("WARNING: only \(thread.messageIDs.count) of \(messageCount) messages loaded") }
         return (CACurrentMediaTime() - start) * 1000
     }
 
@@ -216,6 +223,8 @@ final class ScenarioRunner {
             case "S7": await runS7()
             case "S8": await runS8()
             case "layout": await runLayoutProfile()
+            case "P": await runProfile()
+            case "control": await runControl()
             default: log("unknown scenario \(scenario)")
             }
             if scenario != "S8" { unmount() }
@@ -227,7 +236,7 @@ final class ScenarioRunner {
 
     /// Mounted with the whole history loaded, measured, at the bottom.
     func mountFull() async {
-        if thread?.hasOlder == true { _ = await loadAll() }
+        _ = await loadAll()
         mount()
         await controller?.settle()
         await waitForMeasureAll()

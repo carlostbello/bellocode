@@ -1,0 +1,54 @@
+{
+  "display" : {
+    "backingScale" : 1,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 6.48,
+    "maximumFPS" : 165,
+    "screenLocked" : true
+  },
+  "frames" : {
+    "cpuMaxMs" : 0.56,
+    "cpuP99Ms" : 0.16,
+    "durationS" : 60.1665260833106,
+    "frames" : 9107,
+    "maxMs" : 321.28937501693144,
+    "missedVsyncs" : 819,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 131,
+    "over33ms" : 50,
+    "over33msCPUBound" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 6.110124988481402,
+    "p99Ms" : 20.763458276633173
+  },
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:53:08Z",
+    "memory" : {
+      "footprintMB" : 54.9,
+      "mallocInUseMB" : 48.3,
+      "residentMB" : 123.7
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "control",
+    "window" : "900x900"
+  },
+  "watchdog" : {
+    "maxStallMs" : 79.89887497387826,
+    "p99PingMs" : 2.8482082998380065,
+    "pings" : 4944,
+    "stallsOver100ms" : 0,
+    "stallsOver50ms" : 1,
+    "worstStallsMs" : [
+      79.89887497387826,
+      42.438083328306675,
+      30.205124989151955,
+      30.030208290554583,
+      25.90729168150574,
+      20.78870835248381,
+      17.03870831988752,
+      14.841749973129481
+    ]
+  }
+}
