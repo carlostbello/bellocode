@@ -13,6 +13,7 @@ public enum ExecWrapper {
     /// output goes to /dev/null: Docker keeps an exec's stream open while anything holds its stdout.
     public static func nonInteractive(_ argv: [String]) -> [String] {
         let script = """
+        umask 022
         exec 3<&0 </dev/null
         ( trap '' TERM INT HUP; while IFS= read -r _ <&3; do :; done; kill -TERM -$$ 2>/dev/null; sleep 2; kill -KILL -$$ 2>/dev/null ) >/dev/null 2>&1 &
         w=$!
@@ -30,7 +31,7 @@ public enum ExecWrapper {
     /// Interactive (TTY) sessions: record the session leader's PID under a token so a hang-up on the host can signal
     /// the whole session (`killSession`), then become the requested program.
     public static func interactive(token: String, _ argv: [String]) -> [String] {
-        let script = "mkdir -p /tmp/.bellocode 2>/dev/null; echo $$ > /tmp/.bellocode/\(token).pid 2>/dev/null; exec \"$@\""
+        let script = "umask 022; mkdir -p /tmp/.bellocode 2>/dev/null; echo $$ > /tmp/.bellocode/\(token).pid 2>/dev/null; exec \"$@\""
         return ["/bin/sh", "-c", script, "bellocode-exec"] + argv
     }
 
