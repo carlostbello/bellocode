@@ -39,6 +39,7 @@ Status: integrated 2026-11-16 against MockOpenCode and opencode 2.3.0 (`opencode
 | Next / Previous Region | F6 / ⇧F6 (includes pending requests) | Previous / Next Request | ⌥⌘[ / ⌥⌘] |
 | Sidebar / Inspector / Terminal | ⌃⌘S / ⌥⌘I / ⌃` | Settings… | ⌘, |
 | Paste Inline (no chip) | ⌥⌘V | Connect Provider…, Welcome… | menu only |
+| New / Split / Close Terminal | ⌘T / ⌘D / ⇧⌘W | Next / Previous Terminal, Clear, Send Selection | ⌘} / ⌘{, ⌘K, ⇧⌘L (docs/features/terminal.md) |
 
 The focused composer handles ⌘↩ and ⌥⌘↩ itself (`performKeyEquivalent`), so its send-key policy wins while typing
 (⌘↩ = alternate follow-up when Return sends). Request actions act on the front request of the displayed thread;

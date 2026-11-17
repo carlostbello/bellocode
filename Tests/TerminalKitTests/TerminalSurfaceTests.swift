@@ -130,7 +130,7 @@ struct TerminalSurfaceTests {
         fixture.drawer.display(a, directory: "/tmp/mock-project")
         let ra = try #require(await a.create(directory: "/tmp/mock-project"))
         try await waitFor("a live") { fixture.workspace.existingPane(ra.id)?.status == .live }
-        try await fixture.pane(ra.id).stream.send(Array("echo from-a\r".utf8))
+        try fixture.pane(ra.id).stream.send(Array("echo from-a\r".utf8))
         try await waitFor("a output") { fixture.screen(ra.id).contains("from-a") }
         let paneA = try fixture.pane(ra.id)
 
