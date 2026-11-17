@@ -131,10 +131,20 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     /// it lives, so this bound roughly halves what images add to the footprint. The G1-B fixture's 640×360 images
     /// at 96 MB (FIFO) were the largest single item of the peak footprint.
     public var imageByteLimit = 32 << 20
+    /// Pixel sizes of images seen (layout reserves their space before they decode again), LRU-bounded by
+    /// `imageSizeLimit`; kept across thread switches.
     var imageSizes: [String: CGSize] = [:]
-    var imageRequests: Set<String> = []
+    var imageSizeTick: [String: UInt64] = [:]
+    public var imageSizeLimit = 2_048
+    /// Loads in flight; `imageRows` names the rows waiting for each (entries leave when the load ends).
     var imageTasks: [String: Task<Void, Never>] = [:]
     var imageRows: [String: Set<RowID>] = [:]
+    /// Failed loads of the bound thread: retried with backoff (`imageRetryDelay` doubling, `imageMaxAttempts`), and
+    /// again when the thread is bound anew. Bounded by `imageFailureLimit`.
+    var imageFailures: [String: (attempts: Int, retryAt: CFTimeInterval)] = [:]
+    static let imageFailureLimit = 256
+    static let imageMaxAttempts = 3
+    static let imageRetryDelay: CFTimeInterval = 5
     var imageSourceCache: [RowID: (version: Int, sources: [String])] = [:]
 
     // Inner scrolling (code, tables, tool output) and per-block state.
@@ -315,6 +325,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         inflight.removeAll()
         for task in imageTasks.values { task.cancel() }
         imageTasks.removeAll()
+        imageRows.removeAll()
+        imageFailures.removeAll()
         for tail in tails.values { tail.task?.cancel() }
         tails.removeAll()
         source = nil

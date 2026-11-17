@@ -361,14 +361,23 @@ extension TranscriptController {
     func requestImages(in layout: RowLayout, row id: RowID) {
         for block in layout.blocks where !block.isHidden {
             for image in block.images {
-                imageRows[image.source, default: []].insert(id)
-                guard images[image.source] == nil, !imageRequests.contains(image.source) else { continue }
-                imageRequests.insert(image.source)
                 let source = image.source
+                guard images[source] == nil else { continue }
+                if imageTasks[source] != nil {
+                    imageRows[source, default: []].insert(id)
+                    continue
+                }
+                if let failure = imageFailures[source],
+                    failure.attempts >= Self.imageMaxAttempts || CACurrentMediaTime() < failure.retryAt
+                {
+                    continue
+                }
+                imageRows[source] = [id]
                 let loader = imageLoader
+                let generation = observationGeneration
                 imageTasks[source] = Task { [weak self] in
                     let loaded = await loader.load(source)
-                    guard !Task.isCancelled, let self else { return }
+                    guard !Task.isCancelled, let self, self.observationGeneration == generation else { return }
                     self.imageTasks[source] = nil
                     self.imageArrived(source, loaded)
                 }
@@ -377,15 +386,28 @@ extension TranscriptController {
     }
 
     func imageArrived(_ source: String, _ loaded: LoadedImage?) {
-        guard let loaded else { return }  // stays a placeholder (unreachable, unsupported or too large)
+        let waiting = imageRows.removeValue(forKey: source) ?? []
+        guard let loaded else {
+            // Stays a placeholder (unreachable, unsupported or too large); retried later with backoff.
+            let attempts = (imageFailures[source]?.attempts ?? 0) + 1
+            imageFailures[source] = (attempts, CACurrentMediaTime() + Self.imageRetryDelay * Double(1 << (attempts - 1)))
+            if imageFailures.count > Self.imageFailureLimit {
+                let oldest = imageFailures.min { $0.value.retryAt < $1.value.retryAt }!.key
+                imageFailures[oldest] = nil
+            }
+            return
+        }
+        imageFailures[source] = nil
         tick += 1
         images[source] = loaded.image
         imageTick[source] = tick
         imageBytes += loaded.image.bytesPerRow * loaded.image.height
         evictImages()
-        let knew = imageSizes[source] != nil
+        let knew = imageSizes[source] == loaded.pixelSize
         imageSizes[source] = loaded.pixelSize
-        for id in imageRows[source] ?? [] {
+        imageSizeTick[source] = tick
+        if imageSizes.count > imageSizeLimit { evictImageSizes() }
+        for id in waiting {
             guard let index = rowIndex[id] else { continue }
             if knew {
                 if let view = cellView(index) { view.invalidate() }
@@ -394,6 +416,17 @@ extension TranscriptController {
                 ui[id, default: RowUIState()].version += 1
                 requestLayout(row: index, priority: true)
             }
+        }
+    }
+
+    /// Drops the least recently loaded quarter of the remembered sizes, keeping those of decoded images. Rows laid
+    /// out with a dropped size keep their layout; a later load restores it.
+    func evictImageSizes() {
+        let target = imageSizeLimit * 3 / 4
+        for (source, _) in imageSizeTick.sorted(by: { $0.value < $1.value }) where images[source] == nil {
+            guard imageSizes.count > target else { break }
+            imageSizes[source] = nil
+            imageSizeTick[source] = nil
         }
     }
 
@@ -418,7 +451,6 @@ extension TranscriptController {
     func dropImage(_ source: String) {
         if let image = images.removeValue(forKey: source) { imageBytes -= image.bytesPerRow * image.height }
         imageTick[source] = nil
-        imageRequests.remove(source)
     }
 
     /// Harness: whether an image source has loaded.
