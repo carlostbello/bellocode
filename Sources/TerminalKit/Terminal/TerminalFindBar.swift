@@ -14,7 +14,7 @@ protocol TerminalFindBarDelegate: AnyObject {
 final class TerminalFindBar: NSView, NSSearchFieldDelegate {
     weak var delegate: (any TerminalFindBarDelegate)?
     private let field = NSSearchField()
-    private let count = NSTextField(labelWithString: "")
+    let count = NSTextField(labelWithString: "")
     private let navigation = NSSegmentedControl()
     private let caseButton = NSButton(title: "Aa", target: nil, action: nil)
     private let done = NSButton(title: "Done", target: nil, action: nil)

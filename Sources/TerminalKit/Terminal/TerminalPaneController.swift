@@ -17,10 +17,10 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     public let terminalView: TerminalPaneView
     let stream: TerminalStream
     private unowned let workspace: TerminalWorkspace
-    private let findBar = TerminalFindBar()
-    private let statusPill = TerminalStatusPill()
-    private let endedBar = TerminalEndedBar()
-    private let observerBar = TerminalEndedBar()
+    let findBar = TerminalFindBar()
+    let statusPill = TerminalStatusPill()
+    let endedBar = TerminalEndedBar()
+    let observerBar = TerminalEndedBar()
     private let prompt = SemanticPromptTracker()
     private var oscObservation: TerminalOscObservation?
     private var observation: TerminalObservation?
