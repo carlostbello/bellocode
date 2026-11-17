@@ -72,14 +72,15 @@ import Synchronization
 /// the value in a card; it goes to the Keychain. The agent never receives the value: it gets a one-use reference or a
 /// one-read path. The value is never in a tool result, a message, an event, a log or the store.
 ///
-/// Delivery: a named pipe (FIFO, mode 0600, in a 0700 directory of the app's temporary folder) that yields the value
-/// to the first process that opens it, then is removed; unopened pipes are removed after `fileLifetime`. A command uses
-/// it as `--token-file PATH` or `"$(cat PATH)"`. Limits: anything running as the user could open the pipe first (it
-/// would then fail for the agent's command, which is visible), and a command that prints the value puts it in the
-/// transcript; the guidance tells agents never to print it.
+/// Delivery: a one-read named pipe (`SecretPipe`, mode 0600 in a 0700 directory of the app's temporary folder). The
+/// app holds both ends from creation, so a reader's `open` returns at once and its reads end with end-of-file the
+/// moment the pipe is spent, expires (`fileLifetime`) or is cancelled; no reader can wait on it forever. A command uses
+/// it as `--token-file PATH` or `"$(cat PATH)"`. Limits: anything running as the user could read it first (the agent's
+/// command then gets an empty value, which is visible), and a command that prints the value puts it in the transcript;
+/// the guidance tells agents never to print it.
 ///
-/// Threading: `@MainActor` state; pipe writes run in a short polling task owned by this service and cancelled on
-/// shutdown (the pipe is removed then).
+/// Each service instance has its own directory (`<root>/<pid>.<random>`); `load()` removes directories left by dead
+/// processes and wakes any reader stuck on them.
 @MainActor
 @Observable
 public final class SecretService {
@@ -94,34 +95,47 @@ public final class SecretService {
         var expires: Date
     }
 
-    public static let referencePrefix = "bcsecret_"
-    public static let referenceLifetime: TimeInterval = 3_600
-    public static let fileLifetime: TimeInterval = 600
-    public static let maxReferences = 64
-    public static let maxPipes = 16
+    nonisolated public static let referencePrefix = "bcsecret_"
+    nonisolated public static let referenceLifetime: TimeInterval = 3_600
+    nonisolated public static let fileLifetime: TimeInterval = 600
+    nonisolated public static let maxReferences = 64
+    nonisolated public static let maxPipes = 16
+    /// The largest value a pipe can hold without a reader draining it (macOS FIFO buffer).
+    nonisolated public static let maxValueBytes = SecretPipe.capacity
 
     @ObservationIgnored private let vault: any SecretVault
     @ObservationIgnored private let store: ProjectionStore
     @ObservationIgnored private let clock: any WallClock
     @ObservationIgnored private var references: [String: Reference] = [:]
-    @ObservationIgnored private var pipes: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var pipes: [String: SecretPipe] = [:]
+    @ObservationIgnored private let root: URL
     @ObservationIgnored private let directory: URL
+    @ObservationIgnored private let sweepWindow: Duration
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "secrets")
 
-    public init(vault: any SecretVault, store: ProjectionStore, clock: any WallClock, directory: URL? = nil) {
+    /// `root` holds one directory per service instance; the default is `bellocode-secrets` in the user's temporary
+    /// folder. Tests pass their own root.
+    public init(
+        vault: any SecretVault, store: ProjectionStore, clock: any WallClock, root: URL? = nil,
+        sweepWindow: Duration = SecretPipe.defaultSweepWindow
+    ) {
         self.vault = vault
         self.store = store
         self.clock = clock
-        self.directory = directory ?? FileManager.default.temporaryDirectory
-            .appending(path: "bellocode-secrets-\(getpid())", directoryHint: .isDirectory)
+        self.root = root ?? FileManager.default.temporaryDirectory.appending(path: "bellocode-secrets", directoryHint: .isDirectory)
+        let instance = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
+        self.directory = self.root.appending(path: "\(getpid()).\(instance)", directoryHint: .isDirectory)
+        self.sweepWindow = sweepWindow
     }
 
+    /// Launch: loads labels and removes pipe directories left behind by a crashed or killed app.
     public func load() async {
+        await SecretPipe.removeStale(root: root, legacyParent: FileManager.default.temporaryDirectory)
         labels = (try? await store.secretLabels()) ?? []
     }
 
     public func shutdown() {
-        for task in pipes.values { task.cancel() }
+        for pipe in pipes.values { pipe.cancel() }
         pipes.removeAll()
         references.removeAll()
         try? FileManager.default.removeItem(at: directory)
@@ -147,6 +161,9 @@ public final class SecretService {
     /// Saves (or replaces) the value under `label` and returns the Keychain account.
     func save(label: String, value: SecretValue) async throws -> String {
         guard !value.isEmpty else { throw ExtrasError("The value is empty.") }
+        guard value.utf8.count <= Self.maxValueBytes else {
+            throw ExtrasError("The value is longer than \(Self.maxValueBytes / 1024) KB, the most a one-read path can carry.")
+        }
         let existing = labels.first { $0.label.caseInsensitiveCompare(label) == .orderedSame }
         let account = existing?.account ?? "bcs_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         try vault.store(account: account, label: label, value: value)
@@ -186,20 +203,20 @@ public final class SecretService {
         return (try deliverFile(account: entry.account), entry.label)
     }
 
-    /// Creates the one-read pipe for `account` and starts feeding it. Returns its path.
+    /// Creates the one-read pipe for `account` and starts filling it. Returns its path.
     func deliverFile(account: String) throws -> String {
+        pipes = pipes.filter { !$0.value.isFinished }
         guard pipes.count < Self.maxPipes else { throw ExtrasError("Too many secret files are waiting to be read. Use or let them expire first.") }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        for url in [root, directory] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            chmod(url.path, 0o700)
+        }
         let name = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let path = directory.appending(path: name).path
-        guard mkfifo(path, 0o600) == 0 else { throw ExtrasError("Could not create the secret file (errno \(errno)).") }
+        let pipe = try SecretPipe(path: path, deadline: clock.now().addingTimeInterval(Self.fileLifetime), clock: clock, sweepWindow: sweepWindow)
         let vault = self.vault
-        let deadline = clock.now().addingTimeInterval(Self.fileLifetime)
-        let clock = self.clock
-        pipes[path] = Task { [weak self] in
-            await SecretPipe.feed(path: path, deadline: deadline, clock: clock) { try? vault.read(account: account) }
-            self?.pipes[path] = nil
-        }
+        pipe.start { try? vault.read(account: account) }
+        pipes[path] = pipe
         return path
     }
 
@@ -209,35 +226,202 @@ public final class SecretService {
         try? await store.saveSecretLabel(labels[index])
     }
 
-    /// Paths of pipes not yet read (tests).
-    var pendingPipeCount: Int { pipes.count }
+    /// Pipes not yet spent, expired or cancelled (the bound `maxPipes` counts these).
+    var pendingPipeCount: Int { pipes.values.filter { !$0.isFinished }.count }
+    /// The directory this instance creates pipes in (tests).
+    var pipeDirectory: URL { directory }
 }
 
-/// Feeds one named pipe: polls a non-blocking open for writing (fails with ENXIO until a reader opens it), writes the
-/// value once, closes and removes the pipe. Removed without writing at the deadline or on cancellation.
-enum SecretPipe {
-    static func feed(path: String, deadline: Date, clock: any WallClock, value: @Sendable () -> SecretValue?) async {
-        defer { unlink(path) }
-        while !Task.isCancelled, clock.now() < deadline {
-            let fd = open(path, O_WRONLY | O_NONBLOCK)
-            if fd >= 0 {
-                // One reader has it: no second reader can open a removed pipe.
-                unlink(path)
-                _ = fcntl(fd, F_SETFL, 0)  // blocking writes for the (small) value
-                if let secret = value() {
-                    secret.utf8.withUnsafeBytes { buffer in
-                        var offset = 0
-                        while offset < buffer.count {
-                            let written = write(fd, buffer.baseAddress! + offset, buffer.count - offset)
-                            if written <= 0 { break }
-                            offset += written
-                        }
-                    }
-                }
-                close(fd)
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(50))
+/// One one-read named pipe for a secret value.
+///
+/// The pipe is opened by the app at creation for reading and for writing (both non-blocking, close-on-exec), so:
+/// - a reader's blocking `open` returns at once (a writer exists), never waiting on the app;
+/// - the value is written into the pipe's kernel buffer once, as soon as the vault returns it (never to disk);
+/// - when the buffer is drained (the value was read), at the deadline, or on cancellation the pipe *finishes*:
+///   unread bytes are discarded, the path is renamed away (new opens fail with ENOENT) and both ends are closed, so every
+///   attached reader gets end-of-file at once;
+/// - a reader that resolved the path just before the rename and enters `open` after the close would wait for a writer
+///   forever, so for `sweepWindow` after finishing the app opens the renamed node for writing whenever a reader is
+///   waiting on it (a non-blocking open for writing succeeds only then), which wakes it to an immediate end-of-file.
+///
+/// Readers are watched by polling `FIONREAD` every `tickInterval` on a private serial queue (not the Swift cooperative
+/// pool, so a busy app cannot delay an end-of-file). A crash closes both ends (attached readers get end-of-file); the
+/// node itself is removed, and its waiters woken, by `removeStale` on the next launch.
+public final class SecretPipe: Sendable {
+    /// The most a non-blocking write puts into a macOS FIFO.
+    public static let capacity = 8_192
+    public static let defaultSweepWindow: Duration = .milliseconds(250)
+    static let tickInterval: DispatchTimeInterval = .milliseconds(20)
+
+    private enum Phase: Sendable {
+        case filling
+        case live
+        /// Finished; still waking late openers of the renamed node until `until`. `waker` is a write end held for one tick.
+        case sweeping(until: ContinuousClock.Instant, waker: Int32?)
+        case finished
+    }
+
+    private struct State: Sendable {
+        var phase: Phase = .filling
+        var readFD: Int32
+        var writeFD: Int32
+    }
+
+    let path: String
+    private let spentPath: String
+    private let deadline: Date
+    private let clock: any WallClock
+    private let sweepWindow: Duration
+    private let queue = DispatchQueue(label: "app.bellocode.secret-pipe", qos: .utility)
+    private let state: Mutex<State>
+
+    init(path: String, deadline: Date, clock: any WallClock, sweepWindow: Duration = SecretPipe.defaultSweepWindow) throws {
+        guard mkfifo(path, 0o600) == 0 else { throw ExtrasError("Could not create the secret file (errno \(errno)).") }
+        let readFD = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        let writeFD = readFD >= 0 ? open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC) : -1
+        guard readFD >= 0, writeFD >= 0 else {
+            let code = errno
+            if readFD >= 0 { close(readFD) }
+            unlink(path)
+            throw ExtrasError("Could not open the secret file (errno \(code)).")
         }
+        _ = fcntl(writeFD, F_SETNOSIGPIPE, 1)
+        self.path = path
+        let url = URL(fileURLWithPath: path)
+        spentPath = url.deletingLastPathComponent().appending(path: ".spent-" + url.lastPathComponent).path
+        self.deadline = deadline
+        self.clock = clock
+        self.sweepWindow = sweepWindow
+        state = Mutex(State(readFD: readFD, writeFD: writeFD))
+    }
+
+    /// Reads the value off the main thread (a Keychain read may wait for the user) and writes it into the pipe once.
+    func start(value: @escaping @Sendable () -> SecretValue?) {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let secret = value()
+            queue.async { self.fill(secret) }
+        }
+        scheduleTick()
+    }
+
+    /// Finishes now: attached readers get end-of-file, the path disappears.
+    func cancel() { state.withLock { finish(&$0) } }
+
+    /// Fully done: closed, swept and removed.
+    var isFinished: Bool {
+        state.withLock { if case .finished = $0.phase { true } else { false } }
+    }
+
+    /// Spent, expired or cancelled: its path is gone and attached readers have end-of-file (may still be sweeping).
+    var isSpent: Bool {
+        state.withLock {
+            switch $0.phase {
+            case .filling, .live: false
+            case .sweeping, .finished: true
+            }
+        }
+    }
+
+    private func fill(_ secret: SecretValue?) {
+        state.withLock { state in
+            guard case .filling = state.phase else { return }
+            guard let secret, !secret.isEmpty, secret.utf8.count <= Self.capacity else { return finish(&state) }
+            let written = secret.utf8.withUnsafeBytes { write(state.writeFD, $0.baseAddress!, $0.count) }
+            if written == secret.utf8.count { state.phase = .live } else { finish(&state) }
+        }
+    }
+
+    private func scheduleTick() {
+        queue.asyncAfter(deadline: .now() + Self.tickInterval) { [self] in
+            if tick() { scheduleTick() }
+        }
+    }
+
+    /// One step of the state machine; false once finished.
+    private func tick() -> Bool {
+        state.withLock { state in
+            switch state.phase {
+            case .filling:
+                if clock.now() >= deadline { finish(&state) }
+            case .live:
+                if clock.now() >= deadline || Self.available(state.readFD) == 0 { finish(&state) }
+            case .sweeping(let until, let waker):
+                if let waker {
+                    close(waker)
+                    state.phase = .sweeping(until: until, waker: nil)
+                } else if ContinuousClock.now < until {
+                    let fd = open(spentPath, O_WRONLY | O_NONBLOCK | O_CLOEXEC)
+                    if fd >= 0 {
+                        _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+                        state.phase = .sweeping(until: until, waker: fd)
+                    }
+                } else {
+                    unlink(spentPath)
+                    state.phase = .finished
+                    return false
+                }
+            case .finished:
+                return false
+            }
+            return true
+        }
+    }
+
+    /// Discards unread bytes, renames the node away and closes both ends.
+    private func finish(_ state: inout State) {
+        switch state.phase {
+        case .filling, .live: break
+        case .sweeping, .finished: return
+        }
+        var scratch = [UInt8](repeating: 0, count: 1_024)
+        while read(state.readFD, &scratch, scratch.count) > 0 {}
+        scratch.withUnsafeMutableBytes { _ = memset_s($0.baseAddress, $0.count, 0, $0.count) }
+        if rename(path, spentPath) != 0 { unlink(path) }
+        close(state.writeFD)
+        close(state.readFD)
+        state.readFD = -1
+        state.writeFD = -1
+        state.phase = .sweeping(until: ContinuousClock.now + sweepWindow, waker: nil)
+    }
+
+    /// `FIONREAD` (`_IOR('f', 127, int)`), a macro Swift does not import.
+    private static let fionread: UInt = 0x4004_667F
+
+    private static func available(_ fd: Int32) -> Int32 {
+        var count: Int32 = 0
+        return ioctl(fd, fionread, &count) == 0 ? count : -1
+    }
+
+    // MARK: Launch cleanup
+
+    /// Removes per-instance directories under `root` whose process is gone (and the older `bellocode-secrets-<pid>`
+    /// directories in `legacyParent`), first waking any reader blocked on a pipe in them.
+    nonisolated static func removeStale(root: URL, legacyParent: URL) async {
+        let manager = FileManager.default
+        var stale: [URL] = []
+        for name in (try? manager.contentsOfDirectory(atPath: root.path)) ?? [] {
+            if let pid = Int32(name.split(separator: ".").first ?? ""), !isAlive(pid) { stale.append(root.appending(path: name)) }
+        }
+        for name in (try? manager.contentsOfDirectory(atPath: legacyParent.path)) ?? [] where name.hasPrefix("bellocode-secrets-") {
+            if let pid = Int32(name.dropFirst("bellocode-secrets-".count)), !isAlive(pid) { stale.append(legacyParent.appending(path: name)) }
+        }
+        for directory in stale {
+            for name in (try? manager.contentsOfDirectory(atPath: directory.path)) ?? [] {
+                wakeReaders(directory.appending(path: name).path)
+            }
+            try? manager.removeItem(at: directory)
+        }
+    }
+
+    /// If a reader is blocked opening the FIFO at `path`, briefly becomes its writer so it sees end-of-file.
+    static func wakeReaders(_ path: String) {
+        var info = stat()
+        guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFIFO else { return }
+        let fd = open(path, O_WRONLY | O_NONBLOCK | O_CLOEXEC)
+        if fd >= 0 { close(fd) }
+    }
+
+    private static func isAlive(_ pid: Int32) -> Bool {
+        pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
     }
 }
