@@ -100,6 +100,9 @@ actor EngineCore {
     private var openThreads: [SessionID: Int] = [:]
     /// Optimistic sessions not yet acknowledged; a resync must not delete them.
     private var creatingSessions: Set<SessionID> = []
+    /// Prompts the server admitted (HTTP answer) while a resync was reading the inbox: its snapshot may predate them,
+    /// so its reconcile must not remove them. Cleared when a snapshot fetch starts; bounded by the sends made during one.
+    private var admittedDuringSync: Set<MessageID> = []
     /// Incremented by every resync; async work started under an older generation is discarded.
     private var syncGeneration = 0
     private var dynamicGeneration = 0
@@ -126,6 +129,8 @@ actor EngineCore {
         var writeFailures = 0
         var cacheWritesDropped = 0
         var duplicatesDropped = 0
+        /// Events fully reduced and committed (after `events`, which counts receipt).
+        var eventsApplied = 0
     }
 
     private(set) var statistics = Statistics()
@@ -387,6 +392,7 @@ actor EngineCore {
         }
         statistics.duplicatesDropped = pipeline.duplicatesDropped
         commit(reduction)
+        statistics.eventsApplied += 1
         scheduleDeltaFlush()
     }
 
@@ -631,6 +637,7 @@ actor EngineCore {
         for attempt in 1...3 {
             do {
                 let client = try await currentClient()
+                admittedDuringSync.removeAll()
                 let snapshot = try await fetchSnapshot(client)
                 guard generation == syncGeneration, !Task.isCancelled else { return }
                 try await reconcile(snapshot, generation: generation)
@@ -824,16 +831,26 @@ actor EngineCore {
         for (sessionID, items) in snapshot.inbox {
             let server = items.compactMap(Mapping.queued)
             let keep = Set(server.map(\.id))
-            for prompt in state.queue.values where prompt.sessionID == sessionID && prompt.state == .queued && !keep.contains(prompt.id) {
+            for prompt in state.queue.values
+            where prompt.sessionID == sessionID && prompt.state == .queued && !keep.contains(prompt.id)
+                && !admittedDuringSync.contains(prompt.id)
+            {
                 state.removeQueued(prompt.id, into: &reduction)
             }
             for var prompt in server {
+                // The inbox may have been read before a local edit reached the server; the edit's event settles it.
+                switch state.queueEdits[prompt.id] {
+                case .withdrawn: continue
+                case .delivery(let delivery): prompt.delivery = delivery
+                case nil: break
+                }
                 if let local = state.queue[prompt.id], prompt.text.isEmpty { prompt.text = local.text }
                 if state.messages[prompt.id]?.delivery != nil { continue }
                 state.putQueued(prompt, into: &reduction)
             }
         }
-        for prompt in state.queue.values where prompt.state == .queued && snapshot.inbox[prompt.sessionID] == nil {
+        for prompt in state.queue.values
+        where prompt.state == .queued && snapshot.inbox[prompt.sessionID] == nil && !admittedDuringSync.contains(prompt.id) {
             // The session is idle and its inbox was not read: anything we thought queued has been delivered or
             // dropped. The transcript window shows which.
             if !(state.sessions[prompt.sessionID]?.isRunning ?? false) { state.removeQueued(prompt.id, into: &reduction) }
@@ -1459,10 +1476,12 @@ actor EngineCore {
 
     private func acknowledgeSend(_ id: MessageID, sessionID: SessionID, serverCreated: Timestamp) {
         var reduction = Reduction()
-        if var prompt = pipeline.state.queue[id], prompt.state == .sending {
+        // The item's own time, also when its `inbox.enqueued` event got here first: queued items sort by server time.
+        if var prompt = pipeline.state.queue[id] {
             prompt.state = .queued
             prompt.created = serverCreated
             pipeline.state.putQueued(prompt, into: &reduction)
+            admittedDuringSync.insert(id)
         }
         if pipeline.state.messages[id]?.delivery == .sending {
             pipeline.state.updateMessage(id, persist: true, into: &reduction, create: { nil }) { message in
@@ -1480,14 +1499,20 @@ actor EngineCore {
         var steered = prompt
         steered.delivery = .steer
         pipeline.state.putQueued(steered, into: &reduction)
+        pipeline.state.recordQueueEdit(id, .delivery(.steer))
         commit(reduction)
         do {
             try await call { try await $0.updateInboxItem(sessionID: prompt.sessionID.rawValue, inboxID: id.rawValue, delivery: .steer) }
         } catch {
-            if pipeline.state.queue[id] != nil {
-                var rollback = Reduction()
-                pipeline.state.putQueued(prompt, into: &rollback)
-                commit(rollback)
+            // Only while unsettled: a delivery change or delivery the server reported meanwhile stands.
+            if pipeline.state.queueEdits[id] == .delivery(.steer) {
+                pipeline.state.confirmQueueEdit(id)
+                if var current = pipeline.state.queue[id] {
+                    current.delivery = prompt.delivery
+                    var rollback = Reduction()
+                    pipeline.state.putQueued(current, into: &rollback)
+                    commit(rollback)
+                }
             }
             throw error
         }
@@ -1498,13 +1523,18 @@ actor EngineCore {
         guard let prompt = pipeline.state.queue[id] else { throw EngineError.notFound("The queued message was already sent.") }
         var reduction = Reduction()
         pipeline.state.removeQueued(id, into: &reduction)
+        pipeline.state.recordQueueEdit(id, .withdrawn)
         commit(reduction)
         do {
             try await call { try await $0.cancelInboxItem(sessionID: prompt.sessionID.rawValue, inboxID: id.rawValue) }
         } catch {
-            var rollback = Reduction()
-            pipeline.state.putQueued(prompt, into: &rollback)
-            commit(rollback)
+            // Only while unsettled: if the server's events delivered or cancelled it meanwhile, it is not queued.
+            if pipeline.state.queueEdits[id] == .withdrawn {
+                pipeline.state.confirmQueueEdit(id)
+                var rollback = Reduction()
+                pipeline.state.putQueued(prompt, into: &rollback)
+                commit(rollback)
+            }
             throw error
         }
     }

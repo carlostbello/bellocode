@@ -180,12 +180,17 @@ struct IdentifierFactory: Sendable {
     mutating func sessionID(now: Timestamp) -> SessionID { SessionID(make("ses", now: now, descending: true)) }
 
     private mutating func make(_ prefix: String, now: Timestamp, descending: Bool) -> String {
-        let time = Int64(now.milliseconds)
-        if time != lastTime {
-            lastTime = time
-            counter = 0
-        }
+        // Never backwards: `now` is an estimate of the server clock that a correction can move back, and IDs of one
+        // kind must keep the order they were minted in (it breaks ties between equal timestamps).
+        var time = max(Int64(now.milliseconds), lastTime)
+        if time != lastTime { counter = 0 }
         counter += 1
+        if counter > 0xFFF {
+            // The counter field is full: take the next millisecond rather than wrap.
+            time += 1
+            counter = 1
+        }
+        lastTime = time
         let value = (UInt64(max(time, 0)) & 0xF_FFFF_FFFF) << 12 | (counter & 0xFFF)
         let ordered = descending ? 0xFFFF_FFFF_FFFF - value : value
         var hex = String(ordered, radix: 16)

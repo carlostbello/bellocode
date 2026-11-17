@@ -129,6 +129,7 @@ enum EventReducer {
             inboxDelivered(SessionID(p.sessionID), MessageID(p.inboxID), at: at, state: &state, into: &reduction)
         case .inboxCancelled(let p):
             let id = MessageID(p.inboxID)
+            state.confirmQueueEdit(id)
             state.removeQueued(id, into: &reduction)
             if let message = state.messages[id], message.delivery == .sending || message.delivery == .accepted {
                 state.removeMessage(id, sessionID: message.sessionID, into: &reduction)
@@ -409,10 +410,19 @@ enum EventReducer {
                 message.created = at
             }
         } else if var prompt = state.queue[id] {
-            prompt.state = .queued
-            prompt.delivery = delivery
+            // Our own send (or an item already known). The event confirms admission and nothing more: it may arrive
+            // after the HTTP answer and after later edits (steer), so it must not overwrite the delivery. Its time is
+            // the server's; until the answer brings the item's own time it replaces the client's estimate, so items
+            // sort by one clock (the estimate can run ahead of the server's time by any amount).
+            if prompt.state == .sending {
+                prompt.state = .queued
+                prompt.created = at
+            }
             if prompt.text.isEmpty, let text = p.item.text { prompt.text = text }
             state.putQueued(prompt, into: &reduction)
+        } else if state.queueEdits[id] == .withdrawn {
+            // Withdrawn here before this (late) event arrived; `session.inbox.cancelled` follows.
+            return
         } else {
             let prompt = QueuedPrompt(
                 id: id, sessionID: sessionID, text: p.item.text ?? "", delivery: delivery, created: at, state: .queued)
@@ -423,6 +433,7 @@ enum EventReducer {
     private static func inboxDelivered(
         _ sessionID: SessionID, _ id: MessageID, at: Timestamp, state: inout ProjectionState, into reduction: inout Reduction
     ) {
+        state.confirmQueueEdit(id)
         if let prompt = state.queue[id] {
             state.removeQueued(id, into: &reduction)
             let message = Message(
@@ -510,6 +521,7 @@ enum EventReducer {
                 message.parts = Mapping.parts(content, messageID: messageID, open: open)
             }
         case .inboxDeliveryChanged(let id, let delivery):
+            state.confirmQueueEdit(id)
             if var prompt = state.queue[id] {
                 prompt.delivery = delivery
                 state.putQueued(prompt, into: &reduction)

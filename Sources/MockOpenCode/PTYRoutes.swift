@@ -238,6 +238,15 @@ extension MockOpenCodeServer {
     /// A message from a PTY socket's client.
     func ptySocketMessage(_ subscriberID: Int, _ message: WebSocket.Message) {
         guard let subscriber = pty.subscribers[subscriberID] else { return }
+        if clientMCP.peers[subscriberID] != nil {
+            switch message {
+            case .text(let text): clientMCPFrame(subscriberID, text)
+            case .ping(let payload): enqueuePTYFrame(WebSocket.frame(.pong, payload), to: subscriberID)
+            case .close: closePTYSubscriber(subscriberID)
+            case .binary: break
+            }
+            return
+        }
         switch message {
         case .binary(let data):
             guard subscriber.role == .controller, pty.ptys[subscriber.ptyID]?.controller == subscriberID,
@@ -324,7 +333,7 @@ extension MockOpenCodeServer {
         }
     }
 
-    private func enqueuePTYFrame(_ frame: Data, to subscriberID: Int) {
+    func enqueuePTYFrame(_ frame: Data, to subscriberID: Int) {
         guard var subscriber = pty.subscribers[subscriberID], subscriber.closeAfter == nil else { return }
         if subscriber.pending.count >= MockPTYState.subscriberFrameLimit {
             subscriber.abrupt = true
@@ -365,6 +374,7 @@ extension MockOpenCodeServer {
     func closePTYSubscriber(_ subscriberID: Int) {
         guard let subscriber = pty.subscribers.removeValue(forKey: subscriberID) else { return }
         subscriber.waiter?.resume(returning: nil)
+        clientMCPClosed(subscriberID)
         if pty.ptys[subscriber.ptyID]?.controller == subscriberID { pty.ptys[subscriber.ptyID]?.controller = nil }
     }
 
