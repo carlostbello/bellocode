@@ -309,6 +309,7 @@ extension TranscriptController {
     func acceptHeight(_ layout: RowLayout, row index: Int) {
         heightKeys[index] = layout.key
         if abs(heights[index] - layout.height) > 0.25 {
+            TranscriptProfiler.shared.count(layout.key.uiVersion == 0 ? "heightChangesContent" : "heightChangesUI")
             pendingHeights[layout.key.rowID] = layout.height
             scheduleFlush()
         }
@@ -387,11 +388,19 @@ extension TranscriptController {
             tableRows.insert(index + 1)
         }
         pendingHeights.removeAll()
+        TranscriptProfiler.shared.count("heightFlushRows", tableRows.count)
+        TranscriptProfiler.shared.count("heightFlushes")
+        var t = CACurrentMediaTime()
         withoutAnimation { tableView.noteHeightOfRows(withIndexesChanged: tableRows) }
+        TranscriptProfiler.shared.count("flushNoteMicros", Int((CACurrentMediaTime() - t) * 1e6))
+        t = CACurrentMediaTime()
         forceTableGeometry(from: tableRows.first ?? 0)
+        TranscriptProfiler.shared.count("flushGeometryMicros", Int((CACurrentMediaTime() - t) * 1e6))
         for (index, view) in availableCells() where tableRows.contains(index + 1) { configure(view, index: index) }
+        t = CACurrentMediaTime()
         updateSpacer()
         restore(anchor)
+        TranscriptProfiler.shared.count("flushRestoreMicros", Int((CACurrentMediaTime() - t) * 1e6))
         metrics.heightFlushes += 1
         metrics.maxFlushMilliseconds = max(metrics.maxFlushMilliseconds, (CACurrentMediaTime() - start) * 1000)
         transcriptSignposter.endInterval("flushHeights", signpost)

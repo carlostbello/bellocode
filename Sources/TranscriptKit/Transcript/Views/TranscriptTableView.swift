@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import Synchronization
 
 /// Single-column, view-based table. Row selection is off: text selection is the controller's transcript-level model.
@@ -376,6 +377,16 @@ final class TranscriptCanvasView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        // 8 bits per channel. On a wide-gamut/EDR display the automatic format is 16-bit float (rgba64 in samples
+        // of slow frames): twice the backing-store memory and a slower rasterization path, for text and sRGB fills
+        // that gain nothing from it.
+        layer?.contentsFormat = .RGBA8Uint
+    }
+
+    override func makeBackingLayer() -> CALayer {
+        let layer = super.makeBackingLayer()
+        layer.contentsFormat = .RGBA8Uint
+        return layer
     }
 
     @available(*, unavailable)
