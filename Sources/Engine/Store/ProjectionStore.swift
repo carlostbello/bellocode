@@ -628,6 +628,39 @@ public actor ProjectionStore {
         }
     }
 
+    // MARK: - Terminals
+
+    /// A thread's terminal set (`app_terminal`, kept by `rebuild()`), or nil when none was saved or it is unreadable.
+    public func terminalSet(_ sessionID: SessionID) async throws -> ThreadTerminalSet? {
+        let data = try await read("terminals") { db in
+            try Data.fetchOne(db, sql: "SELECT json FROM app_terminal WHERE session_id = ?", arguments: [sessionID.rawValue])
+        }
+        guard let data else { return nil }
+        return try? Self.decode(ThreadTerminalSet.self, data)
+    }
+
+    /// Saves a thread's terminal set; an empty set deletes the row.
+    public func setTerminalSet(_ set: ThreadTerminalSet, for sessionID: SessionID) async throws {
+        let data = set.isEmpty ? nil : try Self.json(set, Self.encoder)
+        let now = Date().timeIntervalSince1970
+        try await writer.write { db in
+            if let data {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO app_terminal (session_id, updated, json) VALUES (?, ?, ?)",
+                    arguments: [sessionID.rawValue, now, data])
+            } else {
+                try db.execute(sql: "DELETE FROM app_terminal WHERE session_id = ?", arguments: [sessionID.rawValue])
+            }
+        }
+    }
+
+    /// Sessions with a saved terminal set (diagnostics, idle sweeps).
+    public func terminalSessionIDs() async throws -> [SessionID] {
+        try await read("terminals") { db in
+            try String.fetchAll(db, sql: "SELECT session_id FROM app_terminal ORDER BY updated DESC").map { SessionID($0) }
+        }
+    }
+
     /// Applied migration identifiers (tests, diagnostics).
     public func appliedMigrations() async throws -> [String] {
         try await read("migrations") { db in try Array(ProjectionSchema.migrator.appliedIdentifiers(db)).sorted() }

@@ -4,6 +4,7 @@ import ComposerKit
 import DesignSystem
 import Engine
 import SwiftUI
+import TerminalKit
 
 /// One Settings pane. Later packages add panes here (each a real pane; no placeholders are shown).
 @MainActor
@@ -25,6 +26,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         var panes = [
             SettingsPane(id: "general", title: "General", symbolName: "gearshape") {
                 let controller = NSHostingController(rootView: GeneralSettingsView(settings: settings))
+                controller.sizingOptions = [.preferredContentSize]
+                return controller
+            },
+            SettingsPane(id: "terminal", title: "Terminal", symbolName: "terminal") {
+                let controller = NSHostingController(rootView: TerminalSettingsView(settings: settings))
                 controller.sizingOptions = [.preferredContentSize]
                 return controller
             },
@@ -102,6 +108,46 @@ struct GeneralSettingsView: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+/// Settings ▸ Terminal.
+struct TerminalSettingsView: View {
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        Form {
+            LabeledContent("Font size:") {
+                HStack {
+                    Slider(value: fontSize, in: Double(TerminalPreferences.fontSizeRange.lowerBound)...Double(TerminalPreferences.fontSizeRange.upperBound), step: 1)
+                        .frame(width: 160)
+                        .accessibilityLabel("Terminal font size")
+                        .accessibilityValue("\(Int(settings.terminalPreferences.fontSize)) points")
+                    Text("\(Int(settings.terminalPreferences.fontSize)) pt").monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            Picker("Scrollback:", selection: $settings.terminalPreferences.scrollback) {
+                Text("1,000 lines").tag(1_000)
+                Text("10,000 lines").tag(10_000)
+                Text("50,000 lines").tag(50_000)
+                Text("100,000 lines").tag(100_000)
+            }
+            .pickerStyle(.menu)
+            .frame(width: 280)
+            Toggle("Use Option as Meta key", isOn: $settings.terminalPreferences.optionAsMeta)
+            Toggle("Ask before pasting several lines into a shell", isOn: $settings.terminalPreferences.confirmsMultilinePaste)
+            Toggle("Let programs copy to the clipboard (OSC 52)", isOn: $settings.terminalPreferences.allowsClipboardWrites)
+            Text("Terminal output is untrusted. Programs can never read the clipboard.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private var fontSize: Binding<Double> {
+        Binding(
+            get: { Double(settings.terminalPreferences.fontSize) },
+            set: { settings.terminalPreferences.fontSize = CGFloat($0) })
     }
 }
 

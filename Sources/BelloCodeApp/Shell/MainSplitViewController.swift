@@ -108,6 +108,8 @@ final class ContentSplitViewController: NSSplitViewController {
     let threadItem: NSSplitViewItem
     let drawerItem: NSSplitViewItem
     private let autosaveName: String?
+    /// Called after the drawer is resized or collapsed by any route (divider drag, command).
+    var onLayoutChange: (() -> Void)?
 
     init(thread: NSViewController, drawer: NSViewController, autosaveName: String?) {
         threadItem = NSSplitViewItem(viewController: thread)
@@ -131,6 +133,24 @@ final class ContentSplitViewController: NSSplitViewController {
         addSplitViewItem(threadItem)
         addSplitViewItem(drawerItem)
         if let autosaveName { splitView.autosaveName = autosaveName }
+    }
+
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        onLayoutChange?()
+    }
+
+    /// The drawer's height while it is shown.
+    var drawerHeight: Double? {
+        drawerItem.isCollapsed ? nil : Double(drawerItem.viewController.view.frame.height)
+    }
+
+    /// Sets the drawer's height (instant; clamped so the thread keeps its minimum).
+    func setDrawerHeight(_ height: Double) {
+        guard !drawerItem.isCollapsed, splitView.bounds.height > 0 else { return }
+        let maximum = splitView.bounds.height - threadItem.minimumThickness - splitView.dividerThickness
+        let clamped = min(max(CGFloat(height), drawerItem.minimumThickness), max(drawerItem.minimumThickness, maximum))
+        splitView.setPosition(splitView.bounds.height - clamped - splitView.dividerThickness, ofDividerAt: 0)
     }
 }
 

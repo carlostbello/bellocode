@@ -131,7 +131,7 @@ struct AgentSupportTests {
         #expect(model.value.recents.first == "p/m9")
         #expect(model.value.variants["p/m9"] == "high")
         #expect(model.value.hidden == ["p/m0"])
-        #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences"])
+        #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences", "v3-app-terminals"])
     }
 
     @Test func catalogCarriesCostsAndIntegration() throws {

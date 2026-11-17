@@ -1,8 +1,10 @@
 import AgentUI
 import AppKit
 import BelloCore
+import ComposerKit
 import DesignSystem
 import Engine
+import TerminalKit
 import UniformTypeIdentifiers
 
 /// The main window: unified toolbar over sidebar | thread (+ terminal drawer) | right panel.
@@ -12,7 +14,7 @@ import UniformTypeIdentifiers
 /// connection state unobtrusively, and restores layout and selection.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation,
-    NSToolbarItemValidation, SidebarDelegate, ShellActions
+    NSToolbarItemValidation, SidebarDelegate, ShellActions, TerminalShell
 {
     @MainActor
     struct Configuration {
@@ -37,6 +39,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var titleLoop: ObservationLoop?
     private let connectionView = ConnectionStatusView()
     private var isRestoringLayout = false
+    /// The window's terminals (drawer and "Terminal" tab), found through the drawer's host controller.
+    private(set) var terminals: TerminalSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -81,8 +85,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         sidebar.delegate = self
         rightPanel.onTabChange = { [weak self] id in self?.workspace.updateLayout(rightPanelTab: id) }
         split.onLayoutChange = { [weak self] in self?.recordLayout() }
-        container.onDisplay = { [weak self] _ in self?.updateTitle() }
+        container.onDisplay = { [weak self] context in
+            self?.updateTitle()
+            self?.terminals?.display(context)
+        }
         restoreLayout()
+        terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
+        terminals?.bind(engine: workspace.engine, shell: self)
+        content.onLayoutChange = { [weak self] in self?.terminals?.recordDrawerState() }
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -162,7 +172,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             composerVisible: container.composerSurface != nil, composerHasText: container.composerSurface?.hasSendableText ?? false,
             composerRunning: container.composerController.map { $0.runState != .idle } ?? false,
             isTerminalVisible: !split.contentSplit.drawerItem.isCollapsed,
-            availableRequestCommands: Set(RequestCommand.allCases.filter { container.requestStackController?.model?.canPerform($0) ?? false }))
+            availableRequestCommands: Set(RequestCommand.allCases.filter { container.requestStackController?.model?.canPerform($0) ?? false }),
+            terminalAvailable: terminals?.hasContext ?? false, terminalSelected: terminals?.activeHasTerminal ?? false,
+            terminalHasSelectedText: terminals?.activeHasSelection ?? false,
+            terminalSplit: terminals?.terminals?.set.splitSecondary != nil,
+            terminalInPanel: terminals?.activePlacement == .panel)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -230,8 +244,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case .focusPreviousRegion:
             cycleFocus(forward: false)
         case .toggleTerminal:
-            split.setCollapsed(split.contentSplit.drawerItem, !split.contentSplit.drawerItem.isCollapsed)
+            // Like VS Code's ⌃`: show and focus the terminal; hide it when it has focus or is already shown.
+            let drawer = split.contentSplit.drawerItem
+            if drawer.isCollapsed {
+                setTerminalDrawer(visible: true, height: terminals?.terminals?.set.drawerHeight)
+                focusTerminalSoon()
+            } else {
+                let hadFocus = terminals?.focusIsInTerminal ?? false
+                split.setCollapsed(drawer, true)
+                if hadFocus, let view = container.composerFocusView { window?.makeFirstResponder(view) }
+            }
             recordLayout()
+            terminals?.recordDrawerState()
+        case .newTerminal:
+            terminals?.newTerminal()
+        case .closeTerminal:
+            terminals?.closeTerminal()
+        case .splitTerminal:
+            terminals?.toggleSplit()
+        case .nextTerminal:
+            terminals?.selectNext()
+        case .previousTerminal:
+            terminals?.selectPrevious()
+        case .clearTerminal:
+            terminals?.clear()
+        case .renameTerminal:
+            terminals?.rename()
+        case .restartTerminal:
+            terminals?.restart()
+        case .moveTerminal:
+            if terminals?.activePlacement == .drawer, split.panelItem.isCollapsed {
+                split.setCollapsed(split.panelItem, false)
+                rightPanel.select("terminal")
+            }
+            terminals?.moveToOtherPlace()
+        case .sendTerminalSelection:
+            terminals?.sendSelectionToComposer()
         case .sendMessage:
             container.composerController?.composer.sendPrompt(nil) ?? container.composerSurface?.performSend()
         case .queueFollowUp:
@@ -294,6 +342,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func submitRequestAnswer(_ sender: Any?) { perform(.submitAnswer) }
     @objc func showPreviousRequest(_ sender: Any?) { perform(.previousRequest) }
     @objc func showNextRequest(_ sender: Any?) { perform(.nextRequest) }
+    @objc func newTerminal(_ sender: Any?) { perform(.newTerminal) }
+    @objc func closeTerminal(_ sender: Any?) { perform(.closeTerminal) }
+    @objc func splitTerminal(_ sender: Any?) { perform(.splitTerminal) }
+    @objc func selectNextTerminal(_ sender: Any?) { perform(.nextTerminal) }
+    @objc func selectPreviousTerminal(_ sender: Any?) { perform(.previousTerminal) }
+    @objc func clearTerminal(_ sender: Any?) { perform(.clearTerminal) }
+    @objc func renameTerminal(_ sender: Any?) { perform(.renameTerminal) }
+    @objc func restartTerminal(_ sender: Any?) { perform(.restartTerminal) }
+    @objc func moveTerminal(_ sender: Any?) { perform(.moveTerminal) }
+    @objc func sendTerminalSelectionToComposer(_ sender: Any?) { perform(.sendTerminalSelection) }
+
+    // MARK: - TerminalShell
+
+    var terminalComposer: ComposerViewController? { container.composerController?.composer }
+
+    func terminalCreateThread() async -> SessionID? {
+        await container.context?.createThread()?.sessionID
+    }
+
+    var isTerminalDrawerVisible: Bool { !split.contentSplit.drawerItem.isCollapsed }
+    var terminalDrawerHeight: Double? { split.contentSplit.drawerHeight }
+
+    func setTerminalDrawer(visible: Bool, height: Double?) {
+        let drawer = split.contentSplit.drawerItem
+        if drawer.isCollapsed == visible { split.setCollapsed(drawer, !visible) }
+        if visible, let height { split.contentSplit.setDrawerHeight(height) }
+        recordLayout()
+    }
+
+    /// The drawer was just shown; focus its terminal after layout.
+    private func focusTerminalSoon() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.terminals?.drawerFocusView else { return }
+            self.window?.makeFirstResponder(view)
+        }
+    }
 
     // MARK: - Helpers
 
@@ -314,6 +398,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         if let transcript = container.transcriptFocusView { regions.append(transcript) }
         if let requests = container.requestFocusView { regions.append(requests) }
         if let composer = container.composerFocusView { regions.append(composer) }
+        if !split.contentSplit.drawerItem.isCollapsed, let terminal = terminals?.drawerFocusView { regions.append(terminal) }
         guard !regions.isEmpty else { return }
         let responder = window.firstResponder as? NSView
         let current = regions.firstIndex { region in responder.map { $0 === region || $0.isDescendant(of: region) } ?? false }

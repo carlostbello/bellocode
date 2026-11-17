@@ -15,6 +15,7 @@ enum MainMenu {
         mainMenu.addItem(submenu: editMenu())
         mainMenu.addItem(submenu: viewMenu())
         mainMenu.addItem(submenu: threadMenu())
+        mainMenu.addItem(submenu: terminalMenu())
 
         let windowMenu = windowMenu()
         mainMenu.addItem(submenu: windowMenu)
@@ -137,6 +138,24 @@ enum MainMenu {
         menu.add(.deleteThread)
         menu.addItem(.separator())
         menu.add(.nextNeedsAttention)
+        return menu
+    }
+
+    private static func terminalMenu() -> NSMenu {
+        let menu = NSMenu(title: "Terminal")
+        menu.add(.newTerminal)
+        menu.add(.splitTerminal)
+        menu.add(.closeTerminal)
+        menu.addItem(.separator())
+        menu.add(.nextTerminal)
+        menu.add(.previousTerminal)
+        menu.addItem(.separator())
+        menu.add(.renameTerminal)
+        menu.add(.restartTerminal)
+        menu.add(.moveTerminal)
+        menu.addItem(.separator())
+        menu.add(.clearTerminal)
+        menu.add(.sendTerminalSelection)
         return menu
     }
 

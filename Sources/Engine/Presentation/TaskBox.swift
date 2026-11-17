@@ -14,6 +14,11 @@ final class TaskBox: Sendable {
         previous?.cancel()
     }
 
+    /// Removes and returns the task under `key` without cancelling it (to await it).
+    func take(_ key: String) -> Task<Void, Never>? {
+        tasks.withLock { $0.removeValue(forKey: key) }
+    }
+
     func remove(_ key: String) {
         _ = tasks.withLock { $0.removeValue(forKey: key) }
     }
