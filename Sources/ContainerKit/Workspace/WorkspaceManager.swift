@@ -28,8 +28,11 @@ public struct WorkspaceManager: Sendable {
             return WorkspaceStatus(phase: .absent, containerID: nil, imageID: image?.id, ports: [:])
         }
         let current = inspect.config.labels?[WorkspaceSpec.labelConfig]
+        // A bind mount pins the directory it was created from: if the project folder was deleted and re-created (a
+        // re-clone, a move back), the container still sees the old, now empty, directory. Compare identities.
+        let mountsMatch = inspect.config.labels?[WorkspaceSpec.labelMountIdentity] == spec.mountIdentity()
         let phase: WorkspaceStatus.Phase =
-            current != spec.configHash(imageID: image?.id) ? .outdated : inspect.state.running ? .running : .stopped
+            current != spec.configHash(imageID: image?.id) || !mountsMatch ? .outdated : inspect.state.running ? .running : .stopped
         var ports: [Int: Int] = [:]
         for (key, bindings) in inspect.ports ?? [:] {
             guard let port = Int(key.split(separator: "/").first ?? ""), let host = bindings?.first.flatMap({ Int($0.hostPort) }) else { continue }
@@ -69,6 +72,7 @@ public struct WorkspaceManager: Sendable {
             }
             var body = spec.createBody(imageID: status.imageID)
             body.labels?[WorkspaceSpec.labelConfig] = spec.configHash(imageID: status.imageID)
+            body.labels?[WorkspaceSpec.labelMountIdentity] = spec.mountIdentity()
             let id: String
             do {
                 id = try await client.createContainer(name: spec.containerName, body)

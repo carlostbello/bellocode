@@ -35,6 +35,11 @@
     "passed" : true
   },
   {
+    "detail" : "guard plugin listed",
+    "name" : "repository-local plugin not loaded (OPENCODE_DISABLE_PROJECT_CONFIG)",
+    "passed" : true
+  },
+  {
     "detail" : "\nbellocode-exec: \/private\/tmp is not inside a containerised project; refusing to run on the host\n",
     "name" : "a directory outside the project is refused (fail closed)",
     "passed" : true
@@ -45,13 +50,23 @@
     "passed" : true
   },
   {
+    "detail" : "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for \/<\/title>\n<\/head>\n<body>\n<h1>Directory listing for \/<\/h1>\n<hr>\n<ul>\n",
+    "name" : "user shell job: fetched from the host via 127.0.0.1:56432 → container 127.0.0.1:8766, port never published (request 54 ms, ready after 0.1 s)",
+    "passed" : true
+  },
+  {
+    "detail" : "DELETE 204, running 0",
+    "name" : "deleting the running shell job stopped the server in the container",
+    "passed" : true
+  },
+  {
     "detail" : "",
     "name" : "opencode server exited",
     "passed" : true
   },
   {
-    "detail" : "44 sleep 2",
+    "detail" : "",
     "name" : "no processes left in the workspace container",
-    "passed" : false
+    "passed" : true
   }
 ]

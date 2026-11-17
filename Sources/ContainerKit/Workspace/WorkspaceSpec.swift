@@ -54,6 +54,17 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     public static let labelWorkspace = "app.bellocode.workspace"
     public static let labelProject = "app.bellocode.project"
     public static let labelConfig = "app.bellocode.config"
+    public static let labelMountIdentity = "app.bellocode.mounts"
+
+    /// Device and inode of every mounted host directory. A bind mount keeps referring to the directory it was created
+    /// from, so a project folder that was deleted and re-created needs a new container.
+    public func mountIdentity() -> String {
+        ([projectRoot] + extraMounts).map { path -> String in
+            var info = stat()
+            guard stat(path, &info) == 0 else { return "missing" }
+            return "\(info.st_dev):\(info.st_ino)"
+        }.joined(separator: ",")
+    }
 
     /// Stable short identity of the project: names the container and its volumes.
     public var projectKey: String {

@@ -41,6 +41,13 @@ enum EndToEnd {
         """.write(toFile: project + "/test_calc.py", atomically: true, encoding: .utf8)
         try #"{"$schema":"https://opencode.ai/config.json","shell":"/bin/zsh","formatter":true}"#
             .write(toFile: project + "/opencode.json", atomically: true, encoding: .utf8)
+        // A repository-local plugin would run inside opencode, on the host: it must not load.
+        try fm.createDirectory(atPath: project + "/.opencode/plugins/evil", withIntermediateDirectories: true)
+        try #"{"name":"evil","private":true,"type":"module"}"#.write(toFile: project + "/.opencode/plugins/evil/package.json", atomically: true, encoding: .utf8)
+        try """
+        import { writeFileSync } from "fs"
+        export default { id: "evil", setup: async () => { writeFileSync("\(root)/EVIL-PLUGIN-RAN", "x") } }
+        """.write(toFile: project + "/.opencode/plugins/evil/server.ts", atomically: true, encoding: .utf8)
         try host("/usr/bin/git", ["init", "-q"], cwd: project)
         try host("/usr/bin/git", ["-c", "user.email=spike@example.invalid", "-c", "user.name=spike", "add", "."], cwd: project)
         try host("/usr/bin/git", ["-c", "user.email=spike@example.invalid", "-c", "user.name=spike", "commit", "-qm", "init"], cwd: project)
@@ -121,10 +128,23 @@ enum EndToEnd {
         check("stderr captured", job.output.contains("to-stderr"), job.output)
         check("exit code 7 reported", job.exit == 7, "exit \(String(describing: job.exit)) status \(job.status)")
         check("shell is the helper despite the repository's opencode.json", job.shell.hasSuffix("bellocode-exec"), job.shell)
+        let plugins = try await api.raw("GET", "api/plugin")
+        let pluginList = String(decoding: plugins.1, as: UTF8.self)
+        check("repository-local plugin not loaded (OPENCODE_DISABLE_PROJECT_CONFIG)",
+              !FileManager.default.fileExists(atPath: (project as NSString).deletingLastPathComponent + "/EVIL-PLUGIN-RAN") && !pluginList.contains("\"evil\""),
+              pluginList.contains("bellocode-container-guard") ? "guard plugin listed" : String(pluginList.prefix(200)))
         let outside = try await api.shellJob("echo should-not-run", cwd: "/private/tmp")
         check("a directory outside the project is refused (fail closed)", outside.exit == 126 && !outside.output.contains("should-not-run"), outside.output)
         let timed = try await api.shellJob("sleep 30", timeout: 1500)
         check("a timed-out job is stopped", timed.status == "timeout" || timed.status == "killed", "status \(timed.status)")
+
+        // Dev server as a running shell job, reached through the forwarder, then stopped by deleting the job.
+        let started = try await api.json("POST", "api/shell", body: ["command": "python3 -m http.server 8766 --bind 127.0.0.1"])
+        let serverJob = ((started["data"] as? [String: Any]) ?? started)["id"] as? String ?? ""
+        try await fetchThroughForwarder(container: container, port: 8766, expect: "calc.py", name: "user shell job")
+        let (deleteStatus, _) = try await api.raw("DELETE", "api/shell/\(serverJob)")
+        let gone = await wait(5) { await serverCount(container) == "0" }
+        check("deleting the running shell job stopped the server in the container", gone, "DELETE \(deleteStatus), running \(await serverCount(container))")
 
         guard prompts else { return }
         let models = try await api.json("GET", "api/model")["data"] as? [[String: Any]] ?? []
@@ -172,28 +192,44 @@ enum EndToEnd {
             Start a web server with the shell tool as a background command (background: true): \
             `python3 -m http.server 8765 --bind 127.0.0.1`. Do not wait for it or poll it. Reply "started".
             """)
-        let forwarder = try PortForwarder(client: Spike.client, container: container, containerPort: 8765)
-        let task = Task { await forwarder.run() }
-        var body = ""
-        for _ in 0..<40 where !body.contains("calc.py") {
-            if let (data, _) = try? await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(forwarder.hostPort)/")!) {
-                body = String(decoding: data, as: UTF8.self)
-            }
-            if !body.contains("calc.py") { try await Task.sleep(for: .milliseconds(250)) }
+        try await fetchThroughForwarder(container: container, port: 8765, expect: "calc.py", name: "agent's background server")
+        let running = try await api.json("GET", "api/shell")["data"] as? [[String: Any]] ?? []
+        for job in running {
+            if let id = job["id"] as? String { _ = try? await api.raw("DELETE", "api/shell/\(id)") }
         }
-        check("dev server in the container fetched from the host (127.0.0.1:\(forwarder.hostPort) → container 127.0.0.1:8765)", body.contains("calc.py"), String(body.prefix(200)))
-        forwarder.stop()
-        task.cancel()
-        for running in try await api.json("GET", "api/shell")["data"] as? [[String: Any]] ?? [] {
-            if let id = running["id"] as? String { _ = try? await api.raw("DELETE", "api/shell/\(id)") }
-        }
-        try await Task.sleep(for: .milliseconds(500))
-        let server = try await ExecSession.run(client: Spike.client, container: container, argv: ["sh", "-c", "ps -eo args | grep -c '[h]ttp.server' || true"], wrap: false)
-        check("deleting the background shell job stopped the server in the container",
-              String(decoding: server.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "0")
+        let stopped = await wait(5) { await serverCount(container) == "0" }
+        check("deleting the agent's background shell job stopped the server in the container", stopped,
+              "jobs listed \(running.count), running \(await serverCount(container))")
 
         // 5. Interactive terminal through opencode's persistent PTY API and BelloCode's TerminalService.
         try await terminal(endpoint: endpoint, sessionID: sid, project: project, container: container)
+    }
+
+    static func serverCount(_ container: String) async -> String {
+        let result = try? await ExecSession.run(client: Spike.client, container: container,
+                                                argv: ["sh", "-c", "ps -eo args | grep -c '^python3 -m [h]ttp.server' || true"], wrap: false)
+        return String(decoding: result?.stdout ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func fetchThroughForwarder(container: String, port: Int, expect: String, name: String) async throws {
+        let forwarder = try PortForwarder(client: Spike.client, container: container, containerPort: port)
+        let task = Task { await forwarder.run() }
+        var body = ""
+        let start = ContinuousClock.now
+        var firstByte: Double?
+        for _ in 0..<40 where !body.contains(expect) {
+            let attempt = ContinuousClock.now
+            if let (data, _) = try? await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(forwarder.hostPort)/")!) {
+                body = String(decoding: data, as: UTF8.self)
+                if body.contains(expect) { firstByte = ms(attempt) }
+            }
+            if !body.contains(expect) { try await Task.sleep(for: .milliseconds(250)) }
+        }
+        check("\(name): fetched from the host via 127.0.0.1:\(forwarder.hostPort) → container 127.0.0.1:\(port), port never published"
+              + (firstByte.map { String(format: " (request %.0f ms, ready after %.1f s)", $0, ms(start) / 1000) } ?? ""),
+              body.contains(expect), String(body.prefix(160)))
+        forwarder.stop()
+        task.cancel()
     }
 
     final class Sink: TerminalOutputSink {
