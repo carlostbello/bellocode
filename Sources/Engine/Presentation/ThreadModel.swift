@@ -188,6 +188,8 @@ public final class ThreadModel: Identifiable {
             // Delivery unknown: the text stays in `unconfirmedSends` under its ID; back in the draft it would invite a
             // second send under a new ID.
             if failure != .deliveryUnknown, fromDraft, draft.isEmpty { draft = text }
+            // Show the held send together with the error (the change bus may deliver it a moment later).
+            if failure == .deliveryUnknown { await refreshUnconfirmed() }
             return nil
         }
     }
@@ -195,11 +197,19 @@ public final class ThreadModel: Identifiable {
     /// Checks an unconfirmed send with opencode and, if it does not have it, resends it under the same ID.
     public func retryUnconfirmed(_ id: MessageID) async {
         await core.retryUnconfirmed(id)
+        await refreshUnconfirmed()
     }
 
     /// Removes a send that a retry found was not sent and returns its text, to edit and send again.
     public func takeUnconfirmed(_ id: MessageID) async -> String? {
-        await core.takeUnconfirmed(id)
+        let text = await core.takeUnconfirmed(id)
+        await refreshUnconfirmed()
+        return text
+    }
+
+    private func refreshUnconfirmed() async {
+        let current = await core.unconfirmedSends(sessionID)
+        if current != unconfirmedSends { unconfirmedSends = current }
     }
 
     /// Runs a server slash command (`/name arguments`). Returns whether the server accepted it; `lastError` otherwise.

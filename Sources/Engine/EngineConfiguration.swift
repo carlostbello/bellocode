@@ -44,6 +44,8 @@ public struct EngineConfiguration: Sendable {
     public var eventBufferLimit: Int = 4096
     /// Reconnect backoff for the event stream.
     public var eventBackoff = BackoffPolicy(initial: .milliseconds(250), maximum: .seconds(10))
+    /// Retry backoff after a resync failed all its attempts while the event stream stays connected.
+    public var resyncRetryBackoff = BackoffPolicy(initial: .seconds(1), maximum: .seconds(30))
     /// The location whose catalog is loaded when no project is known.
     public var defaultDirectory: String?
     public var time: any TimeSource = SystemTimeSource()

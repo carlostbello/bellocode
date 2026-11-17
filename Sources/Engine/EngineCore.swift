@@ -195,6 +195,7 @@ actor EngineCore {
         deltaTask = nil
         effectTask?.cancel()
         effectTask = nil
+        cancelResyncRetry()
         for task in backgroundTasks.values { task.cancel() }
         backgroundTasks.removeAll()
         commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
@@ -242,6 +243,10 @@ actor EngineCore {
     // MARK: - Event loop
 
     private func receive(_ message: EventHubMessage) async {
+        // A new connection resyncs anyway, and after a disconnect a retry could only fail: drop any pending retry.
+        if case .event = message {} else { cancelResyncRetry() }
+        await lockLoop()
+        defer { unlockLoop() }
         switch message {
         case .event(let envelope):
             await handle(envelope)
@@ -251,6 +256,76 @@ actor EngineCore {
             commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
             setConnection(.offline(reason: reason))
         }
+    }
+
+    // MARK: - Event-loop exclusion
+
+    /// The event loop and out-of-band resyncs (retry, effect overflow) take turns: a resync started outside the loop
+    /// must not interleave with event handling at its suspension points, or a snapshot read before an event could be
+    /// applied after it. At most two waiters exist (the loop and one resync), so the queue is bounded.
+    private var loopLocked = false
+    private var loopWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func lockLoop() async {
+        if !loopLocked {
+            loopLocked = true
+            return
+        }
+        await withCheckedContinuation { loopWaiters.append($0) }
+    }
+
+    private func unlockLoop() {
+        if loopWaiters.isEmpty {
+            loopLocked = false
+        } else {
+            loopWaiters.removeFirst().resume()
+        }
+    }
+
+    /// A resync outside the event loop, serialized with it.
+    private func resyncOutsideLoop(_ reason: ResyncReason) async {
+        await lockLoop()
+        defer { unlockLoop() }
+        guard !Task.isCancelled, started else { return }
+        await resync(reason)
+    }
+
+    // MARK: - Resync retry
+
+    private var resyncRetryTask: Task<Void, Never>?
+    /// The retry whose resync is running (kept so `stop()` and a reconnect can cancel it).
+    private var runningResyncRetry: Task<Void, Never>?
+    private var resyncRetryAttempt = 0
+    /// For tests: resyncs that failed every attempt and scheduled a retry.
+    private(set) var resyncRetriesScheduled = 0
+
+    /// After a resync failed every attempt while the event stream stays connected: retry with bounded backoff until
+    /// one succeeds, the stream reconnects (which resyncs anyway) or the engine stops. The UI shows the cached state as
+    /// out of date (`.offline`) meanwhile.
+    private func scheduleResyncRetry() {
+        guard started, resyncRetryTask == nil else { return }
+        resyncRetryAttempt += 1
+        resyncRetriesScheduled += 1
+        let delay = configuration.resyncRetryBackoff.delay(forAttempt: resyncRetryAttempt, random: Double.random(in: 0..<1))
+        resyncRetryTask = Task { [weak self, time] in
+            do { try await time.sleep(for: delay) } catch { return }
+            await self?.runResyncRetry()
+        }
+    }
+
+    private func runResyncRetry() async {
+        guard !Task.isCancelled else { return }
+        runningResyncRetry = resyncRetryTask
+        resyncRetryTask = nil
+        await resyncOutsideLoop(.overflow)
+        runningResyncRetry = nil
+    }
+
+    private func cancelResyncRetry() {
+        resyncRetryTask?.cancel()
+        resyncRetryTask = nil
+        runningResyncRetry?.cancel()
+        runningResyncRetry = nil
     }
 
     func handle(_ envelope: OpenCodeEventEnvelope) async {
@@ -386,7 +461,7 @@ actor EngineCore {
         if effectQueue.count > effectLimit {
             // Too far behind to follow individually: a resync re-reads everything.
             effectQueue.removeAll()
-            spawn { await $0.resync(.overflow) }
+            spawn { await $0.resyncOutsideLoop(.overflow) }
             return
         }
         guard effectTask == nil else { return }
@@ -471,6 +546,7 @@ actor EngineCore {
                 guard generation == syncGeneration, !Task.isCancelled else { return }
                 try await reconcile(snapshot, generation: generation)
                 guard generation == syncGeneration, !Task.isCancelled else { return }
+                resyncRetryAttempt = 0
                 setConnection(.live)
                 if catalogs[defaultCatalogDirectory()] == nil { enqueue([.refreshCatalog(directory: nil)]) }
                 if !unconfirmed.isEmpty { spawn { await $0.checkUnconfirmed() } }
@@ -480,7 +556,10 @@ actor EngineCore {
             } catch {
                 EngineSignposts.log.error("resync attempt \(attempt, privacy: .public) failed: \(EngineError.from(error).description, privacy: .public)")
                 if attempt == 3 {
-                    setConnection(.offline(reason: "Could not sync with opencode"))
+                    // Still connected (events keep arriving) but the cached state may be missing what the gap lost:
+                    // show it as out of date and keep retrying until a rebuild succeeds.
+                    setConnection(.offline(reason: "Could not sync with opencode; retrying"))
+                    scheduleResyncRetry()
                     return
                 }
                 try? await time.sleep(for: .milliseconds(200 * attempt))

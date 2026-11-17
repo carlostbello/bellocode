@@ -59,7 +59,11 @@ when a block ends, on eviction from the 2,048-message memory cache, and at `stop
   questions per directory, the inbox of running sessions, and the newest 50 messages of open threads (4 requests in
   parallel). Server copies merge onto local ones; local streamed text ahead of a snapshot is kept unless the pid
   changed (server restart: the server wins). A window that does not connect to the cache truncates older cache and
-  resets the thread. Sessions busy across a restart show `unknown` (opencode keeps them busy).
+  resets the thread. Sessions busy across a restart show `unknown` (opencode keeps them busy). A resync that fails all
+  three attempts while the stream stays connected shows `.offline("Could not sync with opencode; retrying")` and retries
+  with `resyncRetryBackoff` (1 s doubling to 30 s) until one succeeds; a reconnect, disconnect or `stop()` cancels the
+  retry. Out-of-loop resyncs (retry, effect-queue overflow) take turns with event handling, so events are applied in
+  order around them.
 - Attention: approval > answer > stopping > running (unknown offline/orphaned) > failed-unseen > finished-unseen >
   idle; seen = max(opencode `viewed`, local visit watermark). Child blockers bubble to every ancestor
   (`blockingChildID`). List = top-level, unarchived; snoozed/settled hide only non-blockers; urgency, then oldest.

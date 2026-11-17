@@ -213,3 +213,51 @@ struct AmbiguousSendTests {
         await tearDown(setup)
     }
 }
+
+// MARK: - M2: resync retry while connected
+
+@Suite("M2 resync retry", .serialized)
+@MainActor
+struct ResyncRetryTests {
+    /// The list endpoints fail through every resync attempt while the event stream stays connected. The engine must
+    /// show the cache as out of date, then retry (with backoff) until a rebuild succeeds, without a reconnect.
+    @Test func failedResyncIsRetriedWhileConnected() async throws {
+        let harness = try await MockHarness.start()
+        // The three attempts of the connect resync and of the first retry fail; the second retry succeeds.
+        await harness.server.injectHTTPFault(.status(500, method: "GET", pathPrefix: "/api/info", count: 6))
+        var configuration = EngineConfiguration(server: .fixed(harness.connection), store: .inMemory)
+        configuration.eventBackoff = BackoffPolicy(initial: .milliseconds(20), maximum: .milliseconds(200))
+        configuration.resyncRetryBackoff = BackoffPolicy(initial: .milliseconds(10), maximum: .milliseconds(40))
+        let engine = try Engine(configuration: configuration)
+        await engine.start()
+        try await waitUntil("stale") {
+            if case .offline = engine.root.connection { true } else { false }
+        }
+        #expect(await harness.server.subscriberCount == 1, "the event stream stays connected")
+        try await waitUntil("live after retries") { engine.root.connection == .live }
+        let scheduled = await engine.core.resyncRetriesScheduled
+        let resyncs = await engine.core.statistics.resyncs
+        #expect(scheduled == 2)
+        #expect(resyncs == 3, "the connect resync and two retries, no reconnect")
+        await engine.stop()
+        await harness.stop()
+    }
+
+    /// Stopping cancels a pending retry: nothing runs after `stop()`.
+    @Test func stopCancelsPendingRetry() async throws {
+        let harness = try await MockHarness.start()
+        await harness.server.injectHTTPFault(.status(500, method: "GET", pathPrefix: "/api/info", count: nil))
+        var configuration = EngineConfiguration(server: .fixed(harness.connection), store: .inMemory)
+        configuration.resyncRetryBackoff = BackoffPolicy(initial: .seconds(30), maximum: .seconds(30))
+        let engine = try Engine(configuration: configuration)
+        await engine.start()
+        try await waitUntil("retry scheduled") {
+            if case .offline = engine.root.connection { true } else { false }
+        }
+        await engine.stop()
+        let resyncs = await engine.core.statistics.resyncs
+        #expect(resyncs == 1)
+        #expect(engine.root.connection == .stopped)
+        await harness.stop()
+    }
+}
