@@ -239,6 +239,11 @@ terminal, real trackpad input, input methods, VoiceOver.
 | **M4 Browser** | Agent and user share one built-in browser | Web tabs; browser bridge; element picker and annotations; presets; browse status |
 | **M5 Ship** | Signed, notarized, auto-updating release | Themes and settings; keybindings; accessibility pass; performance gates; signing, notarization, Sparkle; diagnostics |
 
+Status, 2026-11-16: M0 and M1 are merged on `develop` (shell, Engine, composer, approvals, model picker, onboarding,
+production transcript), plus the M2 terminal drawer and the fixes from the first independent review
+([reviews/M1-review.md](reviews/M1-review.md)). Per-feature notes are in [features/](features/). Nothing has yet been
+checked by a person at the screen.
+
 M1 packages depend on M0. Within M1 to M5, packages are cut along module boundaries so several can run at once.
 M4 can start as soon as G3 passes and does not block M2 or M3.
 
