@@ -88,11 +88,7 @@ extension TranscriptController {
             let visible = Set(availableCells().flatMap { cell in
                 cell.view.layout?.blocks.flatMap { $0.images.map(\.source) } ?? []
             })
-            for source in Array(images.keys) where !visible.contains(source) {
-                if let image = images.removeValue(forKey: source) { imageBytes -= image.bytesPerRow * image.height }
-                imageRequests.remove(source)
-            }
-            imageOrder.removeAll { images[$0] == nil }
+            for source in Array(images.keys) where !visible.contains(source) { dropImage(source) }
         case .findIndex:
             findIndex.removeAll()
         }

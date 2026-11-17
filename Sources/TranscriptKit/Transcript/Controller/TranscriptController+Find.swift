@@ -234,15 +234,11 @@ extension TranscriptController {
 
     func imageArrived(_ source: String, _ loaded: LoadedImage?) {
         guard let loaded else { return }  // stays a placeholder (unreachable, unsupported or too large)
-        let bytes = loaded.image.bytesPerRow * loaded.image.height
+        tick += 1
         images[source] = loaded.image
-        imageOrder.append(source)
-        imageBytes += bytes
-        while imageBytes > imageByteLimit, imageOrder.count > 1 {
-            let old = imageOrder.removeFirst()
-            if let image = images.removeValue(forKey: old) { imageBytes -= image.bytesPerRow * image.height }
-            imageRequests.remove(old)
-        }
+        imageTick[source] = tick
+        imageBytes += loaded.image.bytesPerRow * loaded.image.height
+        evictImages()
         let knew = imageSizes[source] != nil
         imageSizes[source] = loaded.pixelSize
         for id in imageRows[source] ?? [] {
@@ -257,7 +253,29 @@ extension TranscriptController {
         }
     }
 
-    func image(_ source: String) -> CGImage? { images[source] }
+    func image(_ source: String) -> CGImage? {
+        guard let image = images[source] else { return nil }
+        tick += 1
+        imageTick[source] = tick
+        return image
+    }
+
+    /// Least recently drawn images go first; images of rows AppKit is displaying stay (they are re-requested when a
+    /// row that lost its image is configured again).
+    func evictImages() {
+        guard imageBytes > imageByteLimit else { return }
+        let visible = Set(availableCells().flatMap { cell in cell.view.layout?.blocks.flatMap { $0.images.map(\.source) } ?? [] })
+        for (source, _) in imageTick.sorted(by: { $0.value < $1.value }) where !visible.contains(source) {
+            guard imageBytes > imageByteLimit else { break }
+            dropImage(source)
+        }
+    }
+
+    func dropImage(_ source: String) {
+        if let image = images.removeValue(forKey: source) { imageBytes -= image.bytesPerRow * image.height }
+        imageTick[source] = nil
+        imageRequests.remove(source)
+    }
 
     /// Harness: whether an image source has loaded.
     public func isImageLoaded(_ source: String) -> Bool { images[source] != nil }

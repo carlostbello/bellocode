@@ -327,12 +327,32 @@ final class TranscriptCellView: NSView {
         }
     }
 
+    /// Accessibility attributes are computed when an accessibility client asks, not on every configure: the value is
+    /// the row's whole visible text (a 100 KB code block for the largest row) and the custom actions allocate objects
+    /// per hotspot. Configure only announces that the element changed, and only to a running client.
     func updateAccessibility() {
-        guard let controller, let row, let index = controller.rowIndex[row.id] else { return }
-        setAccessibilityLabel(controller.accessibilityLabel(row))
-        setAccessibilityValue(controller.accessibilityValue(index))
-        setAccessibilityCustomActions(controller.accessibilityActions(index, layout: layout))
-        setAccessibilityRoleDescription(row.role == .user ? "prompt" : row.role == .system ? "event" : "reply")
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        NSAccessibility.post(element: self, notification: .valueChanged)
+    }
+
+    override func accessibilityLabel() -> String? {
+        guard let controller, let row else { return nil }
+        return controller.accessibilityLabel(row)
+    }
+
+    override func accessibilityValue() -> Any? {
+        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
+        return controller.accessibilityValue(index)
+    }
+
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
+        return controller.accessibilityActions(index, layout: layout)
+    }
+
+    override func accessibilityRoleDescription() -> String? {
+        guard let row else { return nil }
+        return row.role == .user ? "prompt" : row.role == .system ? "event" : "reply"
     }
 
     // Accessibility text range support for VoiceOver's reading of selected text.

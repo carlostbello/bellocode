@@ -89,7 +89,12 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var flushScheduled = false
     var isAdjustingScroll = false
     var generation = 0
+    /// Evicted layouts waiting to be released after the frame (see `bury`).
+    var graveyard: [RowLayout] = []
+    var graveyardScheduled = false
+    static let graveyardLimit = 64
     var lastPrefetchRange: Range<Int> = 0..<0
+    var prefetchScheduled = false
     var scrollVelocity: CGFloat = 0
     var lastBoundsY: CGFloat = 0
     var lastBoundsTime: CFTimeInterval = 0
@@ -119,13 +124,18 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
 
     // Images.
     var images: [String: CGImage] = [:]
-    var imageOrder: [String] = []
+    /// Last draw tick per decoded image (LRU).
+    var imageTick: [String: UInt64] = [:]
     var imageBytes = 0
-    let imageByteLimit = 96 << 20
+    /// Decoded image budget (bytes of bitmap data). Each drawn image also costs a GPU-side copy of similar size while
+    /// it lives, so this bound roughly halves what images add to the footprint. The G1-B fixture's 640×360 images
+    /// at 96 MB (FIFO) were the largest single item of the peak footprint.
+    public var imageByteLimit = 32 << 20
     var imageSizes: [String: CGSize] = [:]
     var imageRequests: Set<String> = []
     var imageTasks: [String: Task<Void, Never>] = [:]
     var imageRows: [String: Set<RowID>] = [:]
+    var imageSourceCache: [RowID: (version: Int, sources: [String])] = [:]
 
     // Inner scrolling (code, tables, tool output) and per-block state.
     var scrollOffsets: [RowID: [Int: CGPoint]] = [:]
@@ -244,6 +254,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         tableView.controller = nil
         findBar.onChange = nil
         layouts.removeAll()
+        graveyard.removeAll()
         blockCache.removeAll()
     }
 
@@ -274,6 +285,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         findCurrent = nil
         findMatchesByRow = [:]
         findIndex = [:]
+        imageSourceCache = [:]
         isReady = false
         turnAnchor = nil
         pendingHeights.removeAll()
@@ -512,6 +524,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         tails.removeValue(forKey: id)?.task?.cancel()
         findIndex[id] = nil
         pendingHeights[id] = nil
+        imageSourceCache[id] = nil
     }
 
     func contentChanged(row index: Int) {

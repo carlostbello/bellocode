@@ -97,13 +97,21 @@ final class PeakSampler {
         var maxCaches: TranscriptCacheReport?
         var samples = 0
         var maxSampleMs = 0.0
+        var atStart: Memory?
+        /// Seconds into the traversal at which the footprint peak was sampled.
+        var peakAtS = 0.0
     }
 
     private(set) var report = Report()
     private var frames = 0
     private let every: Int
 
-    init(every: Int = 30) { self.every = every }
+    private let started = CACurrentMediaTime()
+
+    init(every: Int = 30) {
+        self.every = every
+        report.atStart = Memory.now()
+    }
 
     func frame(_ controller: TranscriptController) {
         frames += 1
@@ -119,6 +127,7 @@ final class PeakSampler {
             if memory.footprintMB > (report.peakFootprint?.footprintMB ?? 0) {
                 report.peakFootprint = memory
                 report.cachesAtPeak = caches
+                report.peakAtS = round2(CACurrentMediaTime() - started)
             }
             if memory.mallocInUseMB > (report.peakMalloc?.mallocInUseMB ?? 0) { report.peakMalloc = memory }
             var max = report.maxCaches ?? caches
@@ -201,14 +210,31 @@ extension ScenarioRunner {
         var flick = Flick()
         recorder.start()
         var first = true
+        let sampler2: StackSampler? = arguments.contains("--sample") ? StackSampler() : nil
+        sampler2?.start()
+        let pauseAbove = arguments.firstIndex(of: "--pause-above").flatMap { Double(arguments[$0 + 1]) }
+        var paused = false
         await perFrame { [self] dt, _ in
             if first { first = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution.frame(interval: dt) }
+            if dt > 0.0334 { let now = CACurrentMediaTime(); sampler2?.keep(from: now - dt, to: now) }
             sampler.frame(controller)
+            if let pauseAbove, !paused, ProcessStats.memory().footprint > pauseAbove {
+                // Freeze mid-traversal so heap/footprint can inspect the transient peak.
+                paused = true
+                log("PAUSE pid \(getpid()) at \(Int(ProcessStats.memory().footprint)) MB")
+                Thread.sleep(forTimeInterval: 45)
+            }
             controller.userScroll(by: flick.step(dt, rng: &rng, scale: scrollSpeed))
             return controller.distanceFromBottom > 1 && Double(controller.scrollView.contentView.bounds.maxY) < stopAt
         }
         let down = recorder.stop()
         let profile = attribution.finish()
+        if let sampler2 {
+            sampler2.stop()
+            sampler2.writeSamples(to: Report.directory.appending(path: "P-samples.txt"))
+            log("SAMPLES pid \(getpid()) kept \(sampler2.keptSamples) samples from \(sampler2.keptFrames) slow frames; taken \(sampler2.taken) in \(Int(down.reduce(0, +))) s")
+            await sleep(90)
+        }
         await controller.settle()
         await sleep(1)
         if let hold = arguments.firstIndex(of: "--hold").flatMap({ Double(arguments[$0 + 1]) }) {
