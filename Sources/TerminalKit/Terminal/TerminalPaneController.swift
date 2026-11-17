@@ -22,7 +22,8 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     let statusPill = TerminalStatusPill()
     let endedBar = TerminalEndedBar()
     let observerBar = TerminalEndedBar()
-    private let prompt = SemanticPromptTracker()
+    /// Internal so tests can wait for the OSC 133 state instead of sleeping.
+    let prompt = SemanticPromptTracker()
     private var oscObservation: TerminalOscObservation?
     private var observation: TerminalObservation?
     private var noticeTask: Task<Void, Never>?
