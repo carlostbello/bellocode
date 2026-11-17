@@ -53,6 +53,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private let addButton = NSButton()
 
     private(set) var roots: [SidebarNode] = []
+    /// Parent of every node in `roots` (computed once per structure change).
+    private var parentMap: [SidebarNodeID: SidebarNodeID?] = [:]
     private var rootItems: [SidebarItem] = []
     private var items: [SidebarNodeID: SidebarItem] = [:]
     private var structureLoop: ObservationLoop?
@@ -72,6 +74,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private var sectionCounts: [SidebarNodeID: Int] = [:]
     /// Last structure build time (measurements).
     private(set) var lastStructureMilliseconds = 0.0
+    /// The part of it spent reading engine state and deriving sections.
+    private(set) var lastInputMilliseconds = 0.0
 
     init(workspace: WorkspaceController) {
         self.workspace = workspace
@@ -246,13 +250,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         defer { ShellSignposts.sidebar.endInterval("sidebarStructure", signpost) }
         let start = ContinuousClock.now
         let root = workspace.engine.root
-        var newRoots = SidebarTree.build(makeInput())
+        let input = makeInput()
+        let built = ContinuousClock.now
+        var newRoots = SidebarTree.build(input)
         if let forcedPreview { newRoots = Self.insertingGap(into: newRoots, section: forcedPreview.section, at: forcedPreview.index) }
         emptyState.isHidden = !root.projects.isEmpty
         scrollView.isHidden = root.projects.isEmpty && root.attention.items.isEmpty
         filterField.isHidden = root.projects.isEmpty
         if newRoots != roots { apply(newRoots) }
-        lastStructureMilliseconds = Double((ContinuousClock.now - start).components.attoseconds) / 1e15
+        lastInputMilliseconds = PaletteController.milliseconds(since: start) - PaletteController.milliseconds(since: built)
+        lastStructureMilliseconds = PaletteController.milliseconds(since: start)
     }
 
     private func apply(_ newRoots: [SidebarNode]) {
@@ -263,6 +270,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         let firstLoad = roots.isEmpty
         let update = SidebarTree.update(from: roots, to: newRoots)
         roots = newRoots
+        parentMap = SidebarTree.parents(newRoots)
         let previousItems = items
         items = [:]
         rootItems = newRoots.map { materialize($0, reuse: previousItems) }
@@ -350,15 +358,15 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         // Keep a multi-selection (or a "Needs you" row) that already includes the displayed thread.
         let selectedIDs = outlineView.selectedRowIndexes.compactMap { (outlineView.item(atRow: $0) as? SidebarItem)?.id }
         if let selection, selectedIDs.contains(where: { Self.selection(for: $0) == selection }) { return }
-        guard let target = SidebarTree.node(for: selection, in: roots), let item = items[target] else {
+        guard let target = node(for: selection), let item = items[target] else {
             if selection == nil, outlineView.selectedRow >= 0 { setSelectedRow(-1) }
             return
         }
-        var parentID = SidebarTree.parents(roots)[target] ?? nil
+        var parentID = parentMap[target] ?? nil
         var chain: [SidebarItem] = []
         while let id = parentID, let parent = items[id] {
             chain.insert(parent, at: 0)
-            parentID = SidebarTree.parents(roots)[id] ?? nil
+            parentID = parentMap[id] ?? nil
         }
         // Reveal the row (a collapsed section or project opens; Settled stays collapsed only if nothing in it is shown).
         for parent in chain where !outlineView.isItemExpanded(parent) { outlineView.expandItem(parent) }
@@ -366,6 +374,15 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         guard row >= 0, row != outlineView.selectedRow || outlineView.numberOfSelectedRows > 1 else { return }
         setSelectedRow(row)
         outlineView.scrollRowToVisible(row)
+    }
+
+    /// The row for a selection (by identity; see `SidebarTree.node(for:in:)`).
+    private func node(for selection: ShellSelection?) -> SidebarNodeID? {
+        switch selection {
+        case .thread(let id): items[.thread(id)] != nil ? .thread(id) : (items[.attention(id)] != nil ? .attention(id) : nil)
+        case .draft(let directory): items[.project(directory)] != nil ? .project(directory) : nil
+        case nil: nil
+        }
     }
 
     private func setSelectedRow(_ row: Int) {
@@ -526,7 +543,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .section:
             return (item, index == NSOutlineViewDropOnItemIndex ? 0 : index)
         case .thread:
-            guard let parentID = SidebarTree.parents(roots)[item.id] ?? nil, let parent = items[parentID],
+            guard let parentID = parentMap[item.id] ?? nil, let parent = items[parentID],
                   let position = parent.children.firstIndex(where: { $0 === item })
             else { return nil }
             return (parent, position)

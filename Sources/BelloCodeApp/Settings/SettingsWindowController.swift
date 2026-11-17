@@ -22,7 +22,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     let tabs = NSTabViewController()
     private(set) var panes: [SettingsPane]
 
-    init(settings: AppSettings, auth: AuthService?, importSource: CredentialImportSource?) {
+    init(
+        settings: AppSettings, auth: AuthService?, importSource: CredentialImportSource?, engine: Engine? = nil,
+        notifier: AttentionNotifier? = nil
+    ) {
         var panes = [
             SettingsPane(id: "general", title: "General", symbolName: "gearshape") {
                 let controller = NSHostingController(rootView: GeneralSettingsView(settings: settings))
@@ -35,6 +38,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 return controller
             },
         ]
+        if let engine {
+            panes.append(
+                SettingsPane(id: "threads", title: "Threads", symbolName: "tray.2") {
+                    let controller = NSHostingController(rootView: ThreadSettingsView(engine: engine, root: engine.root))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
+            panes.append(
+                SettingsPane(id: "notifications", title: "Notifications", symbolName: "bell.badge") {
+                    let controller = NSHostingController(
+                        rootView: NotificationSettingsView(settings: settings, root: engine.root, notifier: notifier))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
+        }
         if let auth {
             panes.append(
                 SettingsPane(id: "accounts", title: "Accounts", symbolName: "person.crop.circle") {

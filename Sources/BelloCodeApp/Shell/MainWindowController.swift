@@ -85,11 +85,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.toolbar = toolbar
 
         sidebar.delegate = self
-        rightPanel.onTabChange = { [weak self] id in self?.workspace.updateLayout(rightPanelTab: id) }
+        rightPanel.onTabChange = { [weak self] id in
+            self?.workspace.updateLayout(rightPanelTab: id)
+            self?.recordThreadPanel()
+        }
         split.onLayoutChange = { [weak self] in self?.recordLayout() }
         container.onDisplay = { [weak self] context in
             self?.updateTitle()
             self?.terminals?.display(context)
+            self?.applyThreadPanel()
             self?.applyPendingReveal()
         }
         restoreLayout()
@@ -121,6 +125,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         workspace.updateLayout(
             sidebarCollapsed: split.sidebarItem.isCollapsed, rightPanelVisible: !split.panelItem.isCollapsed,
             terminalVisible: !split.contentSplit.drawerItem.isCollapsed)
+        recordThreadPanel()
+    }
+
+    /// Remembers the right panel (shown, tab) for the displayed thread.
+    private func recordThreadPanel() {
+        guard !isRestoringLayout, let id = container.displayed?.threadID else { return }
+        workspace.recordPanel(
+            ThreadPanelState(isRightPanelVisible: !split.panelItem.isCollapsed, rightPanelTab: rightPanel.selectedID), for: id)
+    }
+
+    /// Shows the displayed thread's right panel as it was left there: instantly, without replaying transitions.
+    private func applyThreadPanel() {
+        guard let id = container.displayed?.threadID, let panel = workspace.panel(for: id) else { return }
+        isRestoringLayout = true
+        defer { isRestoringLayout = false }
+        if let tab = panel.rightPanelTab, tab != rightPanel.selectedID { rightPanel.select(tab) }
+        if split.panelItem.isCollapsed == panel.isRightPanelVisible {
+            DS.Motion.withoutAnimation { split.panelItem.isCollapsed = !panel.isRightPanelVisible }
+        }
     }
 
     // MARK: - Title and connection
@@ -143,9 +166,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         } else if root.projects.isEmpty {
             subtitle = "No projects"
         }
+        // Attention in the subtitle (Window menu, Mission Control, VoiceOver): blockers, never colour alone.
+        let blockers = root.attention.counts.dockBadge
+        if blockers > 0 {
+            let needs = blockers == 1 ? "1 needs you" : "\(blockers) need you"
+            subtitle = subtitle.isEmpty ? needs : subtitle + " · " + needs
+        }
         if window.title != title { window.title = title }
         if window.subtitle != subtitle { window.subtitle = subtitle }
-        NSApp.dockTile.badgeLabel = root.attention.counts.dockBadge > 0 ? "\(root.attention.counts.dockBadge)" : nil
     }
 
     // MARK: - NSWindowDelegate

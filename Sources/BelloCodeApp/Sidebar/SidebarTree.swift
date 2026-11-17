@@ -170,11 +170,16 @@ enum SidebarTree {
     /// Parent of every node (nil for roots). Used to detect a node moving between parents.
     static func parents(_ nodes: [SidebarNode], parent: SidebarNodeID? = nil) -> [SidebarNodeID: SidebarNodeID?] {
         var result: [SidebarNodeID: SidebarNodeID?] = [:]
-        for node in nodes {
-            result[node.id] = parent
-            result.merge(parents(node.children, parent: node.id)) { $1 }
-        }
+        result.reserveCapacity(nodes.count * 4)
+        collectParents(nodes, parent: parent, into: &result)
         return result
+    }
+
+    private static func collectParents(_ nodes: [SidebarNode], parent: SidebarNodeID?, into result: inout [SidebarNodeID: SidebarNodeID?]) {
+        for node in nodes {
+            result[node.id] = .some(parent)
+            if !node.children.isEmpty { collectParents(node.children, parent: node.id, into: &result) }
+        }
     }
 
     /// The batch of outline operations that turns `old` into `new`: removals first (deepest parents last does not

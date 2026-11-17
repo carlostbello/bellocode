@@ -1,5 +1,6 @@
 import AgentUI
 import AppKit
+import BelloCore
 import ComposerKit
 import Engine
 
@@ -18,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindow: UtilityWindowController?
     private var connectWindow: UtilityWindowController?
     private var isTerminating = false
+    /// Notifications for blockers and completions, and the Dock badge (docs/features/navigation.md).
+    private(set) var notifier: AttentionNotifier?
+    private var statusItem: StatusItemController?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -42,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Quick Look copies of pasted content left by a crashed run.
                 Task { await PreviewFiles.current.cleanUpAbandoned() }
                 showMainWindow()
+                startAttention(runtime: runtime, settings: settings)
                 NSApp.activate()
                 // Cached content first (start() returns once the cache is shown), then the server connects.
                 await runtime.engine.start()
@@ -118,6 +123,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windows.restore()
     }
 
+    /// Starts notifications (inside the app bundle, never for mock data) and the optional menu-bar item.
+    private func startAttention(runtime: AppRuntime, settings: AppSettings) {
+        let isMock = if case .mock = runtime.source { true } else { false }
+        let delivery = isMock ? nil : SystemNotificationDelivery.makeIfAvailable()
+        let notifier = AttentionNotifier(engine: runtime.engine, settings: settings, delivery: delivery, defaults: runtime.defaults)
+        notifier.frontmostThread = { [weak self] in
+            guard let current = self?.windows?.current, current.window?.isKeyWindow == true else { return nil }
+            return current.container.displayed?.threadID
+        }
+        notifier.onOpen = { [weak self] id in
+            NSApp.activate()
+            self?.openThread(id)
+        }
+        delivery?.onResponse = { [weak notifier] response in
+            Task { await notifier?.handle(response) }
+        }
+        notifier.start()
+        self.notifier = notifier
+        let statusItem = StatusItemController(engine: runtime.engine, settings: settings)
+        statusItem.onOpen = { [weak self] id in self?.openThread(id) }
+        statusItem.start()
+        self.statusItem = statusItem
+    }
+
+    /// Brings the front main window forward (reopening the first one if every window is closed).
+    func showFrontWindow() {
+        if let current = windows?.current { current.showWindow(nil) } else { windows?.showPrimary() }
+    }
+
+    /// Opens a thread from outside a window (a notification, the menu-bar item): the front window shows it.
+    func openThread(_ id: SessionID) {
+        showFrontWindow()
+        windows?.current?.workspace.select(.thread(id))
+        windows?.current?.window?.makeKeyAndOrderFront(nil)
+    }
+
     /// ⇧⌘N: a new main window with its own selection, sharing the engine.
     @objc func newMainWindow(_ sender: Any?) {
         guard windows != nil else { return }
@@ -141,7 +182,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let services else { return }
         if settingsWindow == nil {
             settingsWindow = SettingsWindowController(
-                settings: services.settings, auth: services.auth, importSource: .userInstall())
+                settings: services.settings, auth: services.auth, importSource: .userInstall(), engine: runtime?.engine,
+                notifier: notifier)
         }
         settingsWindow?.show(pane: pane)
     }
