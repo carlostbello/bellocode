@@ -65,6 +65,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showSettings, connectProvider, showWelcome
     case newTerminal, closeTerminal, splitTerminal, nextTerminal, previousTerminal, clearTerminal, renameTerminal
     case restartTerminal, moveTerminal, sendTerminalSelection
+    // M2-C: Changes tab, diff, git and worktrees (Content/ChangesSurface.swift, MainWindowController+Changes.swift).
+    case showChanges, nextChange, previousChange, nextChangedFile, previousChangedFile, addReviewComment, openInEditor
+    case revertHunk, revertFile, revertTurn, commitChanges, pushBranch, openPullRequest
+    case toggleDiffLayout, toggleDiffWhitespace, toggleDiffWrap, chooseWorkspace, chooseBranch, removeWorktree
 
     @MainActor var selector: Selector {
         switch self {
@@ -123,6 +127,26 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .restartTerminal: #selector(MainWindowController.restartTerminal(_:))
         case .moveTerminal: #selector(MainWindowController.moveTerminal(_:))
         case .sendTerminalSelection: #selector(MainWindowController.sendTerminalSelectionToComposer(_:))
+        // A focused diff answers the navigation and comment selectors itself (DiffKit's DiffContentView).
+        case .showChanges: #selector(MainWindowController.showChanges(_:))
+        case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
+        case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
+        case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
+        case .previousChangedFile: #selector(MainWindowController.previousDiffFile(_:))
+        case .addReviewComment: #selector(MainWindowController.addDiffComment(_:))
+        case .openInEditor: #selector(MainWindowController.openChangedFileInEditor(_:))
+        case .revertHunk: #selector(MainWindowController.revertDiffHunk(_:))
+        case .revertFile: #selector(MainWindowController.revertChangedFile(_:))
+        case .revertTurn: #selector(MainWindowController.revertTurnChanges(_:))
+        case .commitChanges: #selector(MainWindowController.commitChanges(_:))
+        case .pushBranch: #selector(MainWindowController.pushBranch(_:))
+        case .openPullRequest: #selector(MainWindowController.openPullRequest(_:))
+        case .toggleDiffLayout: #selector(MainWindowController.toggleDiffLayout(_:))
+        case .toggleDiffWhitespace: #selector(MainWindowController.toggleDiffWhitespace(_:))
+        case .toggleDiffWrap: #selector(MainWindowController.toggleDiffWrap(_:))
+        case .chooseWorkspace: #selector(MainWindowController.chooseWorkspace(_:))
+        case .chooseBranch: #selector(MainWindowController.chooseBranch(_:))
+        case .removeWorktree: #selector(MainWindowController.removeWorktree(_:))
         }
     }
 
@@ -185,6 +209,25 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .restartTerminal: "Restart Terminal"
         case .moveTerminal: "Move Terminal to Right Panel"
         case .sendTerminalSelection: "Send Selection to Composer"
+        case .showChanges: "Show Changes"
+        case .nextChange: "Next Change"
+        case .previousChange: "Previous Change"
+        case .nextChangedFile: "Next Changed File"
+        case .previousChangedFile: "Previous Changed File"
+        case .addReviewComment: "Add Review Comment…"
+        case .openInEditor: "Open in Editor"
+        case .revertHunk: "Revert Hunk"
+        case .revertFile: "Revert File…"
+        case .revertTurn: "Revert Turn…"
+        case .commitChanges: "Commit…"
+        case .pushBranch: "Push"
+        case .openPullRequest: "Open Pull Request"
+        case .toggleDiffLayout: "Side-by-Side Diff"
+        case .toggleDiffWhitespace: "Ignore Whitespace"
+        case .toggleDiffWrap: "Wrap Lines"
+        case .chooseWorkspace: "Choose Workspace…"
+        case .chooseBranch: "Choose Branch…"
+        case .removeWorktree: "Remove Worktree…"
         }
     }
 
@@ -249,6 +292,20 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .clearTerminal: ("k", .command)
         case .sendTerminalSelection: ("l", [.command, .shift])
         case .renameTerminal, .restartTerminal, .moveTerminal: ("", [])
+        // ⌃⌘ arrows: free in text views, terminals and the transcript (which uses ⌥⌘↑/↓).
+        case .showChanges: ("d", [.command, .shift])
+        case .nextChange: (down, [.command, .control])
+        case .previousChange: (up, [.command, .control])
+        case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
+        case .previousChangedFile: (String(UnicodeScalar(UInt16(NSLeftArrowFunctionKey))!), [.command, .control])
+        case .addReviewComment: ("k", [.command, .shift])
+        case .openInEditor: ("o", .command)
+        case .chooseWorkspace: ("e", [.command, .shift])
+        case .chooseBranch: ("b", [.command, .shift])
+        // Reverting is never a single keystroke (research 03, section D); the rest are menu and panel actions.
+        case .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .openPullRequest, .toggleDiffLayout,
+            .toggleDiffWhitespace, .toggleDiffWrap, .removeWorktree:
+            ("", [])
         }
     }
 
@@ -325,6 +382,8 @@ struct CommandContext: Equatable, Sendable {
     var terminalInPanel = false
     /// Transcript commands the displayed transcript can run now.
     var availableTranscriptCommands: Set<ShellCommand> = []
+    /// The Changes tab's state (M2-C).
+    var changes = ChangesCommandState()
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -352,6 +411,18 @@ struct CommandContext: Equatable, Sendable {
         case .closeTerminal, .nextTerminal, .previousTerminal, .clearTerminal, .renameTerminal, .restartTerminal, .moveTerminal:
             return terminalSelected
         case .sendTerminalSelection: return terminalHasSelectedText && composerVisible
+        case .showChanges, .toggleDiffLayout, .toggleDiffWhitespace, .toggleDiffWrap: return changes.available
+        case .nextChange, .previousChange: return changes.hasHunks
+        case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
+        case .addReviewComment: return changes.hasSelection && composerVisible
+        case .openInEditor: return changes.hasTargetFile
+        case .revertHunk: return changes.canRevertHunk
+        case .revertFile: return changes.revertFileTitle != nil
+        case .revertTurn: return changes.canRevertTurn
+        case .commitChanges: return changes.isRepository
+        case .pushBranch, .openPullRequest: return changes.hasBranch
+        case .chooseWorkspace, .chooseBranch: return changes.isDraft && changes.isRepository
+        case .removeWorktree: return changes.isWorktree && !changes.isDraft
         }
     }
 
@@ -362,6 +433,10 @@ struct CommandContext: Equatable, Sendable {
         case .toggleTerminal: isTerminalVisible ? "Hide Terminal" : "Show Terminal"
         case .splitTerminal: terminalSplit ? "Unsplit Terminal" : "Split Terminal"
         case .moveTerminal: terminalInPanel ? "Move Terminal to Drawer" : "Move Terminal to Right Panel"
+        case .revertFile: changes.revertFileTitle.map { $0 + "…" } ?? command.title
+        case .toggleDiffLayout: changes.isSplit ? "Unified Diff" : "Side-by-Side Diff"
+        case .toggleDiffWhitespace: changes.ignoresWhitespace ? "Show Whitespace Changes" : "Ignore Whitespace"
+        case .toggleDiffWrap: changes.wraps ? "Don’t Wrap Lines" : "Wrap Lines"
         default: command.title
         }
     }
@@ -373,4 +448,25 @@ func nextAttention(after current: SessionID?, in items: [SessionID]) -> SessionI
     guard !items.isEmpty else { return nil }
     guard let current, let index = items.firstIndex(of: current) else { return items.first }
     return items[(index + 1) % items.count]
+}
+
+/// What the Changes commands can act on now (gathered by the window; pure, so validation is tested).
+struct ChangesCommandState: Equatable, Sendable {
+    /// A Changes model exists (a thread or draft is displayed).
+    var available = false
+    var isRepository = false
+    var isDraft = false
+    var isWorktree = false
+    var hasBranch = false
+    var hasHunks = false
+    var fileCount = 0
+    var hasSelection = false
+    var hasTargetFile = false
+    var canRevertHunk = false
+    /// "Revert This Turn’s Changes to Login.swift"; nil when the scope cannot revert files.
+    var revertFileTitle: String?
+    var canRevertTurn = false
+    var isSplit = false
+    var ignoresWhitespace = false
+    var wraps = false
 }

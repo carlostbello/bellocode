@@ -565,7 +565,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
 
     /// The files the context menu or a menu command acts on: the clicked row, else the selection, else the file in
     /// view.
-    var targetFiles: [ChangedFile] {
+    public var targetFiles: [ChangedFile] {
         let clicked = outline.clickedRow
         if clicked >= 0, let node = outline.item(atRow: clicked) as? FileTreeNode {
             return outline.selectedRowIndexes.contains(clicked)

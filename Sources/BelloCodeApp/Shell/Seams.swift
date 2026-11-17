@@ -32,20 +32,22 @@ struct ShellSurfaces {
     var rightPanelTabs: [RightPanelTab]
     /// The bottom drawer (terminal).
     var terminalDrawer: @MainActor () -> NSViewController
+    /// DiffKit's "Changes" tab (Content/ChangesSurface.swift), bound by the window. nil: the tab is a placeholder.
+    var changes: ChangesSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
     static func builtIn(services: AppServices) -> ShellSurfaces {
         // TerminalKit (Content/TerminalSurface.swift): the drawer and the "Terminal" tab share one set per window.
         let terminals = TerminalSurfaces(services: services)
+        // DiffKit (Content/ChangesSurface.swift): the "Changes" tab follows the displayed thread.
+        let changes = ChangesSurfaces(services: services)
         return ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
             composer: { ComposerSurfaceController(context: $0, services: services) },
             rightPanelTabs: [
-                RightPanelTab(id: "changes", title: "Changes", symbolName: "plusminus") {
-                    placeholder("Changes", symbol: "plusminus", detail: "Diffs for this thread appear here.")
-                },
+                RightPanelTab(id: "changes", title: "Changes", symbolName: "plusminus") { changes.makeController() },
                 RightPanelTab(id: "files", title: "Files", symbolName: "folder") {
                     placeholder("Files", symbol: "folder", detail: "The project's files appear here.")
                 },
@@ -54,7 +56,7 @@ struct ShellSurfaces {
                 },
                 RightPanelTab(id: "terminal", title: "Terminal", symbolName: "terminal") { terminals.makePanelController() },
             ],
-            terminalDrawer: { terminals.makeDrawerController() })
+            terminalDrawer: { terminals.makeDrawerController() }, changes: changes)
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {
@@ -94,6 +96,8 @@ struct DraftThreadOptions: Hashable, Sendable {
     var agent: String?
     var model: ModelSelection?
     var permissionMode: PermissionMode?
+    /// Where the thread is created when not the project's main checkout (a worktree prepared by the workspace picker).
+    var directory: String?
 }
 
 /// Everything a surface needs about what is displayed, plus the actions a composer performs.
@@ -186,7 +190,7 @@ final class ThreadSurfaceContext {
         isCreatingThread = true
         defer { isCreatingThread = false }
         do {
-            let session = try await engine.createThread(in: projectDirectory, agent: options.agent, model: options.model)
+            let session = try await engine.createThread(in: options.directory ?? projectDirectory, agent: options.agent, model: options.model)
             guard let model = openThread?(session.id) else { return nil }
             if let mode = options.permissionMode { await model.setPermissionMode(mode) }
             newThreadDraft = ""

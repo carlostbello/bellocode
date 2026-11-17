@@ -16,6 +16,7 @@ enum MainMenu {
         mainMenu.addItem(submenu: viewMenu())
         mainMenu.addItem(submenu: threadMenu())
         mainMenu.addItem(submenu: terminalMenu())
+        mainMenu.addItem(submenu: changesMenu())
 
         let windowMenu = windowMenu()
         mainMenu.addItem(submenu: windowMenu)
@@ -166,6 +167,37 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.add(.clearTerminal)
         menu.add(.sendTerminalSelection)
+        return menu
+    }
+
+    /// M2-C: diff navigation, review, revert, commit and workspace commands.
+    private static func changesMenu() -> NSMenu {
+        let menu = NSMenu(title: "Changes")
+        menu.add(.showChanges)
+        menu.addItem(.separator())
+        menu.add(.nextChange)
+        menu.add(.previousChange)
+        menu.add(.nextChangedFile)
+        menu.add(.previousChangedFile)
+        menu.addItem(.separator())
+        menu.add(.toggleDiffLayout)
+        menu.add(.toggleDiffWhitespace)
+        menu.add(.toggleDiffWrap)
+        menu.addItem(.separator())
+        menu.add(.addReviewComment)
+        menu.add(.openInEditor)
+        menu.addItem(.separator())
+        menu.add(.revertHunk)
+        menu.add(.revertFile)
+        menu.add(.revertTurn)
+        menu.addItem(.separator())
+        menu.add(.commitChanges)
+        menu.add(.pushBranch)
+        menu.add(.openPullRequest)
+        menu.addItem(.separator())
+        menu.add(.chooseWorkspace)
+        menu.add(.chooseBranch)
+        menu.add(.removeWorktree)
         return menu
     }
 
