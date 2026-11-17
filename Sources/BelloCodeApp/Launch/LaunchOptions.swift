@@ -71,7 +71,7 @@ struct LaunchOptions: Equatable, Sendable {
             }
             index += 1
         }
-        if case .snapshot(let name) = options.mode, options.mock == nil { options.mock = name == "nav" ? .workspace : .demo }
+        if case .snapshot(let name) = options.mode, options.mock == nil { options.mock = name == "nav" || name == "extras" ? .workspace : .demo }
         return options
     }
 }

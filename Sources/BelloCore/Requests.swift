@@ -194,12 +194,15 @@ public enum QuestionAnswer: Hashable, Sendable, Codable {
 public enum PendingRequest: Hashable, Sendable, Codable, Identifiable {
     case permission(PermissionRequest)
     case question(QuestionRequest)
+    /// Raised by BelloCode itself: a secret request or an app approval (docs/features/orchestration-extras.md).
+    case app(AppRequest)
 
-    /// Unique across both kinds (`per_…` / `frm_…`).
+    /// Unique across all kinds (`per_…` / `frm_…` / `app_…`).
     public var id: String {
         switch self {
         case .permission(let request): request.id.rawValue
         case .question(let request): request.id.rawValue
+        case .app(let request): request.id
         }
     }
 
@@ -207,6 +210,7 @@ public enum PendingRequest: Hashable, Sendable, Codable, Identifiable {
         switch self {
         case .permission(let request): request.sessionID
         case .question(let request): request.sessionID
+        case .app(let request): request.sessionID
         }
     }
 
@@ -214,10 +218,20 @@ public enum PendingRequest: Hashable, Sendable, Codable, Identifiable {
         switch self {
         case .permission(let request): request.received
         case .question(let request): request.received
+        case .app(let request): request.received
         }
     }
 
     public var isPermission: Bool { if case .permission = self { true } else { false } }
+    public var isApp: Bool { if case .app = self { true } else { false } }
+    /// Counts as an approval (permission or app approval) rather than a question.
+    public var isApprovalLike: Bool {
+        switch self {
+        case .permission: true
+        case .question: false
+        case .app(let request): request.isApproval
+        }
+    }
 }
 
 // MARK: - Queue

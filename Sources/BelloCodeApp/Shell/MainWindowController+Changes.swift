@@ -83,8 +83,8 @@ extension MainWindowController: ChangesShell {
             panel.beginCommit()
         case .pushBranch:
             panel.push(nil)
-        case .openPullRequest:
-            panel.openPullRequest(nil)
+        case .createMergeRequest:
+            panel.createMergeRequest(nil)
         case .toggleDiffLayout:
             panel.setLayout(panel.options.layout == .split ? .unified : .split)
             changes.saveOptions()
@@ -118,7 +118,7 @@ extension MainWindowController: ChangesShell {
     @objc func revertTurnChanges(_ sender: Any?) { perform(.revertTurn) }
     @objc func commitChanges(_ sender: Any?) { perform(.commitChanges) }
     @objc func pushBranch(_ sender: Any?) { perform(.pushBranch) }
-    @objc func openPullRequest(_ sender: Any?) { perform(.openPullRequest) }
+    @objc func createMergeRequest(_ sender: Any?) { perform(.createMergeRequest) }
     @objc func toggleDiffLayout(_ sender: Any?) { perform(.toggleDiffLayout) }
     @objc func toggleDiffWhitespace(_ sender: Any?) { perform(.toggleDiffWhitespace) }
     @objc func toggleDiffWrap(_ sender: Any?) { perform(.toggleDiffWrap) }

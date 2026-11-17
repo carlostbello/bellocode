@@ -263,22 +263,6 @@ public struct GitRepository: Sendable {
         return output.status == 0 ? output.text.trimmingCharacters(in: .whitespacesAndNewlines) : nil
     }
 
-    /// GitHub's "compare" page for opening a pull request, or nil for a remote that is not on GitHub.
-    public static func compareURL(remote: String, base: String, branch: String) -> URL? {
-        var path: String?
-        if remote.hasPrefix("git@github.com:") {
-            path = String(remote.dropFirst("git@github.com:".count))
-        } else if let url = URL(string: remote), let host = url.host(), host == "github.com" || host == "www.github.com" {
-            path = String(url.path().drop { $0 == "/" })
-        }
-        guard var repo = path, !repo.isEmpty else { return nil }
-        if repo.hasSuffix(".git") { repo = String(repo.dropLast(4)) }
-        if repo.hasSuffix("/") { repo = String(repo.dropLast()) }
-        guard repo.split(separator: "/").count == 2 else { return nil }
-        func encode(_ ref: String) -> String { ref.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "?#"))) ?? ref }
-        return URL(string: "https://github.com/\(repo)/compare/\(encode(base))...\(encode(branch))?expand=1")
-    }
-
     // MARK: Worktrees
 
     public func worktrees() async throws -> [GitWorktree] {

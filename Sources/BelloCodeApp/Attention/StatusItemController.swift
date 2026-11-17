@@ -72,9 +72,27 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             menu.addItem(entry)
         }
         menu.addItem(.separator())
+        // M3-B: scheduled tasks run while BelloCode is open, even with no window; show what runs next.
+        if let schedules = engine.extras?.schedules {
+            let next = schedules.nextRun
+            let line = NSMenuItem(
+                title: next.map { "Next scheduled: \($0.task.name), \(Self.when($0.date, now: now))" } ?? "No scheduled tasks pending",
+                action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            menu.addItem(line)
+            let tasks = NSMenuItem(title: "Scheduled Tasks…", action: #selector(AppDelegate.showScheduledTasks(_:)), keyEquivalent: "")
+            menu.addItem(tasks)
+            menu.addItem(.separator())
+        }
         let show = NSMenuItem(title: "Open BelloCode", action: #selector(activate(_:)), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
+    }
+
+    static func when(_ date: Date, now: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = date.timeIntervalSince(now) < 6 * 86_400 ? "EEE HH:mm" : "d MMM HH:mm"
+        return formatter.string(from: date)
     }
 
     @objc private func open(_ sender: NSMenuItem) {

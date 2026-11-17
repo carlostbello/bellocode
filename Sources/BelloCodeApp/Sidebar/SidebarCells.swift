@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import DesignSystem
 import Engine
+import OrchestrationUI
 
 /// A thread row ("Needs you" or under a project). Observes only its own `SessionRowModel` (and the manual-unread
 /// set), so one busy thread re-renders one row (AGENTS.md rule 2).
@@ -15,6 +16,8 @@ final class ThreadCell: SidebarRowView {
     private weak var workspace: WorkspaceController?
     private var showsProject = false
     private(set) var presentation: ThreadRowPresentation?
+    /// The linked MR chip in the detail ("#42 ✓", M3-B).
+    private(set) var mergeRequestText: String?
     /// "project · age" never takes more than this from the title.
     private lazy var detailCap = detail.widthAnchor.constraint(lessThanOrEqualToConstant: 92)
 
@@ -64,8 +67,10 @@ final class ThreadCell: SidebarRowView {
             session: session, status: row.status?.status,
             manuallyUnread: organisation?.markedUnread ?? false || workspace.manualUnread.contains(sessionID),
             childCount: childCount, projectName: projectName, snoozedUntil: organisation?.snoozedUntil?.date)
-        guard presentation != self.presentation else { return }
+        let mergeRequestText = Self.mergeRequestText(sessionID, workspace: workspace)
+        guard presentation != self.presentation || mergeRequestText != self.mergeRequestText else { return }
         self.presentation = presentation
+        self.mergeRequestText = mergeRequestText
         if title.currentEditor() == nil { title.stringValue = presentation.title }
         // Regular weight; emphasis only for unread rows and rows that need the user.
         title.font = presentation.isEmphasized ? DS.Typography.current.bodyEmphasized : DS.Typography.current.body
@@ -81,8 +86,16 @@ final class ThreadCell: SidebarRowView {
             leading.toolTip = nil
         }
         badge.count = presentation.childCount
-        detail.stringValue = [presentation.projectName, presentation.timeText].compactMap { $0 }.joined(separator: " · ")
-        setAccessibilityLabel(presentation.accessibilityLabel)
+        detail.stringValue = [mergeRequestText, presentation.projectName, presentation.timeText].compactMap { $0 }.joined(separator: " · ")
+        setAccessibilityLabel(presentation.accessibilityLabel + (mergeRequestText.map { ", merge request \($0)" } ?? ""))
+    }
+
+    /// "#42 ✓" for the first linked PR (+N more), nil without links.
+    static func mergeRequestText(_ id: SessionID, workspace: WorkspaceController) -> String? {
+        guard let service = workspace.engine.extras?.mergeRequests else { return nil }
+        let links = service.links(for: id)
+        guard let first = links.first else { return nil }
+        return MergeRequestText.compact(first, service.snapshots[first.ref.url]) + (links.count > 1 ? " +\(links.count - 1)" : "")
     }
 
     override func prepareForReuse() {

@@ -110,6 +110,21 @@ describe("text", () => {
     const leaf = L.guidance({ depth: 2, limits: L.DEFAULT_LIMITS, delegated: true })
     expect(leaf).toContain("cannot delegate further")
     expect(leaf).toContain("delegated child task")
-    expect(leaf.length).toBeLessThan(1400)
+    expect(leaf.length).toBeLessThan(2400)
+  })
+
+  test("app tools are recognised by namespace or id", () => {
+    expect(L.isAppTool({ id: "bellocode_app_html_render" })).toBe(true)
+    expect(L.isAppTool({ name: "html_render", options: { namespace: "bellocode_app" } })).toBe(true)
+    expect(L.isAppTool({ id: "delegate_task" })).toBe(false)
+  })
+
+  test("guidance names the app tools briefly", () => {
+    const text = L.guidance({ depth: 0, limits: L.DEFAULT_LIMITS, delegated: false })
+    for (const tool of ["schedule_task", "watch_merge_request", "request_secret", "secret_file", "html_render", "html_preview"])
+      expect(text).toContain(tool)
+    expect(text).toContain("Never poll")
+    expect(text).not.toContain("GitHub")
+    expect(L.extrasGuidance.join("\n").length).toBeLessThan(1000)
   })
 })

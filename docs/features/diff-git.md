@@ -13,7 +13,7 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
     and Undo use the same check and restore exact bytes and permissions or refuse. Limit: a writer that keeps the old
     file open and writes into it in the microseconds between the swap and the comparison cannot be serialized without
     its cooperation.
-  - `GitRepository`: status, branches, commits, diffs, stage, commit, push, worktree list and the GitHub compare URL.
+  - `GitRepository`: status, branches, commits, diffs, stage, commit, push, worktree list. The GitLab new-merge-request URL comes from `ForgeProject` (M3-B, orchestration-extras.md).
   - `WorktreeService`: create, with APFS `clonefile` copies and a setup script; remove; restore.
   - `GitService` (`engine.git`): bounded per-directory `GitRepositoryModel`s with FSEvents watching (250 ms debounce, coalesced refreshes, generation checks), workspace preferences (`app_preference`, so no migration) and turn revert.
 - **DiffKit**:
@@ -39,7 +39,7 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
 - **Scopes**: This Turn (pick any turn), Branch vs base, Uncommitted (HEAD → working tree, with per-file staged and unstaged checkboxes), Commit (newest 100).
 - **Revert**: menu titles state the scope ("Discard Uncommitted Changes to X", "Revert This Turn’s Changes to X"). Revert hunk, file or turn apply at once with Undo (toast and ⌘Z). The only confirmations are removing a worktree that holds files of its own, and turn revert when files changed after the turn.
 - **Removing a worktree**: "clean" means no uncommitted, untracked *or ignored* files (`WorktreeService.contents`; ignored folders count once). A clean worktree is removed at once with Undo. Otherwise the confirmation names the counts and up to five paths (`.env`, `build/`); on confirmation those files are moved to the Trash in a folder named after the worktree (`RemovedWorktree.heldContents`), and Undo re-checks out the branch and moves them back byte for byte (staged changes come back unstaged). If the Trash was emptied meanwhile, Undo restores the checkout and says the files are gone. Redo repeats the confirmed removal.
-- **Commands** (Changes menu): Show Changes ⇧⌘D, Next/Previous Change ⌃⌘↓/↑, Next/Previous File ⌃⌘→/←, Add Review Comment ⇧⌘K, Open in Editor ⌘O, Choose Workspace ⇧⌘E, Choose Branch ⇧⌘B. Revert Hunk/File/Turn, Commit, Push, Open Pull Request, Side-by-Side, Ignore Whitespace, Wrap Lines and Remove Worktree have no shortcut.
+- **Commands** (Changes menu): Show Changes ⇧⌘D, Next/Previous Change ⌃⌘↓/↑, Next/Previous File ⌃⌘→/←, Add Review Comment ⇧⌘K, Open in Editor ⌘O, Choose Workspace ⇧⌘E, Choose Branch ⇧⌘B. Revert Hunk/File/Turn, Commit, Push, Create Merge Request, Side-by-Side, Ignore Whitespace, Wrap Lines and Remove Worktree have no shortcut.
 - **Keys in a focused diff**: n/j and p/k move between hunks, ]/[ between files, c comments, ←/→ scroll long lines, ⌘F/⌘G/⌘E find, ⌘C copies, Escape closes find.
 - **Review comments**: ComposerKit has no review-comment chip, so a comment becomes a named text attachment chip ("Review path:12–14.md") with the quoted lines.
 - **Shared shell files**: additive, grouped edits only:
@@ -109,5 +109,5 @@ Other measurements:
 - Popovers' focus.
 - VoiceOver.
 - Opening files in real editors.
-- Push and Open Pull Request against a real GitHub remote.
+- Push and Create Merge Request against a real GitLab remote (M3-B changed this from GitHub to GitLab).
 - Copy-on-write speed on a large repository.

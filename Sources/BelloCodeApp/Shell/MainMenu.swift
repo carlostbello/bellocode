@@ -190,6 +190,8 @@ enum MainMenu {
         agents.addItem(.separator())
         agents.add(.openParentThread)
         menu.addItem(submenu: agents, title: "Agents")
+        // M3-B: linked merge requests (docs/features/orchestration-extras.md).
+        menu.add(.showMergeRequests)
         return menu
     }
 
@@ -248,7 +250,7 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.add(.commitChanges)
         menu.add(.pushBranch)
-        menu.add(.openPullRequest)
+        menu.add(.createMergeRequest)
         menu.addItem(.separator())
         menu.add(.chooseWorkspace)
         menu.add(.chooseBranch)
@@ -260,6 +262,8 @@ enum MainMenu {
         let menu = NSMenu(title: "Window")
         menu.addItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), key: "m")
         menu.addItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)), key: "")
+        menu.addItem(.separator())
+        menu.add(.showScheduledTasks)
         menu.addItem(.separator())
         menu.addItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), key: "")
         return menu

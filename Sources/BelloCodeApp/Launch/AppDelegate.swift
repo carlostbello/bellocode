@@ -1,5 +1,6 @@
 import AgentUI
 import AppKit
+import BrowserKit
 import BelloCore
 import ComposerKit
 import Engine
@@ -22,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Notifications for blockers and completions, and the Dock badge (docs/features/navigation.md).
     private(set) var notifier: AttentionNotifier?
     private var statusItem: StatusItemController?
+    /// Offscreen sandbox for HTML visuals (M3-B): html_preview, snapshots, PNG export.
+    private let visualRenderer = HTMLVisualRenderer()
+    private var wakeObserver: (any NSObjectProtocol)?
 
     init(options: LaunchOptions) {
         self.options = options
@@ -33,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let runtime = try await AppRuntime.make(options: options)
                 self.runtime = runtime
+                startExtras(runtime)
                 if case .snapshot(let name) = options.mode {
                     let directory = options.snapshotDirectory ?? FileManager.default.currentDirectoryPath + "/build/snapshots"
                     let ok = await SnapshotRunner(runtime: runtime, name: name, directory: URL(filePath: directory)).run()
@@ -74,6 +79,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// M3-B (docs/features/orchestration-extras.md): the visual renderer, and after the Mac wakes, an immediate check
+    /// of due scheduled tasks (catch-up policy) and watched merge requests.
+    private func startExtras(_ runtime: AppRuntime) {
+        guard let extras = runtime.engine.extras else { return }
+        extras.visuals.renderer = visualRenderer
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak extras] _ in
+            MainActor.assumeIsolated {
+                guard let extras else { return }
+                Task {
+                    await extras.schedules.tick()
+                    await extras.mergeRequests.pollDue()
+                }
+            }
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Agents keep running with no window open (docs/PLAN.md, section 8.3). Clicking the Dock icon reopens it.
         false
@@ -103,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.runModal()
             }
             await runtime.stop()
+            self.visualRenderer.close()
             await PreviewFiles.current.removeAll()
             NSApp.reply(toApplicationShouldTerminate: true)
         }
@@ -192,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettings(_ sender: Any?) { openSettings(pane: nil) }
 
+    /// Window ▸ Scheduled Tasks… (M3-B): Settings on its Scheduled Tasks pane; works with no window open.
+    @objc func showScheduledTasks(_ sender: Any?) { openSettings(pane: "schedules") }
+
     @objc func connectProvider(_ sender: Any?) { openConnect(nil) }
 
     @objc func showWelcome(_ sender: Any?) { showOnboarding() }
@@ -201,7 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             settingsWindow = SettingsWindowController(
                 settings: services.settings, auth: services.auth, importSource: .userInstall(), engine: runtime?.engine,
-                notifier: notifier)
+                notifier: notifier, openThread: { [weak self] id in self?.openThread(id) })
         }
         settingsWindow?.show(pane: pane)
     }

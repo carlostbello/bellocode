@@ -33,6 +33,7 @@ public struct RenderBlock: Sendable, Equatable {
         case todo(TodoListContent)
         case file(FileChip)
         case subagent(SubagentCardContent)
+        case visual(VisualCardContent)
         case error(ErrorBannerContent)
         case lifecycle(LifecycleContent)
         case working
@@ -65,6 +66,7 @@ public struct RenderBlock: Sendable, Equatable {
         case .todo(let list): RenderBlocks.todoText(list)
         case .file(let file): file.name
         case .subagent(let card): RenderBlocks.subagentText(card)
+        case .visual(let visual): RenderBlocks.visualText(visual)
         case .error(let error): error.title + "\n" + error.message
         case .lifecycle(let event): event.text
         case .working: "Working…"
@@ -111,6 +113,7 @@ public enum RenderBlocks {
         case .todo(let list): return [RenderBlock(.todo(list))]
         case .file(let file): return [RenderBlock(.file(file))]
         case .subagent(let card): return [RenderBlock(.subagent(card))]
+        case .visual(let visual): return [RenderBlock(.visual(visual))]
         case .error(let error): return [RenderBlock(.error(error))]
         case .lifecycle(let event): return [RenderBlock(.lifecycle(event))]
         case .working: return [RenderBlock(.working)]
@@ -192,6 +195,17 @@ public enum RenderBlocks {
             lines.append(glyph + " " + item.text)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The visual's title line (selectable, found by Find).
+    static func visualText(_ visual: VisualCardContent) -> String {
+        let state: String =
+            switch visual.status {
+            case .rendering: "Rendering…"
+            case .ready: "Visual"
+            case .failed(let reason): "Not shown: \(reason)"
+            }
+        return visual.title + " · " + state + (visual.note.map { " · " + $0 } ?? "")
     }
 
     static func subagentText(_ card: SubagentCardContent) -> String {

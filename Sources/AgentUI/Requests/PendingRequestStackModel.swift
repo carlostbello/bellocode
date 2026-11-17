@@ -16,6 +16,10 @@ public protocol PendingRequestSource: AnyObject {
     func reply(to id: PermissionRequestID, _ reply: PermissionReply, message: String?) async
     func answer(_ id: QuestionID, _ answers: [String: QuestionAnswer]) async
     func dismiss(_ id: QuestionID) async
+    /// BelloCode's own requests (secrets, app approvals). Default: ignored (demos).
+    func respond(to request: AppRequest, _ response: AppRequestResponse) async
+    /// Whether a secret is already saved under this label ("Use Saved Value"). Default: false.
+    func savedSecretExists(label: String) -> Bool
 }
 
 extension ThreadModel: PendingRequestSource {}
@@ -46,6 +50,8 @@ public final class PendingRequestStackModel {
     public var noteOpen: Set<String> = []
     public var notes: [String: String] = [:]
     @ObservationIgnored private var forms: [String: QuestionFormModel] = [:]
+    /// Typed secret values not yet saved, per request (memory only; cleared on save, decline and resolution).
+    @ObservationIgnored private var secretDrafts: [String: SecretDraft] = [:]
     @ObservationIgnored private var announced: Set<String> = []
     /// Posts a VoiceOver announcement; injected so tests can record them.
     @ObservationIgnored public var announce: @MainActor (String) -> Void
@@ -89,6 +95,13 @@ public final class PendingRequestStackModel {
         let form = QuestionFormModel(fields: question.fields)
         forms[question.id.rawValue] = form
         return form
+    }
+
+    public func secretDraft(for request: AppRequest) -> SecretDraft {
+        if let draft = secretDrafts[request.id] { return draft }
+        let draft = SecretDraft()
+        secretDrafts[request.id] = draft
+        return draft
     }
 
     /// The child session that asked, when it is not the open thread.
@@ -144,6 +157,11 @@ public final class PendingRequestStackModel {
             switch first {
             case .permission(let permission): text = presentation(permission).announcement
             case .question(let question): text = "Question from the agent: \(question.title)"
+            case .app(let app):
+                switch app.kind {
+                case .secret(let prompt): text = "The agent asks for a secret: \(prompt.label)"
+                case .approval(let approval): text = "Approval needed: \(approval.title)"
+                }
             }
             if let origin = origin(of: first) { text += ", from \(origin)" }
             if fresh.count > 1 { text += ". \(fresh.count) new requests." }
@@ -156,6 +174,8 @@ public final class PendingRequestStackModel {
     private func cleanUp() {
         let ids = Set(requests.map(\.id))
         forms = forms.filter { ids.contains($0.key) }
+        for (id, draft) in secretDrafts where !ids.contains(id) { draft.text = "" }
+        secretDrafts = secretDrafts.filter { ids.contains($0.key) }
         notes = notes.filter { ids.contains($0.key) }
         noteOpen.formIntersection(ids)
         expandedDetails.formIntersection(ids)
@@ -164,4 +184,12 @@ public final class PendingRequestStackModel {
 
     /// The error of the last failed reply, shown on the card while the request is still pending.
     public var replyError: String? { source.lastError?.userMessage }
+}
+
+/// The secure field's text for one secret card. Lives only in memory and is cleared as soon as it is used.
+@MainActor
+@Observable
+public final class SecretDraft {
+    public var text = ""
+    public init() {}
 }

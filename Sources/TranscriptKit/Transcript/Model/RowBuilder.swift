@@ -101,6 +101,10 @@ public enum RowBuilder {
             if let report = subagentReport(user.text) {
                 return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: report)))]
             }
+            // BelloCode's own wakes (MR watch, secret answers) are not the person's message: one line saying why.
+            if let note = belloCodeWake(user.text) {
+                return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: note)))]
+            }
             let files = message.parts.compactMap { part -> FileChip? in
                 guard case .file(let file) = part.content else { return nil }
                 return chip(file)
@@ -130,7 +134,9 @@ public enum RowBuilder {
                                     text: text, isStreaming: part.isStreaming,
                                     duration: context.reasoningDurations[part.id]))))
                 case .tool(let call):
-                    if let card = sendToUserMarkdown(call) {
+                    if let visual = visualCard(call) {
+                        result.append(row(.part(part.id), .assistant, .visual(visual)))
+                    } else if let card = sendToUserMarkdown(call) {
                         result.append(row(.part(part.id), .assistant, .markdown(text: card, isStreaming: !call.status.isFinished)))
                     } else if let todo = todoList(call) {
                         result.append(row(.part(part.id), .assistant, .todo(todo)))
@@ -315,6 +321,57 @@ public enum RowBuilder {
         return "↩ “\(description)” \(verb)" + (clipped.isEmpty ? "" : ": " + clipped)
     }
 
+    /// "!12" for an MR URL or "!12" itself.
+    static func mergeRequestLabel(_ text: String) -> String {
+        if text.hasPrefix("!") { return text }
+        if let range = text.range(of: "/-/merge_requests/") { return "!" + text[range.upperBound...].prefix { $0.isNumber } }
+        return text
+    }
+
+    /// "[BelloCode MR watch] group/proj!1: Pipeline #9 finished…" → "MR watch woke this thread: group/proj!1: …";
+    /// "[BelloCode secret] The user saved “X”. secretRef: …" → "Secret: The user saved “X”." (references stay out of
+    /// the note). nil for other text.
+    static func belloCodeWake(_ text: String) -> String? {
+        guard text.hasPrefix("[BelloCode ") else { return nil }
+        let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
+        if first.hasPrefix("[BelloCode MR watch] ") {
+            let rest = first.dropFirst("[BelloCode MR watch] ".count)
+            return "↻ MR watch woke this thread: " + (rest.count > 200 ? rest.prefix(199) + "…" : rest)
+        }
+        if first.hasPrefix("[BelloCode secret] ") {
+            var rest = String(first.dropFirst("[BelloCode secret] ".count))
+            for marker in [" secretRef:", " One-read path:"] {
+                if let range = rest.range(of: marker) { rest = String(rest[..<range.lowerBound]) }
+            }
+            return "Secret request: " + (rest.count > 200 ? String(rest.prefix(199)) + "…" : rest)
+        }
+        return nil
+    }
+
+    /// BelloCode's `html_render` app tool (`bellocode_app_html_render`) as a visual card, from the call's title and the
+    /// result's `visualID:`/`height:`/`note:` lines. nil for other tools.
+    static func visualCard(_ call: ToolCall) -> VisualCardContent? {
+        guard call.name == "bellocode_app_html_render" || call.name == "html_render" else { return nil }
+        let input = call.input.flatMap { try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any] } ?? [:]
+        let title = (input["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Visual"
+        var fields: [String: String] = [:]
+        for line in call.outputText.split(separator: "\n") {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            fields[line[..<colon].trimmingCharacters(in: .whitespaces)] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        switch call.status {
+        case .failed:
+            return VisualCardContent(visualID: "", title: title, height: 60, status: .failed(call.error?.message ?? "the render failed"))
+        case .completed:
+            guard let id = fields["visualID"], !id.isEmpty else {
+                return VisualCardContent(visualID: "", title: title, height: 60, status: .failed(String(call.outputText.prefix(160))))
+            }
+            return VisualCardContent(visualID: id, title: title, height: Double(fields["height"] ?? "") ?? 240, status: .ready, note: fields["note"])
+        default:
+            return VisualCardContent(visualID: "", title: title, height: 120, status: .rendering)
+        }
+    }
+
     /// The bellocode plugin's `send_to_user` (content the person must read mid-turn) as a quoted Markdown card with a
     /// heading, instead of a tool line. nil for other tools or while the input is still streaming in.
     static func sendToUserMarkdown(_ call: ToolCall) -> String? {
@@ -338,8 +395,29 @@ public enum RowBuilder {
             for key in keys { if let value = input[key] as? String, !value.isEmpty { return value } }
             return ""
         }
-        let lower = name.lowercased()
+        var lower = name.lowercased()
+        // BelloCode's app tools (client MCP `bellocode_app_*`, docs/features/orchestration-extras.md) read as actions.
+        if lower.hasPrefix("bellocode_app_") { lower.removeFirst("bellocode_app_".count) }
         switch lower {
+        case "request_secret":
+            return (.other, active ? "Asking for secret" : "Asked for secret", string("label"))
+        case "secret_file":
+            return (.other, active ? "Preparing one-read secret file" : "Prepared one-read secret file", "")
+        case "schedule_task", "update_scheduled_task":
+            return (.other, active ? "Scheduling" : lower == "schedule_task" ? "Scheduled" : "Updated schedule", string("name", "taskID"))
+        case "list_scheduled_tasks":
+            return (.other, active ? "Listing scheduled tasks" : "Listed scheduled tasks", "")
+        case "delete_scheduled_task", "run_scheduled_task_now":
+            return (.other, lower.hasPrefix("delete") ? (active ? "Deleting schedule" : "Deleted schedule") : (active ? "Running schedule" : "Ran schedule"), string("taskID"))
+        case "link_merge_requests", "unlink_merge_requests":
+            let refs = (input["refs"] as? [String] ?? []).map(mergeRequestLabel)
+            return (.other, lower.hasPrefix("link") ? (active ? "Linking MR" : "Linked MR") : (active ? "Unlinking MR" : "Unlinked MR"), refs.joined(separator: ", "))
+        case "list_thread_merge_requests":
+            return (.other, active ? "Checking linked MRs" : "Checked linked MRs", "")
+        case "watch_merge_request", "unwatch_merge_request":
+            return (.other, lower.hasPrefix("watch") ? "Watching MR" : "Stopped watching MR", mergeRequestLabel(string("ref")))
+        case "html_preview":
+            return (.other, active ? "Previewing visual" : "Previewed visual", string("path"))
         case "read", "view", "cat":
             return (.read, active ? "Reading" : "Read", string("filePath", "file_path", "path"))
         case "edit", "multiedit", "str_replace":

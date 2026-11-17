@@ -91,10 +91,12 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case commandPalette, quickOpen, globalSearch, goBack, goForward, reopenClosedThread, newWindow
     // M2-C: Changes tab, diff, git and worktrees (Content/ChangesSurface.swift, MainWindowController+Changes.swift).
     case showChanges, nextChange, previousChange, nextChangedFile, previousChangedFile, addReviewComment, openInEditor
-    case revertHunk, revertFile, revertTurn, commitChanges, pushBranch, openPullRequest
+    case revertHunk, revertFile, revertTurn, commitChanges, pushBranch, createMergeRequest
     case toggleDiffLayout, toggleDiffWhitespace, toggleDiffWrap, chooseWorkspace, chooseBranch, removeWorktree
     // M3-A: Agents panel (Content/AgentsSurface.swift, MainWindowController+Agents.swift).
     case showAgents, nextAgent, previousAgent, openAgent, followUpAgent, stopAgentTree, openParentThread
+    // M3-B: orchestration extras (Content/MergeRequestSurface.swift; Settings ▸ Scheduled Tasks).
+    case showMergeRequests, showScheduledTasks
 
     @MainActor var selector: Selector {
         switch self {
@@ -183,6 +185,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: #selector(MainWindowController.followUpSelectedAgent(_:))
         case .stopAgentTree: #selector(MainWindowController.stopSelectedAgentTree(_:))
         case .openParentThread: #selector(MainWindowController.openParentThread(_:))
+        case .showMergeRequests: #selector(MainWindowController.showMergeRequests(_:))
+        // Answered by the app delegate (works with no window open).
+        case .showScheduledTasks: #selector(AppDelegate.showScheduledTasks(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -194,7 +199,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .revertTurn: #selector(MainWindowController.revertTurnChanges(_:))
         case .commitChanges: #selector(MainWindowController.commitChanges(_:))
         case .pushBranch: #selector(MainWindowController.pushBranch(_:))
-        case .openPullRequest: #selector(MainWindowController.openPullRequest(_:))
+        case .createMergeRequest: #selector(MainWindowController.createMergeRequest(_:))
         case .toggleDiffLayout: #selector(MainWindowController.toggleDiffLayout(_:))
         case .toggleDiffWhitespace: #selector(MainWindowController.toggleDiffWhitespace(_:))
         case .toggleDiffWrap: #selector(MainWindowController.toggleDiffWrap(_:))
@@ -291,6 +296,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: "Follow Up Selected Agent…"
         case .stopAgentTree: "Stop Selected Agent and Its Tasks"
         case .openParentThread: "Go to Parent Thread"
+        case .showMergeRequests: "Show Merge Requests"
+        case .showScheduledTasks: "Scheduled Tasks…"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -302,7 +309,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .revertTurn: "Revert Turn…"
         case .commitChanges: "Commit…"
         case .pushBranch: "Push"
-        case .openPullRequest: "Open Pull Request"
+        case .createMergeRequest: "Create Merge Request"
         case .toggleDiffLayout: "Side-by-Side Diff"
         case .toggleDiffWhitespace: "Ignore Whitespace"
         case .toggleDiffWrap: "Wrap Lines"
@@ -398,6 +405,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: ("", [])
         case .stopAgentTree: (".", [.command, .control])
         case .openParentThread: ("u", [.command, .control])
+        case .showMergeRequests: ("m", [.command, .control])
+        case .showScheduledTasks: ("e", [.command, .control])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -407,7 +416,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .chooseWorkspace: ("e", [.command, .shift])
         case .chooseBranch: ("b", [.command, .shift])
         // Reverting is never a single keystroke (research 03, section D); the rest are menu and panel actions.
-        case .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .openPullRequest, .toggleDiffLayout,
+        case .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .createMergeRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .removeWorktree:
             ("", [])
         }
@@ -575,6 +584,8 @@ struct CommandContext: Equatable, Sendable {
         case .followUpAgent: return agents.selectionIsChild
         case .stopAgentTree: return agents.canStopSelection
         case .openParentThread: return agents.hasParent
+        case .showMergeRequests: return agents.available
+        case .showScheduledTasks: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible
@@ -583,7 +594,7 @@ struct CommandContext: Equatable, Sendable {
         case .revertFile: return changes.revertFileTitle != nil
         case .revertTurn: return changes.canRevertTurn
         case .commitChanges: return changes.isRepository
-        case .pushBranch, .openPullRequest: return changes.hasBranch
+        case .pushBranch, .createMergeRequest: return changes.hasBranch
         case .chooseWorkspace, .chooseBranch: return changes.isDraft && changes.isRepository
         case .removeWorktree: return changes.isWorktree && !changes.isDraft
         }

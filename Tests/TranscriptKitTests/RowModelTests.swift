@@ -17,6 +17,7 @@ import Testing
             case .todo: "todo"
             case .file: "file"
             case .subagent: "subagent"
+            case .visual(let visual): "visual:\(visual.visualID)"
             case .error: "error"
             case .lifecycle(let event): "life:\(event.text)"
             case .working: "working"

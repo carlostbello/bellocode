@@ -292,7 +292,7 @@ public final class OrchestrationService {
     public var hostedDirectories: [String] { Array(hosts.keys).sorted() }
 
     /// Runs one app tool call. Calls must be attributed to a session; targets must be in the caller's project.
-    func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
+    public func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
         guard let caller = call.sessionID.map({ SessionID($0) }), let callerNode = graph.nodes[caller] else {
             return .error("BelloCode could not tell which thread made this call.")
         }
@@ -301,6 +301,14 @@ public final class OrchestrationService {
         guard let node = graph.nodes[id] else { return .error("No thread \(raw ?? id.rawValue).") }
         guard node.projectID == callerNode.projectID else {
             return .error("That thread is in another project; app tools act only within this project.")
+        }
+        if ExtrasTools.all.contains(call.tool), let engine {
+            let project = engine.root.projects.first { $0.projectID == callerNode.projectID }?.directory ?? callerNode.directory
+            let mode = await core.knownSession(caller)?.permissionMode
+            let extrasCaller = ExtrasCaller(
+                sessionID: caller, projectID: callerNode.projectID, directory: callerNode.directory, projectDirectory: project,
+                permissionMode: mode)
+            return await engine.extras.handle(call, caller: extrasCaller)
         }
         switch call.tool {
         case AppTools.openThread:
@@ -371,6 +379,6 @@ public enum AppTools {
 struct AppToolProvider: ClientMCPToolProvider {
     let service: OrchestrationService
 
-    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions }
+    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions }
     func call(_ call: ClientMCPCall) async -> ClientMCPResult { await service.handleAppTool(call) }
 }

@@ -51,6 +51,21 @@ public struct EngineConfiguration: Sendable {
     /// The location whose catalog is loaded when no project is known.
     public var defaultDirectory: String?
     public var time: any TimeSource = SystemTimeSource()
+    /// Calendar time for the scheduler and the PR poller (docs/features/orchestration-extras.md).
+    public var wallClock: any WallClock = SystemWallClock()
+    /// Where secrets are kept: the macOS Keychain by default; tests pass `InMemorySecretVault`.
+    public var secretVault: any SecretVault = KeychainSecretVault()
+    /// How GitLab is reached (REST v4 over URLSession; tests and mock mode pass recorded fixtures).
+    public var forgeTransport: any ForgeTransport = URLSessionForgeTransport()
+    /// Where GitLab access tokens are kept: the Keychain under `GitLabProvider.tokenService`.
+    public var forgeTokens: any SecretVault = KeychainSecretVault(service: GitLabProvider.tokenService)
+    /// MR watch polling: base interval, longest backoff after failures.
+    public var mergeRequestPoll: Duration = .seconds(120)
+    public var mergeRequestMaxBackoff: Duration = .seconds(1800)
+    /// Where HTML visuals are kept (default: `~/Library/Caches/BelloCode/visuals`).
+    public var visualsDirectory: URL?
+    /// Off in tests that do not exercise scheduling; the app always starts it.
+    public var startsExtras = true
 
     public init(server: ServerSource, store: ProjectionStore.Location) {
         self.server = server

@@ -262,18 +262,31 @@ extension MockOpenCodeServer {
             "source": "subagent", "childID": .string(child.id), "agent": .string(child.agent ?? "general"),
             "state": .string(stateName),
         ]
+        let cut = outcome == "interrupted" && state.cascadeStopped.contains(parentID)
+        admitSynthetic(to: parentID, text: text, description: description, metadata: metadata, hold: cut)
+    }
+
+    /// opencode's `session.synthetic`: a steer synthetic input in the session's inbox that starts a run (unless held
+    /// or `resume` is false). Child reports and BelloCode's wakes (PR watch, secrets) both come this way.
+    @discardableResult
+    func admitSynthetic(to parentID: String, text: String, description: String?, metadata: JSONValue, hold: Bool = false) -> String {
+        let cut = hold
         let inboxID = makeID("msg")
         let created = now()
-        let payload: JSONValue = ["text": .string(text), "description": .string(description), "metadata": metadata]
+        var payloadPairs: [(String, JSONValue)] = [("text", .string(text)), ("metadata", metadata)]
+        if let description { payloadPairs.append(("description", .string(description))) }
+        let payload = JSONValue.object(payloadPairs)
         let json: JSONValue = [
             "id": .string(inboxID), "sessionID": .string(parentID), "time": ["created": .int(Int(created))],
             "type": "synthetic", "payload": payload, "delivery": "steer",
         ]
-        let message: JSONValue = [
-            "id": .string(inboxID), "type": "synthetic", "text": .string(text), "description": .string(description),
-            "metadata": metadata, "time": ["created": .int(Int(created))],
+        var messagePairs: [(String, JSONValue)] = [
+            ("id", .string(inboxID)), ("type", "synthetic"), ("text", .string(text)), ("metadata", metadata),
+            ("time", ["created": .int(Int(created))]),
         ]
-        let cut = outcome == "interrupted" && state.cascadeStopped.contains(parentID)
+        if let description { messagePairs.append(("description", .string(description))) }
+        let message = JSONValue.object(messagePairs)
+        state.syntheticLog.append(text)
         state.inbox[parentID, default: [:]][inboxID] = json
         var item = InboxItem(
             id: inboxID, text: text, attachments: nil, delivery: "steer",
@@ -287,6 +300,7 @@ extension MockOpenCodeServer {
                 "item": ["type": "synthetic", "payload": payload, "delivery": "steer"],
             ], location: state.sessions[parentID]?.directory, durable: parentID)
         if !cut { startRunner(parentID) }
+        return inboxID
     }
 
     /// What the bellocode plugin writes when a child settles: `metadata.bellocode.summary/outcome/settledAt`.

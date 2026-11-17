@@ -235,6 +235,9 @@ extension ProjectionState {
             case .question(var question):
                 question.received = received
                 existing = .question(question)
+            case .app(var app):
+                app.received = received
+                existing = .app(app)
             }
             guard pending[request.id] != existing else { return }
             pending[request.id] = existing

@@ -143,15 +143,6 @@ struct GitParsingTests {
         #expect(try HunkApplier.revert(eof, in: "new") == "old")
     }
 
-    @Test func compareURLsForGitHubRemotesOnly() {
-        #expect(GitRepository.compareURL(remote: "git@github.com:acme/app.git", base: "main", branch: "feat/x")?.absoluteString
-            == "https://github.com/acme/app/compare/main...feat/x?expand=1")
-        #expect(GitRepository.compareURL(remote: "https://github.com/acme/app", base: "main", branch: "b")?.absoluteString
-            == "https://github.com/acme/app/compare/main...b?expand=1")
-        #expect(GitRepository.compareURL(remote: "https://gitlab.com/acme/app.git", base: "main", branch: "b") == nil)
-        #expect(GitRepository.compareURL(remote: "/tmp/origin.git", base: "main", branch: "b") == nil)
-    }
-
     @Test func branchSlugs() {
         #expect(WorktreeService.slug("Fix the login bug!") == "bellocode/fix-the-login-bug")
         #expect(WorktreeService.slug("  Ünïcödé — résumé  ", prefix: "") == "unicode-resume")

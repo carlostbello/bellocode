@@ -55,6 +55,9 @@ public struct WorkspacePreferences: Codable, Sendable, Hashable {
 /// Threading: `@MainActor`; all git and file work runs off the main actor and returns `Sendable` values.
 @MainActor
 public final class GitService {
+    /// The configured GitLab instances (Create Merge Request), set by the engine from Settings ▸ GitLab.
+    public var forgeInstances: @MainActor () -> [GitLabInstance] = { [] }
+
     /// Repository models kept (least recently used dropped beyond this; their watchers stop).
     public static let repositoryLimit = 24
 
@@ -512,9 +515,12 @@ public final class GitRepositoryModel {
         try await repository.push()
     }
 
-    /// GitHub's compare URL for the current branch against the base, or nil (no GitHub remote, detached HEAD).
-    public func pullRequestURL() async -> URL? {
-        guard let branch = status?.branch, let remote = try? await repository.remoteURL() else { return nil }
-        return GitRepository.compareURL(remote: remote, base: baseBranch ?? "main", branch: branch)
+    /// GitLab's "new merge request" page for the current branch (into the base branch), or nil: detached HEAD, or an
+    /// `origin` that is not on one of `instances` (Settings ▸ GitLab).
+    public func newMergeRequestURL(instances: [GitLabInstance]) async -> URL? {
+        guard let branch = status?.branch, let remote = try? await repository.remoteURL(),
+            let project = ForgeProject.resolve(remote: remote, instances: instances)
+        else { return nil }
+        return project.newMergeRequestURL(branch: branch, target: baseBranch)
     }
 }

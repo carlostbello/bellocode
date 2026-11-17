@@ -234,6 +234,21 @@ export function renderTranscript(
 }
 
 /** The instruction entry every session gets (`bellocode.orchestration`). Short: the tool descriptions carry details. */
+/** A client-MCP tool of the BelloCode app (namespace `bellocode_app`). */
+export function isAppTool(tool: { id?: string; name?: string; options?: { namespace?: string } }): boolean {
+  if (tool.options?.namespace === "bellocode_app") return true
+  return typeof tool.id === "string" && tool.id.startsWith("bellocode_app_")
+}
+
+/** The app's own tools (`bellocode_app_*`, present while BelloCode runs): one line each, kept short. */
+export const extrasGuidance = [
+  "While the BelloCode app runs it also offers bellocode_app_* tools:",
+  "- schedule_task / list_scheduled_tasks / update_scheduled_task / delete_scheduled_task / run_scheduled_task_now: recurring or later prompts (a new thread per run, or this thread). The first one in a project waits for the user's approval.",
+  "- link_merge_requests / watch_merge_request: link GitLab merge requests (URL or !iid; the branch's open MR is linked automatically); a watched MR wakes you once per event (pipeline done, approval, comments, merged/closed). Never poll an MR. No glab or gh.",
+  "- request_secret asks the user for a token in a private card, then end your turn; you get a one-use secretRef (secret_file turns it into a one-read path for one command). Never ask for secrets in chat, never print them.",
+  "- html_render shows a chart or rich visual inline (self-contained HTML, theme CSS variables, no network unless approved); html_preview checks it first and gives a PNG.",
+]
+
 export function guidance(input: { readonly depth: number; readonly limits: Limits; readonly delegated: boolean }): string {
   const canDelegate = input.depth + 1 <= input.limits.maxDepth
   const lines = [
@@ -245,6 +260,7 @@ export function guidance(input: { readonly depth: number; readonly limits: Limit
     "- thread_list, thread_search, thread_read, thread_send, thread_wait, thread_interrupt work with other threads of this project; other projects need the user's approval.",
     "- send_to_user shows the user something they must read now (a draft, a decision, a summary).",
     "Use these only when parallel or separate work clearly helps; small tasks are faster done directly.",
+    ...extrasGuidance,
   ]
   if (input.delegated)
     lines.push("You are a delegated child task: finish with a concise final message, which is reported to your parent.")

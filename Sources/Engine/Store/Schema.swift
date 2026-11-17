@@ -6,13 +6,13 @@ import GRDB
 /// Tables holding a cache of opencode state (rebuildable from the server): `project`, `session`, `message`, `part`,
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
 /// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
-/// `app_terminal`.
+/// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`.
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 4
+    static let currentVersion = 5
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -128,6 +128,47 @@ enum ProjectionSchema {
                 ALTER TABLE app_thread ADD COLUMN settled_at REAL;
                 ALTER TABLE app_thread ADD COLUMN never_auto_settle INTEGER NOT NULL DEFAULT 0;
                 ALTER TABLE app_thread ADD COLUMN marked_unread INTEGER NOT NULL DEFAULT 0;
+                """)
+        }
+        // M3-B orchestration extras (docs/features/orchestration-extras.md): scheduled task definitions and their run
+        // history (bounded per task), app-level grants (agent schedules per project, network hosts for HTML visuals),
+        // merge-request watch state (what each wake already reported), and the labels of secrets kept in the Keychain.
+        // `app_secret` never holds a value: only the label, the Keychain account and timestamps.
+        migrator.registerMigration("v5-orchestration-extras") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_schedule (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    directory TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    next_run REAL,
+                    json BLOB NOT NULL
+                );
+                CREATE TABLE app_schedule_run (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    schedule_id TEXT NOT NULL,
+                    started REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE INDEX schedule_run_by_schedule ON app_schedule_run(schedule_id, started DESC);
+                CREATE TABLE app_grant (
+                    kind TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    granted REAL NOT NULL,
+                    PRIMARY KEY (kind, scope)
+                );
+                CREATE TABLE app_mr_watch (
+                    session_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL,
+                    PRIMARY KEY (session_id, url)
+                );
+                CREATE TABLE app_secret (
+                    account TEXT PRIMARY KEY NOT NULL,
+                    label TEXT NOT NULL UNIQUE,
+                    created REAL NOT NULL,
+                    last_used REAL
+                );
                 """)
         }
         return migrator

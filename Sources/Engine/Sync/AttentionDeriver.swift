@@ -44,9 +44,10 @@ public enum AttentionDeriver {
         var pendingCounts: [SessionID: Int] = [:]
         for request in input.pending {
             pendingCounts[request.sessionID, default: 0] += 1
-            switch request {
-            case .permission: approvals[request.sessionID] = min(approvals[request.sessionID] ?? request.received, request.received)
-            case .question: questions[request.sessionID] = min(questions[request.sessionID] ?? request.received, request.received)
+            if request.isApprovalLike {
+                approvals[request.sessionID] = min(approvals[request.sessionID] ?? request.received, request.received)
+            } else {
+                questions[request.sessionID] = min(questions[request.sessionID] ?? request.received, request.received)
             }
         }
 

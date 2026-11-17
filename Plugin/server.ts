@@ -585,6 +585,14 @@ export default {
 
     await ctx.tool.transform((editor: any) => {
       for (const tool of tools) editor.add({ ...tool, options: { codemode: false } })
+      // The app's client-MCP tools (`bellocode_app_*`: schedules, PRs, secrets, visuals) are called directly, not through
+      // Code Mode's `execute`, so each call is its own transcript row (a visual card, a secret request). Applied on every
+      // replay of the transforms, so tools that attach later (the app connects after the server starts) are covered.
+      for (const tool of list<any>(editor.list?.() ?? [])) {
+        if (L.isAppTool(tool)) editor.update?.(tool.id, (draft: any) => {
+          draft.options = { ...(draft.options ?? {}), codemode: false }
+        })
+      }
     })
 
     // MARK: RPC (Swift app → plugin)
@@ -606,6 +614,9 @@ export default {
           tools: list<any>(await ctx.tool.list())
             .map((tool) => tool.id ?? tool.name)
             .filter((name: string) => tools.some((item) => item.name === name)),
+          appTools: list<any>(await ctx.tool.list())
+            .filter(L.isAppTool)
+            .map((tool) => ({ id: tool.id ?? tool.name, codemode: tool.options?.codemode !== false })),
         }),
       },
     )

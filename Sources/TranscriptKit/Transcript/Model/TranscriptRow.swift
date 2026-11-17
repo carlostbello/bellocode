@@ -91,6 +91,8 @@ public enum RowContent: Sendable, Equatable {
     case todo(TodoListContent)
     case file(FileChip)
     case subagent(SubagentCardContent)
+    /// An HTML visual reply (`html_render`), shown as a snapshot image; the host may lay a live view over it.
+    case visual(VisualCardContent)
     case error(ErrorBannerContent)
     case lifecycle(LifecycleContent)
     /// The agent is working and nothing visible is streaming yet.
@@ -296,6 +298,41 @@ public struct SubagentCardContent: Sendable, Equatable {
         self.childSessionID = childSessionID
         self.duration = duration
     }
+}
+
+/// An HTML visual (docs/features/orchestration-extras.md). The image comes from the controller's image loader through
+/// `imageSource(dark:)` (`bellocode-visual://<id>?scheme=light|dark`), so off-screen visuals cost a cached bitmap and
+/// the transcript stays virtualised. Actions are `bellocode-visual-action://<verb>/<id>` URLs given to `openURL`.
+public struct VisualCardContent: Sendable, Equatable {
+    public enum Status: Sendable, Equatable {
+        case rendering
+        case ready
+        case failed(String)
+    }
+
+    public var visualID: String
+    public var title: String
+    /// CSS pixels of content height (capped by the layout).
+    public var height: Double
+    public var status: Status
+    /// "Network blocked: waiting for approval", or nil.
+    public var note: String?
+
+    public init(visualID: String, title: String, height: Double, status: Status, note: String? = nil) {
+        self.visualID = visualID
+        self.title = title
+        self.height = height
+        self.status = status
+        self.note = note
+    }
+
+    public static let scheme = "bellocode-visual"
+    public static let actionScheme = "bellocode-visual-action"
+    public static let maxHeight: Double = 480
+
+    public func imageSource(dark: Bool) -> String { "\(Self.scheme)://\(visualID)?scheme=\(dark ? "dark" : "light")" }
+    public func actionURL(_ verb: String) -> String { "\(Self.actionScheme)://\(verb)/\(visualID)" }
+    public var displayHeight: Double { min(Self.maxHeight, max(60, height)) }
 }
 
 public struct ErrorBannerContent: Sendable, Equatable {

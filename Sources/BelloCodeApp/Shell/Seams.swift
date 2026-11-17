@@ -38,6 +38,7 @@ struct ShellSurfaces {
     var browser: BrowserSurfaces? = nil
     /// The Agents panel behind the "Agents" tab (OrchestrationUI, Content/AgentsSurface.swift); nil in tests.
     var agents: AgentsSurfaces? = nil
+    var mergeRequests: MergeRequestSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -50,6 +51,8 @@ struct ShellSurfaces {
         let browser = BrowserSurfaces(services: services)
         // OrchestrationUI (Content/AgentsSurface.swift): the "Agents" tab follows the displayed thread.
         let agents = AgentsSurfaces()
+        // OrchestrationUI (Content/MergeRequestSurface.swift, M3-B): the "Merge Requests" tab follows the displayed thread.
+        let mergeRequests = MergeRequestSurfaces()
         return ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
@@ -64,8 +67,12 @@ struct ShellSurfaces {
                 RightPanelTab(id: "agents", title: "Agents", symbolName: "point.3.connected.trianglepath.dotted") {
                     agents.makePanelController()
                 },
+                RightPanelTab(id: "mergeRequests", title: "Merge Requests", symbolName: "arrow.triangle.pull") {
+                    mergeRequests.makePanelController()
+                },
             ],
-            terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents)
+            terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents,
+            mergeRequests: mergeRequests)
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {
@@ -140,6 +147,10 @@ final class ThreadSurfaceContext {
     @ObservationIgnored var onOpenThread: ((SessionID) -> Void)?
     /// Shows the Agents panel (the header's lineage strip).
     @ObservationIgnored var onShowAgents: (() -> Void)?
+    /// Opens a URL in the window's built-in browser for this thread; false when it cannot (M3-B: visuals, PRs).
+    @ObservationIgnored var onOpenInBrowser: ((URL) -> Bool)?
+    /// Shows the right panel on its "Merge Requests" tab (M3-B: header MR chips).
+    @ObservationIgnored var onShowMergeRequests: (() -> Void)?
 
     init(engine: Engine, directory: String, projectName: String, thread: ThreadModel?, newThreadDraft: String = "") {
         self.engine = engine
