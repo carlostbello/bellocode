@@ -154,6 +154,8 @@ public actor MockOpenCodeServer {
     var queuedSessionScripts: [String: [TurnScript]] = [:]
     /// Persistent PTYs and their WebSocket attachments (PTYRoutes.swift).
     var pty = MockPTYState()
+    /// Client-MCP sockets, where the mock plays opencode's MCP client (ClientMCPRoutes.swift).
+    var clientMCP = MockClientMCPState()
     /// The simulated `experimental.browser` plugin and session instruction entries (BrowserRoutes.swift).
     var browser = MockBrowserState()
     /// Observes each streamed text/reasoning delta after it is published (harness latency measurements).
