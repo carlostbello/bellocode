@@ -1331,7 +1331,7 @@ final class SidebarDropView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         DS.Color.sidebar.setFill()
-        dirtyRect.fill()
+        dirtyRect.fill(using: .sourceOver)
     }
 
     override func viewDidChangeEffectiveAppearance() {

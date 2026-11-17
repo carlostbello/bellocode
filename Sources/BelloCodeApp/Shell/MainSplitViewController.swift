@@ -187,6 +187,9 @@ final class RightPanelViewController: NSViewController {
     /// Live counts shown after a tab's title ("Changes 3", "Agents 2"); nil hides the count.
     private var counts: [String: Int] = [:]
     private var compactIDs: Set<String> = []
+    private var lastFitWidth: CGFloat = 0
+    /// Counts or the selection changed since the last fit.
+    private var fitIsStale = true
     var onTabChange: ((String) -> Void)?
 
     init(tabs: [RightPanelTab], selectedID: String?) {
@@ -205,6 +208,9 @@ final class RightPanelViewController: NSViewController {
         tabBar.onSelect = { [weak self] id in self?.select(id) }
         tabBar.setAccessibilityLabel("Panel tabs")
         tabBar.translatesAutoresizingMaskIntoConstraints = false
+        // The panel's width decides how many titles fit (`fitTabs`), never the other way round.
+        tabBar.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        tabBar.setContentHuggingPriority(.init(1), for: .horizontal)
         host.translatesAutoresizingMaskIntoConstraints = false
         let separator = DSDivider()
         separator.translatesAutoresizingMaskIntoConstraints = false
@@ -215,7 +221,7 @@ final class RightPanelViewController: NSViewController {
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: container.topAnchor, constant: barTop),
             tabBar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: DS.Space.s8),
-            tabBar.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -DS.Space.s8),
+            tabBar.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Space.s8),
             tabBar.heightAnchor.constraint(equalToConstant: DS.Size.tab),
             separator.topAnchor.constraint(equalTo: container.topAnchor, constant: DS.Size.header + DS.Size.tabBar),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -248,29 +254,29 @@ final class RightPanelViewController: NSViewController {
         }
     }
 
-    /// Drops titles from the last tabs until the bar fits the panel (and gives them back when it widens).
+    /// Drops titles from the last tabs until the bar fits the panel (and gives them back when it widens). Measures
+    /// the bar itself, so the fit is exact.
     private func fitTabs() {
         let available = view.bounds.width - DS.Space.s8 * 2
-        guard available > 0 else { return }
+        guard available > 0, available != lastFitWidth || fitIsStale else { return }
+        lastFitWidth = available
+        fitIsStale = false
         var compact: Set<String> = []
-        func width(_ compact: Set<String>) -> CGFloat {
-            tabs.reduce(CGFloat(0)) { sum, tab in
-                let isCompact = compact.contains(tab.id) && tab.id != selectedID
-                var w: CGFloat = 14 + 14
-                if !isCompact {
-                    w += DSDraw.width(of: tab.title, font: DS.TextRole.labelEmph.font) + 5
-                    if let count = counts[tab.id] { w += 5 + DSDraw.width(of: "\(count)", font: DS.TextRole.meta.font) }
-                }
-                return sum + ceil(w) + 2
+        func fits(_ candidate: Set<String>) -> Bool {
+            compactIDs = candidate
+            tabBar.setItems(items())
+            tabBar.selectedID = selectedID
+            return tabBar.intrinsicContentSize.width <= available
+        }
+        let previous = compactIDs
+        if !fits(compact) {
+            for tab in tabs.reversed() where tab.id != selectedID {
+                compact.insert(tab.id)
+                if fits(compact) { break }
             }
         }
-        for tab in tabs.reversed() where width(compact) > available {
-            if tab.id != selectedID { compact.insert(tab.id) }
-        }
-        guard compact != compactIDs else { return }
-        compactIDs = compact
-        tabBar.setItems(items())
-        tabBar.selectedID = selectedID
+        if compactIDs == previous { return }
+        tabBar.needsLayout = true
     }
 
     /// Sets a tab's count ("Changes 3"); nil or 0 hides it.
@@ -278,6 +284,7 @@ final class RightPanelViewController: NSViewController {
         let value = count.flatMap { $0 > 0 ? $0 : nil }
         guard counts[id] != value, let tab = tabs.first(where: { $0.id == id }) else { return }
         counts[id] = value
+        fitIsStale = true
         if !compactIDs.contains(id) || id == selectedID {
             tabBar.update(DSChoiceItem(id: id, title: tab.title, symbolName: tab.symbolName, count: value, accessibilityLabel: tab.title))
         }
@@ -288,6 +295,7 @@ final class RightPanelViewController: NSViewController {
     func select(_ id: String) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let changed = selectedID != id
+        if changed { fitIsStale = true }
         let titlesChange = changed && (compactIDs.contains(id) || compactIDs.contains(selectedID ?? ""))
         selectedID = id
         if titlesChange {
@@ -331,7 +339,7 @@ final class PanelBackgroundView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         color.setFill()
-        dirtyRect.fill()
+        dirtyRect.fill(using: .sourceOver)
     }
 
     override func viewDidChangeEffectiveAppearance() {

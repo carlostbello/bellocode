@@ -214,6 +214,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     /// repository. Observed (called from the title loop), so the count follows the repository's status.
     private func updateHeaderActions() {
         guard let context = container.context else {
+            rightPanel.setCount(nil, for: "changes")
+            rightPanel.setCount(nil, for: "agents")
             header.openButton.isHidden = true
             header.commitButton.isHidden = true
             header.needsLayout = true
@@ -223,6 +225,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         let changed = repository.status?.files.count ?? 0
         let isRepository = repository.phase != .notRepository
         let hint = changed > 0 ? "\(changed)" : nil
+        // Live counts in the right panel's tabs ("Changes 3", "Agents 2").
+        rightPanel.setCount(changed, for: "changes")
+        if let id = context.thread?.sessionID, let orchestration = workspace.engine.orchestration {
+            _ = orchestration.structureRevision
+            rightPanel.setCount(orchestration.graph.children[id]?.count, for: "agents")
+        } else {
+            rightPanel.setCount(nil, for: "agents")
+        }
         if header.commitButton.shortcutHint != hint { header.commitButton.shortcutHint = hint }
         header.commitButton.accessibilityTitle = changed == 1 ? "Commit, 1 changed file" : "Commit, \(changed) changed files"
         header.commitButton.isEnabled = isRepository

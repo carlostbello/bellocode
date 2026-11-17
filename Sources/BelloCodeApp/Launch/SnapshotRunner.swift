@@ -327,10 +327,10 @@ struct SnapshotRunner {
         let size = NSSize(width: 64, height: 40)
         let image = NSImage(size: size, flipped: false) { rect in
             NSColor.systemTeal.setFill()
-            rect.fill()
+            rect.fill(using: .sourceOver)
             NSColor.white.setFill()
-            NSRect(x: 8, y: 8, width: 30, height: 6).fill()
-            NSRect(x: 8, y: 20, width: 46, height: 6).fill()
+            NSRect(x: 8, y: 8, width: 30, height: 6).fill(using: .sourceOver)
+            NSRect(x: 8, y: 20, width: 46, height: 6).fill(using: .sourceOver)
             return true
         }
         let rep = image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))

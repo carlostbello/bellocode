@@ -220,7 +220,7 @@ final class ThreadCell: NSTableCellView {
             DS.Color.border.setFill()
             for level in 0..<depth {
                 let x = SidebarMetrics.glyphX + DS.Size.iconBox / 2 + CGFloat(level) * SidebarMetrics.childIndent
-                NSRect(x: x.rounded(), y: 0, width: DS.Border.hairline, height: bounds.height).fill()
+                NSRect(x: x.rounded(), y: 0, width: DS.Border.hairline, height: bounds.height).fill(using: .sourceOver)
             }
         }
         let line = firstLine

@@ -1,4 +1,5 @@
 import AppKit
+import DesignSystem
 import Engine
 import Observation
 import SwiftUI
@@ -27,49 +28,42 @@ struct SnoozePickerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline).lineLimit(1).truncationMode(.middle)
-            VStack(spacing: 2) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
+            Text(title).font(.ds(.bodyEmph)).foregroundStyle(Color.ds.text).lineLimit(1).truncationMode(.middle)
+            VStack(spacing: 0) {
                 ForEach(SnoozePreset.allCases, id: \.self) { preset in
                     let date = preset.date(from: now)
                     Button {
                         onSnooze(date)
                     } label: {
                         HStack {
-                            Text(preset.title)
+                            Text(preset.title).font(.ds(.body)).foregroundStyle(Color.ds.text)
                             Spacer()
-                            Text(ThreadRowPresentation.wakeText(date, now: now)).foregroundStyle(.secondary).monospacedDigit()
+                            Text(ThreadRowPresentation.wakeText(date, now: now)).font(.ds(.meta)).foregroundStyle(Color.ds.text3).monospacedDigit()
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(SnoozeRowStyle())
+                    .buttonStyle(DSMenuRowStyle())
                     .accessibilityLabel("\(preset.title), until \(ThreadRowPresentation.wakeText(date, now: now))")
                 }
             }
-            Divider()
-            Text("Custom").font(.subheadline).foregroundStyle(.secondary)
+            Rectangle().fill(Color.ds.border).frame(height: 1)
+            Text("Custom").font(.ds(.metaEmph)).foregroundStyle(Color.ds.text3)
+            // The system date field (no DesignSystem date control yet; it keeps its keyboard and locale behaviour).
             DatePicker("Until", selection: $model.custom, in: now..., displayedComponents: [.date, .hourAndMinute])
                 .datePickerStyle(.field)
                 .labelsHidden()
-            HStack {
-                Text("Wakes early if it needs you.").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: DS.Space.s8) {
+                Text("Wakes early if it needs you.").font(.ds(.meta)).foregroundStyle(Color.ds.text3)
                 Spacer()
                 Button("Cancel", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
+                    .buttonStyle(DSButtonStyle(.ghost, size: .small))
                 Button("Snooze") { onSnooze(model.custom) }.keyboardShortcut(.defaultAction)
+                    .buttonStyle(DSButtonStyle(.primary, size: .small))
             }
         }
-        .padding(14)
+        .padding(DS.Space.s12)
         .frame(width: 300)
-    }
-}
-
-private struct SnoozeRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5).fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.05)))
     }
 }
 

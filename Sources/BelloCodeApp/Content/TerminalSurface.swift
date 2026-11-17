@@ -278,8 +278,8 @@ final class NSHostingPlaceholder: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        label.font = DS.Typography.current.caption
-        label.textColor = .tertiaryLabelColor
+        label.font = DS.TextRole.label.font
+        label.textColor = DS.Color.text3
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([

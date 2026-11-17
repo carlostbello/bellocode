@@ -11,24 +11,24 @@ import SwiftUI
 @MainActor
 enum AppStyle {
     static func composer(hero: Bool = false) -> ComposerStyle {
-        let typography = DS.Typography.current
+        let base = DS.Typography.current.baseSize
         var style = ComposerStyle()
-        style.font = typography.body
-        style.textColor = DS.Palette.text
-        style.placeholderColor = DS.Palette.tertiaryText
-        style.secondaryTextColor = DS.Palette.secondaryText
-        style.cardBackgroundColor = DS.Palette.cardBackground
-        style.borderColor = DS.Palette.cardBorder
-        style.focusBorderColor = DS.Palette.accent.withAlphaComponent(0.55)
-        style.accentColor = DS.Palette.accent
-        style.chipBackgroundColor = DS.Palette.groupFill
-        style.errorColor = DS.Palette.failure
-        style.popoverBackgroundColor = DS.Palette.cardBackground
-        style.cornerRadius = DS.Radius.card
-        style.contentInsets = NSEdgeInsets(top: DS.Spacing.m + 2, left: DS.Spacing.l, bottom: DS.Spacing.s, right: DS.Spacing.s)
+        style.font = DS.TextRole.composer.font(base: base)
+        style.textColor = DS.Color.text
+        style.placeholderColor = DS.Color.placeholder
+        style.secondaryTextColor = DS.Color.text2
+        style.cardBackgroundColor = DS.Color.raised
+        style.borderColor = DS.Color.composerOutline
+        style.focusBorderColor = DS.Color.borderStrong
+        style.accentColor = DS.Color.accent
+        style.chipBackgroundColor = DS.Color.fillHover
+        style.errorColor = DS.Color.dangerText
+        style.popoverBackgroundColor = DS.Color.raised
+        style.cornerRadius = DS.Radius.xl
+        style.contentInsets = NSEdgeInsets(top: DS.Space.s12, left: DS.Space.s14, bottom: DS.Space.s4, right: DS.Space.s8)
         style.minimumLines = hero ? 3 : 1
-        style.controlHeight = DS.Spacing.sidebarRowHeight
-        style.completionRowHeight = DS.Spacing.sidebarRowHeight
+        style.controlHeight = DS.Size.composerControl
+        style.completionRowHeight = DS.Size.menuRow
         style.placeholder = hero
             ? "Describe the task. @ mentions files or agents, / runs commands"
             : "Ask for follow-up changes. @ mentions files, / runs commands"
@@ -36,24 +36,24 @@ enum AppStyle {
     }
 
     static var agentUI: AgentUIStyle {
-        let typography = DS.Typography.current
+        let base = DS.Typography.current.baseSize
         return AgentUIStyle(
-            accent: Color(nsColor: DS.Palette.accent),
-            surface: Color(nsColor: DS.Palette.cardBackground),
-            inset: Color(nsColor: DS.Palette.groupFill),
-            separator: Color(nsColor: DS.Palette.cardBorder),
-            primaryText: Color(nsColor: DS.Palette.text),
-            secondaryText: Color(nsColor: DS.Palette.secondaryText),
-            attention: Color(nsColor: DS.Palette.attention),
-            danger: Color(nsColor: DS.Palette.failure),
-            success: Color(nsColor: DS.Palette.success),
-            bodyFont: .system(size: typography.baseSize),
-            smallFont: .system(size: typography.baseSize - 1),
-            titleFont: .system(size: typography.baseSize, weight: .semibold),
-            monospacedFont: .system(size: typography.baseSize - 1, design: .monospaced),
-            cornerRadius: DS.Radius.card,
-            spacing: DS.Spacing.xs,
-            rowHeight: DS.Spacing.sidebarRowHeight)
+            accent: Color(nsColor: DS.Color.accent),
+            surface: Color(nsColor: DS.Color.raised),
+            inset: Color(nsColor: DS.Color.codeFill),
+            separator: Color(nsColor: DS.Color.border),
+            primaryText: Color(nsColor: DS.Color.text),
+            secondaryText: Color(nsColor: DS.Color.text2),
+            attention: Color(nsColor: DS.Color.warningText),
+            danger: Color(nsColor: DS.Color.dangerText),
+            success: Color(nsColor: DS.Color.successText),
+            bodyFont: DS.TextRole.body.swiftUIFont(base: base),
+            smallFont: DS.TextRole.label.swiftUIFont(base: base),
+            titleFont: DS.TextRole.title.swiftUIFont(base: base),
+            monospacedFont: DS.TextRole.codeSmall.swiftUIFont(base: base),
+            cornerRadius: DS.Radius.xl,
+            spacing: DS.Space.s4,
+            rowHeight: DS.Size.menuRow)
     }
 
     /// Hosts a SwiftUI control with the app's AgentUI style (intrinsic size, Auto Layout).

@@ -201,9 +201,9 @@ final class ShellHeaderBar: NSView {
         let minX = contentMinX
         let rect = NSRect(x: minX, y: 0, width: bounds.width - minX, height: bounds.height)
         DS.Color.canvas.setFill()
-        rect.fill()
+        rect.fill(using: .sourceOver)
         DS.Color.border.setFill()
-        NSRect(x: minX, y: bounds.height - DS.Border.hairline, width: rect.width, height: DS.Border.hairline).fill()
+        NSRect(x: minX, y: bounds.height - DS.Border.hairline, width: rect.width, height: DS.Border.hairline).fill(using: .sourceOver)
     }
 
     override func viewDidChangeEffectiveAppearance() {

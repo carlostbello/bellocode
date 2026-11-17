@@ -758,9 +758,9 @@ final class PaletteFooterView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let dark = DS.Variant(effectiveAppearance).isDark
         DS.Color.text.withAlphaComponent(dark ? 0.025 : 0.02).setFill()
-        bounds.fill()
+        bounds.fill(using: .sourceOver)
         DS.Color.border.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: DS.Border.hairline).fill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: DS.Border.hairline).fill(using: .sourceOver)
         let label = DS.TextRole.label.font
         let capY = (bounds.height - DS.Size.kbd) / 2
         var x = DS.Space.s16
@@ -804,7 +804,7 @@ final class PaletteScrimView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         DS.Color.scrim.setFill()
-        dirtyRect.fill()
+        dirtyRect.fill(using: .sourceOver)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

@@ -267,6 +267,9 @@ final class HeaderCrumb: NSView {
     var text = "" { didSet { if text != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
     var color: NSColor = DS.Color.text2 { didSet { needsDisplay = true } }
     var lineBreakMode: NSLineBreakMode = .byTruncatingTail { didSet { needsDisplay = true } }
+    /// `label` by default; the composer's context strip uses `meta`.
+    var font: NSFont = DS.TextRole.label.font { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var glyphPointSize: CGFloat = DS.Size.iconPointRow { didSet { needsDisplay = true } }
 
     init(symbolName: String?) {
         self.symbolName = symbolName
@@ -291,16 +294,15 @@ final class HeaderCrumb: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override var isFlipped: Bool { true }
-    private var font: NSFont { DS.TextRole.label.font }
-    private var glyphWidth: CGFloat { symbolName == nil ? 0 : 14 + DS.Space.s4 }
+    private var glyphWidth: CGFloat { symbolName == nil ? 0 : glyphPointSize + 2 + DS.Space.s4 }
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: ceil(glyphWidth + DSDraw.width(of: text, font: font)), height: 16)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if let symbolName, let image = DSDraw.symbol(symbolName, pointSize: DS.Size.iconPointRow) {
-            DSDraw.draw(template: image, in: NSRect(x: 0, y: 0, width: 14, height: bounds.height), color: DS.Color.icon)
+        if let symbolName, let image = DSDraw.symbol(symbolName, pointSize: glyphPointSize) {
+            DSDraw.draw(template: image, in: NSRect(x: 0, y: 0, width: glyphPointSize + 2, height: bounds.height), color: DS.Color.icon)
         }
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = lineBreakMode
