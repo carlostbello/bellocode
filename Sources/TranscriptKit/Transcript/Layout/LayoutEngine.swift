@@ -136,6 +136,9 @@ public enum LayoutEngine {
         case .subagent(let card):
             return layoutSubagent(card, width: width, fonts: fonts)
 
+        case .visual(let visual):
+            return layoutVisual(visual, width: width, fonts: fonts)
+
         case .error(let error):
             let text = NSMutableAttributedString(attributedString: fonts.plain(error.title, font: fonts.bold, color: theme.failure))
             text.append(fonts.plain("\n" + error.message, font: fonts.body, color: theme.text))
@@ -661,6 +664,37 @@ public enum LayoutEngine {
             hotspots: [Hotspot(rect: chip, action: .openFile(file.uri), label: "Open \(file.name)")], kindTag: .card)
     }
 
+    /// An HTML visual: a title line with Open and Save actions, then the snapshot (or a placeholder while rendering).
+    static func layoutVisual(_ visual: VisualCardContent, width: CGFloat, fonts: TranscriptFonts) -> BlockLayout {
+        let theme = fonts.theme
+        let text = RenderBlocks.visualText(visual)
+        let titleLength = (visual.title as NSString).length
+        let attributed = NSMutableAttributedString(attributedString: fonts.plain(text, font: fonts.small, color: theme.secondary))
+        attributed.addAttributes(fonts.attributes(font: fonts.semibold, color: theme.text), range: NSRange(location: 0, length: titleLength))
+        let actions = [("Open in Browser", "open"), ("Save Image", "save")]
+        let actionLines = actions.map { (CTLineCreateWithAttributedString(fonts.plain($0.0, font: fonts.small, color: theme.link)), $0.1, $0.0) }
+        let actionsWidth = actionLines.reduce(CGFloat(0)) { $0 + CGFloat(CTLineGetTypographicBounds($1.0, nil, nil, nil)) + 14 }
+        let title = ProseTypesetter.layout(attributed, origin: CGPoint(x: 0, y: 0), textStart: 0, width: max(80, width - actionsWidth - 8), truncate: true)
+        let imageWidth = min(width, 760)
+        let rect = CGRect(x: 0, y: title.frame.maxY + 6, width: imageWidth, height: CGFloat(visual.displayHeight))
+        var labels: [Label] = []
+        var hotspots: [Hotspot] = [Hotspot(rect: rect, action: .openFile(visual.actionURL("focus")), label: "Interact with \(visual.title)")]
+        var x = width
+        for (line, verb, name) in actionLines.reversed() {
+            let lineWidth = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            x -= lineWidth
+            labels.append(Label(line: line, point: CGPoint(x: x, y: floor(title.frame.height * 0.78))))
+            hotspots.append(Hotspot(rect: CGRect(x: x - 2, y: -2, width: lineWidth + 4, height: title.frame.height + 4), action: .openFile(visual.actionURL(verb)), label: name))
+            x -= 14
+        }
+        var images: [BlockImage] = []
+        if visual.status == .ready { images.append(BlockImage(source: visual.imageSource(dark: theme.isDark), rect: rect, radius: 6)) }
+        return BlockLayout(
+            size: CGSize(width: width, height: rect.maxY + 4), plainLength: title.length, fragments: [title],
+            decorations: [Decoration(rect: rect, fill: theme.codeBackground, stroke: theme.cardBorder, radius: 6)],
+            labels: labels, hotspots: hotspots, images: images, kindTag: .image)
+    }
+
     static func layoutSubagent(_ card: SubagentCardContent, width: CGFloat, fonts: TranscriptFonts) -> BlockLayout {
         let theme = fonts.theme
         let text = RenderBlocks.subagentText(card)
@@ -756,6 +790,8 @@ public enum LayoutEngine {
             height += file.isImage ? 140 : lineHeight + 12
         case .subagent:
             height += 2 * lineHeight + 18
+        case .visual(let visual):
+            height += visual.displayHeight + lineHeight + 14
         case .error(let error):
             height += prose(error.message) + lineHeight + 18
         case .lifecycle, .working, .unknown:

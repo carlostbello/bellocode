@@ -293,6 +293,7 @@ extension TranscriptController {
         case .todo: return "To-do list"
         case .file(let file): return file.isImage ? "Image \(file.name)" : "File \(file.name)"
         case .subagent(let card): return "Sub-agent, \(card.status.label)"
+        case .visual(let visual): return "Visual, \(visual.title)"
         case .error(let error): return "Error: \(error.title)"
         case .lifecycle(let event): return event.text
         case .working: return "Agent working"

@@ -159,6 +159,7 @@ extension TranscriptController {
         switch row.content {
         case .user(let user): return user.attachments.filter(\.isImage).map(\.uri)
         case .file(let file): return file.isImage ? [file.uri] : []
+        case .visual(let visual): return [visual.imageSource(dark: false), visual.imageSource(dark: true)]
         case .markdown(let text, _):
             guard text.contains("![") else { return [] }
             return MarkdownParser.blocks(text).compactMap { if case .image(let source, _) = $0.kind { source } else { nil } }

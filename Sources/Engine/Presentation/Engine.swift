@@ -125,6 +125,8 @@ public final class Engine {
     /// Orchestration: the task graph, Agents panel models, cascade stop and app-hosted agent tools
     /// (docs/features/orchestration.md). Created in `init`, started by `start()`.
     public private(set) var orchestration: OrchestrationService!
+    /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
+    public private(set) var extras: ExtrasHub!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -164,6 +166,7 @@ public final class Engine {
             subscribe: { [core] in await core.subscribeBrowserControl() })
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
         orchestration = OrchestrationService(core: core, store: store, engine: self)
+        extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
     }
 
     /// The model of a thread that is open now, without opening it.
@@ -208,6 +211,7 @@ public final class Engine {
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         orchestration.start()
+        await extras.start(store: store)
         await modelPreferences.load()
         await frecency.load()
         await core.start()
@@ -221,6 +225,7 @@ public final class Engine {
         git.shutdown()
         await browser.shutdown()
         await orchestration.shutdown()
+        extras.stop()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }

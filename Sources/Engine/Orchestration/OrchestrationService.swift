@@ -302,6 +302,14 @@ public final class OrchestrationService {
         guard node.projectID == callerNode.projectID else {
             return .error("That thread is in another project; app tools act only within this project.")
         }
+        if ExtrasTools.all.contains(call.tool), let engine {
+            let project = engine.root.projects.first { $0.projectID == callerNode.projectID }?.directory ?? callerNode.directory
+            let mode = await core.knownSession(caller)?.permissionMode
+            let extrasCaller = ExtrasCaller(
+                sessionID: caller, projectID: callerNode.projectID, directory: callerNode.directory, projectDirectory: project,
+                permissionMode: mode)
+            return await engine.extras.handle(call, caller: extrasCaller)
+        }
         switch call.tool {
         case AppTools.openThread:
             guard raw != nil else { return .error("Give threadID.") }
@@ -371,6 +379,6 @@ public enum AppTools {
 struct AppToolProvider: ClientMCPToolProvider {
     let service: OrchestrationService
 
-    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions }
+    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions }
     func call(_ call: ClientMCPCall) async -> ClientMCPResult { await service.handleAppTool(call) }
 }

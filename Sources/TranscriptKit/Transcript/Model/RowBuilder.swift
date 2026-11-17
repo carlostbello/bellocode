@@ -130,7 +130,9 @@ public enum RowBuilder {
                                     text: text, isStreaming: part.isStreaming,
                                     duration: context.reasoningDurations[part.id]))))
                 case .tool(let call):
-                    if let card = sendToUserMarkdown(call) {
+                    if let visual = visualCard(call) {
+                        result.append(row(.part(part.id), .assistant, .visual(visual)))
+                    } else if let card = sendToUserMarkdown(call) {
                         result.append(row(.part(part.id), .assistant, .markdown(text: card, isStreaming: !call.status.isFinished)))
                     } else if let todo = todoList(call) {
                         result.append(row(.part(part.id), .assistant, .todo(todo)))
@@ -313,6 +315,30 @@ public enum RowBuilder {
         let summary = body.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
         let clipped = summary.count > 160 ? String(summary.prefix(159)) + "…" : summary
         return "↩ “\(description)” \(verb)" + (clipped.isEmpty ? "" : ": " + clipped)
+    }
+
+    /// BelloCode's `html_render` app tool (`bellocode_app_html_render`) as a visual card, from the call's title and the
+    /// result's `visualID:`/`height:`/`note:` lines. nil for other tools.
+    static func visualCard(_ call: ToolCall) -> VisualCardContent? {
+        guard call.name == "bellocode_app_html_render" || call.name == "html_render" else { return nil }
+        let input = call.input.flatMap { try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any] } ?? [:]
+        let title = (input["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Visual"
+        var fields: [String: String] = [:]
+        for line in call.outputText.split(separator: "\n") {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            fields[line[..<colon].trimmingCharacters(in: .whitespaces)] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        }
+        switch call.status {
+        case .failed:
+            return VisualCardContent(visualID: "", title: title, height: 60, status: .failed(call.error?.message ?? "the render failed"))
+        case .completed:
+            guard let id = fields["visualID"], !id.isEmpty else {
+                return VisualCardContent(visualID: "", title: title, height: 60, status: .failed(String(call.outputText.prefix(160))))
+            }
+            return VisualCardContent(visualID: id, title: title, height: Double(fields["height"] ?? "") ?? 240, status: .ready, note: fields["note"])
+        default:
+            return VisualCardContent(visualID: "", title: title, height: 120, status: .rendering)
+        }
     }
 
     /// The bellocode plugin's `send_to_user` (content the person must read mid-turn) as a quoted Markdown card with a

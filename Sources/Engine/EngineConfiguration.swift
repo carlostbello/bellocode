@@ -51,6 +51,17 @@ public struct EngineConfiguration: Sendable {
     /// The location whose catalog is loaded when no project is known.
     public var defaultDirectory: String?
     public var time: any TimeSource = SystemTimeSource()
+    /// Calendar time for the scheduler and the PR poller (docs/features/orchestration-extras.md).
+    public var wallClock: any WallClock = SystemWallClock()
+    /// Where secrets are kept: the macOS Keychain by default; tests pass `InMemorySecretVault`.
+    public var secretVault: any SecretVault = KeychainSecretVault()
+    /// How GitHub is reached: `gh` when installed and signed in, else the public REST API. Tests pass fixtures.
+    public var gitHub: any GitHubAccessProvider = SystemGitHubAccess()
+    /// PR watch polling: base interval, longest backoff after failures.
+    public var pullRequestPoll: Duration = .seconds(120)
+    public var pullRequestMaxBackoff: Duration = .seconds(1800)
+    /// Off in tests that do not exercise scheduling; the app always starts it.
+    public var startsExtras = true
 
     public init(server: ServerSource, store: ProjectionStore.Location) {
         self.server = server
