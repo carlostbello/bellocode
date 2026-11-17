@@ -1,5 +1,6 @@
 import BelloCore
 import Foundation
+import OSLog
 import MockOpenCode
 import OpenCodeKit
 import Testing
@@ -259,5 +260,56 @@ struct ResyncRetryTests {
         #expect(resyncs == 1)
         #expect(engine.root.connection == .stopped)
         await harness.stop()
+    }
+}
+
+// MARK: - M10: server text stays out of public logs
+
+@Suite("M10 log privacy", .serialized)
+@MainActor
+struct LogPrivacyTests {
+    static let sentinel = "SENTINEL-sk-live-4f1c9e"
+
+    @Test func summariesNeverCarryServerText() throws {
+        let body = try JSONDecoder().decode(
+            ServerErrorBody.self, from: Data(#"{"_tag":"UnknownError","message":"failed for \#(Self.sentinel)"}"#.utf8))
+        let error = OpenCodeError.http(status: 500, body: body, operation: "session.prompt")
+        #expect(error.description.contains(Self.sentinel), "the description keeps it for display")
+        #expect(!error.logSummary.contains(Self.sentinel))
+        #expect(error.logSummary == "session.prompt: HTTP 500 UnknownError")
+        #expect(!EngineError.logSummary(error).contains(Self.sentinel))
+        #expect(!EngineError.from(error).logSummary.contains(Self.sentinel))
+        let oddTag = try JSONDecoder().decode(
+            ServerErrorBody.self, from: Data(#"{"_tag":"\#(Self.sentinel) <script>","message":"x"}"#.utf8))
+        #expect(OpenCodeError.http(status: 400, body: oddTag, operation: "op").logSummary == "op: HTTP 400 (other)")
+        // User-facing text is sanitized and bounded.
+        let long = String(repeating: "a", count: 1_000) + "\u{1B}[31m"
+        let shown = EngineError.sanitized(long)
+        #expect(shown.count <= 301)
+        #expect(!shown.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) })
+    }
+
+    /// End to end: a resync and a catalog refresh fail with the sentinel in the server's error message; nothing this
+    /// process logged contains it.
+    @Test func failuresWithSecretsInErrorBodiesAreNotLogged() async throws {
+        let start = Date()
+        let harness = try await MockHarness.start()
+        await harness.server.injectHTTPFault(.status(500, method: "GET", pathPrefix: "/api/info", message: "boom \(Self.sentinel)", count: 3))
+        await harness.server.injectHTTPFault(.status(500, method: "GET", pathPrefix: "/api/provider", message: "nope \(Self.sentinel)", count: nil))
+        var configuration = EngineConfiguration(server: .fixed(harness.connection), store: .inMemory)
+        configuration.resyncRetryBackoff = BackoffPolicy(initial: .milliseconds(10), maximum: .milliseconds(20))
+        let engine = try Engine(configuration: configuration)
+        await engine.start()
+        try await waitUntil("live after retry") { engine.root.connection == .live }
+        await engine.refreshCatalog(directory: "/tmp/mock-project")
+        await engine.stop()
+        await harness.stop()
+        let store = try OSLogStore(scope: .currentProcessIdentifier)
+        let entries = try store.getEntries(at: store.position(date: start))
+            .compactMap { $0 as? OSLogEntryLog }
+            .filter { $0.subsystem.hasPrefix("app.bellocode") }
+        #expect(entries.contains { $0.composedMessage.contains("resync attempt") }, "the failure was logged")
+        let leaked = entries.filter { $0.composedMessage.contains(Self.sentinel) }
+        #expect(leaked.isEmpty, "\(leaked.map(\.composedMessage))")
     }
 }

@@ -38,7 +38,11 @@ public struct ServerErrorTag: OpenEnum {
     public static let unknown: Self = "UnknownError"
 }
 
-/// Errors from `OpenCodeClient` and the event stream. Messages never include credentials or request bodies.
+/// Errors from `OpenCodeClient` and the event stream.
+///
+/// `description` includes the server's own error message (`ServerErrorBody.message`), which is arbitrary text that can
+/// echo request content (a path, prompt text, a value the user typed). Never log it publicly: log `logSummary`, which
+/// carries only the operation, status, a validated tag and error codes. Credentials are never part of either.
 public enum OpenCodeError: Error, Sendable, CustomStringConvertible {
     /// The server answered with a non-success status. `body` is the decoded error body when it had one.
     case http(status: Int, body: ServerErrorBody?, operation: String)
@@ -59,6 +63,31 @@ public enum OpenCodeError: Error, Sendable, CustomStringConvertible {
         if case .http(_, let body, _) = self { body?.tag } else { nil }
     }
 
+    /// Operation, status and codes only: safe for public logs.
+    public var logSummary: String {
+        switch self {
+        case .http(let status, let body, let operation):
+            "\(operation): HTTP \(status) \(body.map { Self.safeToken($0.tag.rawValue) } ?? "-")"
+        case .decoding(let operation, _):
+            "\(operation): unexpected response shape"
+        case .transport(let operation, let code):
+            "\(operation): transport error \(code.rawValue)"
+        case .invalidResponse:
+            "response was not HTTP"
+        case .unexpectedContentType(let type):
+            "event stream returned content type \(type.map(Self.safeToken) ?? "none")"
+        }
+    }
+
+    /// `value` if it is a short identifier-like token (letters, digits, `.`, `_`, `-`, `/`, `;`, `=`, space), else
+    /// "(other)". Server tags and content types are expected to pass; anything else is not echoed.
+    static func safeToken(_ value: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/;= ")
+        guard !value.isEmpty, value.count <= 64, value.allSatisfy(allowed.contains) else { return "(other)" }
+        return value
+    }
+
+    /// Includes the server's message: for display (sanitized by the caller) and private diagnostics, never public logs.
     public var description: String {
         switch self {
         case .http(let status, let body, let operation):
