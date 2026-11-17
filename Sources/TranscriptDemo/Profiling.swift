@@ -39,11 +39,14 @@ final class FrameAttribution {
 
     struct SlowFrame: Codable {
         var intervalMs: Double
+        var cpuMs: Double?
         var phaseMs: [String: Double]
         var at: Double
     }
 
     struct Report: Codable {
+        /// Frames over 33 ms whose main-thread CPU was at least 27 ms, worst first, with their phases.
+        var cpuBound: [SlowFrame] = []
         var all = PhaseTotals()
         var over16_7ms = PhaseTotals()
         var over33ms = PhaseTotals()
@@ -63,7 +66,12 @@ final class FrameAttribution {
     }
 
     /// Called once per display frame with the interval that just ended.
+    private var lastCPU = ProcessStats.threadCPUMilliseconds()
+
     func frame(interval: Double) {
+        let cpuNow = ProcessStats.threadCPUMilliseconds()
+        let frameCPU = cpuNow - lastCPU
+        lastCPU = cpuNow
         let phases = TranscriptProfiler.shared.takeFrame()
         let cpu = TranscriptProfiler.shared.takeFrameCPU()
         elapsed += interval
@@ -76,7 +84,13 @@ final class FrameAttribution {
                 named[phase.name] = round2(phases[phase.rawValue])
                 named[phase.name + "CPU"] = round2(cpu[phase.rawValue])
             }
-            report.worst.append(SlowFrame(intervalMs: round2(interval * 1000), phaseMs: named, at: round2(elapsed)))
+            let slow = SlowFrame(intervalMs: round2(interval * 1000), cpuMs: round2(frameCPU), phaseMs: named, at: round2(elapsed))
+            report.worst.append(slow)
+            if frameCPU >= 27 {
+                report.cpuBound.append(slow)
+                report.cpuBound.sort { ($0.cpuMs ?? 0) > ($1.cpuMs ?? 0) }
+                if report.cpuBound.count > 40 { report.cpuBound.removeLast() }
+            }
             report.worst.sort { $0.intervalMs > $1.intervalMs }
             if report.worst.count > 25 { report.worst.removeLast() }
         }
@@ -267,7 +281,7 @@ extension ScenarioRunner {
         Report.write(
             ProfileReport(
                 header: header("P"), display: DisplayInfo.current(window: window), fraction: fraction,
-                down: FrameStats(intervals: down, nominal: nominal), attribution: profile, peak: sampler.report,
+                down: FrameStats(intervals: down, nominal: nominal, cpu: recorder.cpu), attribution: profile, peak: sampler.report,
                 mallocReleasedMB: released, memoryBeforePurge: before, memoryAfterClose: afterClose, floor: floor,
                 cachesBeforePurge: caches, metrics: metrics),
             name: "P")
@@ -307,7 +321,8 @@ extension ScenarioRunner {
             CATransaction.commit()
             return elapsed < seconds
         }
-        let frames = FrameStats(intervals: recorder.stop(), nominal: nominal)
+        let intervals = recorder.stop()
+        let frames = FrameStats(intervals: intervals, nominal: nominal, cpu: recorder.cpu)
         Report.write(
             ControlReport(header: header("control"), display: DisplayInfo.current(window: window), frames: frames, watchdog: watchdog.stop()),
             name: "control")

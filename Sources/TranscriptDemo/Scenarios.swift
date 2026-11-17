@@ -125,6 +125,7 @@ extension ScenarioRunner {
             return controller.distanceFromBottom > 1
         }
         let downIntervals = recorder.stop()
+        let downCPU = recorder.cpu
         let downTags = recorder.tags
         log("S2 down done (\(downIntervals.count) frames)")
         recorder.start()
@@ -140,6 +141,7 @@ extension ScenarioRunner {
             return controller.scrollView.contentView.bounds.minY > 0.5
         }
         let upIntervals = recorder.stop()
+        let upCPU = recorder.cpu
         let upTags = recorder.tags
         let profile = attribution?.finish()
         recorder.tagProvider = nil
@@ -163,11 +165,12 @@ extension ScenarioRunner {
             return elapsed < 60
         }
         let realistic = recorder.stop()
+        let realisticCPU = recorder.cpu
         Report.write(
             S2Report(
-                header: header("S2"), documentHeight: documentHeight, down: FrameStats(intervals: downIntervals, nominal: nominal),
-                up: FrameStats(intervals: upIntervals, nominal: nominal), whileHugeRowVisible: FrameStats(intervals: huge, nominal: nominal),
-                realisticSpeed60s: FrameStats(intervals: realistic, nominal: nominal),
+                header: header("S2"), documentHeight: documentHeight, down: FrameStats(intervals: downIntervals, nominal: nominal, cpu: downCPU),
+                up: FrameStats(intervals: upIntervals, nominal: nominal, cpu: upCPU), whileHugeRowVisible: FrameStats(intervals: huge, nominal: nominal),
+                realisticSpeed60s: FrameStats(intervals: realistic, nominal: nominal, cpu: realisticCPU),
                 meanVelocityPtPerS: round2(travelled / max(duration, 0.001)),
                 realisticMeanVelocityPtPerS: round2(realTravel / max(realDuration, 0.001)), traversalSpeedMultiplier: scrollSpeed,
                 watchdog: watchdog.stop(), metrics: controller.metrics, hugeRowHeight: Double(controller.rowRect(hugeIndex).height),

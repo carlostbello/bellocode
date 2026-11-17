@@ -18,8 +18,24 @@ struct FrameStats: Codable {
     var missedVsyncs = 0
     var nominalMs = 0.0
     var durationS = 0.0
+    /// Frames over 33 ms in which the main thread itself used at least 27 ms of CPU: slow because of our work. The
+    /// other slow frames had the main thread off-CPU (preempted, or waiting on the window server); compare with a
+    /// `--scenario control` run at the same time.
+    var over33msCPUBound: Int?
+    /// Main-thread CPU per frame: p99 and max (ms).
+    var cpuP99Ms: Double?
+    var cpuMaxMs: Double?
 
     init() {}
+
+    init(intervals: [Double], nominal: Double, cpu: [Double]) {
+        self.init(intervals: intervals, nominal: nominal)
+        guard cpu.count == intervals.count, !cpu.isEmpty else { return }
+        over33msCPUBound = zip(intervals, cpu).filter { $0.0 * 1000 > 33.4 && $0.1 * 1000 >= 27 }.count
+        let sorted = cpu.map { $0 * 1000 }.sorted()
+        cpuP99Ms = (sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.99))] * 100).rounded() / 100
+        cpuMaxMs = ((sorted.last ?? 0) * 100).rounded() / 100
+    }
 
     init(intervals: [Double], nominal: Double) {
         guard !intervals.isEmpty else { return }
@@ -49,8 +65,11 @@ func percentile(_ values: [Double], _ p: Double) -> Double {
 final class FrameRecorder: NSObject {
     private var link: CADisplayLink?
     private(set) var intervals: [Double] = []
+    /// Main-thread CPU seconds used during each interval.
+    private(set) var cpu: [Double] = []
     private(set) var tags: [Bool] = []
     private var last: Double?
+    private var lastCPU = 0.0
     private var recording = false
     private var discard = 0
     var tagProvider: (() -> Bool)?
@@ -70,13 +89,16 @@ final class FrameRecorder: NSObject {
 
     @objc private func tick(_ link: CADisplayLink) {
         let timestamp = link.timestamp
+        let cpuNow = ProcessStats.threadCPUMilliseconds() / 1000
         if discard > 0 {
             discard -= 1
         } else if recording, let last {
             intervals.append(timestamp - last)
+            cpu.append(cpuNow - lastCPU)
             tags.append(tagProvider?() ?? false)
         }
         last = timestamp
+        lastCPU = cpuNow
         onFrame?(link)
         let pending = waiters
         waiters.removeAll()
@@ -88,6 +110,7 @@ final class FrameRecorder: NSObject {
 
     func start() {
         intervals.removeAll()
+        cpu.removeAll()
         tags.removeAll()
         last = nil
         recording = true

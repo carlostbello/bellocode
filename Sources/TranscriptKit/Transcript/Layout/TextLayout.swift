@@ -28,8 +28,10 @@ final class MonoLines {
     private let baseColor: CGColor
     private var cache: [Int: CTLine] = [:]
     private var cacheOrder: [Int] = []
-    /// CTLines kept per block; the layout cache counts this many per monospaced fragment as its cost.
-    static let cacheLimit = 120
+    /// CTLines kept per block; the layout cache counts up to this many per monospaced fragment as its cost. It covers
+    /// a tall row's whole canvas (viewport + 2 × 900 pt ≈ 160 lines): at 120 with half dropped on overflow, every
+    /// reposition of the 100 KB block's canvas re-created all its lines (one 290 ms frame of main-thread CPU).
+    static let cacheLimit = 320
 
     /// Releases realised lines (the layout left the screen; they are recreated on demand).
     func purge() {
@@ -123,8 +125,8 @@ final class MonoLines {
         let line = CTLineCreateWithAttributedString(attributed)
         cache[index] = line
         cacheOrder.append(index)
-        if cacheOrder.count > Self.cacheLimit {  // bounded (a viewport shows ~60 lines): drop the oldest half
-            let drop = Self.cacheLimit / 2
+        if cacheOrder.count > Self.cacheLimit {  // bounded: drop the oldest quarter
+            let drop = Self.cacheLimit / 4
             for old in cacheOrder.prefix(drop) { cache[old] = nil }
             cacheOrder.removeFirst(drop)
         }
