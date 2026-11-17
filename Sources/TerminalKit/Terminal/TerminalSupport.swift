@@ -1,4 +1,5 @@
 import AppKit
+import DesignSystem
 import Engine
 import Foundation
 import Observation
@@ -96,7 +97,8 @@ enum TerminalKitSignposts {
 /// Shells whose prompt runs a pasted line at once.
 let interactiveShells: Set<String> = ["zsh", "-zsh", "bash", "-bash", "fish", "-fish", "sh", "-sh", "login"]
 
-/// A small capsule label with a glyph and text (status is never colour-only).
+/// A status pill (§6 "Pills"): 18 high, `r.xs`, `fillSubtle` with a `border` ring, 10 pt glyph + `meta` word in
+/// `text2` (status is never colour-only). Floats over the terminal, so it carries its own fill.
 @MainActor
 final class TerminalStatusPill: NSView {
     let icon = NSImageView()
@@ -106,10 +108,11 @@ final class TerminalStatusPill: NSView {
     init() {
         super.init(frame: .zero)
         stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 2, right: 8)
-        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .secondaryLabelColor
+        stack.spacing = DS.Space.s4
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s6, bottom: 0, right: DS.Space.s6)
+        label.font = DS.TextRole.meta.font
+        label.textColor = DS.Color.text2
         stack.addArrangedSubview(icon)
         stack.addArrangedSubview(label)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -117,7 +120,7 @@ final class TerminalStatusPill: NSView {
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            heightAnchor.constraint(equalToConstant: 18),
+            heightAnchor.constraint(equalToConstant: DS.Size.pill),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -129,17 +132,15 @@ final class TerminalStatusPill: NSView {
     func show(_ text: String, symbol: String) {
         label.stringValue = text
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
-        icon.contentTintColor = .secondaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointMeta, weight: .regular))
+        icon.contentTintColor = DS.Color.icon
         setAccessibilityLabel(text)
         isHidden = false
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
-        NSColor.windowBackgroundColor.withAlphaComponent(0.95).setFill()
-        path.fill()
-        NSColor.separatorColor.setStroke()
-        path.stroke()
+        DSDraw.fill(bounds, radius: DS.Radius.xs, color: DS.Color.raised)
+        DSDraw.fill(bounds, radius: DS.Radius.xs, color: DS.Color.fillSubtle)
+        DSDraw.ring(bounds, radius: DS.Radius.xs, color: DS.Color.border)
     }
 }

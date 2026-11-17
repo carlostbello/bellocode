@@ -66,6 +66,8 @@ extension DS {
         public static let diffFileHeader: CGFloat = 34
         public static let diffHunkBar: CGFloat = 24
         public static let codeBlockHeader: CGFloat = 28
+        /// How far the composer overlaps an attached request card, so card and composer read as one object (§6).
+        public static let attachedOverlap: CGFloat = 16
 
         public static let iconBox: CGFloat = 16
         /// SF Symbol point sizes: in a 16 pt box, in rows, in metadata.

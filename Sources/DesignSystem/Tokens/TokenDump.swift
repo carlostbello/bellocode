@@ -26,7 +26,7 @@ extension DS {
             "", "## Size",
             "header \(Size.header) sidebar \(Size.sidebarWidth) [\(Size.sidebarMinWidth)–\(Size.sidebarMaxWidth)] panel \(Size.rightPanelWidth) column \(Size.contentMaxWidth) gutter \(Size.gutter)",
             "rows: sidebar \(Size.sidebarRow)/\(Size.sidebarRowTwoLine) menu \(Size.menuRow) palette \(Size.paletteRow) tool \(Size.toolRow) diff \(Size.diffLine)",
-            "controls: \(Size.control)/\(Size.controlSmall) composer \(Size.composerControl) send \(Size.send) micro \(Size.micro) tab \(Size.tab) kbd \(Size.kbd) pill \(Size.pill)",
+            "controls: \(Size.control)/\(Size.controlSmall) composer \(Size.composerControl) (attached card overlap \(Size.attachedOverlap)) send \(Size.send) micro \(Size.micro) tab \(Size.tab) kbd \(Size.kbd) pill \(Size.pill)",
             "", "## Shadow",
             "composer dark \(Shadow.composer(dark: true)) light \(Shadow.composer(dark: false))",
             "popover dark \(Shadow.popover(dark: true)) light \(Shadow.popover(dark: false))",

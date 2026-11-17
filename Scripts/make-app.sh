@@ -60,6 +60,15 @@ else
   warn "no Vendor/ripgrep/rg; bundling without ripgrep"
 fi
 
+# Licence texts of the Swift packages linked into the app (Settings ▸ Acknowledgements shows them).
+mkdir -p "$CONTENTS/Resources/Acknowledgements"
+for pair in "GRDB.swift:GRDB.swift/LICENSE" "SwiftTerm:SwiftTerm/LICENSE" "swift-markdown:swift-markdown/LICENSE.txt" \
+            "swift-cmark:swift-cmark/COPYING" "swift-argument-parser:swift-argument-parser/LICENSE.txt" \
+            "swift-png:swift-png/LICENSE" "h:h/LICENSE"; do
+  name="${pair%%:*}"; file="$ROOT/.build/checkouts/${pair#*:}"
+  if [[ -f "$file" ]]; then cp "$file" "$CONTENTS/Resources/Acknowledgements/$name.txt"; else warn "no licence file for $name"; fi
+done
+
 # SwiftPM resource bundles (none yet). Copied for when modules gain resources; check Bundle.module lookup then.
 shopt -s nullglob
 for bundle in "$BIN_DIR"/*.bundle; do

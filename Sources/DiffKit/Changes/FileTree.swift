@@ -22,6 +22,13 @@ public final class FileTreeNode: NSObject, Sendable {
 }
 
 public enum FileTree {
+    /// One row per file, sorted by path (the panel's list: name in `label`, folder in `text3` beside it).
+    public static func flat(_ files: [ChangedFile]) -> [FileTreeNode] {
+        files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }.map { file in
+            FileTreeNode(name: (file.path as NSString).lastPathComponent, path: file.path, file: file, children: [])
+        }
+    }
+
     /// Builds a sorted tree (folders first, then files, by name) with compacted folder chains.
     public static func build(_ files: [ChangedFile]) -> [FileTreeNode] {
         final class Folder {

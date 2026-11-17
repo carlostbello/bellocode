@@ -17,13 +17,13 @@ public final class DropBadgeView: NSVisualEffectView {
         state = .active
         wantsLayer = true
         layer?.cornerRadius = 11
-        layer?.borderWidth = DS.Spacing.hairline
-        layer?.borderColor = DS.Palette.separator.cgColor
-        label.font = DS.Typography.current.captionEmphasized
+        layer?.borderWidth = DS.Border.hairline
+        layer?.borderColor = DS.Color.border.cgColor
+        label.font = DS.TextRole.metaEmph.font
         label.lineBreakMode = .byTruncatingTail
         let stack = NSStackView(views: [icon, label])
-        stack.spacing = DS.Spacing.xs
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: DS.Spacing.m, bottom: 3, right: DS.Spacing.m)
+        stack.spacing = DS.Space.s4
+        stack.edgeInsets = NSEdgeInsets(top: 3, left: DS.Space.s8, bottom: 3, right: DS.Space.s8)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -43,11 +43,11 @@ public final class DropBadgeView: NSVisualEffectView {
 
     public func show(_ text: String, allowed: Bool) {
         label.stringValue = text
-        label.textColor = allowed ? DS.Palette.text : DS.Palette.secondaryText
+        label.textColor = allowed ? DS.Color.text : DS.Color.text2
         icon.image = NSImage(
             systemSymbolName: allowed ? "arrow.down.to.line" : "nosign", accessibilityDescription: nil)?
             .withSymbolConfiguration(
-                .init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [allowed ? DS.Palette.accent : DS.Palette.failure])))
+                .init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [allowed ? DS.Color.accent : DS.Color.dangerText])))
         setAccessibilityLabel(allowed ? "Drop to \(text)" : "Cannot drop: \(text)")
         isHidden = false
     }
@@ -90,7 +90,7 @@ public enum ShortcutText {
 /// Bold runs for matched characters (fuzzy match positions, search snippet highlights).
 public enum MatchHighlight {
     public static func attributed(
-        _ text: String, positions: [Int], font: NSFont, color: NSColor = DS.Palette.text, highlightColor: NSColor? = nil,
+        _ text: String, positions: [Int], font: NSFont, color: NSColor = DS.Color.text, highlightColor: NSColor? = nil,
         highlightFont: NSFont? = nil
     ) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
@@ -116,7 +116,7 @@ public enum MatchHighlight {
         return result
     }
 
-    public static func attributed(_ text: String, ranges: [Range<Int>], font: NSFont, color: NSColor = DS.Palette.secondaryText) -> NSAttributedString {
-        attributed(text, positions: ranges.flatMap { Array($0) }, font: font, color: color, highlightColor: DS.Palette.text)
+    public static func attributed(_ text: String, ranges: [Range<Int>], font: NSFont, color: NSColor = DS.Color.text2) -> NSAttributedString {
+        attributed(text, positions: ranges.flatMap { Array($0) }, font: font, color: color, highlightColor: DS.Color.text)
     }
 }

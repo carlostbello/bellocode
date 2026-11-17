@@ -122,7 +122,7 @@ public struct MergeRequestPanelView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: DS.Spacing.s) {
+            HStack(spacing: DS.Space.s6) {
                 Text("Merge Requests").font(.ds(.title))
                 Spacer()
                 Button {
@@ -135,18 +135,18 @@ public struct MergeRequestPanelView: View {
                 .help("Check GitLab now")
                 .disabled(model.links.isEmpty)
             }
-            .padding(.horizontal, DS.Spacing.m)
-            .padding(.vertical, DS.Spacing.s)
+            .padding(.horizontal, DS.Space.s8)
+            .padding(.vertical, DS.Space.s6)
             if model.service.instances.isEmpty || !model.service.instanceProblems.isEmpty {
                 connectNotice
             }
             SwiftUI.Color.ds.border.frame(height: 1)
             if model.threadID == nil {
-                Text("Select a thread to see its merge requests.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Spacing.m)
+                Text("Select a thread to see its merge requests.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Space.s8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: DS.Spacing.m) {
+                    VStack(alignment: .leading, spacing: DS.Space.s8) {
                         if model.links.isEmpty {
                             Text("No merge requests linked to this thread. Agents link them with link_merge_requests; an open MR for this thread's branch, or one a git push here prints, is linked automatically.")
                                 .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
@@ -164,7 +164,7 @@ public struct MergeRequestPanelView: View {
                                 .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.dangerText).fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .padding(DS.Spacing.m)
+                    .padding(DS.Space.s8)
                 }
             }
         }
@@ -175,7 +175,7 @@ public struct MergeRequestPanelView: View {
     }
 
     private var connectNotice: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.xs) {
+        VStack(alignment: .leading, spacing: DS.Space.s4) {
             if model.service.instances.isEmpty {
                 Label("Connect GitLab: add your instance and an access token in Settings ▸ GitLab.", systemImage: "link.badge.plus")
             }
@@ -186,12 +186,12 @@ public struct MergeRequestPanelView: View {
         }
         .font(.ds(.meta))
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.horizontal, DS.Spacing.m)
-        .padding(.bottom, DS.Spacing.s)
+        .padding(.horizontal, DS.Space.s8)
+        .padding(.bottom, DS.Space.s6)
     }
 
     private var linkField: some View {
-        HStack(spacing: DS.Spacing.s) {
+        HStack(spacing: DS.Space.s6) {
             TextField("MR URL or !123", text: Bindable(model).linkText)
                 .textFieldStyle(DSTextFieldStyle())
                 .onSubmit { Task { await model.link() } }
@@ -210,8 +210,8 @@ struct MergeRequestCard: View {
     var body: some View {
         let snapshot = model.service.snapshots[link.ref.url]
         let watch = model.threadID.flatMap { model.service.watch($0, link.ref.url) }
-        VStack(alignment: .leading, spacing: DS.Spacing.xs) {
-            HStack(alignment: .firstTextBaseline, spacing: DS.Spacing.s) {
+        VStack(alignment: .leading, spacing: DS.Space.s4) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
                 Image(systemName: snapshot?.state.symbolName ?? "arrow.triangle.pull")
                     .foregroundStyle(stateColor(snapshot)).accessibilityHidden(true)
                 Text("!\(link.ref.iid) ").monospacedDigit().foregroundStyle(SwiftUI.Color.ds.text3)
@@ -221,7 +221,7 @@ struct MergeRequestCard: View {
             .lineLimit(2)
             Text(detailLine(snapshot)).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1).truncationMode(.middle)
             if let snapshot {
-                HStack(spacing: DS.Spacing.s) {
+                HStack(spacing: DS.Space.s6) {
                     Text(snapshot.stateLabel)
                     Text("·").foregroundStyle(SwiftUI.Color.ds.text4)
                     Text(snapshot.approvals.label)
@@ -237,7 +237,7 @@ struct MergeRequestCard: View {
                 if let pipeline = snapshot.pipeline, !pipeline.jobs.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(pipeline.jobs.prefix(12)) { job in
-                            HStack(spacing: DS.Spacing.xs) {
+                            HStack(spacing: DS.Space.s4) {
                                 Text(job.status == "success" ? "✓" : job.isFailure ? "✕" : job.status == "running" ? "◌" : "–")
                                     .foregroundStyle(job.isFailure ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3).frame(width: 12)
                                 Text(job.name).lineLimit(1)
@@ -256,7 +256,7 @@ struct MergeRequestCard: View {
                             Button("Pipeline #" + String(pipeline.id)) { model.openURL(url, false) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                         }
                     }
-                    .padding(.leading, DS.Spacing.l)
+                    .padding(.leading, DS.Space.s12)
                 }
             } else if let problem = model.service.problems[link.ref.url] {
                 Label(problem, systemImage: "exclamationmark.triangle").font(.ds(.meta))
@@ -265,7 +265,7 @@ struct MergeRequestCard: View {
                 Text("Checking GitLab…").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
             }
             watchLine(watch)
-            HStack(spacing: DS.Spacing.s) {
+            HStack(spacing: DS.Space.s6) {
                 Button(link.watching ? "Stop Watching" : "Watch") { Task { await model.setWatching(link, !link.watching) } }
                     .help(link.watching ? "Stop waking this thread for this MR" : "Wake this thread when the pipeline finishes, approvals change, comments arrive, or it is merged or closed")
                 Button("Open") { if let url = URL(string: snapshot?.webURL ?? link.ref.url) { model.openURL(url, false) } }
@@ -279,7 +279,7 @@ struct MergeRequestCard: View {
         }
         .buttonStyle(DSButtonStyle(.outline))
         .toggleStyle(DSToggleStyle(.checkbox))
-        .padding(DS.Spacing.s)
+        .padding(DS.Space.s6)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SwiftUI.Color.ds.border, lineWidth: 0.5))
         .accessibilityElement(children: .contain)
@@ -390,7 +390,7 @@ public struct GitLabSettingsView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DS.Spacing.m) {
+        VStack(alignment: .leading, spacing: DS.Space.s8) {
             Text("Merge requests are read from your GitLab instance with a personal or project access token (read_api scope). The token is kept in your Keychain, sent only to that instance, and never shown again or given to agents.")
                 .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             if model.service.instances.isEmpty {
@@ -413,13 +413,21 @@ public struct GitLabSettingsView: View {
                 }
                 SwiftUI.Color.ds.border.frame(height: 1)
             }
-            Form {
-                TextField("Instance URL:", text: Bindable(model).baseURL, prompt: Text("https://gitlab.example.com"))
-                SecureField("Access token:", text: Bindable(model).token, prompt: Text("glpat-…"))
-                    .accessibilityLabel("GitLab access token")
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
+                HStack(spacing: DS.Space.s10) {
+                    Text("Instance URL").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2).frame(width: 96, alignment: .trailing)
+                    TextField("", text: Bindable(model).baseURL, prompt: Text("https://gitlab.example.com")).textFieldStyle(DSTextFieldStyle())
+                        .accessibilityLabel("Instance URL")
+                }
+                HStack(spacing: DS.Space.s10) {
+                    Text("Access token").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2).frame(width: 96, alignment: .trailing)
+                    SecureField("", text: Bindable(model).token, prompt: Text("glpat-…")).textFieldStyle(DSTextFieldStyle())
+                        .accessibilityLabel("GitLab access token")
+                }
                 HStack {
                     Spacer()
                     Button("Add Instance") { Task { await model.save() } }
+                        .buttonStyle(DSButtonStyle(.primary, size: .small))
                         .disabled(model.baseURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }

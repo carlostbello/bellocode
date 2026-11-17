@@ -175,8 +175,11 @@ final class ContentSplitViewController: NSSplitViewController {
 }
 
 /// The right panel: a 40 pt pill tab bar (`DSTabBar`, visual-language.md §6 "Right panel") over the selected tab's
-/// content, below the window's 52 pt header bar. Tab content is created on first selection. Tabs that do not fit drop
-/// their titles from the end (icon only, the title stays their accessibility label); the selected tab keeps its title.
+/// content, below the window's 52 pt header bar. Tab content is created on first selection.
+///
+/// Overflow is one rule for the whole bar, never per tab (`Density`): every tab shows icon + title + count when they
+/// all fit; otherwise every unselected tab is icon + count and only the selected one keeps its title; in the narrowest
+/// panels every tab is icon + count. Icon-only tabs carry their title as tooltip and accessibility label.
 @MainActor
 final class RightPanelViewController: NSViewController {
     private let tabs: [RightPanelTab]
@@ -186,7 +189,13 @@ final class RightPanelViewController: NSViewController {
     private(set) var selectedID: String?
     /// Live counts shown after a tab's title ("Changes 3", "Agents 2"); nil hides the count.
     private var counts: [String: Int] = [:]
-    private var compactIDs: Set<String> = []
+    /// How much of each tab the bar shows; the widest that fits.
+    enum Density: Int, CaseIterable, Comparable {
+        case full, selectedTitle, icons
+        static func < (a: Density, b: Density) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    private(set) var density: Density = .full
     private var lastFitWidth: CGFloat = 0
     /// Counts or the selection changed since the last fit.
     private var fitIsStale = true
@@ -247,36 +256,32 @@ final class RightPanelViewController: NSViewController {
 
     private func items() -> [DSChoiceItem] {
         tabs.map { tab in
-            let compact = compactIDs.contains(tab.id) && tab.id != selectedID
+            let titled = switch density {
+            case .full: true
+            case .selectedTitle: tab.id == selectedID
+            case .icons: false
+            }
             return DSChoiceItem(
-                id: tab.id, title: compact ? "" : tab.title, symbolName: tab.symbolName, count: compact ? nil : counts[tab.id],
+                id: tab.id, title: titled ? tab.title : "", symbolName: tab.symbolName, count: counts[tab.id],
                 accessibilityLabel: tab.title)
         }
     }
 
-    /// Drops titles from the last tabs until the bar fits the panel (and gives them back when it widens). Measures
-    /// the bar itself, so the fit is exact.
+    /// Picks the widest density whose bar fits the panel (and gives titles back when it widens). Measures the bar
+    /// itself, so the fit is exact.
     private func fitTabs() {
         let available = view.bounds.width - DS.Space.s8 * 2
         guard available > 0, available != lastFitWidth || fitIsStale else { return }
         lastFitWidth = available
         fitIsStale = false
-        var compact: Set<String> = []
-        func fits(_ candidate: Set<String>) -> Bool {
-            compactIDs = candidate
+        let previous = density
+        for candidate in Density.allCases {
+            density = candidate
             tabBar.setItems(items())
             tabBar.selectedID = selectedID
-            return tabBar.intrinsicContentSize.width <= available
+            if tabBar.intrinsicContentSize.width <= available { break }
         }
-        let previous = compactIDs
-        if !fits(compact) {
-            for tab in tabs.reversed() where tab.id != selectedID {
-                compact.insert(tab.id)
-                if fits(compact) { break }
-            }
-        }
-        if compactIDs == previous { return }
-        tabBar.needsLayout = true
+        if density != previous { tabBar.needsLayout = true }
     }
 
     /// Sets a tab's count ("Changes 3"); nil or 0 hides it.
@@ -285,9 +290,8 @@ final class RightPanelViewController: NSViewController {
         guard counts[id] != value, let tab = tabs.first(where: { $0.id == id }) else { return }
         counts[id] = value
         fitIsStale = true
-        if !compactIDs.contains(id) || id == selectedID {
-            tabBar.update(DSChoiceItem(id: id, title: tab.title, symbolName: tab.symbolName, count: value, accessibilityLabel: tab.title))
-        }
+        let titled = density == .full || (density == .selectedTitle && id == selectedID)
+        tabBar.update(DSChoiceItem(id: id, title: titled ? tab.title : "", symbolName: tab.symbolName, count: value, accessibilityLabel: tab.title))
         view.needsLayout = true
     }
 
@@ -296,7 +300,7 @@ final class RightPanelViewController: NSViewController {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let changed = selectedID != id
         if changed { fitIsStale = true }
-        let titlesChange = changed && (compactIDs.contains(id) || compactIDs.contains(selectedID ?? ""))
+        let titlesChange = changed && density == .selectedTitle
         selectedID = id
         if titlesChange {
             // The selected tab always shows its title; the bar re-fits on the next layout.

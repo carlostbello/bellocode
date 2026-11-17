@@ -24,6 +24,10 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var environmentBanner: EnvironmentBannerHost?
     private(set) var queuedPrompts: QueuedPromptsView?
     private(set) var unconfirmedSends: UnconfirmedSendsView?
+    /// Status-unknown, delivery-unknown and queued rows in one `raised` tray attached above the card and composer.
+    private(set) var attachedTray: AttachedTrayView?
+    private var attachment: (trayToRequests: NSLayoutConstraint, requestsToComposer: NSLayoutConstraint)?
+    private var attachmentLoop: ObservationLoop?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
@@ -54,7 +58,10 @@ final class ThreadContainerViewController: NSViewController {
         loop = ObservationLoop { [weak self] in self?.update() }
     }
 
-    isolated deinit { loop?.cancel() }
+    isolated deinit {
+        loop?.cancel()
+        attachmentLoop?.cancel()
+    }
 
     /// Reads the selection (observed) and rebuilds only when it changed; marks a finished thread viewed once shown.
     private func update() {
@@ -129,6 +136,10 @@ final class ThreadContainerViewController: NSViewController {
         environmentBanner = nil
         queuedPrompts = nil
         unconfirmedSends = nil
+        attachedTray = nil
+        attachment = nil
+        attachmentLoop?.cancel()
+        attachmentLoop = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -157,7 +168,8 @@ final class ThreadContainerViewController: NSViewController {
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
-        let banner: NSView
+        let environmentView: NSView
+        let tray: NSView
         if let thread = context.thread {
             let unknown = StatusUnknownBanner(thread: thread, engine: workspace.engine)
             statusBanner = unknown
@@ -169,41 +181,65 @@ final class ThreadContainerViewController: NSViewController {
             let directory = context.directory
             let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })
             environmentBanner = environment
-            let column = NSStackView(views: [environment, unknown, unconfirmed, queued])
-            column.orientation = .vertical
-            column.alignment = .leading
-            column.spacing = 0
-            column.detachesHiddenViews = true
-            column.translatesAutoresizingMaskIntoConstraints = false
-            for view in [environment, unknown, unconfirmed, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
-            banner = column
+            environmentView = environment
+            let attached = AttachedTrayView(rows: [unknown, unconfirmed, queued])
+            attachedTray = attached
+            tray = attached
         } else {
-            banner = NSView()
-            banner.translatesAutoresizingMaskIntoConstraints = false
-            banner.heightAnchor.constraint(equalToConstant: 0).isActive = true
+            environmentView = Self.collapsedSpacer()
+            tray = Self.collapsedSpacer()
         }
-        for subview in [transcriptView, requests, banner, composerView] { container.addSubview(subview) }
-        let column = DS.Spacing.readableWidth
+        // Back to front: the tray, the request card, the composer. Each overlaps the next by `attachedOverlap`, so the
+        // composer covers the card's bottom edge and the card (or composer) covers the tray's: one object (§6).
+        for subview in [transcriptView, environmentView, tray, requests, composerView] { container.addSubview(subview) }
+        let trayToRequests = requests.topAnchor.constraint(equalTo: tray.bottomAnchor)
+        let requestsToComposer = composerView.topAnchor.constraint(equalTo: requests.bottomAnchor)
+        attachment = (trayToRequests, requestsToComposer)
+        let column = DS.Size.contentMaxWidth
         NSLayoutConstraint.activate([
             // Full width: the transcript centres its own text column (TranscriptKit), so its scroller sits at the edge.
             transcriptView.topAnchor.constraint(equalTo: container.topAnchor),
             transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
-            banner.topAnchor.constraint(equalTo: requests.bottomAnchor),
-            composerView.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: DS.Spacing.s),
-            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
+            environmentView.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Space.s8),
+            tray.topAnchor.constraint(equalTo: environmentView.bottomAnchor),
+            trayToRequests,
+            requestsToComposer,
+            composerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Space.s8),
         ])
-        for docked in [requests, banner, composerView] {
+        for docked in [environmentView, tray, requests, composerView] {
             let width = docked.widthAnchor.constraint(equalToConstant: column)
             width.priority = Self.columnPreference
             NSLayoutConstraint.activate([
                 docked.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
+                docked.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Size.gutter),
                 width,
             ])
         }
+        attachmentLoop = ObservationLoop { [weak self] in self?.updateAttachment() }
         return container
+    }
+
+    private static func collapsedSpacer() -> NSView {
+        let view = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.heightAnchor.constraint(equalToConstant: 0).isActive = true
+        return view
+    }
+
+    /// Overlaps whatever is shown: the tray onto the card (or the composer), the card onto the composer. Constants
+    /// only, so a request arriving moves nothing but the column above the composer (no animation, rule 17).
+    private func updateAttachment() {
+        guard let (trayToRequests, requestsToComposer) = attachment else { return }
+        let overlap = DS.Size.attachedOverlap
+        let hasRequests = requestStackController?.hasRequests ?? false
+        // Observed reads: the same state the tray's rows show themselves for.
+        let hasTray: Bool = if let thread = context?.thread {
+            !thread.queue.isEmpty || !thread.unconfirmedSends.isEmpty || (statusBanner?.isShowing ?? false)
+        } else { false }
+        attachedTray?.render(visible: hasTray)
+        trayToRequests.constant = hasTray ? -overlap : 0
+        requestsToComposer.constant = hasRequests ? -overlap : 0
     }
 
     private func makeDraft(_ context: ThreadSurfaceContext) -> NSView {
@@ -225,17 +261,17 @@ final class ThreadContainerViewController: NSViewController {
         self.composer = composer
         let composerView = adopt(composer)
         for subview in [heading, path, composerView] { container.addSubview(subview) }
-        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
+        let width = composerView.widthAnchor.constraint(equalToConstant: DS.Size.contentMaxWidth)
         width.priority = Self.columnPreference
         NSLayoutConstraint.activate([
             heading.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            heading.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
-            path.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: DS.Spacing.xs),
+            heading.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Space.s16),
+            path.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: DS.Space.s4),
             path.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Spacing.xl),
+            composerView.topAnchor.constraint(equalTo: path.bottomAnchor, constant: DS.Space.s16),
             composerView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Spacing.xl),
-            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.columnMargin),
+            composerView.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: DS.Space.s16),
+            composerView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Size.gutter),
             width,
         ])
         return container

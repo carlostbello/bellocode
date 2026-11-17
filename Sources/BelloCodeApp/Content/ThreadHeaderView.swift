@@ -70,6 +70,12 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         stack.alignment = .centerY
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // Crumbs give way (truncate, then detach from the end) instead of drawing under Open and Commit.
+        stack.setClippingResistancePriority(.defaultLow, for: .horizontal)
+        for (index, view) in [containerCrumb, statusCrumb, statusDot, placeCrumb, dot].enumerated() {
+            stack.setVisibilityPriority(NSStackView.VisibilityPriority(rawValue: Float(400 + index * 50)), for: view)
+        }
+        clipsToBounds = true
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),

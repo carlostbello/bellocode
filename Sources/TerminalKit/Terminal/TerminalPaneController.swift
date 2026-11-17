@@ -415,44 +415,44 @@ public struct TerminalLink {
     public let openInDefaultBrowser: @MainActor () -> Void
 }
 
-/// The bar under a terminal that has ended ("Exited (1)  [Restart] [Close]") or is read-only ("[Take Control]").
+/// The bar under a terminal that has ended ("Exited (1)  [Close] [Restart]") or is read-only ("[Take Control]"): 32 pt,
+/// `canvas` with a `border` hairline, glyph + word in `label text2`, ghost secondary and outline primary (§6 Terminal).
 @MainActor
 final class TerminalEndedBar: NSView {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let primary = NSButton(title: "", target: nil, action: nil)
-    private let secondary = NSButton(title: "", target: nil, action: nil)
+    private let primary = DSButton(title: "", variant: .outline, size: .small)
+    private let secondary = DSButton(title: "", variant: .ghost, size: .small)
     var onPrimary: (() -> Void)?
     var onSecondary: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
-        label.textColor = .secondaryLabelColor
+        label.font = DS.TextRole.label.font
+        label.textColor = DS.Color.text2
         label.lineBreakMode = .byTruncatingTail
-        for button in [primary, secondary] {
-            button.bezelStyle = .push
-            button.controlSize = .small
-            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-            button.target = self
-        }
+        for button in [primary, secondary] { button.target = self }
+        secondary.isMuted = true
         primary.action = #selector(primaryPressed)
         secondary.action = #selector(secondaryPressed)
-        primary.keyEquivalent = ""
-        let stack = NSStackView(views: [icon, label, NSView(), secondary, primary])
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let stack = NSStackView(views: [icon, label, spacer, secondary, primary])
         stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 8)
+        stack.alignment = .centerY
+        stack.spacing = DS.Space.s6
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: DS.Space.s12, bottom: 4, right: DS.Space.s8)
         stack.translatesAutoresizingMaskIntoConstraints = false
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(stack)
-        let separator = NSBox()
-        separator.boxType = .separator
+        let separator = DSDivider()
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
         NSLayoutConstraint.activate([
             separator.topAnchor.constraint(equalTo: topAnchor), separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: DS.Border.hairline),
+            heightAnchor.constraint(equalToConstant: DS.Size.terminalTabStrip),
             stack.topAnchor.constraint(equalTo: separator.bottomAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
@@ -462,15 +462,15 @@ final class TerminalEndedBar: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
-        dirtyRect.fill()
+        DS.Color.canvas.setFill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
     }
 
     func show(text: String, symbol: String, primary primaryTitle: String, secondary secondaryTitle: String?) {
         label.stringValue = text
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
-        icon.contentTintColor = .secondaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointRow, weight: .regular))
+        icon.contentTintColor = DS.Color.icon
         primary.title = primaryTitle
         secondary.title = secondaryTitle ?? ""
         secondary.isHidden = secondaryTitle == nil

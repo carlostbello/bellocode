@@ -26,7 +26,8 @@ final class RequestStackSurfaceController: NSViewController, FocusableSurface {
         let container = NSView()
         container.setAccessibilityLabel("Pending requests")
         if let thread = context.thread {
-            let (view, model) = AgentUIFactories.pendingRequestStack(thread: thread, engine: context.engine, style: AppStyle.agentUI)
+            let (view, model) = AgentUIFactories.pendingRequestStack(
+                thread: thread, engine: context.engine, style: AppStyle.agentUI, attachedOverlap: DS.Size.attachedOverlap)
             self.model = model
             stackView = view
             container.addSubview(view)

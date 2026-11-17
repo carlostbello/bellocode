@@ -25,8 +25,8 @@ final class BrowserContentView: NSView {
         viewportHost.wantsLayer = true
         snapshotView.imageScaling = .scaleAxesIndependently
         snapshotView.isHidden = true
-        sizeLabel.font = DS.Typography.current.caption
-        sizeLabel.textColor = DS.Palette.secondaryText
+        sizeLabel.font = .monospacedDigitSystemFont(ofSize: DS.TextRole.meta.font.pointSize, weight: .regular)
+        sizeLabel.textColor = DS.Color.text3
         sizeLabel.alignment = .center
         failure.button.target = self
         failure.button.action = #selector(retry)
@@ -49,8 +49,9 @@ final class BrowserContentView: NSView {
     private func refreshBackground() {
         let viewportMode = tab?.viewport != nil
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (viewportMode ? DS.Palette.groupFill : DS.Palette.contentBackground).cgColor
-            viewportHost.layer?.borderColor = DS.Palette.separator.cgColor
+            // Responsive mode: the page sits on the `raised` tone with a `borderStrong` edge.
+            layer?.backgroundColor = (viewportMode ? DS.Color.raised : DS.Color.canvas).cgColor
+            viewportHost.layer?.borderColor = DS.Color.borderStrong.cgColor
         }
     }
 
@@ -172,18 +173,22 @@ final class BrowserContentView: NSView {
     @objc private func retry() { onRetry?() }
 }
 
-/// The outline around the element the agent acts on.
+/// The outline around the element the agent acts on: the agent's tone (`infoText` ring 2 pt, `info` 12 % fill, `r.xs`).
 final class BrowserHighlightView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.borderColor = NSColor.controlAccentColor.cgColor
         layer?.borderWidth = 2
-        layer?.cornerRadius = 4
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        layer?.cornerRadius = DS.Radius.xs
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.borderColor = DS.Color.infoText.cgColor
+        layer?.backgroundColor = DS.Color.info.withAlphaComponent(0.12).cgColor
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -208,17 +213,18 @@ final class AgentCursorView: NSView {
             shadow.shadowOffset = NSSize(width: 0, height: -1)
             return shadow
         }()
-        badge.font = .systemFont(ofSize: 10, weight: .semibold)
-        badge.textColor = .white
+        // The agent tag: a solid `info` pill (r.xs, `metaEmph`, white) so it reads on any page.
+        badge.font = DS.TextRole.metaEmph.font
+        badge.textColor = DS.Color.onAccent
         badge.drawsBackground = true
-        badge.backgroundColor = .controlAccentColor
+        badge.backgroundColor = DS.Color.info
         badge.isBordered = false
         badge.wantsLayer = true
-        badge.layer?.cornerRadius = 4
+        badge.layer?.cornerRadius = DS.Radius.xs
         badge.layer?.masksToBounds = true
-        badge.frame = NSRect(x: 18, y: 20, width: 40, height: 16)
+        badge.frame = NSRect(x: 18, y: 20, width: 44, height: DS.Size.pill - 2)
         badge.alignment = .center
-        ring.borderColor = NSColor.controlAccentColor.cgColor
+        ring.borderColor = DS.Color.info.cgColor
         ring.borderWidth = 2
         ring.frame = CGRect(x: -10, y: -10, width: 20, height: 20)
         ring.cornerRadius = 10

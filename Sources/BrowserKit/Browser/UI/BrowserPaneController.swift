@@ -47,7 +47,7 @@ public final class BrowserPaneController: NSViewController {
     private let footer = NSView()
     private let footerIcon = NSImageView()
     private let footerLabel = NSTextField(labelWithString: "")
-    private let controlSwitch = NSSwitch()
+    private let controlSwitch = DSToggle(kind: .switch)
     private let controlLabel = NSTextField(labelWithString: "Agent control")
     private var observerID: UUID?
     private var observedSet: BrowserTabSet?
@@ -77,8 +77,8 @@ public final class BrowserPaneController: NSViewController {
         strip.delegate = self
         banners.orientation = .vertical
         banners.alignment = .width
-        banners.spacing = DS.Spacing.xs
-        banners.edgeInsets = NSEdgeInsets(top: DS.Spacing.xs, left: DS.Spacing.s, bottom: DS.Spacing.xs, right: DS.Spacing.s)
+        banners.spacing = DS.Space.s6
+        banners.edgeInsets = NSEdgeInsets(top: DS.Space.s6, left: DS.Space.s8, bottom: DS.Space.s6, right: DS.Space.s8)
         banners.detachesHiddenViews = true
         findBar.isHidden = true
         shelf.isHidden = true
@@ -86,10 +86,10 @@ public final class BrowserPaneController: NSViewController {
         content.onRetry = { [weak self] in self?.set?.selectedTab?.reload() }
         configureToolbar()
         configureFooter()
-        let separators = (0..<3).map { _ -> NSBox in
-            let box = NSBox()
-            box.boxType = .separator
-            return box
+        let separators = (0..<3).map { _ -> DSDivider in
+            let divider = DSDivider()
+            divider.heightAnchor.constraint(equalToConstant: DS.Border.hairline).isActive = true
+            return divider
         }
         let stack = NSStackView(views: [strip, separators[0], toolbar, banners, findBar, content, separators[1], shelf, separators[2], footer])
         stack.orientation = .vertical
@@ -101,7 +101,7 @@ public final class BrowserPaneController: NSViewController {
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: root.topAnchor), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            findBar.heightAnchor.constraint(equalToConstant: 30), footer.heightAnchor.constraint(equalToConstant: 24),
+            findBar.heightAnchor.constraint(equalToConstant: DS.Size.terminalTabStrip), footer.heightAnchor.constraint(equalToConstant: 28),
             banners.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         content.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -311,7 +311,7 @@ public final class BrowserPaneController: NSViewController {
             for bar in shown {
                 banners.addArrangedSubview(bar)
                 bar.translatesAutoresizingMaskIntoConstraints = false
-                bar.widthAnchor.constraint(equalTo: banners.widthAnchor, constant: -2 * DS.Spacing.s).isActive = true
+                bar.widthAnchor.constraint(equalTo: banners.widthAnchor, constant: -2 * DS.Space.s8).isActive = true
             }
         }
         banners.isHidden = shown.isEmpty
@@ -321,13 +321,12 @@ public final class BrowserPaneController: NSViewController {
 
     private func configureFooter() {
         footerIcon.imageScaling = .scaleProportionallyDown
-        footerLabel.font = DS.Typography.current.caption
-        footerLabel.textColor = DS.Palette.secondaryText
+        footerLabel.font = DS.TextRole.meta.font
+        footerLabel.textColor = DS.Color.text3
         footerLabel.lineBreakMode = .byTruncatingMiddle
         footerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        controlLabel.font = DS.Typography.current.caption
-        controlLabel.textColor = DS.Palette.secondaryText
-        controlSwitch.controlSize = .mini
+        controlLabel.font = DS.TextRole.meta.font
+        controlLabel.textColor = DS.Color.text2
         controlSwitch.target = self
         controlSwitch.action = #selector(controlSwitchChanged)
         controlSwitch.setAccessibilityLabel("Let this thread's agent control the browser")
@@ -336,14 +335,14 @@ public final class BrowserPaneController: NSViewController {
             footer.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            footerIcon.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: DS.Spacing.m),
+            footerIcon.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: DS.Space.s12),
             footerIcon.centerYAnchor.constraint(equalTo: footer.centerYAnchor), footerIcon.widthAnchor.constraint(equalToConstant: 12),
-            footerLabel.leadingAnchor.constraint(equalTo: footerIcon.trailingAnchor, constant: DS.Spacing.xs),
+            footerLabel.leadingAnchor.constraint(equalTo: footerIcon.trailingAnchor, constant: DS.Space.s6),
             footerLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlLabel.leadingAnchor, constant: -DS.Spacing.m),
-            controlLabel.trailingAnchor.constraint(equalTo: controlSwitch.leadingAnchor, constant: -DS.Spacing.xs),
+            footerLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlLabel.leadingAnchor, constant: -DS.Space.s8),
+            controlLabel.trailingAnchor.constraint(equalTo: controlSwitch.leadingAnchor, constant: -DS.Space.s6),
             controlLabel.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-            controlSwitch.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -DS.Spacing.m),
+            controlSwitch.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -DS.Space.s12),
             controlSwitch.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
         ])
         footer.setAccessibilityElement(true)
@@ -370,10 +369,10 @@ public final class BrowserPaneController: NSViewController {
         let status = model.status
         let shared = set?.sharedTabs.count ?? 0
         let (symbol, tint): (String, NSColor) = switch status {
-        case .attached: (model.running.isEmpty ? "sparkle" : "cursorarrow.motionlines", DS.Palette.accent)
-        case .disabled, .off, .parked: ("sparkle", DS.Palette.secondaryText)
-        case .connecting, .retrying, .waitingForServer: ("arrow.triangle.2.circlepath", DS.Palette.secondaryText)
-        case .replaced, .unavailable, .incompatible: ("exclamationmark.triangle.fill", DS.Palette.attention)
+        case .attached: (model.running.isEmpty ? "sparkle" : "cursorarrow.motionlines", DS.Color.infoText)
+        case .disabled, .off, .parked: ("sparkle", DS.Color.text3)
+        case .connecting, .retrying, .waitingForServer: ("arrow.triangle.2.circlepath", DS.Color.text3)
+        case .replaced, .unavailable, .incompatible: ("exclamationmark.triangle", DS.Color.warningText)
         }
         footerIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         footerIcon.contentTintColor = tint
@@ -383,7 +382,7 @@ public final class BrowserPaneController: NSViewController {
         footer.setAccessibilityLabel("\(status.label)\(tabs). \(status.detail) \(where_)")
         controlSwitch.isHidden = false
         controlLabel.isHidden = false
-        controlSwitch.state = engine.browser.isControlEnabled(sessionID) ? .on : .off
+        controlSwitch.isOn = engine.browser.isControlEnabled(sessionID)
     }
 
     @objc private func controlSwitchChanged() { perform(.toggleAgentControl) }
@@ -418,7 +417,7 @@ public final class BrowserPaneController: NSViewController {
     @objc private func pickPressed() { perform(.pickElement) }
     @objc private func sharePressed() { perform(.shareTab) }
 
-    @objc private func viewportPressed(_ sender: NSButton) {
+    @objc private func viewportPressed(_ sender: NSView) {
         let menu = NSMenu()
         let current = set?.selectedTab?.viewport
         let fill = NSMenuItem(title: "Fill Pane", action: #selector(viewportChosen(_:)), keyEquivalent: "")
@@ -470,7 +469,7 @@ public final class BrowserPaneController: NSViewController {
         }
     }
 
-    @objc private func appearancePressed(_ sender: NSButton) {
+    @objc private func appearancePressed(_ sender: NSView) {
         let menu = NSMenu()
         for (index, appearance) in PageAppearance.allCases.enumerated() {
             let item = NSMenuItem(title: appearance.title, action: #selector(appearanceChosen(_:)), keyEquivalent: "")
@@ -486,7 +485,7 @@ public final class BrowserPaneController: NSViewController {
         perform([BrowserPaneCommand.appearanceSystem, .appearanceLight, .appearanceDark][sender.tag])
     }
 
-    @objc private func morePressed(_ sender: NSButton) {
+    @objc private func morePressed(_ sender: NSView) {
         let menu = NSMenu()
         var entries: [(String, BrowserPaneCommand)] = [
             ("Open in Default Browser", .openInDefaultBrowser), ("Find in Page…", .findInPage),
@@ -760,6 +759,12 @@ final class ClosureMenuItem: NSMenuItem {
 @MainActor
 final class BrowserPaneView: NSView {
     weak var pane: BrowserPaneController?
+
+    /// The docked pane is solid `canvas` (tab strip, toolbar, banners, shelf and footer included).
+    override func draw(_ dirtyRect: NSRect) {
+        DS.Color.canvas.setFill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
+    }
 
     @objc func findInTranscript(_ sender: Any?) { pane?.perform(.findInPage) }
     @objc func findNextInTranscript(_ sender: Any?) { pane.map { $0.find($0.findBarText, forward: true) } }

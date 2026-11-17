@@ -47,15 +47,8 @@ import Testing
         #expect(DS.ColorToken.text4.darkHighContrast == DS.ColorToken.text3.darkHighContrast)
     }
 
-    @Test func legacyNamesPointAtTheNewTokens() {
-        #expect(DS.Palette.text === DS.Color.text)
-        #expect(DS.Palette.secondaryText === DS.Color.text2)
-        #expect(DS.Palette.cardBackground === DS.Color.raised)
-        #expect(DS.Palette.contentBackground === DS.Color.canvas)
-        #expect(DS.Palette.attention === DS.Color.warningText)
-        #expect(DS.Palette.failure === DS.Color.dangerText)
+    @Test func syntaxNamesPointAtTheTokens() {
         #expect(DS.Syntax.keyword === DS.Color.syntaxKeyword)
-        #expect(DS.Radius.card == DS.Radius.xl)
     }
 
     /// WCAG AA (4.5:1) for text tokens on the surfaces they are used on, in all four variants.
@@ -101,7 +94,7 @@ import Testing
             #expect(role.lineHeight(base: 16) == role.spec.lineHeight + 3, "\(role)")
         }
         #expect(DS.Typography(baseSize: 16).font(.label).pointSize == 15)
-        #expect(DS.Typography(baseSize: 16).sectionHeader.pointSize == 14)
+        #expect(DS.Typography(baseSize: 16).font(.metaEmph).pointSize == 14)
     }
 
     @Test func dumpListsEveryToken() {

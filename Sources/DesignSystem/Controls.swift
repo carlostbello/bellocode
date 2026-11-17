@@ -1,7 +1,7 @@
 import AppKit
 
-// Shared AppKit controls that predate the visual language, restyled onto it (CountBadge, EmptyStateView, UndoToastView)
-// or kept for the shell restyle (MonogramView, SidebarRowView, ToolbarButton). New controls live in `Controls/`.
+// Shared AppKit controls that predate the visual language, restyled onto it (CountBadge, EmptyStateView, UndoToastView).
+// New controls live in `Controls/`.
 
 // MARK: - Count badge
 
@@ -66,160 +66,6 @@ public final class CountBadge: NSView {
     }
 }
 
-// MARK: - Monogram
-
-/// A project's two-letter monogram on a colour derived from its name (stable across launches).
-///
-/// - Deprecated: coloured monograms are out of the visual language (audit #5). Use `ProjectIcon` (folder glyph or
-///   favicon). Kept until the shell restyle (restyle-plan step 1) removes its last use.
-@MainActor
-public final class MonogramView: NSView {
-    private let label = NSTextField(labelWithString: "")
-    public var name = "" {
-        didSet {
-            guard name != oldValue else { return }
-            label.stringValue = Self.initials(name)
-            needsDisplay = true
-        }
-    }
-
-    public override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        label.font = .systemFont(ofSize: 8.5, weight: .bold)
-        label.textColor = .white
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            widthAnchor.constraint(equalToConstant: 16),
-            heightAnchor.constraint(equalToConstant: 16),
-        ])
-        setAccessibilityElement(false)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    public override var wantsUpdateLayer: Bool { true }
-
-    public override func updateLayer() {
-        layer?.cornerRadius = DS.Radius.small
-        layer?.backgroundColor = Self.color(for: name).cgColor
-    }
-
-    /// Up to two letters: the first letters of the first two words, else the first two characters.
-    public nonisolated static func initials(_ name: String) -> String {
-        let words = name.split { !$0.isLetter && !$0.isNumber }
-        let letters: [Character] = words.count >= 2 ? [words[0].first!, words[1].first!] : Array(name.filter { $0.isLetter || $0.isNumber }.prefix(2))
-        return String(letters).uppercased()
-    }
-
-    /// One of a fixed palette of system colours, chosen by a stable hash (not `hashValue`, which is seeded per run).
-    public nonisolated static func paletteIndex(for name: String, paletteSize: Int = 12) -> Int {
-        var hash: UInt32 = 2_166_136_261
-        for byte in name.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
-        return Int(hash % UInt32(paletteSize))
-    }
-
-    private static let palette: [NSColor] = [
-        .systemBlue, .systemPurple, .systemPink, .systemRed, .systemOrange, .systemYellow, .systemGreen, .systemMint,
-        .systemTeal, .systemCyan, .systemIndigo, .systemBrown,
-    ]
-
-    static func color(for name: String) -> NSColor { palette[paletteIndex(for: name)] }
-}
-
-// MARK: - Sidebar row
-
-/// A dense sidebar row: leading image, title (inline-editable), trailing detail text and an optional badge. Hosts in
-/// an `NSOutlineView`/`NSTableView` (it is an `NSTableCellView`, so `textField` editing and accessibility work).
-@MainActor
-open class SidebarRowView: NSTableCellView {
-    public let leading = NSImageView()
-    public let monogram = MonogramView()
-    public let title = NSTextField(labelWithString: "")
-    public let detail = NSTextField(labelWithString: "")
-    public let badge = CountBadge()
-    /// A small accent dot before the title (unread). Paired with an accessibility value, never colour alone.
-    public let unreadDot = NSView()
-    /// Shown on hover and on keyboard selection (for example "New thread" on a project row).
-    public let accessoryButton = NSButton()
-    private var leadingConstraint: NSLayoutConstraint!
-
-    public override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        let typography = DS.Typography.current
-        title.font = typography.body
-        title.lineBreakMode = .byTruncatingTail
-        title.cell?.truncatesLastVisibleLine = true
-        // Below every split-view holding priority (250-260): a long title truncates instead of widening the sidebar.
-        title.setContentCompressionResistancePriority(.defaultLow - 10, for: .horizontal)
-        title.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        detail.font = typography.caption
-        detail.textColor = DS.Palette.secondaryText
-        detail.setContentCompressionResistancePriority(.required, for: .horizontal)
-        detail.setContentHuggingPriority(.required, for: .horizontal)
-        leading.imageScaling = .scaleProportionallyDown
-        unreadDot.wantsLayer = true
-        unreadDot.layer?.cornerRadius = 3
-        unreadDot.isHidden = true
-        accessoryButton.isBordered = false
-        accessoryButton.bezelStyle = .accessoryBarAction
-        accessoryButton.imagePosition = .imageOnly
-        accessoryButton.isHidden = true
-        monogram.isHidden = true
-        textField = title
-        imageView = leading
-
-        let stack = NSStackView(views: [leading, monogram, unreadDot, title, badge, detail, accessoryButton])
-        stack.orientation = .horizontal
-        stack.spacing = DS.Spacing.s
-        stack.alignment = .centerY
-        stack.setCustomSpacing(DS.Spacing.xs, after: unreadDot)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.detachesHiddenViews = true
-        addSubview(stack)
-        leadingConstraint = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Spacing.xxs)
-        NSLayoutConstraint.activate([
-            leadingConstraint,
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.s),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            leading.widthAnchor.constraint(equalToConstant: 16),
-            leading.heightAnchor.constraint(equalToConstant: 16),
-            unreadDot.widthAnchor.constraint(equalToConstant: 6),
-            unreadDot.heightAnchor.constraint(equalToConstant: 6),
-            accessoryButton.widthAnchor.constraint(equalToConstant: 18),
-            accessoryButton.heightAnchor.constraint(equalToConstant: 18),
-        ])
-    }
-
-    @available(*, unavailable)
-    public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    open override func updateLayer() {
-        // Unread is an `infoText` dot plus a medium title (visual-language.md §6 Sidebar), never the accent.
-        unreadDot.layer?.backgroundColor = DS.Color.infoText.cgColor
-    }
-
-    open override var wantsUpdateLayer: Bool { true }
-
-    public var leadingInset: CGFloat {
-        get { leadingConstraint.constant }
-        set { leadingConstraint.constant = newValue }
-    }
-
-    public var showsUnread: Bool {
-        get { !unreadDot.isHidden }
-        set {
-            unreadDot.isHidden = !newValue
-            needsDisplay = true
-        }
-    }
-}
-
 // MARK: - Empty state
 
 /// A centred empty, offline or failure state (visual-language.md §6): 32 pt glyph `text4`, `body` title, `label text2`
@@ -258,9 +104,9 @@ public final class EmptyStateView: NSView {
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -DS.Spacing.xxl),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DS.Spacing.xl),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DS.Spacing.xl),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -DS.Space.s24),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DS.Space.s16),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DS.Space.s16),
             self.detail.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
         ])
         setAccessibilityElement(false)
@@ -332,27 +178,5 @@ public final class UndoToastView: NSView {
 
     public func hide() {
         isHidden = true
-    }
-}
-
-// MARK: - Toolbar
-
-/// Builds a toolbar button item with an SF Symbol, a label (shown in "Icon and Text" mode and to VoiceOver) and a
-/// tooltip that names the shortcut. The action travels the responder chain (nil target) so menu validation and the
-/// toolbar agree.
-@MainActor
-public enum ToolbarButton {
-    public static func make(
-        _ identifier: NSToolbarItem.Identifier, label: String, symbolName: String, action: Selector, toolTip: String? = nil
-    ) -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = label
-        item.paletteLabel = label
-        item.toolTip = toolTip ?? label
-        item.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: label)
-        item.action = action
-        item.target = nil
-        item.isBordered = true
-        return item
     }
 }

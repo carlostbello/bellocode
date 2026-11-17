@@ -59,11 +59,11 @@ struct ShellSurfaces {
             composer: { ComposerSurfaceController(context: $0, services: services) },
             rightPanelTabs: [
                 RightPanelTab(id: "changes", title: "Changes", symbolName: "plusminus") { changes.makeController() },
-                RightPanelTab(id: "files", title: "Files", symbolName: "folder") {
+                RightPanelTab(id: "files", title: "Files", symbolName: "doc.on.doc") {
                     placeholder("Files", symbol: "folder", detail: "The project's files appear here.")
                 },
                 RightPanelTab(id: "browser", title: "Browser", symbolName: "globe") { browser.makePanelController() },
-                RightPanelTab(id: "terminal", title: "Terminal", symbolName: "terminal") { terminals.makePanelController() },
+                RightPanelTab(id: "terminal", title: "Terminal", symbolName: "apple.terminal") { terminals.makePanelController() },
                 RightPanelTab(id: "agents", title: "Agents", symbolName: "point.3.connected.trianglepath.dotted") {
                     agents.makePanelController()
                 },

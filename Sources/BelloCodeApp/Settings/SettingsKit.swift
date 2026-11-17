@@ -71,6 +71,39 @@ struct SettingsRow<Trailing: View>: View {
     }
 }
 
+/// A row of fields and buttons spanning the group (an image name and Save, a sign-in form).
+struct SettingsFieldRow<Content: View>: View {
+    var divided = true
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: DS.Space.s8) { content }
+            .padding(.horizontal, DS.Space.s12)
+            .padding(.vertical, DS.Space.s8)
+            .overlay(alignment: .top) {
+                if divided { Rectangle().fill(Color.ds.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+            }
+    }
+}
+
+/// A row of actions at the bottom of a group (Check Again, Fix…), leading-aligned.
+struct SettingsActionsRow<Content: View>: View {
+    var divided = true
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: DS.Space.s6) {
+            content
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .frame(minHeight: 40)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(Color.ds.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+    }
+}
+
 /// A switch row (the common case).
 struct SettingsToggleRow: View {
     let title: String
@@ -102,40 +135,14 @@ struct SettingsNote: View {
     }
 }
 
-/// A select (replaces `Picker(.menu)`): the current value in an outline small button with a chevron, opening a
-/// native menu of the choices (the checked one marked).
+/// A select in a settings row (DesignSystem's `DSMenuSelect`).
 struct SettingsMenuPicker<ID: Hashable>: View {
     let label: String
     let options: [(id: ID, title: String)]
     @Binding var selection: ID
 
     var body: some View {
-        Menu {
-            ForEach(options.indices, id: \.self) { index in
-                let option = options[index]
-                Button {
-                    selection = option.id
-                } label: {
-                    if option.id == selection { Label(option.title, systemImage: "checkmark") } else { Text(option.title) }
-                }
-            }
-        } label: {
-            HStack(spacing: DS.Space.s6) {
-                Text(options.first { $0.id == selection }?.title ?? "").font(.ds(.labelEmph)).foregroundStyle(Color.ds.text)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color.ds.text4)
-            }
-            .padding(.horizontal, DS.Space.s8)
-            .frame(height: DS.Size.controlSmall)
-            .background(Color.ds.raised, in: RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous).strokeBorder(Color.ds.borderStrong, lineWidth: 1))
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .accessibilityLabel(label)
-        .accessibilityValue(options.first { $0.id == selection }?.title ?? "")
+        DSMenuSelect(label, options: options, selection: $selection)
     }
 }
 
@@ -172,7 +179,7 @@ struct SettingsRadioRows<ID: Hashable>: View {
     }
 }
 
-/// A text-size style slider row: the system slider (no DesignSystem slider yet) with the value in `meta text2`.
+/// A slider row: DesignSystem's `DSSlider` with the value in `meta text2`.
 struct SettingsSliderRow: View {
     let title: String
     let range: ClosedRange<Double>
@@ -183,8 +190,7 @@ struct SettingsSliderRow: View {
     var body: some View {
         SettingsRow(title, divided: divided) {
             HStack(spacing: DS.Space.s8) {
-                Slider(value: $value, in: range, step: 1)
-                    .controlSize(.small)
+                DSSlider(value: $value, in: range, step: 1)
                     .frame(width: 160)
                     .accessibilityLabel(accessibilityLabel)
                     .accessibilityValue("\(Int(value)) points")

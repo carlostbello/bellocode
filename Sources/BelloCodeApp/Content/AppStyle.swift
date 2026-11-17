@@ -5,55 +5,31 @@ import DesignSystem
 import Engine
 import SwiftUI
 
-/// Maps DesignSystem tokens onto the ComposerKit and AgentUI style structs, so the composer, the request cards, the
-/// pickers and the shell share one visual language (fonts from `DS.Typography.current`, one card radius and surface,
-/// semantic colours that follow appearance, accent and Increase Contrast).
+/// The few host choices ComposerKit and AgentUI still take from the app. Their colours, radii and metrics come from
+/// DesignSystem directly (`ComposerStyle.resolvedWithDesignTokens`, AgentUI's `DS` reads), so only behaviour (hero
+/// height, placeholder) and the fonts that follow Settings ▸ text size are passed here.
 @MainActor
 enum AppStyle {
     static func composer(hero: Bool = false) -> ComposerStyle {
-        let base = DS.Typography.current.baseSize
         var style = ComposerStyle()
-        style.font = DS.TextRole.composer.font(base: base)
-        style.textColor = DS.Color.text
-        style.placeholderColor = DS.Color.placeholder
-        style.secondaryTextColor = DS.Color.text2
-        style.cardBackgroundColor = DS.Color.raised
-        style.borderColor = DS.Color.composerOutline
-        style.focusBorderColor = DS.Color.borderStrong
-        style.accentColor = DS.Color.accent
-        style.chipBackgroundColor = DS.Color.fillHover
-        style.errorColor = DS.Color.dangerText
-        style.popoverBackgroundColor = DS.Color.raised
-        style.cornerRadius = DS.Radius.xl
-        style.contentInsets = NSEdgeInsets(top: DS.Space.s12, left: DS.Space.s14, bottom: DS.Space.s4, right: DS.Space.s8)
+        // Compared on settings changes to re-apply the text size; ComposerKit resolves the rest from tokens.
+        style.font = DS.TextRole.composer.font(base: DS.Typography.current.baseSize)
         style.minimumLines = hero ? 3 : 1
-        style.controlHeight = DS.Size.composerControl
-        style.completionRowHeight = DS.Size.menuRow
         style.placeholder = hero
             ? "Describe the task. @ mentions files or agents, / runs commands"
             : "Ask for follow-up changes. @ mentions files, / runs commands"
         return style
     }
 
+    /// AgentUI's defaults (DesignSystem tokens) with fonts at the current text size (the Accounts panes read them).
     static var agentUI: AgentUIStyle {
         let base = DS.Typography.current.baseSize
-        return AgentUIStyle(
-            accent: Color(nsColor: DS.Color.accent),
-            surface: Color(nsColor: DS.Color.raised),
-            inset: Color(nsColor: DS.Color.codeFill),
-            separator: Color(nsColor: DS.Color.border),
-            primaryText: Color(nsColor: DS.Color.text),
-            secondaryText: Color(nsColor: DS.Color.text2),
-            attention: Color(nsColor: DS.Color.warningText),
-            danger: Color(nsColor: DS.Color.dangerText),
-            success: Color(nsColor: DS.Color.successText),
-            bodyFont: DS.TextRole.body.swiftUIFont(base: base),
-            smallFont: DS.TextRole.label.swiftUIFont(base: base),
-            titleFont: DS.TextRole.title.swiftUIFont(base: base),
-            monospacedFont: DS.TextRole.codeSmall.swiftUIFont(base: base),
-            cornerRadius: DS.Radius.xl,
-            spacing: DS.Space.s4,
-            rowHeight: DS.Size.menuRow)
+        var style = AgentUIStyle.standard
+        style.bodyFont = DS.TextRole.body.swiftUIFont(base: base)
+        style.smallFont = DS.TextRole.label.swiftUIFont(base: base)
+        style.titleFont = DS.TextRole.title.swiftUIFont(base: base)
+        style.monospacedFont = DS.TextRole.codeSmall.swiftUIFont(base: base)
+        return style
     }
 
     /// Hosts a SwiftUI control with the app's AgentUI style (intrinsic size, Auto Layout).

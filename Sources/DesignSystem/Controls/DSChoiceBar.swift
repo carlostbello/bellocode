@@ -183,6 +183,8 @@ public final class DSChoiceButton: DSControl {
 
     private func updateAccessibility() {
         let label = item.title.isEmpty ? (item.accessibilityLabel ?? item.id) : item.title
+        // Icon-only choices name themselves on hover too.
+        toolTip = item.title.isEmpty ? label : nil
         setAccessibilityLabel(item.count.map { "\(label), \($0)" } ?? label)
         setAccessibilityValue(isSelected ? 1 : 0)
     }
@@ -242,16 +244,18 @@ public final class DSChoiceButton: DSControl {
         let textColor = emphasised ? DS.Color.text : DS.Color.text2
         let iconColor = emphasised ? DS.Color.text : DS.Color.icon
         var x = rect.minX + padding
-        if item.title.isEmpty, let name = item.symbolName, let image = DSDraw.symbol(name, pointSize: DS.Size.iconPointRow) {
+        if item.title.isEmpty, item.count == nil, let name = item.symbolName, let image = DSDraw.symbol(name, pointSize: DS.Size.iconPointRow) {
             DSDraw.draw(template: image, in: rect, color: iconColor)
         } else {
             if let name = item.symbolName, let image = DSDraw.symbol(name, pointSize: DS.Size.iconPointRow) {
                 DSDraw.draw(template: image, in: NSRect(x: x, y: rect.minY, width: 14, height: rect.height), color: iconColor)
                 x += 14 + 5
             }
-            let titleWidth = DSDraw.width(of: item.title, font: labelFont)
-            DSDraw.text(item.title, in: NSRect(x: x, y: rect.minY, width: titleWidth + 1, height: rect.height), font: labelFont, color: textColor)
-            x += titleWidth + 5
+            if !item.title.isEmpty {
+                let titleWidth = DSDraw.width(of: item.title, font: labelFont)
+                DSDraw.text(item.title, in: NSRect(x: x, y: rect.minY, width: titleWidth + 1, height: rect.height), font: labelFont, color: textColor)
+                x += titleWidth + 5
+            }
             if let count = item.count {
                 let countFont = DS.TextRole.meta.font(base: DS.Typography.current.baseSize, monospacedDigits: true)
                 DSDraw.text("\(count)", in: NSRect(x: x, y: rect.minY, width: rect.maxX - x, height: rect.height), font: countFont, color: DS.Color.text3)

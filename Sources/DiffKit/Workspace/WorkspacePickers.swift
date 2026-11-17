@@ -17,20 +17,19 @@ public struct WorkspacePickerButton: View {
         Button {
             isOpen.value.toggle()
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: symbol)
+            HStack(spacing: DS.Space.s6) {
+                Image(systemName: symbol).font(.system(size: DS.Size.iconPointRow)).foregroundStyle(SwiftUI.Color.ds.icon)
                 Text(draft.workspaceLabel).lineLimit(1)
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(.secondary)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text4)
             }
-            .font(.system(size: DS.Typography.current.baseSize - 1))
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(DSComposerSelectStyle(isOpen: isOpen.value))
         .disabled(draft.repository.phase == .notRepository)
         .help(draft.repository.phase == .notRepository ? "Worktrees need a git repository" : "Where the agent works: local checkout or a worktree (⇧⌘E)")
         .accessibilityLabel("Workspace")
         .accessibilityValue(draft.workspaceLabel)
         .onChange(of: draft.workspaceOpenRequests) { isOpen.value = true }
-        .popover(isPresented: $isOpen.value, arrowEdge: .top) {
+        .glassPopover(isPresented: $isOpen.value, width: 360) {
             WorkspacePickerView(draft: draft) { isOpen.value = false }
         }
     }
@@ -102,10 +101,12 @@ public struct WorkspacePickerView: View {
     public var body: some View {
         let options = options
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+            HStack(spacing: DS.Space.s8) {
+                PickerSearchGlyph()
                 TextField("Filter workspaces", text: $query.value)
                     .textFieldStyle(.plain)
+                    .font(.ds(.body))
+                    .foregroundStyle(SwiftUI.Color.ds.text)
                     .focused($focused)
                     .onKeyPress(.downArrow) { highlight.value = min(highlight.value + 1, max(0, options.count - 1)); return .handled }
                     .onKeyPress(.upArrow) { highlight.value = max(highlight.value - 1, 0); return .handled }
@@ -117,12 +118,13 @@ public struct WorkspacePickerView: View {
                     .onChange(of: query.value) { highlight.value = 0 }
                     .accessibilityLabel("Filter workspaces")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            Divider()
+            .padding(.horizontal, DS.Space.s12)
+            .frame(height: 40)
+            SwiftUI.Color.ds.border.frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        SwiftUI.Color.clear.frame(height: DS.Space.s4)
                         if !draft.worktrees.isEmpty, query.value.isEmpty {
                             EmptyView()
                         }
@@ -133,35 +135,38 @@ public struct WorkspacePickerView: View {
                             .id(index)
                         }
                         if options.isEmpty {
-                            Text("No matching workspace").foregroundStyle(.secondary).padding(10)
+                            Text("No matching workspace").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Space.s10)
                         }
                     }
                 }
                 .onChange(of: highlight.value) { proxy.scrollTo(highlight.value) }
             }
+            .padding(.horizontal, DS.Space.s4)
             .frame(maxHeight: 260)
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
+            SwiftUI.Color.ds.border.frame(height: 1)
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
                 Toggle("Start new worktrees from origin", isOn: $draft.startFromOrigin)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(DSToggleStyle(.checkbox))
+                    .font(.ds(.label))
+                    .foregroundStyle(SwiftUI.Color.ds.text)
                     .help("Fetch the base branch from origin first, so the worktree starts at the remote's latest commit")
                 if draft.mode == .newWorktree {
                     HStack(spacing: 6) {
-                        Text("Branch").foregroundStyle(.secondary)
+                        Text("Branch").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2)
                         TextField("Named after the prompt", text: $draft.branchName)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(DSTextFieldStyle())
                             .accessibilityLabel("New branch name")
                     }
                 }
                 Text("New worktrees go in \((draft.preferences.parentDirectory(projectDirectory: draft.projectDirectory) as NSString).abbreviatingWithTildeInPath)")
-                    .font(.system(size: DS.Typography.current.baseSize - 2))
-                    .foregroundStyle(.secondary)
+                    .font(.ds(.meta))
+                    .foregroundStyle(SwiftUI.Color.ds.text3)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            .padding(10)
+            .padding(DS.Space.s12)
         }
-        .font(.system(size: DS.Typography.current.baseSize))
+        .font(.ds(.body))
         .frame(width: 360)
         .onAppear {
             focused = true
@@ -182,14 +187,13 @@ public struct BranchPickerButton: View {
             if !isOpen.value { draft.repository.loadBranches() }
             isOpen.value.toggle()
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
+            HStack(spacing: DS.Space.s6) {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: DS.Size.iconPointRow)).foregroundStyle(SwiftUI.Color.ds.icon)
                 Text(draft.branchLabel).lineLimit(1).truncationMode(.middle)
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(.secondary)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text4)
             }
-            .font(.system(size: DS.Typography.current.baseSize - 1))
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(DSComposerSelectStyle(isOpen: isOpen.value))
         .disabled(draft.mode == .existingWorktree || draft.repository.phase == .notRepository)
         .help(draft.mode == .newWorktree ? "Base branch for the new worktree (⇧⌘B)" : "Branch of the local checkout (⇧⌘B)")
         .accessibilityLabel(draft.mode == .newWorktree ? "Base branch" : "Branch")
@@ -198,7 +202,7 @@ public struct BranchPickerButton: View {
             draft.repository.loadBranches()
             isOpen.value = true
         }
-        .popover(isPresented: $isOpen.value, arrowEdge: .top) {
+        .glassPopover(isPresented: $isOpen.value, width: 360) {
             BranchPickerView(draft: draft) { isOpen.value = false }
         }
     }
@@ -283,10 +287,12 @@ public struct BranchPickerView: View {
     public var body: some View {
         let rows = rows
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+            HStack(spacing: DS.Space.s8) {
+                PickerSearchGlyph()
                 TextField(draft.mode == .newWorktree ? "Base branch" : "Switch to or create a branch", text: $query.value)
                     .textFieldStyle(.plain)
+                    .font(.ds(.body))
+                    .foregroundStyle(SwiftUI.Color.ds.text)
                     .focused($focused)
                     .onKeyPress(.downArrow) { highlight.value = min(highlight.value + 1, max(0, rows.count - 1)); return .handled }
                     .onKeyPress(.upArrow) { highlight.value = max(highlight.value - 1, 0); return .handled }
@@ -297,14 +303,15 @@ public struct BranchPickerView: View {
                     .onKeyPress(.escape) { close(); return .handled }
                     .onChange(of: query.value) { highlight.value = 0 }
                     .accessibilityLabel("Filter branches")
-                if draft.repository.isLoadingBranches { ProgressView().controlSize(.small).accessibilityLabel("Loading branches") }
+                if draft.repository.isLoadingBranches { StatusLabel(.running, showsText: false).accessibilityLabel("Loading branches") }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            Divider()
+            .padding(.horizontal, DS.Space.s12)
+            .frame(height: 40)
+            SwiftUI.Color.ds.border.frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        SwiftUI.Color.clear.frame(height: DS.Space.s4)
                         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                             switch row {
                             case .branch(let branch):
@@ -324,28 +331,32 @@ public struct BranchPickerView: View {
                         }
                         if rows.isEmpty {
                             Text(draft.repository.isLoadingBranches ? "Loading branches…" : "No matching branch")
-                                .foregroundStyle(.secondary).padding(10)
+                                .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Space.s10)
                         }
                     }
                 }
                 .onChange(of: highlight.value) { proxy.scrollTo(highlight.value) }
             }
+            .padding(.horizontal, DS.Space.s4)
             .frame(maxHeight: 300)
             if let error = error.value {
-                Divider()
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Color(nsColor: DS.Palette.failure))
-                    .font(.system(size: DS.Typography.current.baseSize - 1))
-                    .padding(10)
+                SwiftUI.Color.ds.border.frame(height: 1)
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
+                    Text(error).foregroundStyle(SwiftUI.Color.ds.text)
+                }
+                .font(.ds(.label))
+                .padding(DS.Space.s12)
             }
         }
-        .font(.system(size: DS.Typography.current.baseSize))
+        .font(.ds(.body))
         .frame(width: 360)
         .onAppear { focused = true }
     }
 }
 
-/// A compact picker row: icon, title, detail, a checkmark for the current choice; highlighted by the keyboard.
+/// A picker row (§6 "Menus, popovers"): 28–34 pt, `r.sm`, keyboard / hover highlight `fillHover`, glyph `icon`, title
+/// `body`, detail `meta text3`, and the current choice's check in `accent` in a trailing slot.
 struct PickerRow: View {
     var symbol: String
     var title: String
@@ -356,25 +367,36 @@ struct PickerRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).frame(width: 16).foregroundStyle(.secondary)
+            HStack(spacing: DS.Space.s8) {
+                Image(systemName: symbol).font(.system(size: DS.Size.iconPointRow)).frame(width: DS.Size.iconBox).foregroundStyle(SwiftUI.Color.ds.icon)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).lineLimit(1).truncationMode(.middle)
                     if !detail.isEmpty {
-                        Text(detail).font(.system(size: DS.Typography.current.baseSize - 2)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Text(detail).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1).truncationMode(.middle)
                     }
                 }
-                Spacer(minLength: 4)
-                if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor).accessibilityLabel("Current") }
+                Spacer(minLength: DS.Space.s4)
+                Image(systemName: "checkmark")
+                    .font(.system(size: DS.Size.iconPointMeta, weight: .semibold))
+                    .foregroundStyle(SwiftUI.Color.ds.accent)
+                    .opacity(selected ? 1 : 0)
+                    .accessibilityHidden(!selected)
+                    .accessibilityLabel("Current")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(highlighted ? Color.accentColor.opacity(0.18) : Color.clear)
-            .contentShape(Rectangle())
+            .padding(.vertical, DS.Space.s4)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DSMenuRowStyle(isHighlighted: highlighted))
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// The search glyph of a picker's input row (16 pt box, `text3`).
+struct PickerSearchGlyph: View {
+    var body: some View {
+        Image(systemName: "magnifyingglass")
+            .font(.system(size: DS.Size.iconPoint))
+            .foregroundStyle(SwiftUI.Color.ds.text3)
+            .accessibilityHidden(true)
     }
 }
 

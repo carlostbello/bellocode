@@ -3,7 +3,7 @@ import BelloCore
 import DesignSystem
 import Engine
 
-/// Shown above the composer when opencode restarted while this thread's turn ran: the server still lists it as busy
+/// A row of the attached tray above the composer (`AttachedTrayView`), shown when opencode restarted while this thread's turn ran: the server still lists it as busy
 /// but nothing runs it. BelloCode does not act on its own; the user chooses Stop (mark it interrupted) or Resume
 /// (mark it interrupted and ask the agent to continue). Offline, the sidebar footer's connection state explains instead.
 @MainActor
@@ -22,7 +22,6 @@ final class StatusUnknownBanner: NSView {
         self.engine = engine
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
         let glyph = DSStatusGlyphView()
         glyph.status = .unknown
         glyph.pointSize = DS.Size.iconPoint
@@ -41,7 +40,7 @@ final class StatusUnknownBanner: NSView {
         row.alignment = .centerY
         row.spacing = DS.Space.s8
         row.setCustomSpacing(DS.Space.s10, after: glyph)
-        row.edgeInsets = NSEdgeInsets(top: DS.Space.s10, left: DS.Space.s14, bottom: DS.Space.s10, right: DS.Space.s10)
+        row.edgeInsets = NSEdgeInsets(top: DS.Space.s6, left: DS.Space.s14, bottom: DS.Space.s6, right: DS.Space.s8)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         collapsed = heightAnchor.constraint(equalToConstant: 0)
@@ -72,17 +71,6 @@ final class StatusUnknownBanner: NSView {
         stopButton.isEnabled = !busy
         resumeButton.isEnabled = !busy
         if show { setAccessibilityLabel("Status unknown. \(message.stringValue)") }
-    }
-
-    override var wantsUpdateLayer: Bool { true }
-
-    /// A `raised` card (`r.xl`) with the composer's outline, like the request cards it sits with.
-    override func updateLayer() {
-        layer?.cornerRadius = DS.Radius.xl
-        layer?.cornerCurve = .continuous
-        layer?.borderWidth = DS.Border.hairline
-        layer?.backgroundColor = DS.Color.raised.cgColor
-        layer?.borderColor = DS.Color.composerOutline.cgColor
     }
 
     @objc func stop() {
