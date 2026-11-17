@@ -181,127 +181,127 @@ extension DS.ColorToken {
     private static let accentDark = C(0x346BF1)
     private static let accentLight = C(0x1B4ED8)
 
-    static let canvas = Self("canvas", .surface, light: C(0xFCFCFC), dark: C(0x000000), use: "Window, transcript, right panel, terminal")
-    static let sidebar = Self("sidebar", .surface, light: C(0xFAFAFA), dark: C(0x000000), use: "Sidebar")
-    static let raised = Self(
+    public static let canvas = Self("canvas", .surface, light: C(0xFCFCFC), dark: C(0x000000), use: "Window, transcript, right panel, terminal")
+    public static let sidebar = Self("sidebar", .surface, light: C(0xFAFAFA), dark: C(0x000000), use: "Sidebar")
+    public static let raised = Self(
         "raised", .surface, light: C(0xFFFFFF), dark: C(0x111111), darkHC: C(0x161616),
         use: "Composer, attached cards, menus, popovers, palette, toasts")
-    static let message = Self("message", .surface, light: C(0xEBEBED), dark: C(0x1E1E1E), use: "User message bubble")
-    static let codeFill = Self(
+    public static let message = Self("message", .surface, light: C(0xEBEBED), dark: C(0x1E1E1E), use: "User message bubble")
+    public static let codeFill = Self(
         "codeFill", .surface, light: C(0xFAFAFA), dark: .white(0.035), lightHC: C(0xF4F4F5), darkHC: .white(0.07),
         use: "Code blocks, command previews (light adds `border` 70 %)")
-    static let fillSubtle = Self(
+    public static let fillSubtle = Self(
         "fillSubtle", .surface, light: C(0xFAFAFA), dark: .white(0.03), lightHC: C(0xF4F4F5), darkHC: .white(0.06),
         use: "Search field, segmented track, report boxes")
-    static let fillHover = Self(
+    public static let fillHover = Self(
         "fillHover", .surface, light: C(0xF4F4F5), dark: .white(0.04), lightHC: C(0xE9E9EB), darkHC: .white(0.08),
         use: "Ghost-control hover/pressed, selected tab")
-    static let scrim = Self("scrim", .surface, light: C(0xFCFCFC, 0.60), dark: C(0x000000, 0.64), use: "Behind palette and dialogs (+ blur 4)")
-    static let rowHover = Self(
+    public static let scrim = Self("scrim", .surface, light: C(0xFCFCFC, 0.60), dark: C(0x000000, 0.64), use: "Behind palette and dialogs (+ blur 4)")
+    public static let rowHover = Self(
         "rowHover", .surface, light: C(0xF4F4F5), dark: rowWash.withAlpha(0.08), lightHC: C(0xE9E9EB), darkHC: rowWash.withAlpha(0.14),
         use: "Sidebar/list row hover")
-    static let rowActive = Self(
+    public static let rowActive = Self(
         "rowActive", .surface, light: C(0xFFFFFF), dark: rowWash.withAlpha(0.11), darkHC: rowWash.withAlpha(0.18),
         use: "Current thread (light adds `rowRing`)")
-    static let rowSelected = Self(
+    public static let rowSelected = Self(
         "rowSelected", .surface, light: C(0xFFFFFF), dark: rowWash.withAlpha(0.07), darkHC: rowWash.withAlpha(0.13),
         use: "Multi-select, file list (light adds `rowRing`)")
-    static let rowRing = Self(
+    public static let rowRing = Self(
         "rowRing", .surface, light: C(0xE4E4E7, 0.7), dark: .clear, lightHC: C(0xA1A1AA), darkHC: .white(0.2),
         use: "Inset ring of active/selected rows in light")
-    static let highlight = Self(
+    public static let highlight = Self(
         "highlight", .surface, light: C(0x18181B, 0.06), dark: C(0xF5F5F5, 0.09), lightHC: C(0x18181B, 0.12), darkHC: C(0xF5F5F5, 0.18),
         use: "Palette/menu keyboard highlight (never accent)")
 
-    static let text = Self("text", .text, light: C(0x18181B), dark: C(0xF5F5F5), use: "Titles, prose, values")
-    static let sidebarText = Self("sidebarText", .text, light: C(0x18181B), dark: C(0xF1F3F7), use: "Sidebar row titles")
-    static let text2 = Self(
+    public static let text = Self("text", .text, light: C(0x18181B), dark: C(0xF5F5F5), use: "Titles, prose, values")
+    public static let sidebarText = Self("sidebarText", .text, light: C(0x18181B), dark: C(0xF1F3F7), use: "Sidebar row titles")
+    public static let text2 = Self(
         "text2", .text, light: C(0x71717A), dark: C(0xA1A1A1), lightHC: C(0x52525B), darkHC: C(0xC4C4C4),
         use: "Secondary labels, control labels, tool verbs")
-    static let text3 = Self(
+    public static let text3 = Self(
         "text3", .text, light: C(0x71717A), dark: C(0x8F8F8F), lightHC: C(0x52525B), darkHC: C(0xC4C4C4),
         use: "Row metadata, section labels")
-    static let text4 = Self(
+    public static let text4 = Self(
         "text4", .text, light: C(0x71717A, 0.6), dark: C(0xA1A1A1, 0.55), lightHC: C(0x52525B), darkHC: C(0xC4C4C4),
         use: "Timestamps, gutters, chevrons, disabled (below AA by design)")
-    static let icon = Self(
+    public static let icon = Self(
         "icon", .text, light: C(0x71717A), dark: C(0xA1A1A1, 0.9), lightHC: C(0x52525B), darkHC: C(0xC4C4C4),
         use: "Default icon tint")
-    static let placeholder = Self(
+    public static let placeholder = Self(
         "placeholder", .text, light: C(0x71717A), dark: C(0xA1A1A1), lightHC: C(0x52525B), darkHC: C(0xC4C4C4),
         use: "Composer and field placeholders (= text2)")
 
-    static let border = Self(
+    public static let border = Self(
         "border", .border, light: C(0xE4E4E7), dark: .white(0.08), lightHC: C(0xA1A1AA), darkHC: .white(0.2),
         use: "Panel dividers, row dividers, card edges")
-    static let borderStrong = Self(
+    public static let borderStrong = Self(
         "borderStrong", .border, light: C(0xD4D4D8), dark: .white(0.11), lightHC: C(0xA1A1AA), darkHC: .white(0.2),
         use: "Outline buttons, inputs, popover edge")
-    static let composerOutline = Self(
+    public static let composerOutline = Self(
         "composerOutline", .border, light: .black(0.08), dark: .white(0.05), lightHC: C(0xA1A1AA), darkHC: .white(0.2),
         use: "Composer and attached cards")
-    static let composerHighlight = Self(
+    public static let composerHighlight = Self(
         "composerHighlight", .border, light: .clear, dark: .white(0.03), use: "Inner top highlight of the composer")
 
-    static let accent = Self(
+    public static let accent = Self(
         "accent", .accent, light: accentLight, dark: accentDark, followsUserAccent: true,
         use: "Primary button, Send, focus ring, caret, checkmarks")
-    static let accentHover = Self(
+    public static let accentHover = Self(
         "accentHover", .accent, light: accentLight.withAlpha(0.9).over(C(0xFCFCFC)), dark: accentDark.withAlpha(0.9).over(C(0x000000)),
         use: "Primary hover (accent 90 % on canvas)")
-    static let onAccent = Self("onAccent", .accent, light: C(0xFFFFFF), dark: C(0xFFFFFF), use: "Text on accent")
-    static let focusRing = Self(
+    public static let onAccent = Self("onAccent", .accent, light: C(0xFFFFFF), dark: C(0xFFFFFF), use: "Text on accent")
+    public static let focusRing = Self(
         "focusRing", .accent, light: accentLight, dark: accentDark, followsUserAccent: true, use: "2 pt inset keyboard focus ring")
-    static let focusHalo = Self(
+    public static let focusHalo = Self(
         "focusHalo", .accent, light: accentLight.withAlpha(0.24), dark: accentDark.withAlpha(0.24), followsUserAccent: true,
         use: "3 pt halo around a focused text field")
-    static let textSelection = Self(
+    public static let textSelection = Self(
         "textSelection", .selection, light: accentLight.withAlpha(0.2), dark: accentDark.withAlpha(0.3), followsUserAccent: true,
         use: "NSTextView selectedTextAttributes")
-    static let findMatch = Self("findMatch", .selection, light: C(0xFFDE8B), dark: C(0x8C6C1F), use: "Find matches")
-    static let findActive = Self("findActive", .selection, light: C(0xEEA52B), dark: C(0xEEA52B), use: "Current find match")
+    public static let findMatch = Self("findMatch", .selection, light: C(0xFFDE8B), dark: C(0x8C6C1F), use: "Find matches")
+    public static let findActive = Self("findActive", .selection, light: C(0xEEA52B), dark: C(0xEEA52B), use: "Current find match")
 
-    static let success = Self("success", .semantic, light: C(0x00BC7D), dark: C(0x00BC7D), use: "Done, additions (fills, glyphs)")
-    static let successText = Self("successText", .semantic, light: C(0x007A55), dark: C(0x00D492), use: "Success words, +n")
-    static let warning = Self("warning", .semantic, light: C(0xFE9A00), dark: C(0xFE9A00), use: "Needs you (fills)")
-    static let warningText = Self("warningText", .semantic, light: C(0xBB4D00), dark: C(0xFFB900), use: "Approval words, glyphs")
-    static let danger = Self("danger", .semantic, light: C(0xFB2C36), dark: C(0xFB414A), use: "Failed, Stop, deletions (fills)")
-    static let dangerText = Self("dangerText", .semantic, light: C(0xC10007), dark: C(0xFF6467), use: "Failure words, −n")
-    static let info = Self("info", .semantic, light: C(0x2B7FFF), dark: C(0x2B7FFF), use: "Running, questions (fills)")
-    static let infoText = Self("infoText", .semantic, light: C(0x1447E6), dark: C(0x51A2FF), use: "Question words, links, spinner head")
-    static let successSurface = Self("successSurface", .semantic, light: C(0x00BC7D, 0.08), dark: C(0x00BC7D, 0.16), use: "Pills, tinted cards")
-    static let warningSurface = Self("warningSurface", .semantic, light: C(0xFE9A00, 0.08), dark: C(0xFE9A00, 0.16), use: "Pills, tinted cards")
-    static let dangerSurface = Self("dangerSurface", .semantic, light: C(0xFB2C36, 0.08), dark: C(0xFB414A, 0.16), use: "Pills, tinted cards")
-    static let infoSurface = Self("infoSurface", .semantic, light: C(0x2B7FFF, 0.08), dark: C(0x2B7FFF, 0.16), use: "Pills, tinted cards")
+    public static let success = Self("success", .semantic, light: C(0x00BC7D), dark: C(0x00BC7D), use: "Done, additions (fills, glyphs)")
+    public static let successText = Self("successText", .semantic, light: C(0x007A55), dark: C(0x00D492), use: "Success words, +n")
+    public static let warning = Self("warning", .semantic, light: C(0xFE9A00), dark: C(0xFE9A00), use: "Needs you (fills)")
+    public static let warningText = Self("warningText", .semantic, light: C(0xBB4D00), dark: C(0xFFB900), use: "Approval words, glyphs")
+    public static let danger = Self("danger", .semantic, light: C(0xFB2C36), dark: C(0xFB414A), use: "Failed, Stop, deletions (fills)")
+    public static let dangerText = Self("dangerText", .semantic, light: C(0xC10007), dark: C(0xFF6467), use: "Failure words, −n")
+    public static let info = Self("info", .semantic, light: C(0x2B7FFF), dark: C(0x2B7FFF), use: "Running, questions (fills)")
+    public static let infoText = Self("infoText", .semantic, light: C(0x1447E6), dark: C(0x51A2FF), use: "Question words, links, spinner head")
+    public static let successSurface = Self("successSurface", .semantic, light: C(0x00BC7D, 0.08), dark: C(0x00BC7D, 0.16), use: "Pills, tinted cards")
+    public static let warningSurface = Self("warningSurface", .semantic, light: C(0xFE9A00, 0.08), dark: C(0xFE9A00, 0.16), use: "Pills, tinted cards")
+    public static let dangerSurface = Self("dangerSurface", .semantic, light: C(0xFB2C36, 0.08), dark: C(0xFB414A, 0.16), use: "Pills, tinted cards")
+    public static let infoSurface = Self("infoSurface", .semantic, light: C(0x2B7FFF, 0.08), dark: C(0x2B7FFF, 0.16), use: "Pills, tinted cards")
 
-    static let diffAddLine = Self("diffAddLine", .diff, light: C(0x00BC7D, 0.08), dark: C(0x00BC7D, 0.10), use: "Added line fill")
-    static let diffAddGutter = Self("diffAddGutter", .diff, light: C(0x00BC7D, 0.14), dark: C(0x00BC7D, 0.16), use: "Added gutter fill")
-    static let diffAddWord = Self("diffAddWord", .diff, light: C(0x00BC7D, 0.22), dark: C(0x00D492, 0.28), use: "Added word emphasis")
-    static let diffDelLine = Self("diffDelLine", .diff, light: C(0xFB2C36, 0.07), dark: C(0xFB414A, 0.10), use: "Deleted line fill")
-    static let diffDelGutter = Self("diffDelGutter", .diff, light: C(0xFB2C36, 0.12), dark: C(0xFB414A, 0.16), use: "Deleted gutter fill")
-    static let diffDelWord = Self("diffDelWord", .diff, light: C(0xFB2C36, 0.20), dark: C(0xFF6467, 0.28), use: "Deleted word emphasis")
-    static let diffHunk = Self("diffHunk", .diff, light: C(0x2B7FFF, 0.06), dark: C(0x51A2FF, 0.07), use: "Hunk bar fill (text3 mono 11)")
-    static let diffModifiedIcon = Self(
+    public static let diffAddLine = Self("diffAddLine", .diff, light: C(0x00BC7D, 0.08), dark: C(0x00BC7D, 0.10), use: "Added line fill")
+    public static let diffAddGutter = Self("diffAddGutter", .diff, light: C(0x00BC7D, 0.14), dark: C(0x00BC7D, 0.16), use: "Added gutter fill")
+    public static let diffAddWord = Self("diffAddWord", .diff, light: C(0x00BC7D, 0.22), dark: C(0x00D492, 0.28), use: "Added word emphasis")
+    public static let diffDelLine = Self("diffDelLine", .diff, light: C(0xFB2C36, 0.07), dark: C(0xFB414A, 0.10), use: "Deleted line fill")
+    public static let diffDelGutter = Self("diffDelGutter", .diff, light: C(0xFB2C36, 0.12), dark: C(0xFB414A, 0.16), use: "Deleted gutter fill")
+    public static let diffDelWord = Self("diffDelWord", .diff, light: C(0xFB2C36, 0.20), dark: C(0xFF6467, 0.28), use: "Deleted word emphasis")
+    public static let diffHunk = Self("diffHunk", .diff, light: C(0x2B7FFF, 0.06), dark: C(0x51A2FF, 0.07), use: "Hunk bar fill (text3 mono 11)")
+    public static let diffModifiedIcon = Self(
         "diffModifiedIcon", .diff, light: C(0x1447E6, 0.5).over(C(0x71717A)), dark: C(0x51A2FF, 0.65), use: "M badge / modified glyph")
 
-    static let syntaxKeyword = Self("syntaxKeyword", .syntax, light: C(0x9B2393), dark: C(0xFF7AB2), lightHC: C(0x7A0F72), darkHC: C(0xFF9CC6), use: "Keywords")
-    static let syntaxType = Self("syntaxType", .syntax, light: C(0x0B4F79), dark: C(0x6BDFFF), lightHC: C(0x053A5C), darkHC: C(0x9AE9FF), use: "Types")
-    static let syntaxFunction = Self("syntaxFunction", .syntax, light: C(0x326D74), dark: C(0x67B7A4), lightHC: C(0x1F5157), darkHC: C(0x8ED6C4), use: "Functions")
-    static let syntaxString = Self("syntaxString", .syntax, light: C(0xC41A16), dark: C(0xFC6A5D), lightHC: C(0x9A0F0C), darkHC: C(0xFF9488), use: "Strings")
-    static let syntaxNumber = Self("syntaxNumber", .syntax, light: C(0x1C00CF), dark: C(0xD0BF69), lightHC: C(0x1400A0), darkHC: C(0xE6D78A), use: "Numbers")
-    static let syntaxComment = Self("syntaxComment", .syntax, light: C(0x5D6C79), dark: C(0x7F8C98), lightHC: C(0x3E4A55), darkHC: C(0xA9B4BE), use: "Comments")
-    static let syntaxProperty = Self("syntaxProperty", .syntax, light: C(0x6C36A9), dark: C(0xA167E6), lightHC: C(0x52248A), darkHC: C(0xC197F2), use: "Properties")
+    public static let syntaxKeyword = Self("syntaxKeyword", .syntax, light: C(0x9B2393), dark: C(0xFF7AB2), lightHC: C(0x7A0F72), darkHC: C(0xFF9CC6), use: "Keywords")
+    public static let syntaxType = Self("syntaxType", .syntax, light: C(0x0B4F79), dark: C(0x6BDFFF), lightHC: C(0x053A5C), darkHC: C(0x9AE9FF), use: "Types")
+    public static let syntaxFunction = Self("syntaxFunction", .syntax, light: C(0x326D74), dark: C(0x67B7A4), lightHC: C(0x1F5157), darkHC: C(0x8ED6C4), use: "Functions")
+    public static let syntaxString = Self("syntaxString", .syntax, light: C(0xC41A16), dark: C(0xFC6A5D), lightHC: C(0x9A0F0C), darkHC: C(0xFF9488), use: "Strings")
+    public static let syntaxNumber = Self("syntaxNumber", .syntax, light: C(0x1C00CF), dark: C(0xD0BF69), lightHC: C(0x1400A0), darkHC: C(0xE6D78A), use: "Numbers")
+    public static let syntaxComment = Self("syntaxComment", .syntax, light: C(0x5D6C79), dark: C(0x7F8C98), lightHC: C(0x3E4A55), darkHC: C(0xA9B4BE), use: "Comments")
+    public static let syntaxProperty = Self("syntaxProperty", .syntax, light: C(0x6C36A9), dark: C(0xA167E6), lightHC: C(0x52248A), darkHC: C(0xC197F2), use: "Properties")
 
-    static let terminalCursor = Self("terminalCursor", .terminal, light: C(0x26384E), dark: C(0xB4CBFF), use: "Terminal cursor")
-    static let terminalSelection = Self("terminalSelection", .terminal, light: C(0x253F63, 0.2), dark: C(0xB4CBFF, 0.25), use: "Terminal selection")
-    static let ansiCyan = Self("ansiCyan", .terminal, light: C(0x0B4F79), dark: C(0x6BDFFF), use: "ANSI cyan")
-    static let ansiMagenta = Self("ansiMagenta", .terminal, light: C(0x6C36A9), dark: C(0xA167E6), use: "ANSI magenta")
+    public static let terminalCursor = Self("terminalCursor", .terminal, light: C(0x26384E), dark: C(0xB4CBFF), use: "Terminal cursor")
+    public static let terminalSelection = Self("terminalSelection", .terminal, light: C(0x253F63, 0.2), dark: C(0xB4CBFF, 0.25), use: "Terminal selection")
+    public static let ansiCyan = Self("ansiCyan", .terminal, light: C(0x0B4F79), dark: C(0x6BDFFF), use: "ANSI cyan")
+    public static let ansiMagenta = Self("ansiMagenta", .terminal, light: C(0x6C36A9), dark: C(0xA167E6), use: "ANSI magenta")
 
-    static let scrollThumb = Self("scrollThumb", .chrome, light: C(0xD9D9D9), dark: .white(0.36), lightHC: C(0xA1A1AA), darkHC: .white(0.5), use: "Overlay scroller knob")
-    static let scrollThumbHover = Self("scrollThumbHover", .chrome, light: C(0xBFBFBF), dark: .white(0.45), lightHC: C(0x71717A), darkHC: .white(0.6), use: "Knob on hover")
-    static let kbdFill = Self("kbdFill", .chrome, light: C(0x18181B, 0.06), dark: C(0xF5F5F5, 0.08), lightHC: C(0x18181B, 0.1), darkHC: C(0xF5F5F5, 0.14), use: "Key caps")
-    static let disabledFill = Self("disabledFill", .chrome, light: C(0x18181B, 0.12), dark: C(0xF5F5F5, 0.12), use: "Disabled Send fill")
-    static let shadow = Self("shadow", .chrome, light: .black(1), dark: .black(1), use: "Shadow base colour (recipes set opacity)")
+    public static let scrollThumb = Self("scrollThumb", .chrome, light: C(0xD9D9D9), dark: .white(0.36), lightHC: C(0xA1A1AA), darkHC: .white(0.5), use: "Overlay scroller knob")
+    public static let scrollThumbHover = Self("scrollThumbHover", .chrome, light: C(0xBFBFBF), dark: .white(0.45), lightHC: C(0x71717A), darkHC: .white(0.6), use: "Knob on hover")
+    public static let kbdFill = Self("kbdFill", .chrome, light: C(0x18181B, 0.06), dark: C(0xF5F5F5, 0.08), lightHC: C(0x18181B, 0.1), darkHC: C(0xF5F5F5, 0.14), use: "Key caps")
+    public static let disabledFill = Self("disabledFill", .chrome, light: C(0x18181B, 0.12), dark: C(0xF5F5F5, 0.12), use: "Disabled Send fill")
+    public static let shadow = Self("shadow", .chrome, light: .black(1), dark: .black(1), use: "Shadow base colour (recipes set opacity)")
 
     /// Every token, in documentation order. Tests check this list is complete and unique.
     public static let all: [DS.ColorToken] = [

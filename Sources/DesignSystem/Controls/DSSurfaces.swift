@@ -12,7 +12,8 @@ public final class DSGlassView: NSView {
     public static var forcesSolidFallback = false
 
     public let surface: DS.Surface
-    public let contentView = NSView()
+    /// Flipped (top-left origin), like the rest of the DesignSystem views.
+    public let contentView: NSView = DSFlippedView()
     public var radius: CGFloat { didSet { needsLayout = true; chrome.needsDisplay = true } }
     /// Draws the shadow (popovers, palette, composer). Off for surfaces inside a panel that has its own window shadow.
     public var showsShadow = true { didSet { needsLayout = true } }
@@ -97,6 +98,12 @@ public final class DSGlassView: NSView {
         image.resizingMode = .stretch
         return image
     }
+}
+
+/// A plain flipped container.
+@MainActor
+public final class DSFlippedView: NSView {
+    public override var isFlipped: Bool { true }
 }
 
 /// Tint, ring and highlight above the material.

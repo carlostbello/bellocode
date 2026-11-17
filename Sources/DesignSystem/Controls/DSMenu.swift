@@ -38,11 +38,13 @@ public struct DSMenuRow: Hashable, Sendable, Identifiable {
     public var recedes = false
     /// Reserve the check slot even when unchecked (lists with a selection).
     public var reservesCheckSlot = true
+    /// Reserve the 14 pt icon slot when `symbolName` is nil, so titles align with rows that have one (palette).
+    public var reservesIconSlot = false
 
     public init(
         id: String, title: String, symbolName: String? = nil, trailing: String? = nil, trailingEmphasis: String? = nil,
         link: String? = nil, shortcut: String? = nil, isChecked: Bool = false, isEnabled: Bool = true, recedes: Bool = false,
-        reservesCheckSlot: Bool = true
+        reservesCheckSlot: Bool = true, reservesIconSlot: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -55,6 +57,7 @@ public struct DSMenuRow: Hashable, Sendable, Identifiable {
         self.isEnabled = isEnabled
         self.recedes = recedes
         self.reservesCheckSlot = reservesCheckSlot
+        self.reservesIconSlot = reservesIconSlot
     }
 }
 
@@ -66,6 +69,9 @@ public final class DSMenuListView: NSView {
     public private(set) var highlightedID: String? { didSet { syncHighlight() } }
     public var onChoose: ((String) -> Void)?
     public static let padding: CGFloat = 4
+    /// Menus use `fillHover`; the command palette uses `highlight` (text 9 % / 6 %) with `r.md` and 34 pt rows.
+    public enum Look: Sendable { case menu, palette }
+    public var look: Look = .menu { didSet { setEntries(entries) } }
 
     private var entryViews: [NSView] = []
 
@@ -89,7 +95,15 @@ public final class DSMenuListView: NSView {
             switch entry {
             case .header(_, let title, let trailing): DSMenuHeaderView(title: title, trailing: trailing)
             case .separator: DSMenuSeparatorView()
-            case .row(let row): DSMenuRowView(row: row)
+            case .row(let row):
+                {
+                    let view = DSMenuRowView(row: row)
+                    if look == .palette {
+                        view.highlightColor = DS.Color.highlight
+                        view.highlightRadius = DS.Radius.md
+                    }
+                    return view
+                }()
             }
         }
         entryViews.forEach(addSubview)
@@ -104,16 +118,16 @@ public final class DSMenuListView: NSView {
         entries.compactMap { if case .row(let row) = $0 { row } else { nil } }
     }
 
-    static func height(of entry: DSMenuEntry) -> CGFloat {
+    func height(of entry: DSMenuEntry) -> CGFloat {
         switch entry {
-        case .header: DS.Size.menuGroupHeader
+        case .header: look == .palette ? 28 : DS.Size.menuGroupHeader
         case .separator: 9
-        case .row: DS.Size.menuRow + 2
+        case .row: look == .palette ? DS.Size.paletteRow : DS.Size.menuRow + 2
         }
     }
 
     public override var intrinsicContentSize: NSSize {
-        let height = entries.map(Self.height).reduce(0, +) + Self.padding * 2
+        let height = entries.map(height(of:)).reduce(0, +) + Self.padding * 2
         let width = entryViews.compactMap { ($0 as? DSMenuRowView)?.preferredWidth }.max() ?? 200
         return NSSize(width: max(200, width + Self.padding * 2), height: height)
     }
@@ -122,7 +136,7 @@ public final class DSMenuListView: NSView {
         super.layout()
         var y = Self.padding
         for (entry, view) in zip(entries, entryViews) {
-            let height = Self.height(of: entry)
+            let height = height(of: entry)
             view.frame = NSRect(x: Self.padding, y: y, width: bounds.width - Self.padding * 2, height: height)
             y += height
         }
@@ -207,6 +221,8 @@ public final class DSMenuListView: NSView {
 public final class DSMenuRowView: NSView {
     public let row: DSMenuRow
     public var isHighlighted = false { didSet { if isHighlighted != oldValue { needsDisplay = true; setAccessibilitySelected(isHighlighted) } } }
+    var highlightColor: NSColor = DS.Color.fillHover
+    var highlightRadius: CGFloat = DS.Radius.sm
 
     init(row: DSMenuRow) {
         self.row = row
@@ -225,7 +241,7 @@ public final class DSMenuRowView: NSView {
 
     public override var isFlipped: Bool { true }
 
-    private var leadingSlot: CGFloat { (row.reservesCheckSlot || row.isChecked ? 22 : 8) + (row.symbolName != nil ? 20 : 0) }
+    private var leadingSlot: CGFloat { (row.reservesCheckSlot || row.isChecked ? 22 : 8) + (row.symbolName != nil || row.reservesIconSlot ? 22 : 0) }
 
     private var trailingText: String { [row.trailing, row.trailingEmphasis].compactMap { $0 }.joined(separator: "  ") }
 
@@ -235,7 +251,7 @@ public final class DSMenuRowView: NSView {
         var width = leadingSlot + DSDraw.width(of: row.title, font: body) + 10
         if !trailingText.isEmpty { width += 24 + DSDraw.width(of: trailingText, font: meta) }
         if let link = row.link { width += 24 + DSDraw.width(of: link, font: meta) }
-        if let shortcut = row.shortcut { width += 24 + DSDraw.width(of: shortcut, font: DS.TextRole.metaEmph.font) }
+        if let shortcut = row.shortcut { width += 30 + DSDraw.width(of: shortcut, font: DS.TextRole.metaEmph.font) }
         return ceil(width)
     }
 
@@ -247,7 +263,7 @@ public final class DSMenuRowView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0, dy: 1)
-        if isHighlighted { DSDraw.fill(rect, radius: DS.Radius.sm, color: DS.Color.fillHover) }
+        if isHighlighted { DSDraw.fill(rect, radius: highlightRadius, color: highlightColor) }
         let titleColor: NSColor = !row.isEnabled ? DS.Color.text4 : (row.recedes ? DS.Color.text3 : DS.Color.text)
         var x: CGFloat = 8
         if row.isChecked, let check = DSDraw.symbol("checkmark", pointSize: 11, weight: .semibold) {
@@ -256,7 +272,9 @@ public final class DSMenuRowView: NSView {
         if row.reservesCheckSlot || row.isChecked { x = 22 }
         if let symbol = row.symbolName, let image = DSDraw.symbol(symbol, pointSize: DS.Size.iconPointRow) {
             DSDraw.draw(template: image, in: NSRect(x: x, y: rect.minY, width: 14, height: rect.height), color: DS.Color.icon)
-            x += 20
+            x += 22
+        } else if row.reservesIconSlot {
+            x += 22
         }
         let meta = DS.TextRole.meta.font(base: DS.Typography.current.baseSize, monospacedDigits: true)
         var right = rect.maxX - 8
@@ -267,9 +285,11 @@ public final class DSMenuRowView: NSView {
         }
         if let shortcut = row.shortcut {
             let font = DS.TextRole.metaEmph.font
-            let w = DSDraw.width(of: shortcut, font: font, kern: 0.5)
-            DSDraw.text(shortcut, in: NSRect(x: right - w, y: rect.minY, width: w + 1, height: rect.height), font: font, color: DS.Color.text3, kern: 0.5)
-            right -= w + 12
+            let w = max(DS.Size.kbd, DSDraw.width(of: shortcut, font: font, kern: 0.5) + 10)
+            let cap = NSRect(x: right - w + 2, y: rect.midY - DS.Size.kbd / 2, width: w, height: DS.Size.kbd)
+            DSDraw.fill(cap, radius: DS.Radius.xs, color: DS.Color.kbdFill)
+            DSDraw.text(shortcut, in: cap, font: font, color: DS.Color.text2, alignment: .center, kern: 0.5)
+            right -= w + 10
         }
         if let emphasis = row.trailingEmphasis {
             let w = DSDraw.width(of: emphasis, font: meta)

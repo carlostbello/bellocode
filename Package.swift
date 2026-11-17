@@ -108,6 +108,9 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // Restyle step 0: every token and DesignSystem control in every state, light and dark, rendered to PNG
+        // (`swift run DesignGallery`, docs/design/implementation-guide.md).
+        .executableTarget(name: "DesignGallery", dependencies: ["DesignSystem", "BelloCore"], swiftSettings: swiftSettings),
         // M2-C diff harness: snapshots and scroll benchmarks (docs/features/diff-git.md).
         .executableTarget(
             name: "DiffDemo",
