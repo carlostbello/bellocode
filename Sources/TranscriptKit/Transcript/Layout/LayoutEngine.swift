@@ -15,6 +15,8 @@ public struct RowLayoutInput: Sendable {
     /// Pre-parsed blocks (cache hit or streaming); parsed here when nil.
     public var blocks: [RenderBlock]?
     public var highlighter: any HighlightService
+    /// Shared parse cache (finished rows are parsed once).
+    public var cache: RenderBlockCache?
 
     public var key: LayoutKey {
         LayoutKey(
@@ -31,7 +33,7 @@ public enum LayoutEngine {
     }
 
     static func layoutNow(_ input: RowLayoutInput, fonts: TranscriptFonts) -> RowLayout {
-        let blocks = input.blocks ?? RenderBlocks.blocks(for: input.row)
+        let blocks = input.blocks ?? input.cache?.blocks(for: input.row) ?? RenderBlocks.blocks(for: input.row)
         let layouts = layoutBlocks(
             blocks, content: input.row.content, ui: input.ui, imageSizes: input.imageSizes, width: input.width, fonts: fonts,
             highlighter: input.highlighter)
