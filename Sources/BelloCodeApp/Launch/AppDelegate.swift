@@ -38,6 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settings.apply()
                 services = makeServices(settings: settings, auth: runtime.auth)
                 Task { await AttachmentFileStore.applicationDefault.cleanUp() }
+                // Quick Look copies of pasted content left by a crashed run.
+                Task { await PreviewFiles.current.cleanUpAbandoned() }
                 showMainWindow()
                 NSApp.activate()
                 // Cached content first (start() returns once the cache is shown), then the server connects.
@@ -86,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspace?.close()
         Task { @MainActor in
             await runtime.stop()
+            await PreviewFiles.current.removeAll()
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

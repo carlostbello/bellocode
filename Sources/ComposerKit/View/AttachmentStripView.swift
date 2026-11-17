@@ -31,21 +31,46 @@ actor ThumbnailLoader {
         return image
     }
 
-    /// A file Quick Look can open: the original file, or the in-memory bytes written to a temporary file.
+    /// A file Quick Look can open: the original file, or the in-memory bytes written to a preview file (owned by
+    /// `PreviewFiles`; delete it with `discardPreview(for:)` when the preview ends or the attachment goes).
     func previewURL(for attachment: ComposerAttachment) -> URL? {
         switch attachment.content {
         case .file(let url):
             return url
         case .data(let data):
-            return write(data, name: attachment.name, id: attachment.id)
+            return previews.write(data, name: attachment.name, id: attachment.id)
         case .text(let text):
-            return write(Data(text.utf8), name: attachment.name, id: attachment.id)
+            return previews.write(Data(text.utf8), name: attachment.name, id: attachment.id)
         }
     }
 
-    private func write(_ data: Data, name: String, id: String) -> URL? {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "BelloCodeComposer/\(id)", directoryHint: .isDirectory)
-        let url = folder.appending(path: name)
+    private let previews = PreviewFiles.current
+
+    func discardPreview(for id: String) { previews.remove(id: id) }
+}
+
+/// Quick Look needs a file, so pasted images and text are written to `<tmp>/BelloCodeComposer/<pid>/<attachment>/`
+/// while previewed. The owning chip deletes its file when the preview ends, when it is removed and when it goes away;
+/// `removeAll()` runs at quit and `cleanUpAbandoned()` at launch removes folders of processes that no longer run
+/// (a crash), so unsent private content does not linger.
+public struct PreviewFiles: Sendable {
+    public let root: URL
+    public let processID: Int32
+
+    public static let current = PreviewFiles(
+        root: FileManager.default.temporaryDirectory.appending(path: "BelloCodeComposer", directoryHint: .isDirectory),
+        processID: ProcessInfo.processInfo.processIdentifier)
+
+    public init(root: URL, processID: Int32) {
+        self.root = root
+        self.processID = processID
+    }
+
+    var directory: URL { root.appending(path: String(processID), directoryHint: .isDirectory) }
+
+    func write(_ data: Data, name: String, id: String) -> URL? {
+        let folder = directory.appending(path: AttachmentFileStore.safeComponent(id), directoryHint: .isDirectory)
+        let url = folder.appending(path: AttachmentFileStore.safeComponent(name))
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
@@ -53,6 +78,31 @@ actor ThumbnailLoader {
         } catch {
             return nil
         }
+    }
+
+    func remove(id: String) {
+        try? FileManager.default.removeItem(at: directory.appending(path: AttachmentFileStore.safeComponent(id), directoryHint: .isDirectory))
+    }
+
+    /// Deletes this process's preview files (quit).
+    @concurrent
+    public func removeAll() async {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Deletes preview folders left by processes that are no longer running (and files from before per-process
+    /// folders). Returns how many entries were removed.
+    @discardableResult
+    @concurrent
+    public func cleanUpAbandoned() async -> Int {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(atPath: root.path) else { return 0 }
+        var removed = 0
+        for name in entries {
+            if let pid = Int32(name), pid == processID || (kill(pid, 0) == 0 || errno == EPERM) { continue }
+            if (try? manager.removeItem(at: root.appending(path: name))) != nil { removed += 1 }
+        }
+        return removed
     }
 }
 
@@ -114,7 +164,11 @@ final class AttachmentStripView: NSView {
             next.append(chip)
         }
         guard next.map(\.attachment.id) != chips.map(\.attachment.id) else { return }
-        for chip in chips where !next.contains(where: { $0 === chip }) { stack.removeArrangedSubview(chip); chip.removeFromSuperview() }
+        for chip in chips where !next.contains(where: { $0 === chip }) {
+            chip.discardPreview()
+            stack.removeArrangedSubview(chip)
+            chip.removeFromSuperview()
+        }
         for (index, chip) in next.enumerated() {
             if chip.superview == nil { stack.insertArrangedSubview(chip, at: index) }
         }
@@ -141,6 +195,8 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
     private let sizeLabel = NSTextField(labelWithString: "")
     private let removeButton = NSButton()
     private var previewURL: URL?
+    /// `previewURL` is a file this chip wrote (pasted content), deleted when the preview ends or the chip goes.
+    private var ownsPreviewFile = false
     private var thumbnailTask: Task<Void, Never>?
 
     init(attachment: ComposerAttachment, style: ComposerStyle) {
@@ -200,7 +256,10 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    isolated deinit { thumbnailTask?.cancel() }
+    isolated deinit {
+        thumbnailTask?.cancel()
+        discardPreview()
+    }
 
     private static func icon(for attachment: ComposerAttachment) -> NSImage {
         if let url = attachment.fileURL { return NSWorkspace.shared.icon(forFile: url.path) }
@@ -263,11 +322,24 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
         let attachment = self.attachment
         Task { [weak self] in
             let url = await ThumbnailLoader.shared.previewURL(for: attachment)
-            guard let self, let url else { return }
+            guard let self, let url else {
+                if case .file = attachment.content {} else { await ThumbnailLoader.shared.discardPreview(for: attachment.id) }
+                return
+            }
             self.previewURL = url
+            if case .file = attachment.content {} else { self.ownsPreviewFile = true }
             panel.makeKeyAndOrderFront(nil)
             panel.reloadData()
         }
+    }
+
+    /// Deletes the preview file this chip wrote, if any (preview ended, attachment removed, teardown).
+    func discardPreview() {
+        guard ownsPreviewFile else { return }
+        ownsPreviewFile = false
+        previewURL = nil
+        let id = attachment.id
+        Task { await ThumbnailLoader.shared.discardPreview(for: id) }
     }
 
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
@@ -277,7 +349,10 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        MainActor.assumeIsolated { panel.dataSource = nil }
+        MainActor.assumeIsolated {
+            panel.dataSource = nil
+            discardPreview()
+        }
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { previewURL == nil ? 0 : 1 }

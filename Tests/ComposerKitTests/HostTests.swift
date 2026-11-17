@@ -322,12 +322,13 @@ final class FakeThread: ComposerThreadSource {
     @Test func fileStoreCleanUpIsBounded() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "composer-clean-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = AttachmentFileStore(directory: directory, maxAge: .seconds(3600), maxTotalBytes: 10)
+        let store = AttachmentFileStore(directory: directory, maxAge: .seconds(3600), maxTotalBytes: 100, inUseGrace: .zero)
         for index in 0..<3 {
             _ = try await store.materialize(.text(String(repeating: "x", count: 6), name: "t\(index).txt"))
         }
         // 18 bytes > 10: the oldest go until the total fits.
-        let removed = await store.cleanUp()
+        let small = AttachmentFileStore(directory: directory, maxAge: .seconds(3600), maxTotalBytes: 10, inUseGrace: .zero)
+        let removed = await small.cleanUp()
         #expect(removed == 2)
         let old = AttachmentFileStore(directory: directory, maxAge: .seconds(1), maxTotalBytes: 1_000)
         #expect(await old.cleanUp(now: Date().addingTimeInterval(10)) == 1)

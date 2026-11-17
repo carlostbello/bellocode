@@ -18,7 +18,11 @@ Status: integrated 2026-11-16 against MockOpenCode and opencode 2.3.0 (`opencode
   folder · Local checkout/Worktree, read from `.git` off-main). `/` lists server commands and skills (a leading
   command runs `session.command`); `@` lists agents and the server's `fs/find` results (local index offline).
   Attachments: files by `file://` URI; pasted images and large pastes are written to
-  `~/Library/Application Support/BelloCode/attachments` (7 days / 512 MB, cleaned at launch) and sent as URIs;
+  `~/Library/Application Support/BelloCode/attachments` (7 days / 512 MB, enforced on every write and at launch; files
+  written in the last hour may still be queued for delivery and are never evicted: a paste that cannot fit fails with
+  "Attachment storage is full"). Quick Look copies of pasted content live in `<tmp>/BelloCodeComposer/<pid>/` and are
+  deleted when the preview closes, the chip is removed or goes away, and at quit; a crashed run's folder is removed
+  at the next launch and sent as URIs;
   mentions carry `{start,end,text}` (UTF-16). The optimistic user message shows attached files.
 - **Styles**: `AppStyle` maps DesignSystem tokens (card surface/border, radius 12, fonts from the text-size setting)
   into `ComposerStyle` and `AgentUIStyle`. Side panels hold their width (sidebar 260 pt default, resizable, autosaved).
