@@ -83,7 +83,9 @@ struct EngineFlowTests {
 
             try await waitUntil("approval pending") { !thread.pendingRequests.isEmpty }
             await expect(thread.status?.status == .awaitingApproval, "thread.status?.status == .awaitingApproval")
-            await expect(engine.root.attention.counts.approvals == 1, "engine.root.attention.counts.approvals == 1")
+            // The thread and the root summary are separate subscribers (topics `.thread` and `.attention`), applied by
+            // separate tasks: the summary follows within a turn of the main actor, not necessarily in the same one.
+            try await waitUntil("approval counted") { engine.root.attention.counts.approvals == 1 }
             await expect(engine.root.attention.items.first?.sessionID == session.id, "engine.root.attention.items.first?.sessionID == session.id")
             guard case .permission(let permission) = thread.pendingRequests[0] else { Issue.record("expected a permission"); return }
             await expect(permission.action == "edit", "permission.action == 'edit'")
@@ -92,7 +94,7 @@ struct EngineFlowTests {
             await expect(thread.lastError == nil, "thread.lastError == nil")
 
             try await waitUntil("question pending") { thread.pendingRequests.contains { !$0.isPermission } }
-            await expect(engine.root.attention.counts.questions == 1, "engine.root.attention.counts.questions == 1")
+            try await waitUntil("question counted") { engine.root.attention.counts.questions == 1 }
             guard case .question(let question) = thread.pendingRequests[0] else { Issue.record("expected a question"); return }
             await expect(question.fields.first?.options.map(\.value) == ["swift test", "make test"], "the question offers the two runners")
             await thread.answer(question.id, ["runner": .text("swift test")])
@@ -100,7 +102,7 @@ struct EngineFlowTests {
 
             await harness.server.waitUntilAllIdle()
             try await waitUntil("turn finished") { thread.status?.status == .finishedUnread }
-            await expect(engine.root.attention.counts.unread == 1, "engine.root.attention.counts.unread == 1")
+            try await waitUntil("unread counted") { engine.root.attention.counts.unread == 1 }
             await expect(thread.pendingRequests.isEmpty, "thread.pendingRequests.isEmpty")
 
             // Exactly one user message: the optimistic one, now delivered, under the server's ID.
@@ -111,7 +113,7 @@ struct EngineFlowTests {
 
             await thread.markViewed()
             try await waitUntil("viewed") { thread.status?.status == .idle }
-            await expect(engine.root.attention.items.isEmpty, "engine.root.attention.items.isEmpty")
+            try await waitUntil("attention cleared") { engine.root.attention.items.isEmpty }
 
             // The live projection and the cache equal the list endpoints.
             await engine.flush()

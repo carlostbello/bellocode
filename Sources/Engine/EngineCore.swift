@@ -418,14 +418,19 @@ actor EngineCore {
 
     private func commit(_ reduction: Reduction) {
         guard !reduction.isEmpty else { return }
-        if !reduction.changes.isEmpty {
-            EngineSignposts.publish.measure("publish") { bus.publish(reduction.changes) }
+        // The derived statuses and summary go out in the same publish as the changes they derive from: a subscriber
+        // woken between two publishes would show, say, a pending approval while the thread's status still says running.
+        var changes = reduction.changes
+        let statusDirty = !reduction.statusDirty.isEmpty
+        if statusDirty { changes += deriveAttention() }
+        if !changes.isEmpty {
+            EngineSignposts.publish.measure("publish") { bus.publish(changes) }
         }
         if !reduction.writes.isEmpty {
             pendingWrites.merge(reduction.writes)
             scheduleWrite()
         }
-        if !reduction.statusDirty.isEmpty { recomputeAttention(publish: true) }
+        if statusDirty { organise() }
         if !reduction.effects.isEmpty { enqueue(reduction.effects) }
     }
 
@@ -545,6 +550,13 @@ actor EngineCore {
     // MARK: - Attention
 
     private func recomputeAttention(publish: Bool) {
+        let changes = deriveAttention()
+        if publish, !changes.isEmpty { bus.publish(changes) }
+        if publish { organise() }
+    }
+
+    /// Re-derives statuses and the summary and returns what changed, unpublished.
+    private func deriveAttention() -> [ProjectionChange] {
         let state = pipeline.state
         let (newStatuses, newSummary) = AttentionDeriver.derive(
             .init(
@@ -556,8 +568,7 @@ actor EngineCore {
         statuses = newStatuses
         summary = newSummary
         if summaryChanged { changes.append(.attention(newSummary)) }
-        if publish, !changes.isEmpty { bus.publish(changes) }
-        if publish { organise() }
+        return changes
     }
 
     private func setConnection(_ status: ConnectionStatus) {
