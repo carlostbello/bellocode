@@ -258,7 +258,7 @@ enum Sheets {
         sheet.row("toast (solid fallback)", [toast], sizes: [NSSize(width: 340, height: 36)])
         let empty = EmptyStateView(symbolName: "tray", title: "No threads yet", detail: "Start a thread to put an agent to work in this project.", actionTitle: "New thread")
         sheet.row("empty state", [empty], sizes: [NSSize(width: 420, height: 200)])
-        sheet.row("scroller knob", [scrollerSample()], sizes: [NSSize(width: 200, height: 120)])
+        sheet.row("scroller knob (rest, hover)", [scrollerSample()], sizes: [NSSize(width: 100, height: 120)])
         return sheet
     }
 
@@ -276,16 +276,17 @@ enum Sheets {
     }
 
     static func scrollerSample() -> NSView {
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        let doc = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 400))
-        scroll.documentView = doc
-        DSScroller.install(on: scroll)
-        scroll.scrollerStyle = .legacy
-        scroll.autohidesScrollers = false
-        scroll.verticalScroller?.knobProportion = 0.3
-        return scroll
+        let card = DSCard(style: .inset)
+        for (index, x) in [CGFloat(20), 60].enumerated() {
+            let scroller = DSScroller(frame: NSRect(x: x, y: 10, width: 15, height: 100))
+            scroller.scrollerStyle = .legacy  // overlay knobs are faded out in a still
+            scroller.knobProportion = 0.35
+            scroller.doubleValue = 0.3
+            scroller.isEnabled = true
+            if index == 1 { scroller.mouseEntered(with: NSEvent()) }
+            card.addSubview(scroller)
+        }
+        return card
     }
 
     // MARK: Menus and glass
