@@ -30,7 +30,7 @@ public struct MarkdownBlock: Sendable, Hashable {
         switch kind {
         case .paragraph(let text), .heading(_, let text): text.text
         case .listItem(let marker, let checkbox, let text):
-            (checkbox.map { $0 ? "[x] " : "[ ] " } ?? marker + " ") + text.text
+            (checkbox.map { $0 ? "☑ " : "☐ " } ?? marker + " ") + text.text
         case .code(_, let code): code
         case .table(let table): table.plainText
         case .rule: "———"
