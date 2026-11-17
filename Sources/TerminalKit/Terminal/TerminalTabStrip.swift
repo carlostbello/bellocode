@@ -33,7 +33,8 @@ final class TerminalTabStrip: NSView {
         super.init(frame: frame)
         stack.orientation = .horizontal
         stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: 0, bottom: 3, right: 0)
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let document = FlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -166,7 +167,8 @@ final class TerminalTabStrip: NSView {
     }
 }
 
-/// One tab.
+/// One ghost tab (§6 "Terminal drawer"): 24 high, `r.md`, glyph 12 + title `label`; selected = `fillHover` + `text`,
+/// hover = `fillHover`, rest = `text2`; the close glyph appears on hover or selection; exited shows its word in `text3`.
 @MainActor
 final class TerminalTabView: NSView, NSTextFieldDelegate {
     let id: String
@@ -174,7 +176,7 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
     private let glyph = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let state = NSTextField(labelWithString: "")
-    private let closeButton = NSButton()
+    private let closeButton = DSButton(icon: "xmark", accessibilityTitle: "Close Terminal", size: .small)
     private var editor: NSTextField?
     private(set) var isSelected = false
     private(set) var isSplit = false
@@ -185,32 +187,28 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
     init(id: String) {
         self.id = id
         super.init(frame: .zero)
-        title.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        title.font = DS.TextRole.labelEmph.font
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        state.font = .systemFont(ofSize: NSFont.smallSystemFontSize - 1)
-        state.textColor = .secondaryLabelColor
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Terminal")?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
-        closeButton.isBordered = false
-        closeButton.bezelStyle = .accessoryBarAction
-        closeButton.imagePosition = .imageOnly
+        state.font = DS.TextRole.meta.font
+        state.textColor = DS.Color.text3
         closeButton.target = self
         closeButton.action = #selector(closePressed)
         closeButton.toolTip = "Close Terminal"
         let stack = NSStackView(views: [glyph, title, state, closeButton])
         stack.orientation = .horizontal
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 4)
+        stack.spacing = DS.Space.s6
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s8, bottom: 0, right: DS.Space.s2)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            heightAnchor.constraint(equalToConstant: 22),
+            heightAnchor.constraint(equalToConstant: DS.Size.controlSmall),
             widthAnchor.constraint(greaterThanOrEqualToConstant: 72), widthAnchor.constraint(lessThanOrEqualToConstant: 220),
-            closeButton.widthAnchor.constraint(equalToConstant: 16), closeButton.heightAnchor.constraint(equalToConstant: 16),
-            glyph.widthAnchor.constraint(equalToConstant: 12),
+            closeButton.widthAnchor.constraint(equalToConstant: DS.Size.micro), closeButton.heightAnchor.constraint(equalToConstant: DS.Size.micro),
+            glyph.widthAnchor.constraint(equalToConstant: DS.Size.iconPointRow),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.radioButton)
@@ -225,7 +223,7 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
         self.isSplit = isSplit
         isRunning = record.state.isRunning
         if editor == nil { title.stringValue = record.displayTitle }
-        title.textColor = isSelected ? .labelColor : .secondaryLabelColor
+        title.textColor = isSelected || isHovered ? DS.Color.text : DS.Color.text2
         let symbol: String
         if !record.state.isRunning {
             symbol = "stop.circle"
@@ -239,8 +237,8 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
         }
         state.isHidden = state.stringValue.isEmpty
         glyph.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
-        glyph.contentTintColor = record.state.isRunning ? .secondaryLabelColor : .tertiaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointMeta + 1, weight: .regular))
+        glyph.contentTintColor = record.state.isRunning ? DS.Color.icon : DS.Color.text4
         toolTip = [record.displayTitle, (record.currentDirectory as NSString).abbreviatingWithTildeInPath, record.state.label]
             .compactMap { $0 }.joined(separator: "\n")
         setAccessibilityLabel([record.displayTitle, record.state.label].compactMap { $0 }.joined(separator: ", "))
@@ -250,26 +248,27 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
 
     func showCreating() {
         title.stringValue = "Starting…"
-        title.textColor = .tertiaryLabelColor
+        title.textColor = DS.Color.text3
         glyph.image = NSImage(systemSymbolName: "hourglass", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
-        glyph.contentTintColor = .tertiaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointMeta + 1, weight: .regular))
+        glyph.contentTintColor = DS.Color.text4
         state.isHidden = true
-        closeButton.isHidden = true
+        closeButton.alphaValue = 0
+        closeButton.isEnabled = false
         setAccessibilityLabel("Starting terminal")
     }
 
     private func updateChrome() {
-        closeButton.isHidden = id.isEmpty || !(isSelected || isHovered)
+        // Hidden by alpha, not `isHidden`, so the tab's width never changes on hover.
+        closeButton.alphaValue = id.isEmpty || !(isSelected || isHovered) ? 0 : 1
+        closeButton.isEnabled = !id.isEmpty && (isSelected || isHovered)
+        if editor == nil, !id.isEmpty { title.textColor = isSelected || isHovered ? DS.Color.text : DS.Color.text2 }
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let fill: NSColor? = isSelected
-            ? NSColor.controlAccentColor.withAlphaComponent(0.16) : (isHovered ? NSColor.quaternaryLabelColor : nil)
-        guard let fill else { return }
-        fill.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: DS.Radius.medium, yRadius: DS.Radius.medium).fill()
+        guard isSelected || isHovered else { return }
+        DSDraw.fill(bounds, radius: DS.Radius.md, color: DS.Color.fillHover)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -322,8 +321,11 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
         guard editor == nil else { return }
         let field = NSTextField(string: title.stringValue)
         field.font = title.font
-        field.isBordered = true
-        field.focusRingType = .default
+        field.textColor = DS.Color.text
+        field.isBordered = false
+        field.drawsBackground = true
+        field.backgroundColor = DS.Color.canvas
+        field.focusRingType = .none
         field.delegate = self
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(field)

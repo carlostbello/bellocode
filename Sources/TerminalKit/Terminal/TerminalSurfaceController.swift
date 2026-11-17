@@ -21,8 +21,8 @@ public final class TerminalSurfaceController: NSViewController {
 
     private unowned let workspace: TerminalWorkspace
     private let tabStrip = TerminalTabStrip()
-    private let newButton = NSButton()
-    private let splitButton = NSButton()
+    private let newButton = DSButton(icon: "plus", accessibilityTitle: "New Terminal", size: .small)
+    private let splitButton = DSButton(icon: "rectangle.split.2x1", accessibilityTitle: "Split Terminal", size: .small)
     private let messageLine = NSTextField(labelWithString: "")
     private let messageBar = NSStackView()
     private let content = NSView()
@@ -55,20 +55,22 @@ public final class TerminalSurfaceController: NSViewController {
     public override func loadView() {
         let container = SurfaceBackgroundView()
         let header = NSView()
-        let separator = NSBox()
-        separator.boxType = .separator
+        let separator = DSDivider()
+        separator.heightAnchor.constraint(equalToConstant: DS.Border.hairline).isActive = true
         configure(newButton, symbol: "plus", label: "New Terminal", toolTip: "New Terminal (⌘T)", action: #selector(newTerminalPressed))
         configure(splitButton, symbol: "rectangle.split.2x1", label: "Split Terminal", toolTip: "Split Terminal (⌘D)", action: #selector(splitPressed))
         splitButton.isHidden = placement != .drawer
-        messageLine.font = DS.Typography.current.caption
-        messageLine.textColor = .secondaryLabelColor
+        messageLine.font = DS.TextRole.label.font
+        messageLine.textColor = DS.Color.text2
         messageLine.lineBreakMode = .byTruncatingTail
         let messageIcon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil) ?? NSImage())
-        messageIcon.contentTintColor = DS.Palette.attention
+        messageIcon.symbolConfiguration = .init(pointSize: DS.Size.iconPointRow, weight: .regular)
+        messageIcon.contentTintColor = DS.Color.warningText
         messageBar.setViews([messageIcon, messageLine], in: .leading)
         messageBar.orientation = .horizontal
-        messageBar.spacing = DS.Spacing.xs
-        messageBar.edgeInsets = NSEdgeInsets(top: 3, left: DS.Spacing.m, bottom: 3, right: DS.Spacing.m)
+        messageBar.alignment = .centerY
+        messageBar.spacing = DS.Space.s6
+        messageBar.edgeInsets = NSEdgeInsets(top: 4, left: DS.Space.s12, bottom: 4, right: DS.Space.s12)
         messageBar.isHidden = true
         splitView.isVertical = true
         splitView.dividerStyle = .thin
@@ -78,7 +80,7 @@ public final class TerminalSurfaceController: NSViewController {
 
         let buttons = NSStackView(views: [splitButton, newButton])
         buttons.orientation = .horizontal
-        buttons.spacing = 2
+        buttons.spacing = DS.Space.s2
         for view in [tabStrip, buttons] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             header.addSubview(view)
@@ -98,7 +100,7 @@ public final class TerminalSurfaceController: NSViewController {
             header.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 30),
+            header.heightAnchor.constraint(equalToConstant: DS.Size.terminalTabStrip),
             separator.topAnchor.constraint(equalTo: header.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -109,11 +111,11 @@ public final class TerminalSurfaceController: NSViewController {
             content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            tabStrip.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: DS.Spacing.xs),
+            tabStrip.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: DS.Space.s6),
             tabStrip.topAnchor.constraint(equalTo: header.topAnchor),
             tabStrip.bottomAnchor.constraint(equalTo: header.bottomAnchor),
-            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -DS.Spacing.xs),
-            buttons.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -DS.Spacing.s),
+            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -DS.Space.s4),
+            buttons.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -DS.Space.s6),
             buttons.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             splitView.topAnchor.constraint(equalTo: content.topAnchor),
             splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -130,18 +132,10 @@ public final class TerminalSurfaceController: NSViewController {
         observation = TerminalObservation { [weak self] in self?.render() }
     }
 
-    private func configure(_ button: NSButton, symbol: String, label: String, toolTip: String, action: Selector) {
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
-        button.imagePosition = .imageOnly
-        button.controlSize = .small
+    private func configure(_ button: DSButton, symbol: String, label: String, toolTip: String, action: Selector) {
         button.toolTip = toolTip
-        button.setAccessibilityLabel(label)
         button.target = self
         button.action = action
-        button.widthAnchor.constraint(equalToConstant: 24).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 22).isActive = true
     }
 
     // MARK: Display
@@ -180,7 +174,7 @@ public final class TerminalSurfaceController: NSViewController {
         let splitID = placement == .drawer ? terminals?.set.splitSecondary : nil
         let creating = (terminals?.creatingCount ?? 0) + (isCreatingThread ? 1 : 0)
         tabStrip.update(records: records, selectedID: selectedID, splitID: splitID, creating: creating)
-        splitButton.state = splitID == nil ? .off : .on
+        splitButton.isSelected = splitID != nil
         splitButton.isEnabled = !records.isEmpty
         newButton.isEnabled = directory != nil
 
@@ -460,42 +454,42 @@ extension TerminalSurfaceController: TerminalTabStripDelegate {
     func tabStripNewTerminal(_ strip: TerminalTabStrip) { newTerminal() }
 }
 
-/// "No terminals in this thread" with one "New Terminal" action.
+/// "No terminals in this thread" with one "New Terminal" action: the DS empty-state recipe (32 pt glyph `text4`,
+/// `body` title, `label text2` hint, one outline button).
 @MainActor
 final class TerminalEmptyState: NSView {
     private let icon = NSImageView()
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
-    private let button = NSButton(title: "New Terminal", target: nil, action: nil)
+    private let button = DSButton(title: "New Terminal", variant: .outline, size: .small, shortcutHint: "⌘T")
     var onNewTerminal: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 22, weight: .light))
-        icon.contentTintColor = .tertiaryLabelColor
-        title.font = DS.Typography.current.bodyEmphasized
-        title.textColor = .secondaryLabelColor
-        detail.font = DS.Typography.current.caption
-        detail.textColor = .tertiaryLabelColor
+            .withSymbolConfiguration(.init(pointSize: 24, weight: .regular))
+        icon.contentTintColor = DS.Color.text4
+        title.font = DS.TextRole.bodyEmph.font
+        title.textColor = DS.Color.text
+        detail.font = DS.TextRole.label.font
+        detail.textColor = DS.Color.text2
         detail.alignment = .center
         detail.maximumNumberOfLines = 2
-        button.bezelStyle = .push
-        button.controlSize = .regular
         button.target = self
         button.action = #selector(pressed)
         button.toolTip = "New Terminal (⌘T)"
         let stack = NSStackView(views: [icon, title, detail, button])
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = DS.Spacing.s
-        stack.setCustomSpacing(DS.Spacing.l, after: detail)
+        stack.spacing = DS.Space.s6
+        stack.setCustomSpacing(DS.Space.s10, after: icon)
+        stack.setCustomSpacing(DS.Space.s14, after: detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DS.Spacing.xl),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DS.Space.s24),
             detail.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
         ])
     }
@@ -508,18 +502,21 @@ final class TerminalEmptyState: NSView {
         self.detail.stringValue = detail ?? ""
         self.detail.isHidden = detail == nil
         button.isHidden = action == nil
-        if let action { button.title = action }
+        if let action {
+            button.title = action
+            button.shortcutHint = action == "New Terminal" ? "⌘T" : nil
+        }
     }
 
     @objc private func pressed() { onNewTerminal?() }
 }
 
-/// The surface's root view: draws the window background (so the drawer reads as part of the window in both
-/// appearances, and snapshots taken with `cacheDisplay` include it).
+/// The surface's root view: the solid `canvas` (the terminal is a docked surface, visual-language.md §4), so the
+/// drawer, its tab strip and the emulator read as one region; snapshots taken with `cacheDisplay` include it.
 @MainActor
 final class SurfaceBackgroundView: NSView {
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
+        DS.Color.canvas.setFill()
         dirtyRect.fill()
     }
 }
@@ -529,6 +526,7 @@ final class SurfaceBackgroundView: NSView {
 @MainActor
 final class TerminalSplitView: NSSplitView {
     var needsEqualWidths = false
+    override var dividerColor: NSColor { DS.Color.border }
 
     override func layout() {
         super.layout()
