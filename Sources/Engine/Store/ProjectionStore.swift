@@ -115,25 +115,47 @@ public struct SearchHit: Hashable, Sendable {
 /// state, so every screen opens from disk before the server answers.
 ///
 /// Threading: an actor; every database call is async and runs on GRDB's own queues, never on the main thread.
-/// Writes are transactional batches (`apply`). Reads return immutable `Sendable` domain values.
+/// Writes are transactional batches (`apply`). Reads return immutable `Sendable` domain values. Opening (and migrating)
+/// is synchronous: create the store off the main actor (`open(location:changes:)`).
 ///
 /// Observation: `changes` routes changes to topic subscribers (`observe`) so a consumer wakes only for its own thread,
 /// project or the attention list. `apply` publishes after commit unless told not to (the engine publishes live
 /// changes itself, slightly ahead of disk).
 ///
-/// The cache is disposable: `rebuild()` clears it, and a database written by a newer schema (or unreadable) is deleted
-/// and recreated at open, rather than failing. Credentials are never stored.
+/// The opencode tables are disposable (`rebuild()` clears them), but the app-owned tables (drafts, projects,
+/// preferences) are not. So a database is never deleted: one that is verifiably corrupt (`SQLITE_CORRUPT`,
+/// `SQLITE_NOTADB`) or written by a newer schema is moved aside (quarantined, with its WAL) and a new one created
+/// (`recovery` says which); any other failure (lock, I/O, permission, a failing migration) throws `OpenError` and leaves
+/// the file untouched for a retry. Credentials are never stored.
 public actor ProjectionStore {
     public enum Location: Sendable {
         case file(URL)
         case inMemory
     }
 
+    /// What opening had to do to get a usable database.
+    public enum Recovery: Sendable, Hashable {
+        case none
+        /// The file was not a readable database; it was moved to this URL and a new one created.
+        case quarantinedCorrupt(URL)
+        /// A newer BelloCode wrote the file; it was moved to this URL (for that build) and a new one created.
+        case quarantinedNewerSchema(URL)
+    }
+
+    /// The database could not be opened for a reason that may pass (locked, I/O, permission, failed migration). The file
+    /// was not changed; retry later. The description carries only the SQLite result code or error type, never paths or
+    /// content.
+    public struct OpenError: Error, Sendable, CustomStringConvertible {
+        public var reason: String
+        public var description: String { "The local database could not be opened (\(reason)). It was left unchanged." }
+    }
+
     public nonisolated let changes: ChangeBus
     public nonisolated let location: Location
     private let writer: any DatabaseWriter
-    /// Whether opening found an incompatible or unreadable database and recreated it.
-    public nonisolated let wasRecreated: Bool
+    public nonisolated let recovery: Recovery
+    /// Whether opening found an incompatible or unreadable database and set it aside for a new one.
+    public nonisolated var wasRecreated: Bool { recovery != .none }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -144,6 +166,10 @@ public actor ProjectionStore {
     private static let decoder = JSONDecoder()
 
     public init(location: Location, changes: ChangeBus = ChangeBus()) throws {
+        try self.init(location: location, changes: changes, migrator: ProjectionSchema.migrator)
+    }
+
+    init(location: Location, changes: ChangeBus, migrator: DatabaseMigrator) throws {
         self.location = location
         self.changes = changes
         let signpost = EngineSignposts.database.beginInterval("open")
@@ -151,12 +177,18 @@ public actor ProjectionStore {
         switch location {
         case .inMemory:
             let queue = try DatabaseQueue()
-            try ProjectionSchema.migrator.migrate(queue)
+            try migrator.migrate(queue)
             writer = queue
-            wasRecreated = false
+            recovery = .none
         case .file(let url):
-            (writer, wasRecreated) = try Self.openFile(url)
+            (writer, recovery) = try Self.openFile(url, migrator: migrator)
         }
+    }
+
+    /// Opens (and migrates) the store off the caller's actor, so a slow disk or migration never blocks the main thread.
+    @concurrent
+    public static func open(location: Location, changes: ChangeBus = ChangeBus()) async throws -> ProjectionStore {
+        try ProjectionStore(location: location, changes: changes)
     }
 
     private static func configuration() -> Configuration {
@@ -166,28 +198,91 @@ public actor ProjectionStore {
         return configuration
     }
 
-    /// Opens (or creates) the database; deletes and recreates it if it is unreadable or was written by a newer schema.
-    private static func openFile(_ url: URL) throws -> (any DatabaseWriter, Bool) {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    private enum OpenProblem: Error {
+        case corrupt
+        case newerSchema
+    }
+
+    /// Opens (or creates) the database. Corrupt or newer-schema files are quarantined; anything else throws.
+    private static func openFile(_ url: URL, migrator: DatabaseMigrator) throws -> (any DatabaseWriter, Recovery) {
         do {
-            let pool = try DatabasePool(path: url.path, configuration: configuration())
-            let migrator = ProjectionSchema.migrator
-            let superseded = try pool.read { try migrator.hasBeenSuperseded($0) }
-            if superseded { throw SchemaMismatch() }
-            try migrator.migrate(pool)
-            return (pool, false)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         } catch {
-            EngineSignposts.log.error("projection cache unusable (\(String(describing: type(of: error)), privacy: .public)); recreating")
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(atPath: url.path + suffix)
-            }
-            let pool = try DatabasePool(path: url.path, configuration: configuration())
-            try ProjectionSchema.migrator.migrate(pool)
-            return (pool, true)
+            throw OpenError(reason: "folder: \((error as NSError).domain) \((error as NSError).code)")
+        }
+        let problem: OpenProblem
+        do {
+            return (try openAndMigrate(url, migrator: migrator), .none)
+        } catch let found as OpenProblem {
+            problem = found
+        } catch let error as DatabaseError where [.SQLITE_CORRUPT, .SQLITE_NOTADB].contains(error.resultCode) {
+            problem = .corrupt
+        } catch let error as DatabaseError {
+            EngineSignposts.log.error("projection store unavailable: SQLite \(error.resultCode.rawValue, privacy: .public)")
+            throw OpenError(reason: "SQLite result \(error.extendedResultCode.rawValue)")
+        } catch {
+            EngineSignposts.log.error("projection store unavailable: \(String(describing: type(of: error)), privacy: .public)")
+            throw OpenError(reason: String(describing: type(of: error)))
+        }
+        let label = problem == .corrupt ? "corrupt" : "newer"
+        let moved: URL
+        do {
+            moved = try quarantine(url, label: label)
+        } catch {
+            throw OpenError(reason: "could not move the \(label) database aside")
+        }
+        EngineSignposts.log.error("projection store \(label, privacy: .public): moved aside, starting a new one")
+        do {
+            let writer = try openAndMigrate(url, migrator: migrator)
+            return (writer, problem == .corrupt ? .quarantinedCorrupt(moved) : .quarantinedNewerSchema(moved))
+        } catch {
+            throw OpenError(reason: "new database: \(String(describing: type(of: error)))")
         }
     }
 
-    private struct SchemaMismatch: Error {}
+    private static func openAndMigrate(_ url: URL, migrator: DatabaseMigrator) throws -> DatabasePool {
+        let pool = try DatabasePool(path: url.path, configuration: configuration())
+        do {
+            if try pool.read({ try migrator.hasBeenSuperseded($0) }) { throw OpenProblem.newerSchema }
+            try migrator.migrate(pool)
+            return pool
+        } catch {
+            try? pool.close()
+            throw error
+        }
+    }
+
+    /// Moves the database and its WAL/SHM files to `<name>.<label>-<timestamp>` beside it (the WAL keeps its suffix, so
+    /// the moved database still opens with its last writes).
+    private static func quarantine(_ url: URL, label: String) throws -> URL {
+        let stamp = Int(Date().timeIntervalSince1970 * 1000)
+        let target = url.deletingLastPathComponent().appending(path: "\(url.lastPathComponent).\(label)-\(stamp)")
+        let manager = FileManager.default
+        try manager.moveItem(at: url, to: target)
+        for suffix in ["-wal", "-shm"] where manager.fileExists(atPath: url.path + suffix) {
+            try manager.moveItem(atPath: url.path + suffix, toPath: target.path + suffix)
+        }
+        pruneQuarantine(beside: url, keep: quarantineLimit)
+        return target
+    }
+
+    /// Quarantined copies kept beside the database (the newest; older ones are removed).
+    static let quarantineLimit = 3
+
+    private static func pruneQuarantine(beside url: URL, keep: Int) {
+        let manager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        let prefix = url.lastPathComponent + "."
+        guard let names = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
+        let stamp = { (name: String) -> Int in Int(name.split(separator: "-").last ?? "") ?? 0 }
+        let copies = names.filter { name in
+            name.hasPrefix(prefix) && !name.hasSuffix("-wal") && !name.hasSuffix("-shm")
+                && (name.contains(".corrupt-") || name.contains(".newer-"))
+        }.sorted { stamp($0) > stamp($1) }
+        for name in copies.dropFirst(keep) {
+            for suffix in ["", "-wal", "-shm"] { try? manager.removeItem(at: directory.appending(path: name + suffix)) }
+        }
+    }
 
     /// Subscribes to changes for one topic.
     public nonisolated func observe(_ topic: ChangeTopic) -> ChangeSubscription { changes.subscribe(topic) }
