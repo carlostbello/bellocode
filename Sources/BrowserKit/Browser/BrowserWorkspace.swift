@@ -75,10 +75,32 @@ public final class BrowserWorkspace {
         parking.isExcludedFromWindowsMenu = true
         parking.contentView = NSView(frame: parking.contentRect(forFrameRect: parking.frame))
         loadHistory()
+        installInputMonitor()
+    }
+
+    private var inputMonitor: Any?
+
+    /// Real clicks and keystrokes in a web view (the agent's synthesized events never reach the app's event queue).
+    private func installInputMonitor() {
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
+            MainActor.assumeIsolated {
+                var view: NSView?
+                if event.type == .keyDown {
+                    view = event.window?.firstResponder as? NSView
+                } else if let content = event.window?.contentView {
+                    view = content.hitTest(content.convert(event.locationInWindow, from: nil))
+                }
+                while let current = view, !(current is BrowserWebView) { view = current.superview }
+                if let webView = view as? BrowserWebView, !webView.isAgentEvent(event) { webView.tab?.userInteracted() }
+            }
+            return event
+        }
     }
 
     /// Saves and releases every set (window or app closing). Attachments end; PTYs and pages are not involved.
     public func close() async {
+        if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
+        inputMonitor = nil
         await flushSaves()
         await flushHistory()
         for set in sets.values {

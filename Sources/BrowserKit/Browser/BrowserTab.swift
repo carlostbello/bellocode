@@ -2,8 +2,9 @@ import AppKit
 import OpenCodeKit
 import WebKit
 
-/// The WKWebView of a tab. Tells real user input apart from the agent's synthesized input, so a person interacting
-/// with a tab the agent is driving pauses the agent on that tab (UX: the user always wins).
+/// The WKWebView of a tab. The person's clicks and keys are seen by the workspace's event monitor (synthesized agent
+/// events go straight to the view and never pass through the app's event queue), so a person interacting with a tab
+/// the agent is driving pauses the agent on that tab (the user always wins).
 @MainActor
 public final class BrowserWebView: WKWebView {
     weak var tab: BrowserTab?
@@ -13,30 +14,25 @@ public final class BrowserWebView: WKWebView {
     /// Extra items for the context menu (set by the pane).
     var contextMenuProvider: ((NSMenu) -> Void)?
 
+    /// Events the agent synthesized (number and timestamp). WebKit re-posts unhandled key equivalents through the
+    /// event queue, where the input monitor would otherwise mistake them for the person. Bounded.
+    /// (`eventNumber` is only valid for mouse events, so type and timestamp identify an event.)
+    private var agentEvents: [(type: UInt, timestamp: TimeInterval)] = []
+
+    func remember(_ event: NSEvent) {
+        agentEvents.append((event.type.rawValue, event.timestamp))
+        if agentEvents.count > 64 { agentEvents.removeFirst(agentEvents.count - 64) }
+    }
+
+    func isAgentEvent(_ event: NSEvent) -> Bool {
+        isDeliveringAgentInput || agentEvents.contains { $0.type == event.type.rawValue && $0.timestamp == event.timestamp }
+    }
+
     func deliveringAgentInput<T>(_ body: () throws -> T) rethrows -> T {
+        let outer = isDeliveringAgentInput
         isDeliveringAgentInput = true
-        defer { isDeliveringAgentInput = false }
+        defer { isDeliveringAgentInput = outer }
         return try body()
-    }
-
-    private func userInput() {
-        guard !isDeliveringAgentInput else { return }
-        tab?.userInteracted()
-    }
-
-    public override func mouseDown(with event: NSEvent) {
-        userInput()
-        super.mouseDown(with: event)
-    }
-
-    public override func rightMouseDown(with event: NSEvent) {
-        userInput()
-        super.rightMouseDown(with: event)
-    }
-
-    public override func keyDown(with event: NSEvent) {
-        userInput()
-        super.keyDown(with: event)
     }
 
     public override func scrollWheel(with event: NSEvent) {
@@ -515,6 +511,15 @@ public final class BrowserTab: NSObject {
                     self?.resumeLoadWaiters()
                 }
             }
+        }
+    }
+
+    /// After recreating a suspended web view: waits until it has a document and finished loading (bounded).
+    func waitForRestore(timeout: Duration = .seconds(15)) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while let webView, webView.url == nil || webView.isLoading, ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(30))
         }
     }
 

@@ -39,7 +39,7 @@ final class BrowserContentView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var isFlipped: Bool { true }
+    override nonisolated var isFlipped: Bool { true }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
@@ -231,7 +231,7 @@ final class AgentCursorView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    override var isFlipped: Bool { true }
+    override nonisolated var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     func place(at point: NSPoint) {

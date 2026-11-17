@@ -257,5 +257,5 @@ final class BrowserTabView: NSView {
 }
 
 final class BrowserFlippedView: NSView {
-    override var isFlipped: Bool { true }
+    override nonisolated var isFlipped: Bool { true }
 }

@@ -438,10 +438,14 @@ struct BrowserOperations {
 
     private func press(_ chord: String) async throws {
         let key = try NativeInput.parse(chord)
+        let trace = ProcessInfo.processInfo.environment["BROWSER_DEMO_TRACE"] != nil
         if set.inputMode == .native {
             do {
+                if trace { print("  press: native start") }
                 try NativeInput.press(webView, key)
+                if trace { print("  press: delivered") }
                 await settle()
+                if trace { print("  press: settled") }
                 set.logDelivery("press", "native")
                 return
             } catch let error as NativeInput.Unavailable {

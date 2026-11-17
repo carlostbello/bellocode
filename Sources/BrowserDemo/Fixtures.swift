@@ -1,22 +1,55 @@
 // Fixture pages for the browser self-test and end-to-end run. Origin A serves pages; origin B (a different port on `localhost`) is cross-site.
+import Foundation
 
 enum Fixtures {
-    static func route(_ path: String, crossOrigin: String, sameOrigin: String) -> (String, String)? {
+    static func route(_ path: String, headers: [String], crossOrigin: String, sameOrigin: String) -> FixtureResponse? {
         let bare = path.split(separator: "?").first.map(String.init) ?? path
-        let html = "text/html"
+        func page(_ body: String) -> FixtureResponse { FixtureResponse(body: body) }
         switch bare {
-        case "/", "/form.html": return (html, form)
-        case "/dialogs.html": return (html, dialogs)
-        case "/console.html": return (html, console)
-        case "/spa.html", "/spa/details": return (html, spa)
-        case "/frames.html": return (html, frames(same: sameOrigin, cross: crossOrigin))
-        case "/child.html": return (html, child)
-        case "/shadow.html": return (html, shadow)
-        case "/long.html": return (html, long)
-        case "/slow.html": return (html, "<!doctype html><title>Slow</title><p id=t>Loading</p><script>setTimeout(() => { t.textContent = 'Ready now'; }, 600)</script>")
+        case "/", "/form.html": return page(form)
+        case "/dialogs.html": return page(dialogs)
+        case "/console.html": return page(console)
+        case "/spa.html", "/spa/details": return page(spa)
+        case "/frames.html": return page(frames(same: sameOrigin, cross: crossOrigin))
+        case "/child.html": return page(child)
+        case "/shadow.html": return page(shadow)
+        case "/long.html": return page(long)
+        case "/slow.html": return page("<!doctype html><title>Slow</title><p id=t>Loading</p><script>setTimeout(() => { t.textContent = 'Ready now'; }, 600)</script>")
+        case "/popup.html": return page(popup)
+        case "/scheme.html": return page(scheme)
+        case "/landing.html": return page(landing)
+        case "/report.csv":
+            return FixtureResponse(type: "text/csv", body: "name,plan\nAda Lovelace,pro\n", headers: ["Content-Disposition: attachment; filename=\"report.csv\""])
+        case "/private":
+            // HTTP Basic: ada / secret.
+            let expected = "Authorization: Basic " + Data("ada:secret".utf8).base64EncodedString()
+            if headers.contains(where: { $0.caseInsensitiveCompare(expected) == .orderedSame }) {
+                return page("<!doctype html><title>Members</title><h1 id=welcome>Welcome, Ada</h1>")
+            }
+            return FixtureResponse(status: "401 Unauthorized", body: "<!doctype html><title>Sign in</title>sign in required", headers: ["WWW-Authenticate: Basic realm=\"Fixture members\""])
         default: return nil
         }
     }
+
+    static let popup = """
+    <!doctype html><html><head><title>Popup fixture</title>\(style)</head><body>
+    <a id="blank" href="/landing.html?from=blank" target="_blank">Open landing in a new tab</a>
+    <button id="open" onclick="window.open('/landing.html?from=open')">window.open landing</button>
+    <a id="download" href="/report.csv">Download report</a>
+    </body></html>
+    """
+
+    static let landing = "<!doctype html><title>Landing</title>\(style)<h1>Landing page</h1><p id=from></p><script>from.textContent = location.search</script>"
+
+    static let scheme = """
+    <!doctype html><html><head><title>Scheme fixture</title><meta name="color-scheme" content="light dark">
+    <style>body{font:16px -apple-system,sans-serif;margin:24px;background:#fff;color:#111} @media (prefers-color-scheme: dark){body{background:#1c1c1e;color:#f2f2f7}}
+    .card{border:1px solid #8884;border-radius:12px;padding:16px;max-width:520px}</style></head><body>
+    <div class="card"><h1>Preview</h1><p id="mode"></p><p id="size"></p></div>
+    <script>const update = () => { mode.textContent = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; size.textContent = innerWidth + 'x' + innerHeight; };
+    update(); matchMedia('(prefers-color-scheme: dark)').addEventListener('change', update); addEventListener('resize', update);</script>
+    </body></html>
+    """
 
     static let style = "<style>body{font:14px -apple-system,sans-serif;margin:16px} label{display:block;margin:6px 0} .box{padding:8px;border:1px solid #888;margin:6px 0}</style>"
 

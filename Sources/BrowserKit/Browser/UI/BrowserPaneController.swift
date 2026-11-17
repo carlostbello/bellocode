@@ -762,3 +762,8 @@ final class BrowserPaneView: NSView {
 extension BrowserPaneController {
     var findBarText: String { findBar.field.stringValue }
 }
+
+extension BrowserPaneController {
+    /// Puts text in the find field (the snapshot harness).
+    func findBarSet(_ text: String) { findBar.field.stringValue = text }
+}

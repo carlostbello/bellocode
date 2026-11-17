@@ -487,8 +487,11 @@ extension BrowserTabSet: BrowserBridgeHost {
         if let dialog = tab.dialog, !["dialog", "console", "stop", "files.list", "files.get"].contains(command.type) {
             throw BrowserFailure(.dialogOpen, "A JavaScript \(dialog.type) is blocking this tab (WebKit cannot script or capture it until answered): \"\(dialog.message.prefix(200))\". Call browser.dialog({tabID, action: \"accept\"}) or \"dismiss\" first.")
         }
+        let wasLive = tab.isLive
         workspace?.prepareForAgent(tab)
         tab.lastAgentAction = Date()
+        // A suspended tab was just recreated: wait for its page to come back before acting on it.
+        if !wasLive, tab.info.url != "about:blank" { try await tab.waitForRestore() }
         return try await withActivity(tab, Self.describe(command)) {
             try await BrowserOperations(set: self, tab: tab, command: command).run()
         }

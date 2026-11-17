@@ -69,13 +69,17 @@ enum NativeInput {
     }
 
     private static func click(_ webView: BrowserWebView, window: NSWindow, point: NSPoint, flags: NSEvent.ModifierFlags, button: String, count: Int) throws {
-        if let moved = mouse(.mouseMoved, window, point, flags, clicks: 0) { webView.mouseMoved(with: moved) }
+        if let moved = mouse(.mouseMoved, window, point, flags, clicks: 0) {
+            webView.mouseMoved(with: moved)
+        }
         if button == "right" { webView.suppressMenusUntil = Date().addingTimeInterval(1) }
         for click in 1...max(1, count) {
             let (downType, upType): (NSEvent.EventType, NSEvent.EventType) = button == "right" ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
             guard let down = mouse(downType, window, point, flags, clicks: click), let up = mouse(upType, window, point, flags, clicks: click) else {
                 throw Unavailable(description: "could not create event")
             }
+            webView.remember(down)
+            webView.remember(up)
             if button == "right" {
                 webView.rightMouseDown(with: down)
                 webView.rightMouseUp(with: up)
@@ -152,6 +156,7 @@ enum NativeInput {
                 windowNumber: window.windowNumber, context: nil, characters: key.characters,
                 charactersIgnoringModifiers: key.charactersIgnoringModifiers, isARepeat: false, keyCode: key.keyCode
             ) else { throw Unavailable(description: "could not create key event") }
+            webView.remember(event)
             if type == .keyDown {
                 // Command chords travel as key equivalents first, as AppKit does for real input. WebKit claims them,
                 // lets the page see a trusted keydown, and hands unhandled ones back to the app's menu - which only
