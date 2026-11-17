@@ -242,3 +242,32 @@ struct HostGitIsolationTests {
         }
     }
 }
+
+/// M3 (docs/reviews/M3-M6-review.md): a report is "Isolated" only when every applicable check ran and held.
+@Suite("Isolation verdict")
+struct IsolationVerdictTests {
+    func report(_ outcomes: [IsolationReport.Outcome]) -> IsolationReport {
+        IsolationReport(date: Date(), directory: "/p", full: true, checks: outcomes.enumerated().map { .init("check \($0.offset)", $0.element) })
+    }
+
+    @Test func skippedChecksAreNotVerifiedNeverIsolated() {
+        let skipped = report([.confined("git"), .container("shell"), .skipped("no project")])
+        #expect(skipped.verdict == .notVerified)
+        #expect(!skipped.passed)
+        #expect(skipped.summary.hasPrefix("Not verified"))
+        // Only "off" and confined checks, nothing exercised in a container: not verified either.
+        let nothingRan = report([.confined("git"), .off("formatters off")])
+        #expect(nothingRan.verdict == .notVerified)
+        // The server offline (the only other check): not verified.
+        #expect(report([.confined("git"), .skipped("opencode is not running")]).verdict == .notVerified)
+    }
+
+    @Test func problemsWinAndAFullRunIsIsolated() {
+        #expect(report([.container("shell"), .skipped("x"), .host("pty ran on this Mac")]).verdict == .problem)
+        #expect(report([.container("shell"), .failed("no answer")]).verdict == .problem)
+        let full = report([.confined("git"), .container("shell"), .container("pty"), .off("formatters off")])
+        #expect(full.verdict == .isolated)
+        #expect(full.passed)
+        #expect(full.summary.hasPrefix("Isolated"))
+    }
+}

@@ -255,9 +255,10 @@ enum SmokeTest {
             return false
         }
         for check in report.checks { log("  isolation: \(check.name): \(check.outcome.word) - \(check.outcome.detail)") }
-        log("isolation: \(report.summary)")
-        guard report.passed, report.ranInContainer >= 4 else {
-            log("FAIL isolation check")
+        log("isolation: \(report.verdict.word): \(report.summary)")
+        // Only a full pass counts: a skipped check makes the report "Not verified", which fails the smoke test.
+        guard report.verdict == .isolated, report.ranInContainer >= 4 else {
+            log("FAIL isolation check (\(report.verdict.word))")
             return false
         }
         return true

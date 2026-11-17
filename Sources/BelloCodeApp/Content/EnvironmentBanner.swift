@@ -195,7 +195,7 @@ final class RuntimeStatusButton: DSButton {
         let label = RuntimeStatusLabel(runtime: service.runtime, enabled: service.isEnabled)
         if title != label.text { title = label.text }
         if symbolName != label.symbol { symbolName = label.symbol }
-        toolTip = service.isolation.map { "Isolation: \($0.summary)" } ?? (service.runtime?.userMessage ?? "Checking Rancher Desktop")
+        toolTip = service.isolation.map { "Isolation: \($0.verdict.word). \($0.summary)" } ?? (service.runtime?.userMessage ?? "Checking Rancher Desktop")
         isHidden = !service.isEnabled
         // The header bar places this item by its fitting size: re-run its layout when the label changes.
         superview?.needsLayout = true

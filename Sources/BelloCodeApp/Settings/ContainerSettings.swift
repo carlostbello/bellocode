@@ -259,8 +259,8 @@ struct IsolationReportView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DS.Space.s8) {
                 if let report {
-                    DSPillView(report.passed ? "Isolated" : "Problem", tone: report.passed ? .success : .danger,
-                               symbolName: report.passed ? "checkmark.shield" : "exclamationmark.shield")
+                    DSPillView(report.verdict.word, tone: report.verdict == .isolated ? .success : report.verdict == .problem ? .danger : .warning,
+                               symbolName: report.verdict == .isolated ? "checkmark.shield" : report.verdict == .problem ? "exclamationmark.shield" : "questionmark.diamond")
                     Text(report.summary).font(.ds(.meta)).foregroundStyle(DSColor.text2).lineLimit(2)
                 } else {
                     Text("Not checked yet").font(.ds(.body)).foregroundStyle(DSColor.text2)
@@ -275,7 +275,8 @@ struct IsolationReportView: View {
                 ForEach(report.checks) { check in
                     HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
                         Text(check.outcome.word).font(.ds(.metaEmph))
-                            .foregroundStyle(check.outcome.isProblem ? DSColor.dangerText : DSColor.successText).frame(width: 64, alignment: .leading)
+                            .foregroundStyle(check.outcome.isProblem ? DSColor.dangerText : check.outcome.word == "Skipped" ? DSColor.warningText : DSColor.successText)
+                            .frame(width: 64, alignment: .leading)
                         Text(check.name).font(.ds(.label)).foregroundStyle(DSColor.text).frame(width: 150, alignment: .leading)
                         Text(check.outcome.detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).lineLimit(2)
                         Spacer(minLength: 0)
