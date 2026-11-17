@@ -50,6 +50,14 @@ Since the spike: screenshots of background tabs work (parking window); suspended
   (60 s → deny), remembered per site only while the app runs; geolocation has no public WKWebView delegate and stays
   denied. HTTP sign-in credentials go straight to WebKit, never stored or logged. Injected scripts run in an isolated
   world; the page world only gets the console hook (untrusted).
+- Downloads are bounded: 3 write at once, 7 more wait as "Queued" (WebKit gets no destination until a slot frees,
+  and cancelling a queued one releases its place), further ones are cancelled and shown as "Refused"; the shelf keeps
+  20 entries and trims the oldest ended ones whenever a download is added or ends. Progress from WebKit's KVO (any
+  thread) is copied and handed to the main actor explicitly.
+- `files.get` of a download hands out only the file that finished: its device, inode, size and modification time are
+  recorded at completion and checked again on a descriptor opened without following links, before and after a read
+  capped at 5 MiB, off the main actor and cancellable. A moved, replaced, linked or grown file is refused
+  (`file_changed`), a missing one is `file_unavailable`.
 
 ## Model guidance
 Session instruction entry `bellocode.browser` (`PUT /api/experimental/session/{id}/instructions/entries/{key}`),

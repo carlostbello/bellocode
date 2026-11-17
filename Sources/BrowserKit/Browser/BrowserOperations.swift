@@ -121,8 +121,18 @@ struct BrowserOperations {
             guard let item = set.workspace?.downloads.completed(forTab: tab.id).first(where: { $0.fileID == fileID }), let destination = item.destination else {
                 throw BrowserFailure("file_unavailable", "This file ID is not a completed capture or download of this tab. Call browser.files.list({tabID}) and use an exact returned id.")
             }
-            guard item.bytes <= Int64(BrowserContract.maxFileBytes), let data = try? Data(contentsOf: destination) else {
+            let data: Data
+            do {
+                guard let identity = item.identity else { throw DownloadReadError.unavailable }
+                data = try await BrowserDownloads.readVerified(destination, identity: identity, limit: BrowserContract.maxFileBytes)
+            } catch DownloadReadError.tooLarge {
                 throw BrowserFailure("too_large", "The download is larger than 5 MiB, so it stays on the user's Mac (\(item.filename) in Downloads). Tell the user where it is.")
+            } catch DownloadReadError.changed {
+                throw BrowserFailure("file_changed", "\(item.filename) changed on disk after the download finished (moved, replaced or edited), so it is not shared. Ask the user to download it again.")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw BrowserFailure("file_unavailable", "\(item.filename) can no longer be read from Downloads. Ask the user to download it again.")
             }
             return BrowserResult(value: ["tab": tabValue], files: [BrowserFile(id: item.fileID, name: item.filename, mime: Self.mime(for: item.filename), data: data)])
         case "console":
