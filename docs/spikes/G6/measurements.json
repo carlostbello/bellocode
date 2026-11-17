@@ -1,0 +1,169 @@
+{
+  "cancellation" : {
+    "exit_code" : "143",
+    "processes_left_after_2.3_s (bg job, double-forked, TERM-ignoring parent)" : "0",
+    "processes_left_when_command_uses_setsid" : "1",
+    "stream_end_after_cancel_ms" : "2011"
+  },
+  "coldStart" : {
+    "createStartFirstExec" : {
+      "max" : 81.794334,
+      "mean" : 73.06129159999999,
+      "min" : 66.84575,
+      "n" : 5,
+      "p50" : 69.866208,
+      "p95" : 81.794334
+    },
+    "startStoppedFirstExec" : {
+      "max" : 71.416209,
+      "mean" : 55.56503360000001,
+      "min" : 50.587084,
+      "n" : 5,
+      "p50" : 51.758542,
+      "p95" : 71.416209
+    }
+  },
+  "concurrency" : {
+    "20_execs_correct" : 20,
+    "20_execs_sleep_0.5_wall_ms" : 623.279333,
+    "20_helpers_correct" : 20,
+    "20_helpers_sleep_0.5_wall_ms" : 703.848542
+  },
+  "execRoundTrip" : {
+    "bellocodeExec_process_-c_true" : {
+      "max" : 42.883917,
+      "mean" : 20.235506670000003,
+      "min" : 15.737042,
+      "n" : 200,
+      "p50" : 20.260959,
+      "p95" : 23.667125
+    },
+    "engineExec_true" : {
+      "max" : 33.195,
+      "mean" : 11.281919375000003,
+      "min" : 9.868208,
+      "n" : 200,
+      "p50" : 10.795333,
+      "p95" : 13.463417
+    },
+    "engineExec_wrapped_sh" : {
+      "max" : 27.791541,
+      "mean" : 16.703065835000004,
+      "min" : 10.022875,
+      "n" : 200,
+      "p50" : 15.500667,
+      "p95" : 26.520417
+    },
+    "host_\/bin\/sh_-c_true" : {
+      "max" : 75.356292,
+      "mean" : 5.897079750000001,
+      "min" : 2.5305,
+      "n" : 200,
+      "p50" : 3.9085,
+      "p95" : 5.563583
+    }
+  },
+  "fileIO" : {
+    "create_10000_small_files" : {
+      "container_exit" : 0,
+      "container_ms" : 1631.3115830000002,
+      "host_exit" : 0,
+      "host_ms" : 459.730292,
+      "ratio" : 3.5484100382056183
+    },
+    "delete_10000_small_files" : {
+      "container_exit" : 0,
+      "container_ms" : 959.389167,
+      "host_exit" : 0,
+      "host_ms" : 356.868917,
+      "ratio" : 2.688351720472198
+    },
+    "git_clone_local_11k_files" : {
+      "container_exit" : 0,
+      "container_ms" : 5582.818041,
+      "host_exit" : 0,
+      "host_ms" : 1409.120375,
+      "ratio" : 3.9619170512668234
+    },
+    "git_status_again" : {
+      "container_exit" : 0,
+      "container_ms" : 208.4705,
+      "host_exit" : 0,
+      "host_ms" : 118.801333,
+      "ratio" : 1.754782498947213
+    },
+    "git_status_first" : {
+      "container_exit" : 0,
+      "container_ms" : 380.345375,
+      "host_exit" : 0,
+      "host_ms" : 475.561917,
+      "ratio" : 0.7997809778363729
+    },
+    "grep_recursive_ts" : {
+      "container_exit" : 0,
+      "container_ms" : 732.091792,
+      "host_exit" : 0,
+      "host_ms" : 209.659833,
+      "ratio" : 3.4918075700270164
+    },
+    "remove_clone" : {
+      "container_exit" : 0,
+      "container_ms" : 1239.051125,
+      "host_exit" : 0,
+      "host_ms" : 479.873417,
+      "ratio" : 2.582037431342024
+    }
+  },
+  "machine" : {
+    "engine" : "Docker 29.9.2 in Rancher Desktop VM (Alpine Linux v3.24, 2 vCPU, 6.2 GB, vz + virtiofs)",
+    "host" : "macOS Version 27.0.1 (Build 26A434), 18 CPUs"
+  },
+  "ownership" : {
+    "as-root" : "host uid 501, group 20, mode 600, host can read: true",
+    "as-user" : "host uid 501, group 20, mode 666, host can read: true",
+    "host_0600_file_read_in_container_as_mapped_uid" : "readable"
+  },
+  "sharing" : {
+    "Library_not_shared" : "\/Library\/Developer: Engine API 400: invalid mount config for type \"bind\": bind source path does not exist: \/Library\/Developer",
+    "home" : "\/Users\/carlosbello\/.bellocode-g6-spike: container sees 6 entries, host has 6",
+    "private_tmp" : "\/private\/tmp: container sees 24 entries, host has 27",
+    "usr_share_not_shared" : "\/usr\/share\/man: Engine API 400: invalid mount config for type \"bind\": bind source path does not exist: \/usr\/share\/man",
+    "var_folders" : "\/var\/folders\/wm\/6pzgb_bn3rv3hb8jzgy3pp340000gn\/T\/: container sees 16664 entries, host has 17958"
+  },
+  "throughput" : {
+    "bellocodeExec_bytes_match" : 0,
+    "bellocodeExec_ms" : 51.875041,
+    "bytes" : 18777780,
+    "engineExec_TTY_ms" : 171.61125,
+    "engineExec_nonTTY_ms" : 61.957334,
+    "host_seq_ms" : 175.875875,
+    "tty_bytes" : 16888896
+  },
+  "ttyEcho" : {
+    "containerExecTTY" : {
+      "max" : 0.981916,
+      "mean" : 0.5179377300000001,
+      "min" : 0.276458,
+      "n" : 200,
+      "p50" : 0.491958,
+      "p95" : 0.84325
+    },
+    "hostPTY_script_cat" : {
+      "max" : 0.154708,
+      "mean" : 0.04041688999999996,
+      "min" : 0.014792,
+      "n" : 200,
+      "p50" : 0.038333,
+      "p95" : 0.054375
+    }
+  },
+  "visibility" : {
+    "container_write_seen_on_host_p50_ms_incl_exec_start" : 9.966458,
+    "host_write_seen_in_container_p50_ms_incl_exec_end" : 1.349542
+  },
+  "watchers" : {
+    "fsevents_on_host_for_container_writes" : "events delivered (95 ms incl. exec)",
+    "inotify_in_container_for_container_writes" : "events delivered",
+    "inotify_in_container_for_host_writes" : "NO events (other only)"
+  }
+}

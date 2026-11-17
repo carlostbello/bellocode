@@ -45,7 +45,9 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         "BELLOCODE_EXEC_CONFIG", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "OPENCODE_CLIENT",
     ]
     public static let hostOnlyPrefixes = ["XDG_", "__CF", "DYLD_", "OPENCODE_PASSWORD", "OPENCODE_SERVER", "OPENCODE_DISABLE",
-                                          "OPENCODE_CONFIG", "OPENCODE_PTY", "BUN_", "Apple_", "LC_TERMINAL"]
+                                          "OPENCODE_CONFIG", "OPENCODE_PTY", "BUN_", "Apple_", "LC_TERMINAL",
+                                          // Host git policy (hooks off for host git) must not leak into the container's git.
+                                          "GIT_CONFIG_"]
 
     public static func forwardedEnvironment(_ environment: [String: String]) -> [String: String] {
         environment.filter { name, _ in

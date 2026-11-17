@@ -1,0 +1,19 @@
+{
+  "inotify_bridge": {
+    "method": "bellocode-exec in ~/.bellocode-g6-spike/bench; inotifywait -m in the container; host writes; then an in-container `touch -c`",
+    "host_create_and_modify": "no inotify events in the container",
+    "in_container_touch_c": "ATTRIB event delivered for the touched file",
+    "conclusion": "host edits (the agent's file tools) do not wake watchers inside the container; a host FSEvents -> batched `touch -c` exec bridge, or polling watchers (CHOKIDAR_USEPOLLING=1, WATCHPACK_POLLING=true), is needed for hot reload"
+  },
+  "git_worktree_in_container": {
+    "method": "host `git worktree add` under opencode's worktree directory (mounted at the same path); git in the container",
+    "gitdir_file": "absolute host path (.../proj/.git/worktrees/feature), resolves in the container because paths match",
+    "git_status": "fails: 'detected dubious ownership' (host-created directories can appear as uid 0 inside the container)",
+    "git_status_with_GIT_CONFIG_safe.directory=*": "works",
+    "git_commit_in_worktree": "works; the commit is visible to host git"
+  },
+  "ownership_inside_container": "files and directories created on the host appear as uid 501 or uid 0 inside the container depending on the directory; files created in the container (as uid 501 or as root) appear on the host as the host user (uid 501, gid 20)",
+  "umask": "files created by an exec get mode 0666 on the host: set umask 022 in the wrapper",
+  "published_ports": "HostIp 127.0.0.1 -> limactl listens on 127.0.0.1 only; HostIp 0.0.0.0 -> limactl listens on *:port (every interface of the Mac)",
+  "seq_note": "host /usr/bin/seq (BSD) prints large numbers differently from GNU seq, so the byte counts differ; throughput compares time only"
+}
