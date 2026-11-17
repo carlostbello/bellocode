@@ -86,13 +86,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
-    /// Shuts the AuthService down, then stops the engine and its server; the child has exited before the app does.
+    /// Carries out pending deletes and waits for them, shuts the AuthService down, then stops the engine and its server;
+    /// the child has exited before the app does.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let runtime, !runtime.isStopped else { return .terminateNow }
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
         windows?.closeAllForTermination()
         Task { @MainActor in
+            // Deletes still in their Undo window are sent now, and the engine stops only after their results (M5).
+            let failed = await PendingThreadDeletions.shared(for: runtime.engine).drain()
+            if !failed.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = failed.count == 1 ? "A thread could not be deleted" : "\(failed.count) threads could not be deleted"
+                alert.informativeText = "They are still there and will show again the next time BelloCode opens."
+                alert.runModal()
+            }
             await runtime.stop()
             await PreviewFiles.current.removeAll()
             NSApp.reply(toApplicationShouldTerminate: true)

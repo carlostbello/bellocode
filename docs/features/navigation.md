@@ -25,8 +25,12 @@ Status: done 2026-11-16 against MockOpenCode (bundled 2.3.0 for `make smoke`). N
 Projects → sections → threads (or "All Threads by State"); filter field (⌥⌘F; titles fuzzy, project name keeps all
 its threads); ⇧/⌘-click and ⇧-arrows multi-select, and every organisation command acts on the selection. Pin, settle,
 snooze (Later Today / Tomorrow / Next Week / Custom… popover), wake, archive, delete, mark unread, never auto-settle:
-immediate, 5-second Undo toast and ⌘Z/⇧⌘Z. **Delete is deferred**: hidden at once, sent to opencode when the Undo
-window ends (or when the window closes); after that it leaves the undo stack. Drag and drop: rows within a section
+immediate, 5-second Undo toast and ⌘Z/⇧⌘Z. **Delete is deferred** and app-wide (`PendingThreadDeletions`, one per
+engine): hidden at once in every window (a window showing the thread moves to a neighbour), Undo offered in every
+window (toast and ⌘Z; Undo in any of them restores it everywhere and retires the others), sent to opencode exactly
+once when the Undo window ends, when the last window closes, or at quit, which waits for the results before stopping
+the engine (a failure shows the row again with a notice, or a quit alert when no window is left); after sending it
+leaves the undo stacks. Drag and drop: rows within a section
 reorder, between sections change state (badge says Pin / Unpin / Settle / Un-settle / Wake / Snooze until …), Working
 refuses ("follows the agent"), another project refuses ("Threads stay in their project's folder"), projects reorder
 (pinned stay above). Insertion gap with rows sliding aside (`.gap`; plain line under Reduce Motion); structure changes
@@ -95,5 +99,5 @@ two windows. Not run: VoiceOver (labels and announcements exist), separate displ
 Real drag and drop (gap animation, badge position, project reorder); notification delivery, actions and grouping in a
 signed build (ad-hoc builds may be refused: the Settings state shows it); VoiceOver and Reduce Motion; menu-bar item.
 The flat list cannot reorder across projects; wake compares
-server run times with the local clock; deferred deletes are per window (another window shows the row for 5 s);
+server run times with the local clock; Redo of an undone delete lives only in the window that undid it;
 `ShellState.manualUnread` is legacy (engine-owned now); full sidebar rebuild (filter cleared) is 100 ms at 2,000.

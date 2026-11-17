@@ -141,7 +141,10 @@ final class RecordingDelivery: NotificationDelivering {
         workspace.undo.undoFromToast()
         #expect(!workspace.hiddenThreads.contains(ids[0]))
         #expect(workspace.selection == .thread(ids[0]))
-        try await Task.sleep(for: .milliseconds(300))
+        // Deterministic (no sleep): Undo cancelled the pending delete before anything was sent.
+        #expect(!workspace.deletions.isPending(ids[0]) && workspace.deletions.sentCount == 0)
+        workspace.commitPendingDeletes()
+        #expect(workspace.deletions.sentCount == 0, "an undone delete is never sent")
         #expect(await shell.server.session(ids[0].rawValue) != nil, "still on the server")
         // Without Undo it is deleted when the window closes (or after five seconds); Undo can no longer bring it back.
         workspace.delete([ids[1]])
@@ -149,6 +152,35 @@ final class RecordingDelivery: NotificationDelivering {
         #expect(await waitUntil(timeout: .seconds(5)) { !workspace.hiddenThreads.contains(ids[1]) })
         #expect(await shell.server.session(ids[1].rawValue) == nil, "deleted on the server")
         #expect(workspace.undo.toasts.current == nil, "the delete's toast is gone")
+    }
+
+    /// Review M5: a second window of the same engine hides the row too, leaves it if shown, and can undo the delete.
+    @Test func deferredDeleteIsSharedByEveryWindow() async throws {
+        let shell = try await Shell.start()
+        defer { Task { await shell.stop() } }
+        let first = shell.controller.workspace
+        let second = WorkspaceController(engine: shell.engine, stateStore: ShellStateStore(defaults: nil))
+        defer { second.close() }
+        #expect(second.deletions === first.deletions)
+        let ids = threads(shell)
+        try #require(ids.count >= 2)
+        second.select(.thread(ids[0]))
+        first.delete([ids[0]])
+        #expect(second.hiddenThreads.contains(ids[0]), "hidden in the other window")
+        #expect(second.selection != .thread(ids[0]), "the other window left the thread")
+        second.undo.undoFromToast()
+        #expect(!first.hiddenThreads.contains(ids[0]) && first.undo.toasts.current == nil)
+        #expect(second.selection == .thread(ids[0]), "and went back to it")
+        // Closing one window keeps the delete pending; it is sent once, when the other commits.
+        first.delete([ids[1]])
+        let sentBefore = first.deletions.sentCount
+        second.close()
+        #expect(first.deletions.isPending(ids[1]))
+        first.commitPendingDeletes()
+        first.commitPendingDeletes()
+        #expect(await waitUntil(timeout: .seconds(5)) { !first.hiddenThreads.contains(ids[1]) })
+        #expect(first.deletions.sentCount == sentBefore + 1)
+        #expect(await shell.server.session(ids[1].rawValue) == nil)
     }
 
     @Test func historyBackForwardAndReopenClosed() async throws {
