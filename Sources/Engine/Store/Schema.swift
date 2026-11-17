@@ -5,13 +5,14 @@ import GRDB
 ///
 /// Tables holding a cache of opencode state (rebuildable from the server): `project`, `session`, `message`, `part`,
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
-/// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`.
+/// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
+/// `app_terminal`.
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -102,6 +103,17 @@ enum ProjectionSchema {
             try db.execute(sql: """
                 CREATE TABLE app_preference (
                     key TEXT PRIMARY KEY NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                """)
+        }
+        // A thread's terminals (records, exit codes the server forgets, tab order, split, drawer height), one JSON value
+        // per session (TerminalService).
+        migrator.registerMigration("v3-app-terminals") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_terminal (
+                    session_id TEXT PRIMARY KEY NOT NULL,
                     updated REAL NOT NULL,
                     json BLOB NOT NULL
                 );

@@ -104,6 +104,8 @@ public final class Engine {
     public let configuration: EngineConfiguration
     /// Model picker favourites, recents and hidden models (app-owned; persisted in the store).
     public let modelPreferences: ModelPreferencesModel
+    /// Per-thread terminals on opencode's persistent PTYs (docs/features/terminal.md).
+    public let terminals: TerminalService
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -118,6 +120,7 @@ public final class Engine {
         store = try ProjectionStore(location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
         core = EngineCore(configuration: configuration, store: store)
         modelPreferences = ModelPreferencesModel(store: store)
+        terminals = TerminalService(store: store, client: { [core] in try await core.currentClient() })
     }
 
     /// Creates the provider sign-in service for this engine's server. Create one per app (Settings and onboarding share
@@ -155,6 +158,7 @@ public final class Engine {
     /// Closes open threads, writes pending state, stops the event stream and (if supervised) the server.
     public func stop() async {
         await modelPreferences.flush()
+        await terminals.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
