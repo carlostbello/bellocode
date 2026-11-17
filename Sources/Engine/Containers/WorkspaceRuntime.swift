@@ -31,10 +31,17 @@ public protocol WorkspaceRuntime: Sendable {
         _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
         timeout: Duration
     ) async throws -> WorkspaceManager.SecretCommandResult
+    /// Removes one-shot secret-command containers left by a crash (default: nothing).
+    func removeLeftoverSecretContainers() async
     /// The last `tail` lines of the container's own output (bounded), for display only.
     func logs(container: String, tail: Int) async throws -> Data
     func events() -> AsyncStream<EngineMonitorEvent>
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder
+}
+
+extension WorkspaceRuntime {
+    /// Removes one-shot secret-command containers left by a crash. Nothing to do in fakes.
+    public func removeLeftoverSecretContainers() async {}
 }
 
 /// Rancher Desktop through ContainerKit.
@@ -89,6 +96,7 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         try await manager.runSecretCommand(
             spec, shell: shell, command: command, workingDir: workingDir, name: name, secret: secret, policy: policy, timeout: timeout)
     }
+    public func removeLeftoverSecretContainers() async { await manager.removeLeftoverSecretContainers() }
     public func logs(container: String, tail: Int) async throws -> Data {
         var data = Data()
         for try await chunk in try await client.logs(container, follow: false, tail: String(tail)) {

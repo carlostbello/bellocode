@@ -266,6 +266,9 @@ public final class EnvironmentService {
         if runtime != state { runtime = state }
         if state.isReady && !wasReady {
             tasks.set("events", Task { [weak self] in await self?.followEvents() })
+            // Secret-command containers a crash left behind (their command had the value in its environment).
+            let runtime = activeRuntime
+            tasks.set("secret-leftovers", Task { await runtime.removeLeftoverSecretContainers() })
             for model in models.values { refreshImageAndPhase(model) }
         } else if !state.isReady {
             tasks.set("events", Task {})
