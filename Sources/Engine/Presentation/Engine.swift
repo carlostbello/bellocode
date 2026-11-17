@@ -112,6 +112,8 @@ public final class Engine {
     public let modelPreferences: ModelPreferencesModel
     /// Per-thread terminals on opencode's persistent PTYs (docs/features/terminal.md).
     public let terminals: TerminalService
+    /// Per-thread agent control of the built-in browser (`experimental.browser` bridge; docs/features/browser.md).
+    public let browser: BrowserBridgeService
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -142,6 +144,9 @@ public final class Engine {
         core = EngineCore(configuration: configuration, store: store)
         modelPreferences = ModelPreferencesModel(store: store, retryBackoff: configuration.writeRetryBackoff, time: configuration.time)
         terminals = TerminalService(store: store, client: { [core] in try await core.currentClient() })
+        browser = BrowserBridgeService(
+            store: store, client: { [core] in try await core.currentClient() },
+            subscribe: { [core] in await core.subscribeBrowserControl() })
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
     }
 
@@ -191,6 +196,7 @@ public final class Engine {
     public func stop() async {
         await modelPreferences.flush()
         await terminals.shutdown()
+        await browser.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
