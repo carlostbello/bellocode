@@ -44,6 +44,10 @@ public struct EngineConfiguration: Sendable {
     public var eventBufferLimit: Int = 4096
     /// Reconnect backoff for the event stream.
     public var eventBackoff = BackoffPolicy(initial: .milliseconds(250), maximum: .seconds(10))
+    /// Retry backoff for failed database writes (kept in memory meanwhile).
+    public var writeRetryBackoff = BackoffPolicy(initial: .milliseconds(250), maximum: .seconds(10))
+    /// Retry backoff after a resync failed all its attempts while the event stream stays connected.
+    public var resyncRetryBackoff = BackoffPolicy(initial: .seconds(1), maximum: .seconds(30))
     /// The location whose catalog is loaded when no project is known.
     public var defaultDirectory: String?
     public var time: any TimeSource = SystemTimeSource()
@@ -75,6 +79,9 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
     case server(String)
     /// No answer in time; the server may or may not have applied it.
     case timedOut
+    /// Every answer to a send was lost and opencode could not be asked whether it has the prompt. It is kept, with its
+    /// ID, as an `UnconfirmedSend`: retrying reuses the ID, so opencode admits it at most once.
+    case deliveryUnknown
     case cancelled
     case failed(String)
 
@@ -86,17 +93,50 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
         case .rejected(let detail): "opencode refused the request. \(detail)"
         case .server(let detail): "opencode reported an error. \(detail)"
         case .timedOut: "opencode did not answer in time. Check the thread before retrying."
+        case .deliveryUnknown:
+            "Delivery unknown: opencode did not confirm it received this message. Retry checks and resends it under the same ID, so it cannot run twice."
         case .cancelled: "Cancelled."
         case .failed(let detail): "Something went wrong. \(detail)"
         }
     }
 
+    /// The user-facing text. It can contain the server's own error message (sanitized: control characters removed,
+    /// at most 300 characters), so it is for display and private diagnostics only. Log `logSummary`.
     public var description: String { userMessage }
+
+    /// The kind of failure only, never server-provided text: safe for public logs.
+    public var logSummary: String {
+        switch self {
+        case .offline: "offline"
+        case .notFound: "notFound"
+        case .conflict: "conflict"
+        case .rejected: "rejected"
+        case .server: "server"
+        case .timedOut: "timedOut"
+        case .deliveryUnknown: "deliveryUnknown"
+        case .cancelled: "cancelled"
+        case .failed: "failed"
+        }
+    }
+
+    /// For public logs: the engine error kind plus, for server errors, the operation, status and validated tag.
+    static func logSummary(_ error: any Error) -> String {
+        if let error = error as? OpenCodeError { return error.logSummary }
+        return from(error).logSummary
+    }
+
+    /// Server-provided text made safe to display: no control characters, bounded length.
+    static func sanitized(_ text: String) -> String {
+        let cleaned = String(String.UnicodeScalarView(text.unicodeScalars.map { scalar in
+            CharacterSet.controlCharacters.contains(scalar) ? " " : scalar
+        }))
+        return cleaned.count > 300 ? String(cleaned.prefix(300)) + "…" : cleaned
+    }
 
     /// Whether retrying the same request may succeed.
     public var isTransient: Bool {
         switch self {
-        case .offline, .timedOut, .server: true
+        case .offline, .timedOut, .server, .deliveryUnknown: true
         default: false
         }
     }
@@ -107,7 +147,7 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
         if let error = error as? OpenCodeError {
             switch error {
             case .http(let status, let body, _):
-                let message = body?.message ?? "HTTP \(status)"
+                let message = body.map { sanitized($0.message) } ?? "HTTP \(status)"
                 switch status {
                 case 404: return .notFound(message)
                 case 409: return .conflict(message)

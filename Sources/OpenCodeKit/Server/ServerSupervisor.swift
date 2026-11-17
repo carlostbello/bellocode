@@ -121,16 +121,30 @@ public actor ServerSupervisor {
 
     /// State changes, starting with the current state. States are snapshots, so a consumer that falls more than 32
     /// changes behind sees the newest ones only.
+    ///
+    /// An observer is removed as soon as its stream terminates (the consumer stops iterating or drops it), not at the
+    /// next state change, so waiting repeatedly while the state is stable does not accumulate observers.
     public func states() -> AsyncStream<ServerState> {
         let (stream, continuation) = AsyncStream.makeStream(of: ServerState.self, bufferingPolicy: .bufferingNewest(32))
         nextObserverID += 1
-        observers[nextObserverID] = continuation
+        let id = nextObserverID
+        observers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeObserver(id) }
+        }
         continuation.yield(state)
         return stream
     }
 
+    private func removeObserver(_ id: UInt64) { observers[id] = nil }
+
+    /// For tests and diagnostics: live `states()` streams.
+    var observerCount: Int { observers.count }
+
     /// The verified endpoint. Waits while starting or restarting; throws if stopped or failed, or when cancelled.
     public func awaitReady() async throws -> ServerEndpoint {
+        // Ready now: no subscription at all.
+        if case .ready(let endpoint) = state { return endpoint }
         for await state in states() {
             switch state {
             case .ready(let endpoint): return endpoint

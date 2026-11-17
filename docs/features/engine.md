@@ -25,8 +25,15 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   `.catalog`, `.connection`). A token re-renders only the tail `MessageModel`; `messageIDs` changes only when a message
   is added, removed or reordered. Follow-tail and scroll position belong to the view.
 - Optimistic: a send appears at once with `delivery == .sending` (idle) or as a `.sending` queue item (busy; queue is
-  the default, steer on request); `.accepted`/`.queued` only after the server answers; on failure it is removed, the
-  text returns to the draft and `lastError` is set. Rename/archive/model/agent/mode roll back on failure. Delete hides
+  the default, steer on request); `.accepted`/`.queued` only after the server answers; on a definite failure it is
+  removed, the text returns to the draft and `lastError` is set. A lost answer is retried under the same prompt ID
+  (opencode 2.3.0 answers a repeated ID with the original item and keeps one message: `PromptRetryRealBinaryTests`,
+  run 2026-11-16). If any answer was lost, the outcome is decided by asking the server: `GET …/message/{id}`, then the
+  inbox, then the message again; found = accepted; absent = one more same-ID send (or not sent after a definite
+  refusal); unreachable = `EngineError.deliveryUnknown`: the entry stays `.sending`, the text is not put back in the
+  draft, and `ThreadModel.unconfirmedSends` holds it (32 max) for `retryUnconfirmed(_:)` (check, then same-ID resend)
+  or, once a retry is refused, `takeUnconfirmed(_:)`. Every successful resync checks unknown sends (never resends).
+  In memory only: a relaunch drops them (the resync shows the prompt if it was admitted). Rename/archive/model/agent/mode roll back on failure. Delete hides
   the row and restores it if the server refuses. A reply removes the request only after the server's 204.
 
 ## Schema (`Store/Schema.swift`, migration `v1-initial`)
@@ -35,16 +42,24 @@ Cache (rebuildable): `project`, `session` (by project, parent), `message` (`seq`
 `part` (by message/idx), `message_fts` (FTS5, rowid = `message.seq`), `pending_request`, `queued_prompt`, `catalog`
 (no secret-bearing fields), `session_sync` (older-page cursor, history complete). App-owned (kept by `rebuild()`):
 `app_project` (directory, order, pinned, archived), `app_thread` (draft, visit watermark, pinned, snoozed, settled,
-scroll anchor). Rows hold the domain value as JSON plus query columns. A newer-schema or unreadable file is deleted
-and recreated at open. Writes are batched transactions; the engine writes behind (100 ms), streamed text is persisted
-when a block ends, on eviction from the 2,048-message memory cache, and at `stop()`.
+scroll anchor), `app_preference`. Rows hold the domain value as JSON plus query columns. Nothing is ever deleted at
+open: a verifiably corrupt (`SQLITE_CORRUPT`/`NOTADB`) or newer-schema file is moved aside with its WAL
+(`projection.sqlite.corrupt-<ms>` / `.newer-<ms>`, newest three kept), a new one is created and
+`EngineRoot.storage == .recovered(...)`; any other failure (lock, I/O, permission, failed migration) throws
+`ProjectionStore.OpenError` with the file untouched (the app offers Try Again). `Engine.make(configuration:)` opens and
+migrates off the main actor. Writes are batched transactions; the engine writes behind (100 ms) with one writer: while
+a write is slow, newer writes coalesce into one pending batch (one entry per row). A failed write keeps app-owned rows
+(retried with `writeRetryBackoff` until they succeed; `storage == .writeFailing`, "Not saving" in the toolbar) and
+retries opencode cache rows three times before dropping them for a resync. Streamed text is persisted when a block
+ends, on eviction from the 2,048-message memory cache, and at `stop()` (which retries a failing write three times).
 
 ## Sync and coalescing rules
 
 - One ordered path: EventHub → `EventPipeline` (drop duplicate event IDs, 8,192 remembered) → `StreamCoalescer` for
   text/reasoning/tool-input deltas → pure `EventReducer` → `ChangeBus` (live) and write-behind.
 - Coalescer: per (message, block); a flush is due 33 ms after the first unpublished delta; a message is flushed at once
-  before any other event for it (block/step end, tool call, turn end, interrupt); over 1 MB pending flushes at once.
+  before any other event for it (block/step end, tool call, turn end, interrupt); reaching 1 MB pending flushes
+  everything inside `ingest`, before the next delta (a hard ceiling, not just "due").
   Nothing is dropped; revision increases once per publish.
 - Reducers are monotonic (create-only-if-empty, forward-only tool states, busy/idle only move forward), so duplicates,
   late events and replay over a newer snapshot change nothing (tested on the recorded stream).
@@ -52,7 +67,11 @@ when a block ends, on eviction from the 2,048-message memory cache, and at `stop
   questions per directory, the inbox of running sessions, and the newest 50 messages of open threads (4 requests in
   parallel). Server copies merge onto local ones; local streamed text ahead of a snapshot is kept unless the pid
   changed (server restart: the server wins). A window that does not connect to the cache truncates older cache and
-  resets the thread. Sessions busy across a restart show `unknown` (opencode keeps them busy).
+  resets the thread. Sessions busy across a restart show `unknown` (opencode keeps them busy). A resync that fails all
+  three attempts while the stream stays connected shows `.offline("Could not sync with opencode; retrying")` and retries
+  with `resyncRetryBackoff` (1 s doubling to 30 s) until one succeeds; a reconnect, disconnect or `stop()` cancels the
+  retry. Out-of-loop resyncs (retry, effect-queue overflow) take turns with event handling, so events are applied in
+  order around them.
 - Attention: approval > answer > stopping > running (unknown offline/orphaned) > failed-unseen > finished-unseen >
   idle; seen = max(opencode `viewed`, local visit watermark). Child blockers bubble to every ancestor
   (`blockingChildID`). List = top-level, unarchived; snoozed/settled hide only non-blockers; urgency, then oldest.

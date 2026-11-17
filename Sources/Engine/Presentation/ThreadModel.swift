@@ -72,19 +72,34 @@ public final class ThreadModel: Identifiable {
     public private(set) var submittingRequestIDs: Set<String> = []
     /// Follow-ups admitted (or being admitted) but not yet delivered, oldest first.
     public private(set) var queue: [QueuedPrompt] = []
+    /// Sends whose delivery is unknown (every answer was lost), or that a retry found were not sent, oldest first. Pin
+    /// them above the composer with `retryUnconfirmed(_:)` (same prompt ID, so at most once on the server) and, for a
+    /// not-sent entry, `takeUnconfirmed(_:)` to edit it again. Never offer to send their text as a new prompt.
+    public private(set) var unconfirmedSends: [UnconfirmedSend] = []
     /// The last command failure, for an inline error; cleared by the next successful command.
     public private(set) var lastError: EngineError?
     /// App-owned per-thread state (pin, snooze, settle, scroll anchor). The draft is `draft`.
     public private(set) var uiState: ThreadUIState
 
     /// The unsent composer text. Persisted (debounced) and restored on relaunch.
+    ///
+    /// Empty until `isDraftLoaded`: the stored draft is read with the thread's cached window. An edit made before then
+    /// is not persisted on its own; it is merged with the stored draft (`mergeDrafts`) when that arrives, or when the
+    /// thread closes first, so neither text is lost.
     public var draft: String {
         didSet {
             guard draft != oldValue else { return }
+            guard isDraftLoaded else {
+                draftEditedBeforeLoad = true
+                return
+            }
             scheduleDraftSave()
         }
     }
+    /// The stored draft has been read into `draft`. Editors should show `draft` only after this (or reconcile then).
+    public private(set) var isDraftLoaded = false
 
+    @ObservationIgnored private var draftEditedBeforeLoad = false
     @ObservationIgnored private var models: [MessageID: MessageModel] = [:]
     @ObservationIgnored private var keys: [MessageID: MessageSortKey] = [:]
     @ObservationIgnored private let core: EngineCore
@@ -168,10 +183,33 @@ public final class ThreadModel: Identifiable {
             lastError = nil
             return id
         } catch {
-            lastError = EngineError.from(error)
-            if fromDraft, draft.isEmpty { draft = text }
+            let failure = EngineError.from(error)
+            lastError = failure
+            // Delivery unknown: the text stays in `unconfirmedSends` under its ID; back in the draft it would invite a
+            // second send under a new ID.
+            if failure != .deliveryUnknown, fromDraft, draft.isEmpty { draft = text }
+            // Show the held send together with the error (the change bus may deliver it a moment later).
+            if failure == .deliveryUnknown { await refreshUnconfirmed() }
             return nil
         }
+    }
+
+    /// Checks an unconfirmed send with opencode and, if it does not have it, resends it under the same ID.
+    public func retryUnconfirmed(_ id: MessageID) async {
+        await core.retryUnconfirmed(id)
+        await refreshUnconfirmed()
+    }
+
+    /// Removes a send that a retry found was not sent and returns its text, to edit and send again.
+    public func takeUnconfirmed(_ id: MessageID) async -> String? {
+        let text = await core.takeUnconfirmed(id)
+        await refreshUnconfirmed()
+        return text
+    }
+
+    private func refreshUnconfirmed() async {
+        let current = await core.unconfirmedSends(sessionID)
+        if current != unconfirmedSends { unconfirmedSends = current }
     }
 
     /// Runs a server slash command (`/name arguments`). Returns whether the server accepted it; `lastError` otherwise.
@@ -316,11 +354,9 @@ public final class ThreadModel: Identifiable {
         hasOlder = snapshot.hasOlder
         pendingRequests = snapshot.pending
         queue = snapshot.queue
+        if snapshot.unconfirmed != unconfirmedSends { unconfirmedSends = snapshot.unconfirmed }
         uiState = snapshot.ui
-        if phase == .opening {
-            draft = snapshot.ui.draft
-            tasks.remove("draft")
-        }
+        if !isDraftLoaded { hydrateDraft(stored: snapshot.ui.draft) }
         if phase != .deleted { phase = .ready }
     }
 
@@ -361,6 +397,13 @@ public final class ThreadModel: Identifiable {
             for (id, prompt) in change.queue { byID[id] = prompt }
             let updated = byID.values.sorted { $0.created == $1.created ? $0.id < $1.id : $0.created < $1.created }
             if updated != queue { queue = updated }
+        }
+        if !change.unconfirmed.isEmpty || !change.removedUnconfirmed.isEmpty {
+            var updated = unconfirmedSends.filter { !change.removedUnconfirmed.contains($0.id) }
+            for send in change.unconfirmed.values.sorted(by: { $0.id < $1.id }) {
+                if let index = updated.firstIndex(where: { $0.id == send.id }) { updated[index] = send } else { updated.append(send) }
+            }
+            if updated != unconfirmedSends { unconfirmedSends = updated }
         }
         if let serverHasOlder = change.historyHasOlder[sessionID], !didPage, serverHasOlder != hasOlder {
             hasOlder = serverHasOlder
@@ -432,7 +475,32 @@ public final class ThreadModel: Identifiable {
         let text = draft
         let id = sessionID
         let core = self.core
-        engine?.track(Task { await core.updateThreadUI(id) { $0.draft = text } })
+        if isDraftLoaded {
+            engine?.track(Task { await core.updateThreadUI(id) { $0.draft = text } })
+        } else if draftEditedBeforeLoad {
+            // Closed before the stored draft was read: merge with it where it lives instead of replacing it.
+            engine?.track(Task { await core.updateThreadUI(id) { $0.draft = ThreadModel.mergeDrafts(stored: $0.draft, local: text) } })
+        }
+        // Otherwise nothing was read or typed: writing the empty placeholder would erase the stored draft.
+    }
+
+    /// Installs the stored draft, merged with anything set before it arrived.
+    private func hydrateDraft(stored: String) {
+        let local = draft
+        let merged = draftEditedBeforeLoad ? Self.mergeDrafts(stored: stored, local: local) : stored
+        draftEditedBeforeLoad = false
+        isDraftLoaded = true
+        if merged != draft { draft = merged }
+        if merged == stored { tasks.remove("draft") } else { scheduleDraftSave() }
+    }
+
+    /// Joins a stored draft with text entered before it was read: the stored text first, then a blank line and the
+    /// newer text. Identical or extending text is not duplicated.
+    nonisolated static func mergeDrafts(stored: String, local: String) -> String {
+        if stored.isEmpty { return local }
+        if local.isEmpty || local == stored { return stored }
+        if local.hasPrefix(stored) { return local }
+        return stored + "\n\n" + local
     }
 
     /// For tests and diagnostics: the number of message models held.

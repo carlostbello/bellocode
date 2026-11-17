@@ -14,12 +14,14 @@ enum Instrumentation {
 /// A content-free, credential-free description of an error, safe to show in state and logs.
 func describeError(_ error: any Error) -> String {
     switch error {
-    case let error as OpenCodeError: error.description
+    // Never the server's message text: it is arbitrary and can echo request content.
+    case let error as OpenCodeError: error.logSummary
     case let error as ServerSupervisorError: error.description
     case let error as TimeoutError: error.description
     case let error as SSEParser.Failure: "\(error)"
     case let error as URLError: "network error \(error.code.rawValue)"
-    case is DecodingError: "decoding error: \(OpenCodeClient.describe(error))"
+    // Coding paths can contain server-chosen keys (file paths in maps): only the kind of failure.
+    case is DecodingError: "decoding error"
     case is CancellationError: "cancelled"
     default: "\(type(of: error))"
     }

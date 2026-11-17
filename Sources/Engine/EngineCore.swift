@@ -23,7 +23,30 @@ public struct ThreadSnapshot: Sendable {
     public var hasOlder: Bool
     public var pending: [PendingRequest]
     public var queue: [QueuedPrompt]
+    /// Sends whose delivery is unknown or that a retry found not sent, oldest first.
+    public var unconfirmed: [UnconfirmedSend] = []
     public var ui: ThreadUIState
+}
+
+/// A send whose answers were all lost: opencode may or may not have admitted it. Kept (with its prompt ID) until a check
+/// finds it on the server, a retry under the same ID is answered, or the server definitively refuses it.
+public struct UnconfirmedSend: Hashable, Sendable, Identifiable {
+    public enum State: Hashable, Sendable {
+        /// Not known whether opencode has it. Offer Retry (same ID; at most once on the server).
+        case unknown
+        /// A check or retry is in flight.
+        case checking
+        /// opencode answered and does not have it: definitively not sent. Offer to put the text back in the composer.
+        case notSent(String)
+    }
+
+    /// The prompt ID: opencode's user message ID once delivered.
+    public var id: MessageID
+    public var sessionID: SessionID
+    public var text: String
+    /// It was a follow-up for a running turn (queue or steer), not a direct send.
+    public var isFollowUp: Bool
+    public var state: State
 }
 
 /// A page of older messages, oldest first.
@@ -57,7 +80,14 @@ actor EngineCore {
     private var eventTask: Task<Void, Never>?
     private var deltaTask: Task<Void, Never>?
     private var writeTask: Task<Void, Never>?
-    private var writeChain: Task<Void, Never>?
+    /// A write is in flight (at most one); callers of `flushWrites` wait in `writeWaiters` until it ends.
+    private var writing = false
+    private var writeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var consecutiveWriteFailures = 0
+    private var failedCacheWrites = 0
+    /// Failed attempts after which a batch's opencode-cache rows are dropped for a resync (app-owned rows never are).
+    let cacheWriteAttempts = 3
+    private(set) var storage: StorageStatus = .ok
     private var effectTask: Task<Void, Never>?
     private var backgroundTasks: [Int: Task<Void, Never>] = [:]
     private var nextTaskID = 0
@@ -80,6 +110,10 @@ actor EngineCore {
     private var serverPID: Int?
     /// The last resync found a different server process: locally streamed text from the old one is discarded.
     private var serverRestarted = false
+    /// Sends whose answers were lost, with the request to resend under the same ID (bounded by `unconfirmedLimit`).
+    private var unconfirmed: [MessageID: (send: UnconfirmedSend, request: PromptRequest, order: Int)] = [:]
+    private var unconfirmedOrder = 0
+    let unconfirmedLimit = 32
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -87,6 +121,7 @@ actor EngineCore {
         var resyncs = 0
         var writeBatches = 0
         var writeFailures = 0
+        var cacheWritesDropped = 0
         var duplicatesDropped = 0
     }
 
@@ -95,6 +130,7 @@ actor EngineCore {
     init(configuration: EngineConfiguration, store: ProjectionStore) {
         self.configuration = configuration
         self.store = store
+        storage = store.recovery == .none ? .ok : .recovered(store.recovery)
         pipeline = EventPipeline(
             state: ProjectionState(messageCapacity: configuration.messageCacheCapacity), cadence: configuration.streamCadence)
     }
@@ -168,14 +204,27 @@ actor EngineCore {
         deltaTask = nil
         effectTask?.cancel()
         effectTask = nil
+        cancelResyncRetry()
         for task in backgroundTasks.values { task.cancel() }
         backgroundTasks.removeAll()
         commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
         pendingWrites.messages += pipeline.state.messages.dirtyMessages
         pipeline.state.messages.markPersisted(pipeline.state.messages.dirtyMessages.map(\.id))
-        await flushWrites()
         writeTask?.cancel()
         writeTask = nil
+        await flushWrites()
+        // A failing disk at quit: a few short retries, then give up (the storage status already says so).
+        var attempt = 0
+        while !pendingWrites.isEmpty, attempt < 3 {
+            attempt += 1
+            try? await time.sleep(for: .milliseconds(100 * attempt))
+            await flushWrites()
+        }
+        writeTask?.cancel()
+        writeTask = nil
+        if !pendingWrites.isEmpty {
+            EngineSignposts.log.error("projection writes lost at stop: \(self.pendingWrites.rowCount, privacy: .public) rows")
+        }
         if case .supervised(let supervisor) = configuration.server { await supervisor.stop() }
         setConnection(.stopped)
         started = false
@@ -215,6 +264,10 @@ actor EngineCore {
     // MARK: - Event loop
 
     private func receive(_ message: EventHubMessage) async {
+        // A new connection resyncs anyway, and after a disconnect a retry could only fail: drop any pending retry.
+        if case .event = message {} else { cancelResyncRetry() }
+        await lockLoop()
+        defer { unlockLoop() }
         switch message {
         case .event(let envelope):
             await handle(envelope)
@@ -224,6 +277,76 @@ actor EngineCore {
             commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
             setConnection(.offline(reason: reason))
         }
+    }
+
+    // MARK: - Event-loop exclusion
+
+    /// The event loop and out-of-band resyncs (retry, effect overflow) take turns: a resync started outside the loop
+    /// must not interleave with event handling at its suspension points, or a snapshot read before an event could be
+    /// applied after it. At most two waiters exist (the loop and one resync), so the queue is bounded.
+    private var loopLocked = false
+    private var loopWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func lockLoop() async {
+        if !loopLocked {
+            loopLocked = true
+            return
+        }
+        await withCheckedContinuation { loopWaiters.append($0) }
+    }
+
+    private func unlockLoop() {
+        if loopWaiters.isEmpty {
+            loopLocked = false
+        } else {
+            loopWaiters.removeFirst().resume()
+        }
+    }
+
+    /// A resync outside the event loop, serialized with it.
+    private func resyncOutsideLoop(_ reason: ResyncReason) async {
+        await lockLoop()
+        defer { unlockLoop() }
+        guard !Task.isCancelled, started else { return }
+        await resync(reason)
+    }
+
+    // MARK: - Resync retry
+
+    private var resyncRetryTask: Task<Void, Never>?
+    /// The retry whose resync is running (kept so `stop()` and a reconnect can cancel it).
+    private var runningResyncRetry: Task<Void, Never>?
+    private var resyncRetryAttempt = 0
+    /// For tests: resyncs that failed every attempt and scheduled a retry.
+    private(set) var resyncRetriesScheduled = 0
+
+    /// After a resync failed every attempt while the event stream stays connected: retry with bounded backoff until
+    /// one succeeds, the stream reconnects (which resyncs anyway) or the engine stops. The UI shows the cached state as
+    /// out of date (`.offline`) meanwhile.
+    private func scheduleResyncRetry() {
+        guard started, resyncRetryTask == nil else { return }
+        resyncRetryAttempt += 1
+        resyncRetriesScheduled += 1
+        let delay = configuration.resyncRetryBackoff.delay(forAttempt: resyncRetryAttempt, random: Double.random(in: 0..<1))
+        resyncRetryTask = Task { [weak self, time] in
+            do { try await time.sleep(for: delay) } catch { return }
+            await self?.runResyncRetry()
+        }
+    }
+
+    private func runResyncRetry() async {
+        guard !Task.isCancelled else { return }
+        runningResyncRetry = resyncRetryTask
+        resyncRetryTask = nil
+        await resyncOutsideLoop(.overflow)
+        runningResyncRetry = nil
+    }
+
+    private func cancelResyncRetry() {
+        resyncRetryTask?.cancel()
+        resyncRetryTask = nil
+        runningResyncRetry?.cancel()
+        runningResyncRetry = nil
     }
 
     func handle(_ envelope: OpenCodeEventEnvelope) async {
@@ -278,48 +401,94 @@ actor EngineCore {
 
     // MARK: - Persistence
 
-    private func scheduleWrite() {
+    /// Starts the write-behind timer. One timer and one write at a time: while a write is slow or failing, newer writes
+    /// coalesce into `pendingWrites` (one entry per row) instead of queueing tasks or batches.
+    private func scheduleWrite(after delay: Duration? = nil) {
         guard writeTask == nil else { return }
-        let interval = configuration.writeInterval
+        let interval = delay ?? configuration.writeInterval
         writeTask = Task { [weak self, time] in
-            try? await time.sleep(for: interval)
+            do { try await time.sleep(for: interval) } catch { return }
             await self?.writeTick()
         }
     }
 
     private func writeTick() async {
-        writeTask = nil
         await flushWrites()
+        writeTask = nil
+        if !pendingWrites.isEmpty {
+            scheduleWrite(after: consecutiveWriteFailures > 0 ? writeRetryDelay() : nil)
+        }
     }
 
-    /// Writes everything pending, in order after any write already in flight.
+    private func writeRetryDelay() -> Duration {
+        configuration.writeRetryBackoff.delay(forAttempt: consecutiveWriteFailures, random: Double.random(in: 0..<1))
+    }
+
+    /// Writes everything pending, after any write already in flight (at most one runs). A failed write is not lost:
+    /// app-owned rows go back in front of newer writes and are retried until they succeed; opencode cache rows are
+    /// retried `cacheWriteAttempts` times, then dropped and rebuilt by a resync. Storage status is published so the UI
+    /// can say that changes are not being saved.
     func flushWrites() async {
+        // Wait (without polling) for the write in flight; it resumes waiters when it ends.
+        while writing { await withCheckedContinuation { writeWaiters.append($0) } }
         let batch = pendingWrites
+        guard !batch.isEmpty else { return }
         pendingWrites = StoreBatch()
-        let previous = writeChain
-        guard !batch.isEmpty else {
-            await previous?.value
+        writing = true
+        let succeeded: Bool
+        do {
+            try await store.apply(batch, publish: false)
+            succeeded = true
+        } catch {
+            EngineSignposts.log.error("projection write failed: \(String(describing: type(of: error)), privacy: .public)")
+            succeeded = false
+        }
+        writing = false
+        let waiters = writeWaiters
+        writeWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        statistics.writeBatches += 1
+        if succeeded {
+            consecutiveWriteFailures = 0
+            failedCacheWrites = 0
+            setStorage(.ok)
             return
         }
-        let store = self.store
-        let task = Task { [weak self] in
-            await previous?.value
-            do {
-                try await store.apply(batch, publish: false)
-                await self?.recordWrite(failed: false)
-            } catch {
-                EngineSignposts.log.error("projection write failed: \(String(describing: type(of: error)), privacy: .public)")
-                await self?.recordWrite(failed: true)
-            }
+        statistics.writeFailures += 1
+        consecutiveWriteFailures += 1
+        failedCacheWrites += 1
+        var retained = batch.appOwned
+        if failedCacheWrites < cacheWriteAttempts {
+            retained.merge(batch.cacheOnly)
+        } else {
+            // The cache part keeps failing (it may be what fails): drop it and rebuild it from the server instead.
+            failedCacheWrites = 0
+            statistics.cacheWritesDropped += 1
+            if connection.isLive { spawn { await $0.resyncOutsideLoop(.overflow) } }
         }
-        writeChain = task
-        await task.value
+        retained.merge(pendingWrites)
+        pendingWrites = retained
+        setStorage(.writeFailing)
+        scheduleWrite(after: writeRetryDelay())
     }
 
-    private func recordWrite(failed: Bool) {
-        statistics.writeBatches += 1
-        if failed { statistics.writeFailures += 1 }
+    private func setStorage(_ status: StorageStatus) {
+        // A launch recovery notice stays until a write fails (then that is the more urgent message).
+        if status == .ok, case .recovered = storage { return }
+        guard status != storage else { return }
+        storage = status
+        bus.publish([.storage(status)])
     }
+
+    /// For tests: queues writes as a reduction would.
+    func enqueueWritesForTesting(_ batch: StoreBatch) {
+        var reduction = Reduction()
+        reduction.writes = batch
+        commit(reduction)
+    }
+
+    /// For tests and diagnostics: rows waiting to be written.
+    var pendingWriteRows: Int { pendingWrites.rowCount }
 
     /// Publishes buffered stream deltas and writes everything pending (tests, thread open, shutdown).
     func flush() async {
@@ -359,7 +528,7 @@ actor EngineCore {
         if effectQueue.count > effectLimit {
             // Too far behind to follow individually: a resync re-reads everything.
             effectQueue.removeAll()
-            spawn { await $0.resync(.overflow) }
+            spawn { await $0.resyncOutsideLoop(.overflow) }
             return
         }
         guard effectTask == nil else { return }
@@ -444,15 +613,20 @@ actor EngineCore {
                 guard generation == syncGeneration, !Task.isCancelled else { return }
                 try await reconcile(snapshot, generation: generation)
                 guard generation == syncGeneration, !Task.isCancelled else { return }
+                resyncRetryAttempt = 0
                 setConnection(.live)
                 if catalogs[defaultCatalogDirectory()] == nil { enqueue([.refreshCatalog(directory: nil)]) }
+                if !unconfirmed.isEmpty { spawn { await $0.checkUnconfirmed() } }
                 return
             } catch is CancellationError {
                 return
             } catch {
-                EngineSignposts.log.error("resync attempt \(attempt, privacy: .public) failed: \(EngineError.from(error).description, privacy: .public)")
+                EngineSignposts.log.error("resync attempt \(attempt, privacy: .public) failed: \(EngineError.logSummary(error), privacy: .public)")
                 if attempt == 3 {
-                    setConnection(.offline(reason: "Could not sync with opencode"))
+                    // Still connected (events keep arriving) but the cached state may be missing what the gap lost:
+                    // show it as out of date and keep retrying until a rebuild succeeds.
+                    setConnection(.offline(reason: "Could not sync with opencode; retrying"))
+                    scheduleResyncRetry()
                     return
                 }
                 try? await time.sleep(for: .milliseconds(200 * attempt))
@@ -791,6 +965,7 @@ actor EngineCore {
             pending: state.pending.values.filter { state.isWithin($0.sessionID, of: sessionID) }
                 .sorted { $0.received == $1.received ? $0.id < $1.id : $0.received < $1.received },
             queue: state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created },
+            unconfirmed: unconfirmedSends(sessionID),
             ui: state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID))
     }
 
@@ -809,7 +984,7 @@ actor EngineCore {
             pipeline.state = state
             commit(reduction)
         } catch {
-            EngineSignposts.log.info("window refresh failed: \(EngineError.from(error).description, privacy: .public)")
+            EngineSignposts.log.info("window refresh failed: \(EngineError.logSummary(error), privacy: .public)")
         }
     }
 
@@ -891,7 +1066,7 @@ actor EngineCore {
             reduction.writes.catalogs.append(catalog)
             commit(reduction)
         } catch {
-            EngineSignposts.log.info("catalog refresh failed: \(EngineError.from(error).description, privacy: .public)")
+            EngineSignposts.log.info("catalog refresh failed: \(EngineError.logSummary(error), privacy: .public)")
         }
     }
 
@@ -1017,12 +1192,17 @@ actor EngineCore {
     }
 
     /// Sends a prompt. Idle: the user message appears at once as `.sending`. Busy: it is listed in the queue as
-    /// `.sending` (queue by default, or steer). Either way it becomes `.accepted`/`.queued` only when the server answers.
-    /// On failure the optimistic entry is removed and the error thrown (the caller restores the draft).
+    /// `.sending` (queue by default, or steer). Either way it becomes `.accepted`/`.queued` only when the server answers
+    /// (or a check finds it under its ID). On a definite failure the optimistic entry is removed and the error thrown
+    /// (the caller restores the draft). If every answer was lost and the server cannot be asked, it throws
+    /// `.deliveryUnknown` and keeps the entry plus an `UnconfirmedSend` for an explicit same-ID retry.
     func sendPrompt(
         _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
     ) async throws -> MessageID {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+        guard unconfirmed.count < unconfirmedLimit else {
+            throw EngineError.failed("Too many messages have unknown delivery. Retry them before sending more.")
+        }
         let now = serverNow()
         let id = ids.messageID(now: now)
         let running = session.isRunning && !pipeline.state.orphaned.contains(sessionID)
@@ -1053,25 +1233,168 @@ actor EngineCore {
             agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
             skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
             delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        switch await deliver(request, id: id, sessionID: sessionID) {
+        case .admitted(let created):
+            acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
+            return id
+        case .rejected(let error):
+            rollbackSend(id, sessionID: sessionID)
+            throw EngineError.from(error)
+        case .unknown:
+            // Keep the optimistic entry and the request: a retry reuses the ID, so it is admitted at most once.
+            unconfirmedOrder += 1
+            let send = UnconfirmedSend(id: id, sessionID: sessionID, text: text, isFollowUp: busy, state: .unknown)
+            unconfirmed[id] = (send, request, unconfirmedOrder)
+            bus.publish([.unconfirmed(send)])
+            throw EngineError.deliveryUnknown
+        }
+    }
+
+    /// What became of a prompt request.
+    enum DeliveryOutcome: Sendable {
+        /// The server answered, or a check found it under its ID.
+        case admitted(Timestamp)
+        /// The server answered with a refusal and does not have it.
+        case rejected(any Error)
+        /// Every answer was lost and the server could not be asked.
+        case unknown
+    }
+
+    /// Sends `request`, retrying a lost answer (transport failure) under the same ID: opencode 2.3.0 answers a repeated
+    /// ID with the original item and keeps one message (verified against the real binary, `PromptRetryRealBinaryTests`).
+    /// If any answer was lost, the outcome is decided by asking the server for the ID, never assumed.
+    private func deliver(_ request: PromptRequest, id: MessageID, sessionID: SessionID, attempts: Int = 3) async -> DeliveryOutcome {
         var lastError: (any Error)?
-        for attempt in 0..<3 {
+        var answerLost = false
+        for attempt in 0..<attempts {
             do {
                 let item = try await currentClient().prompt(sessionID: sessionID.rawValue, request)
                 observeServerTime(item.time.created)
-                acknowledgeSend(id, sessionID: sessionID, serverCreated: Timestamp(milliseconds: item.time.created))
-                return id
+                return .admitted(Timestamp(milliseconds: item.time.created))
             } catch {
                 lastError = error
-                // Only a lost answer is retried, with the same ID, so the server admits it at most once.
-                guard case OpenCodeError.transport = error, attempt < 2 else { break }
-                try? await time.sleep(for: .milliseconds(150 * (attempt + 1)))
+                guard case OpenCodeError.transport = error else { break }
+                answerLost = true
+                if attempt < attempts - 1 { try? await time.sleep(for: .milliseconds(150 * (attempt + 1))) }
             }
         }
+        let failure = lastError ?? EngineError.failed("Send failed.")
+        guard answerLost else { return .rejected(failure) }
+        switch await lookUpPrompt(id, sessionID: sessionID) {
+        case .found(let created):
+            return .admitted(created)
+        case .unreachable:
+            return .unknown
+        case .absent:
+            // The server is reachable again and does not have it. If the last attempt's answer was lost, send once
+            // more under the same ID to get a definite answer; a refusal after a lost answer is definite as it is.
+            guard case OpenCodeError.transport = failure else { return .rejected(failure) }
+            do {
+                let item = try await currentClient().prompt(sessionID: sessionID.rawValue, request)
+                observeServerTime(item.time.created)
+                return .admitted(Timestamp(milliseconds: item.time.created))
+            } catch {
+                if case OpenCodeError.transport = error { return .unknown }
+                return .rejected(error)
+            }
+        }
+    }
+
+    enum PromptLookup: Sendable {
+        case found(Timestamp)
+        case absent
+        case unreachable
+    }
+
+    /// Whether the server has a prompt under `id`: delivered (a user message) or admitted and waiting (inbox).
+    private func lookUpPrompt(_ id: MessageID, sessionID: SessionID) async -> PromptLookup {
+        do {
+            let client = try await currentClient()
+            func message() async throws -> Timestamp? {
+                do {
+                    let dto = try await client.message(sessionID: sessionID.rawValue, messageID: id.rawValue)
+                    if case .user(let user) = dto { return Timestamp(milliseconds: user.time.created) }
+                    return serverNow()
+                } catch let error as OpenCodeError where error.status == 404 {
+                    return nil
+                }
+            }
+            if let created = try await message() { return .found(created) }
+            if let item = try await client.inbox(sessionID: sessionID.rawValue).first(where: { $0.id == id.rawValue }) {
+                return .found(Timestamp(milliseconds: item.time.created))
+            }
+            // Delivered between the two reads: it left the inbox after the message lookup.
+            if let created = try await message() { return .found(created) }
+            return .absent
+        } catch {
+            return .unreachable
+        }
+    }
+
+    private func rollbackSend(_ id: MessageID, sessionID: SessionID) {
         var rollback = Reduction()
         if pipeline.state.queue[id]?.state == .sending { pipeline.state.removeQueued(id, into: &rollback) }
         if pipeline.state.messages[id]?.delivery == .sending { pipeline.state.removeMessage(id, sessionID: sessionID, into: &rollback) }
         commit(rollback)
-        throw EngineError.from(lastError ?? EngineError.failed("Send failed."))
+    }
+
+    func unconfirmedSends(_ sessionID: SessionID) -> [UnconfirmedSend] {
+        unconfirmed.values.filter { $0.send.sessionID == sessionID }.sorted { $0.order < $1.order }.map(\.send)
+    }
+
+    /// Checks an unconfirmed send and, if the server does not have it, resends it under the same ID. Admitted: it
+    /// becomes an ordinary accepted send. Refused: it is marked `notSent` (the text stays until `takeUnconfirmed`).
+    /// Unreachable: it stays `unknown`.
+    func retryUnconfirmed(_ id: MessageID) async {
+        guard let held = unconfirmed[id], held.send.state == .unknown else { return }
+        setUnconfirmedState(id, .checking)
+        let outcome = await deliver(held.request, id: id, sessionID: held.send.sessionID, attempts: 1)
+        resolveUnconfirmed(id, outcome)
+    }
+
+    /// Asks the server about every unknown send (after a resync); never resends on its own.
+    func checkUnconfirmed() async {
+        let ids = unconfirmed.values.filter { $0.send.state == .unknown }.sorted { $0.order < $1.order }.map(\.send.id)
+        for id in ids {
+            guard let held = unconfirmed[id], held.send.state == .unknown else { continue }
+            setUnconfirmedState(id, .checking)
+            switch await lookUpPrompt(id, sessionID: held.send.sessionID) {
+            case .found(let created): resolveUnconfirmed(id, .admitted(created))
+            case .absent, .unreachable: setUnconfirmedState(id, .unknown)
+            }
+        }
+    }
+
+    /// Removes a not-sent entry and returns its text (to put back in the composer). Unknown entries stay: dropping
+    /// one could invite sending the same instruction twice.
+    func takeUnconfirmed(_ id: MessageID) -> String? {
+        guard let held = unconfirmed[id], case .notSent = held.send.state else { return nil }
+        unconfirmed[id] = nil
+        bus.publish([.unconfirmedRemoved(id, sessionID: held.send.sessionID)])
+        return held.send.text
+    }
+
+    private func setUnconfirmedState(_ id: MessageID, _ state: UnconfirmedSend.State) {
+        guard var held = unconfirmed[id], held.send.state != state else { return }
+        held.send.state = state
+        unconfirmed[id] = held
+        bus.publish([.unconfirmed(held.send)])
+    }
+
+    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) {
+        guard let held = unconfirmed[id] else { return }
+        let sessionID = held.send.sessionID
+        switch outcome {
+        case .admitted(let created):
+            unconfirmed[id] = nil
+            bus.publish([.unconfirmedRemoved(id, sessionID: sessionID)])
+            acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
+        case .rejected(let error):
+            rollbackSend(id, sessionID: sessionID)
+            setUnconfirmedState(id, .notSent(EngineError.from(error).userMessage))
+        case .unknown:
+            setUnconfirmedState(id, .unknown)
+        }
     }
 
     /// A turn whose status is unknown after a server restart (still "busy" on the server, owned by no live process):

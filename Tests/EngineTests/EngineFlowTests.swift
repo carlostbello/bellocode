@@ -135,6 +135,8 @@ struct EngineFlowTests {
         #expect(id == nil)
         #expect(thread.lastError == .server("Injected failure"))
         #expect(thread.draft == "this will fail")
+        // The rollback reaches the model through the change bus: wait for it in order, not by luck.
+        try await threadBarrier(engine, thread)
         #expect(userMessages(thread).isEmpty)
         #expect(thread.queue.isEmpty)
         thread.close()

@@ -359,6 +359,29 @@ struct ServerSupervisorTests {
         #expect(launcher.processes.isEmpty)
     }
 
+    /// M9 (docs/reviews/M1-review.md): waiting for a ready server many times while its state does not change (SSE
+    /// reconnects against a healthy child) must not accumulate state observers; ended `states()` streams are removed.
+    @Test func repeatedReadyWaitsDoNotAccumulateObservers() async throws {
+        defer { cleanUp() }
+        let launcher = FakeLauncher()
+        let supervisor = ServerSupervisor(
+            configuration: configuration(), launcher: launcher, probe: FakeProbe(launcher: launcher), time: ManualTimeSource(),
+            random: { 0.5 })
+        await supervisor.start()
+        _ = try await waitFor(supervisor) { $0.endpoint != nil }
+        for _ in 0..<500 { _ = try await supervisor.awaitReady() }
+        // Streams a consumer abandons are removed when they terminate, without waiting for a state change.
+        for _ in 0..<50 {
+            var iterator = await supervisor.states().makeAsyncIterator()
+            _ = await iterator.next()
+        }
+        try await within(.seconds(5)) {
+            while await supervisor.observerCount > 0 { await Task.yield() }
+        }
+        #expect(await supervisor.observerCount == 0)
+        await supervisor.stop()
+    }
+
     @Test func awaitReadyThrowsWhenStopped() async {
         let supervisor = ServerSupervisor(configuration: configuration(), launcher: FakeLauncher())
         await expectNotRunning(supervisor)

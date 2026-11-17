@@ -24,9 +24,9 @@ public struct StreamKey: Hashable, Sendable {
 ///
 /// Every delta is kept, in order; only intermediate render snapshots are skipped. A flush is due `cadence` after the
 /// first delta that is not yet published (default 33 ms, about 30 commits per second per message), and the owner
-/// flushes a message at once when its block ends, its step ends or fails, or the turn is interrupted. If pending text
-/// exceeds `maxPendingBytes` the coalescer reports itself due immediately, so memory stays bounded without dropping
-/// anything.
+/// flushes a message at once when its block ends, its step ends or fails, or the turn is interrupted. When pending text
+/// reaches `maxPendingBytes` the owner (`EventPipeline.ingest`) takes everything at once, before admitting the next
+/// delta, so pending memory stays under `maxPendingBytes` plus one delta without dropping anything.
 ///
 /// A plain value with an injected notion of time (`now` parameters) so cadence is testable without sleeping. Owned by
 /// `EngineCore`, off the main actor.

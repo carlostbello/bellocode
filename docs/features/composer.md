@@ -22,11 +22,14 @@ Status: done 2026-11-16. `ComposerKit` (AppKit, TextKit 2) plus the `ComposerDem
 ## `ComposerHost`
 
 `draftKey`, `loadDraft()`, `saveDraft(_:)` (debounced 150 ms while typing; immediate on send, switch, teardown),
-`send(ComposerSubmission) async -> .accepted | .failed(message)`, `stop()`, `runState` (idle / running / stopping),
+`send(ComposerSubmission) async -> .accepted | .failed(message) | .unconfirmed(message)`, `stop()`, `runState` (idle / running / stopping),
 `supportsSteer`, `supportsAttachments`, `defaultFollowUp` (queue), `errorMessage` / `clearError()`, `recentPrompts()`,
 `observe(_:) -> ComposerObservation`. Return from `send` only after the server admitted the prompt: the composer clears
 at once, shows "Sending…", and on failure puts text, tokens and attachments back (merged before anything typed since,
-into the thread that sent it) with the error inline. `ThreadModelComposerHost(threadModel)` adapts an Engine
+into the thread that sent it) with the error inline. `.unconfirmed` (every answer lost; the host keeps it under its
+ID for an explicit retry) leaves the composer clear and shows the message: restoring it would invite a duplicate.
+`isDraftLoaded` (default true): while false the composer shows nothing, saves nothing over the stored draft, and
+when it turns true shows the stored draft or, if the user typed meanwhile, the stored draft followed by the new text. `ThreadModelComposerHost(threadModel)` adapts an Engine
 `ThreadModel` (via `ComposerThreadSource`); tokens, attachments and selection live in a bounded in-memory
 `ComposerDraftCache` and are used while the persisted text still matches. It reports `supportsAttachments = false`.
 

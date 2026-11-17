@@ -122,3 +122,15 @@ func recordedEnvelopes() throws -> [OpenCodeEventEnvelope] {
     let decoder = OpenCodeEventDecoder()
     return try recordedFrames().map { decoder.decode(Data($0.utf8)) }
 }
+
+/// An ordering barrier for a thread model: publishes a marker change on the thread's topic after everything the engine
+/// has published so far, and waits until the model applied it. Each subscriber's mailbox is ordered, so every earlier
+/// change to the thread (for example from a resync that just finished) has been applied when this returns. Replaces
+/// fixed sleeps (docs/reviews/M1-review.md, m3).
+@MainActor
+func threadBarrier(_ engine: Engine, _ thread: ThreadModel) async throws {
+    let marker = Double(Int.random(in: 1_000_000..<9_000_000))
+    let id = thread.sessionID
+    await engine.core.updateThreadUI(id) { $0.scrollOffset = marker }
+    try await waitUntil("barrier") { thread.uiState.scrollOffset == marker }
+}

@@ -9,12 +9,20 @@ enum TransportError: Error, Equatable {
 }
 
 /// A loopback TCP listener on an ephemeral port. Accepted connections arrive on ``connections``.
+///
+/// Admission is bounded: at most `backlog` accepted connections wait for the consumer; beyond that a new connection is
+/// cancelled at once (the client sees it closed) and counted in `rejected`, so a burst cannot grow memory.
 struct LoopbackListener: Sendable {
     let listener: NWListener
     let port: UInt16
     let connections: AsyncStream<NWConnection>
+    let rejectedCount: RejectionCounter
 
-    static func start(queue: DispatchQueue) async throws -> LoopbackListener {
+    var rejected: Int { rejectedCount.value }
+
+    static let defaultBacklog = 256
+
+    static func start(queue: DispatchQueue, backlog: Int = defaultBacklog) async throws -> LoopbackListener {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         parameters.allowLocalEndpointReuse = true
@@ -24,9 +32,13 @@ struct LoopbackListener: Sendable {
         } catch {
             throw TransportError.listenerFailed("\(error)")
         }
-        let (stream, continuation) = AsyncStream.makeStream(of: NWConnection.self, bufferingPolicy: .unbounded)
+        let (stream, continuation) = AsyncStream.makeStream(of: NWConnection.self, bufferingPolicy: .bufferingOldest(max(1, backlog)))
+        let rejected = RejectionCounter()
         listener.newConnectionHandler = { connection in
-            continuation.yield(connection)
+            if case .dropped = continuation.yield(connection) {
+                connection.cancel()
+                rejected.increment()
+            }
         }
         let resumed = Mutex(false)
         let port: UInt16 = try await withCheckedThrowingContinuation { ready in
@@ -49,10 +61,17 @@ struct LoopbackListener: Sendable {
             }
             listener.start(queue: queue)
         }
-        return LoopbackListener(listener: listener, port: port, connections: stream)
+        return LoopbackListener(listener: listener, port: port, connections: stream, rejectedCount: rejected)
     }
 
     func stop() { listener.cancel() }
+}
+
+/// Connections refused because the accept queue was full.
+final class RejectionCounter: Sendable {
+    private let count = Mutex(0)
+    func increment() { count.withLock { $0 += 1 } }
+    var value: Int { count.withLock { $0 } }
 }
 
 /// Async wrappers over one accepted `NWConnection`.

@@ -75,10 +75,19 @@ struct IntegrationFixesTests {
         #expect(thread.lastError == nil)
         try await waitUntil("settled") { thread.status?.status != .unknown && !(thread.session?.isRunning ?? true) }
         #expect(thread.session?.outcome == .interrupted)
+        let resyncsBefore = await engine.core.statistics.resyncs
         let again = try await harness.server.restart()
         box.set(ServerConnection(baseURL: again.url, credentials: ServerCredentials(password: again.password ?? "")))
         try await waitUntil("live again") { engine.root.connection == .live }
-        try await Task.sleep(for: .milliseconds(200))
+        // Barriers instead of a fixed sleep: the restart's resync has completed in the engine, and the thread model
+        // has applied everything it published.
+        let deadline = ContinuousClock.now + .seconds(15)
+        while await engine.core.statistics.resyncs <= resyncsBefore || engine.root.connection != .live {
+            guard ContinuousClock.now < deadline else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!(await engine.core.isOrphaned(session.id)))
+        try await threadBarrier(engine, thread)
         #expect(!thread.isStatusUnknown && !(thread.session?.isRunning ?? true), "a resync does not bring it back")
 
         // Resume on another orphan: settles it and sends a continue prompt that runs.

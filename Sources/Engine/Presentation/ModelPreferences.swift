@@ -1,6 +1,7 @@
 import BelloCore
 import Foundation
 import Observation
+import OpenCodeKit
 
 /// The user's model picker preferences: favourites (pinned, in order), recently used and hidden models. Keys are
 /// `ModelEntry.id` (`provider/model`). App-owned state, persisted in the projection store (`app_preference`).
@@ -42,22 +43,39 @@ public struct ModelPreferences: Hashable, Sendable, Codable {
 
 /// Observable, persisted `ModelPreferences`.
 ///
-/// Threading: `@MainActor`. Changes apply at once and are written behind; a failed write keeps the in-memory value
-/// (it is preference data, rewritten on the next change).
+/// Threading: `@MainActor`. Changes apply at once and are written behind, one write at a time with the latest value. A
+/// failed write is not dropped: `saveFailed` turns true (the UI says changes are not being saved) and the latest value
+/// is retried with backoff until a write succeeds; `flush()` tries once more.
 @MainActor
 @Observable
 public final class ModelPreferencesModel {
     public private(set) var value = ModelPreferences()
     public private(set) var isLoaded = false
+    /// The last write failed; the value is kept in memory and retried.
+    public private(set) var saveFailed = false
 
     @ObservationIgnored private let store: ProjectionStore?
+    @ObservationIgnored private let retryBackoff: BackoffPolicy
+    @ObservationIgnored private let time: any TimeSource
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var savedGeneration = 0
+    @ObservationIgnored private var failures = 0
     static let key = "model-preferences"
 
     /// `store == nil` keeps preferences in memory only (previews, demos).
-    public init(store: ProjectionStore?) {
+    public init(
+        store: ProjectionStore?, retryBackoff: BackoffPolicy = BackoffPolicy(initial: .milliseconds(250), maximum: .seconds(10)),
+        time: any TimeSource = SystemTimeSource()
+    ) {
         self.store = store
+        self.retryBackoff = retryBackoff
+        self.time = time
+    }
+
+    isolated deinit {
+        retryTask?.cancel()
     }
 
     /// Reads the stored value once. Edits made before loading finishes win over the stored value.
@@ -75,15 +93,52 @@ public final class ModelPreferencesModel {
         guard next != value else { return }
         value = next
         generation += 1
+        save()
+    }
+
+    /// Writes the current value after any write in flight (one at a time; the newest value wins).
+    private func save() {
         guard let store else { return }
-        let snapshot = next
+        retryTask?.cancel()
+        retryTask = nil
         let previous = saveTask
-        saveTask = Task {
+        saveTask = Task { [weak self] in
             await previous?.value
-            try? await store.setPreference(Self.key, snapshot)
+            guard let self, self.savedGeneration < self.generation else { return }
+            let snapshot = self.value
+            let generation = self.generation
+            do {
+                try await store.setPreference(Self.key, snapshot)
+                self.savedGeneration = max(self.savedGeneration, generation)
+                self.failures = 0
+                if self.savedGeneration == self.generation { self.saveFailed = false }
+            } catch {
+                self.failures += 1
+                self.saveFailed = true
+                self.scheduleRetry()
+            }
         }
     }
 
-    /// Waits for pending writes (tests, shutdown).
-    public func flush() async { await saveTask?.value }
+    private func scheduleRetry() {
+        guard retryTask == nil else { return }
+        let delay = retryBackoff.delay(forAttempt: failures, random: Double.random(in: 0..<1))
+        let time = self.time
+        retryTask = Task { [weak self] in
+            do { try await time.sleep(for: delay) } catch { return }
+            self?.retryTask = nil
+            self?.save()
+        }
+    }
+
+    /// Waits for pending writes, retrying a failed one once (tests, shutdown).
+    public func flush() async {
+        await saveTask?.value
+        if saveFailed {
+            save()
+            await saveTask?.value
+        }
+        retryTask?.cancel()
+        retryTask = nil
+    }
 }

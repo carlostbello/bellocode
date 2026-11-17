@@ -85,6 +85,8 @@ protocol FocusableSurface: AnyObject {
 protocol ComposerSurface: FocusableSurface {
     var hasSendableText: Bool { get }
     func performSend()
+    /// Inserts text at the selection as one undoable edit and focuses the composer.
+    func insertText(_ text: String)
 }
 
 /// Choices made in a new-thread draft, applied when its thread is created.

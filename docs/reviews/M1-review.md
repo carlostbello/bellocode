@@ -61,3 +61,46 @@ Reviewed `develop`, 2026-11-16. Verdict: **not ready for a reliable daily-driver
 - Test paste, Finder drag/drop and Quick Look, including removal, shutdown and crash cleanup; inspect privacy implications with representative sensitive files.
 - Exercise real provider OAuth, real approvals/questions, network gaps and a running turn at quit with a sandboxed server.
 - Verification here: static source and feature-note review; no build, tests, UI automation or live server were run. The brief forbids writes outside `build`, and running the existing suite may create temporary files, preferences or other data outside it. No claims of screen acceptance, performance measurement or actual reproduction are made. Follow up with isolated, instrumented tests for the scenarios above.
+
+## Disposition
+
+M1-G review fixes, 2026-11-16 (branch `t3/m1-review-fixes`). Every finding was checked against the code and found
+real; each fix has a regression test that forces the scenario deterministically (injected write hooks, mock faults,
+barriers), and each test was seen failing on the old behaviour where noted.
+
+- **M1 fixed** (`adcd692`). Reproduced: closing before hydration wrote `""` over a stored draft, and an early edit
+  was dropped. `ThreadModel.isDraftLoaded`; edits before it merge with the stored draft (stored first) on hydration
+  or close; `ComposerController` saves nothing over an unloaded draft and reconciles typing into it; tokens and
+  selection survive model eviction. Tests: `ReviewFixesTests` (M1), `DraftHydrationTests`.
+- **M4 fixed** (`50313e6`, `19cbd65`, race fix in `e28516c`). Real 2.3.0 (`PromptRetryRealBinaryTests`, opt-in,
+  `opencode/big-pickle`, isolated XDG/HOME, one ID sent twice): the repeated ID answers 200 with the same item and
+  the server keeps one user message; `GET …/message/{id}` is 404 `MessageNotFoundError` before and 200 after. A lost
+  answer is now reconciled by ID (message, inbox, message); found = accepted, absent = one more same-ID send,
+  unreachable = "Delivery unknown" (`UnconfirmedSend`, composer stays clear, Retry reuses the ID, Thread menu item).
+  Tests: `AmbiguousSendTests` (mock `HTTPFault.dropResponse` serves the prompt and drops the answer).
+- **M2 fixed** (`e28516c`). Reproduced by design (three failed attempts left `.offline` with no retry). Cancellable
+  bounded-backoff retry while connected; out-of-loop resyncs serialized with event handling. `ResyncRetryTests`.
+- **M3 fixed** (`6eb04fb`). Failed writes keep app-owned rows (retried until success) and retry cache rows three
+  times before a resync; `EngineRoot.storage` / toolbar "Not saving"; `stop()` retries; preferences retry
+  (`saveFailed`). `WriteBehindSafetyTests`, `PreferenceWriteSafetyTests`.
+- **M5 fixed** (`4a87e94`). Reproduced: a permission failure deleted the database. Only `SQLITE_CORRUPT`/`NOTADB`
+  and newer schemas are quarantined (moved aside with WAL, newest three kept); anything else throws `OpenError`
+  with the file untouched and the app offers Try Again. `StoreOpenSafetyTests`. No migration added.
+- **M6 deferred**: the transcript is being replaced by another work package (TranscriptKit); not touched here.
+- **M7 fixed** (`938a3e4`). Budget enforced on every write without evicting files younger than one hour (a queued
+  send is read on delivery); over budget fails visibly. Quick Look copies are per process and deleted on dismissal,
+  removal, deinit and quit; dead processes' folders are removed at launch. `AttachmentStorageTests`.
+- **M8 fixed** (`6eb04fb`, `cc0b323`). One writer, no task chain, pending writes coalesced to one entry per row
+  (a 200-update stall makes at most 3 write attempts, 1 pending row); deltas flush inside `ingest` at the byte
+  ceiling. `blockedWriterCoalescesInsteadOfChaining`, `StreamDeltaCeilingTests`. A livelock in the first writer
+  version (polling a finished task under actor priorities) was found by the full suite and replaced by continuations.
+- **M9 fixed** (`7378657`). `onTermination` removes observers; `awaitReady` does not subscribe when ready.
+- **M10 fixed** (`cace8e1`; log lines in `6eb04fb`). `logSummary` (operation, status, validated tag) in every public
+  log; misleading comment corrected; user-facing server text sanitized. `LogPrivacyTests` reads this process's
+  OSLogStore for a sentinel and fails with the old log line.
+- **m1 fixed** (`6eb04fb`). `Engine.make` / `ProjectionStore.open` open and migrate off the main actor; launch order
+  unchanged (the window still shows cached content first). `StoreOpenOffMainTests` (a migration that needs the main
+  actor to proceed). Not measured on a slow disk.
+- **m2 fixed** (`cd0e8e7`). Accept queue bounded (256), overflow cancelled and counted. `ListenerBoundTests`.
+- **m3 fixed for the cited sleeps** (`22dc69b`) with `threadBarrier`; other fixed sleeps in older tests remain. The
+  real-server lost-response half is covered by the M4 probe plus the mock fault.

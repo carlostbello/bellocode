@@ -10,9 +10,13 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     var sessionID: SessionID { get }
     /// The persisted plain-text draft.
     var draft: String { get set }
+    /// `draft` holds the stored value (it is read asynchronously when the thread opens).
+    var isDraftLoaded: Bool { get }
     var isRunning: Bool { get }
     var isStopping: Bool { get }
     var composerErrorMessage: String? { get }
+    /// The last send's delivery is unknown (kept by the thread for a same-ID retry), not failed.
+    var composerDeliveryUnknown: Bool { get }
     /// Earlier user prompts, oldest first.
     var composerPromptHistory: [String] { get }
     func send(_ text: String?, attachments: PromptAttachments, delivery: PromptDelivery?) async -> MessageID?
@@ -22,8 +26,14 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     func clearError()
 }
 
+extension ComposerThreadSource {
+    public var isDraftLoaded: Bool { true }
+    public var composerDeliveryUnknown: Bool { false }
+}
+
 extension ThreadModel: ComposerThreadSource {
     public var composerErrorMessage: String? { lastError?.userMessage }
+    public var composerDeliveryUnknown: Bool { lastError == .deliveryUnknown }
 
     public var composerPromptHistory: [String] {
         messageIDs.compactMap { id in
@@ -79,6 +89,7 @@ public final class ThreadModelComposerHost: ComposerHost {
     }
 
     public var draftKey: String { source.sessionID.rawValue }
+    public var isDraftLoaded: Bool { source.isDraftLoaded }
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
@@ -110,6 +121,9 @@ public final class ThreadModelComposerHost: ComposerHost {
             return .failed(source.composerErrorMessage ?? "The command was not run.")
         }
         if await source.send(input.text, attachments: input.attachments, delivery: delivery) != nil { return .accepted }
+        if source.composerDeliveryUnknown {
+            return .unconfirmed(source.composerErrorMessage ?? "Delivery unknown: opencode did not confirm it received this message.")
+        }
         return .failed(source.composerErrorMessage ?? "The message was not sent.")
     }
 
@@ -210,6 +224,7 @@ private final class ObservationTracker {
         withObservationTracking {
             _ = source.isRunning
             _ = source.isStopping
+            _ = source.isDraftLoaded
             _ = source.composerErrorMessage
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in

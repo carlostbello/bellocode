@@ -38,26 +38,114 @@ public struct StoreBatch: Sendable {
             && syncStates.isEmpty
     }
 
-    /// Appends `other`; later writes to the same row win.
+    /// Folds `other` (newer) into this batch. Later writes to the same row replace earlier ones, so a batch holds at most
+    /// one write per row (it is bounded by the number of distinct rows, however long writes are deferred), and a later
+    /// removal cancels earlier writes of that row and of what it owns. Applying the merged batch leaves the database as
+    /// applying both in order would.
     public mutating func merge(_ other: StoreBatch) {
-        projects += other.projects
-        replaceAllProjects = replaceAllProjects || other.replaceAllProjects
-        sessions += other.sessions
-        removedSessions += other.removedSessions
-        messages += other.messages
-        removedMessages += other.removedMessages
+        if other.replaceAllProjects {
+            projects = other.projects
+            replaceAllProjects = true
+        } else {
+            projects = Self.upserting(projects, other.projects, by: \.id)
+        }
+
+        let removedSessionIDs = Set(other.removedSessions)
+        if !removedSessionIDs.isEmpty {
+            sessions.removeAll { removedSessionIDs.contains($0.id) }
+            messages.removeAll { removedSessionIDs.contains($0.sessionID) }
+            pending.removeAll { removedSessionIDs.contains($0.sessionID) }
+            queue.removeAll { removedSessionIDs.contains($0.sessionID) }
+            syncStates.removeAll { removedSessionIDs.contains($0.sessionID) }
+            truncatedHistory = truncatedHistory.filter { !removedSessionIDs.contains($0.key) }
+        }
+        removedSessions = Self.unique(removedSessions + other.removedSessions)
+        sessions = Self.upserting(sessions, other.sessions, by: \.id)
+
+        // Truncation runs before message upserts: drop earlier writes it would have deleted.
+        for (sessionID, key) in other.truncatedHistory {
+            messages.removeAll { $0.sessionID == sessionID && $0.sortKey < key }
+        }
         truncatedHistory.merge(other.truncatedHistory) { $1 }
-        pending += other.pending
-        resolvedRequests += other.resolvedRequests
-        replaceAllPending = replaceAllPending || other.replaceAllPending
-        queue += other.queue
-        removedQueue += other.removedQueue
+        let removedMessageIDs = Set(other.removedMessages)
+        if !removedMessageIDs.isEmpty { messages.removeAll { removedMessageIDs.contains($0.id) } }
+        removedMessages = Self.unique(removedMessages + other.removedMessages)
+        messages = Self.upserting(messages, other.messages, by: \.id)
+
+        if other.replaceAllPending {
+            pending = other.pending
+            resolvedRequests = other.resolvedRequests
+            replaceAllPending = true
+        } else {
+            let resolved = Set(other.resolvedRequests)
+            if !resolved.isEmpty { pending.removeAll { resolved.contains($0.id) } }
+            resolvedRequests = Self.unique(resolvedRequests + other.resolvedRequests)
+            pending = Self.upserting(pending, other.pending, by: \.id)
+        }
+
+        if !other.replaceQueue.isEmpty { queue.removeAll { other.replaceQueue.contains($0.sessionID) } }
         replaceQueue.formUnion(other.replaceQueue)
-        catalogs += other.catalogs
-        registry += other.registry
-        removedRegistry += other.removedRegistry
-        threadUI += other.threadUI
-        syncStates += other.syncStates
+        let removedQueueIDs = Set(other.removedQueue)
+        if !removedQueueIDs.isEmpty { queue.removeAll { removedQueueIDs.contains($0.id) } }
+        removedQueue = Self.unique(removedQueue + other.removedQueue)
+        queue = Self.upserting(queue, other.queue, by: \.id)
+
+        catalogs = Self.upserting(catalogs, other.catalogs, by: \.directory)
+        let removedDirectories = Set(other.removedRegistry)
+        if !removedDirectories.isEmpty { registry.removeAll { removedDirectories.contains($0.directory) } }
+        removedRegistry = Self.unique(removedRegistry + other.removedRegistry)
+        registry = Self.upserting(registry, other.registry, by: \.directory)
+        threadUI = Self.upserting(threadUI, other.threadUI, by: \.sessionID)
+        syncStates = Self.upserting(syncStates, other.syncStates, by: \.sessionID)
+    }
+
+    /// The rows only BelloCode owns (projects added, drafts and per-thread state): never dropped on a write failure.
+    var appOwned: StoreBatch {
+        var batch = StoreBatch()
+        batch.registry = registry
+        batch.removedRegistry = removedRegistry
+        batch.threadUI = threadUI
+        return batch
+    }
+
+    /// Everything else: a cache of opencode state that a resync can rebuild.
+    var cacheOnly: StoreBatch {
+        var batch = self
+        batch.registry = []
+        batch.removedRegistry = []
+        batch.threadUI = []
+        return batch
+    }
+
+    /// Rows written (for bounds and diagnostics).
+    var rowCount: Int {
+        projects.count + sessions.count + removedSessions.count + messages.count + removedMessages.count
+            + truncatedHistory.count + pending.count + resolvedRequests.count + queue.count + removedQueue.count
+            + catalogs.count + registry.count + removedRegistry.count + threadUI.count + syncStates.count
+    }
+
+    /// `existing` with `newer` applied: a row already present is replaced in place, a new one appended.
+    private static func upserting<Row, Key: Hashable>(_ existing: [Row], _ newer: [Row], by key: KeyPath<Row, Key>) -> [Row] {
+        guard !newer.isEmpty else { return existing }
+        var result = existing
+        var index: [Key: Int] = [:]
+        index.reserveCapacity(result.count + newer.count)
+        for (offset, row) in result.enumerated() { index[row[keyPath: key]] = offset }
+        for row in newer {
+            let id = row[keyPath: key]
+            if let offset = index[id] {
+                result[offset] = row
+            } else {
+                index[id] = result.count
+                result.append(row)
+            }
+        }
+        return result
+    }
+
+    private static func unique<T: Hashable>(_ values: [T]) -> [T] {
+        var seen = Set<T>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     /// The changes this batch represents, for publishing.
@@ -115,25 +203,47 @@ public struct SearchHit: Hashable, Sendable {
 /// state, so every screen opens from disk before the server answers.
 ///
 /// Threading: an actor; every database call is async and runs on GRDB's own queues, never on the main thread.
-/// Writes are transactional batches (`apply`). Reads return immutable `Sendable` domain values.
+/// Writes are transactional batches (`apply`). Reads return immutable `Sendable` domain values. Opening (and migrating)
+/// is synchronous: create the store off the main actor (`open(location:changes:)`).
 ///
 /// Observation: `changes` routes changes to topic subscribers (`observe`) so a consumer wakes only for its own thread,
 /// project or the attention list. `apply` publishes after commit unless told not to (the engine publishes live
 /// changes itself, slightly ahead of disk).
 ///
-/// The cache is disposable: `rebuild()` clears it, and a database written by a newer schema (or unreadable) is deleted
-/// and recreated at open, rather than failing. Credentials are never stored.
+/// The opencode tables are disposable (`rebuild()` clears them), but the app-owned tables (drafts, projects,
+/// preferences) are not. So a database is never deleted: one that is verifiably corrupt (`SQLITE_CORRUPT`,
+/// `SQLITE_NOTADB`) or written by a newer schema is moved aside (quarantined, with its WAL) and a new one created
+/// (`recovery` says which); any other failure (lock, I/O, permission, a failing migration) throws `OpenError` and leaves
+/// the file untouched for a retry. Credentials are never stored.
 public actor ProjectionStore {
     public enum Location: Sendable {
         case file(URL)
         case inMemory
     }
 
+    /// What opening had to do to get a usable database.
+    public enum Recovery: Sendable, Hashable {
+        case none
+        /// The file was not a readable database; it was moved to this URL and a new one created.
+        case quarantinedCorrupt(URL)
+        /// A newer BelloCode wrote the file; it was moved to this URL (for that build) and a new one created.
+        case quarantinedNewerSchema(URL)
+    }
+
+    /// The database could not be opened for a reason that may pass (locked, I/O, permission, failed migration). The file
+    /// was not changed; retry later. The description carries only the SQLite result code or error type, never paths or
+    /// content.
+    public struct OpenError: Error, Sendable, CustomStringConvertible {
+        public var reason: String
+        public var description: String { "The local database could not be opened (\(reason)). It was left unchanged." }
+    }
+
     public nonisolated let changes: ChangeBus
     public nonisolated let location: Location
     private let writer: any DatabaseWriter
-    /// Whether opening found an incompatible or unreadable database and recreated it.
-    public nonisolated let wasRecreated: Bool
+    public nonisolated let recovery: Recovery
+    /// Whether opening found an incompatible or unreadable database and set it aside for a new one.
+    public nonisolated var wasRecreated: Bool { recovery != .none }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -144,6 +254,10 @@ public actor ProjectionStore {
     private static let decoder = JSONDecoder()
 
     public init(location: Location, changes: ChangeBus = ChangeBus()) throws {
+        try self.init(location: location, changes: changes, migrator: ProjectionSchema.migrator)
+    }
+
+    init(location: Location, changes: ChangeBus, migrator: DatabaseMigrator) throws {
         self.location = location
         self.changes = changes
         let signpost = EngineSignposts.database.beginInterval("open")
@@ -151,12 +265,23 @@ public actor ProjectionStore {
         switch location {
         case .inMemory:
             let queue = try DatabaseQueue()
-            try ProjectionSchema.migrator.migrate(queue)
+            try migrator.migrate(queue)
             writer = queue
-            wasRecreated = false
+            recovery = .none
         case .file(let url):
-            (writer, wasRecreated) = try Self.openFile(url)
+            (writer, recovery) = try Self.openFile(url, migrator: migrator)
         }
+    }
+
+    /// Opens (and migrates) the store off the caller's actor, so a slow disk or migration never blocks the main thread.
+    @concurrent
+    public static func open(location: Location, changes: ChangeBus = ChangeBus()) async throws -> ProjectionStore {
+        try ProjectionStore(location: location, changes: changes, migrator: ProjectionSchema.migrator)
+    }
+
+    @concurrent
+    static func open(location: Location, changes: ChangeBus, migrator: DatabaseMigrator) async throws -> ProjectionStore {
+        try ProjectionStore(location: location, changes: changes, migrator: migrator)
     }
 
     private static func configuration() -> Configuration {
@@ -166,28 +291,95 @@ public actor ProjectionStore {
         return configuration
     }
 
-    /// Opens (or creates) the database; deletes and recreates it if it is unreadable or was written by a newer schema.
-    private static func openFile(_ url: URL) throws -> (any DatabaseWriter, Bool) {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    private enum OpenProblem: Error {
+        case corrupt
+        case newerSchema
+    }
+
+    /// Opens (or creates) the database. Corrupt or newer-schema files are quarantined; anything else throws.
+    private static func openFile(_ url: URL, migrator: DatabaseMigrator) throws -> (any DatabaseWriter, Recovery) {
         do {
-            let pool = try DatabasePool(path: url.path, configuration: configuration())
-            let migrator = ProjectionSchema.migrator
-            let superseded = try pool.read { try migrator.hasBeenSuperseded($0) }
-            if superseded { throw SchemaMismatch() }
-            try migrator.migrate(pool)
-            return (pool, false)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         } catch {
-            EngineSignposts.log.error("projection cache unusable (\(String(describing: type(of: error)), privacy: .public)); recreating")
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(atPath: url.path + suffix)
-            }
-            let pool = try DatabasePool(path: url.path, configuration: configuration())
-            try ProjectionSchema.migrator.migrate(pool)
-            return (pool, true)
+            throw OpenError(reason: "folder: \((error as NSError).domain) \((error as NSError).code)")
+        }
+        let problem: OpenProblem
+        do {
+            return (try openAndMigrate(url, migrator: migrator), .none)
+        } catch let found as OpenProblem {
+            problem = found
+        } catch let error as DatabaseError where [.SQLITE_CORRUPT, .SQLITE_NOTADB].contains(error.resultCode) {
+            problem = .corrupt
+        } catch let error as DatabaseError {
+            EngineSignposts.log.error("projection store unavailable: SQLite \(error.resultCode.rawValue, privacy: .public)")
+            throw OpenError(reason: "SQLite result \(error.extendedResultCode.rawValue)")
+        } catch {
+            EngineSignposts.log.error("projection store unavailable: \(String(describing: type(of: error)), privacy: .public)")
+            throw OpenError(reason: String(describing: type(of: error)))
+        }
+        let label = problem == .corrupt ? "corrupt" : "newer"
+        let moved: URL
+        do {
+            moved = try quarantine(url, label: label)
+        } catch {
+            throw OpenError(reason: "could not move the \(label) database aside")
+        }
+        EngineSignposts.log.error("projection store \(label, privacy: .public): moved aside, starting a new one")
+        do {
+            let writer = try openAndMigrate(url, migrator: migrator)
+            return (writer, problem == .corrupt ? .quarantinedCorrupt(moved) : .quarantinedNewerSchema(moved))
+        } catch {
+            throw OpenError(reason: "new database: \(String(describing: type(of: error)))")
         }
     }
 
-    private struct SchemaMismatch: Error {}
+    private static func openAndMigrate(_ url: URL, migrator: DatabaseMigrator) throws -> DatabasePool {
+        let pool = try DatabasePool(path: url.path, configuration: configuration())
+        do {
+            if try pool.read({ try migrator.hasBeenSuperseded($0) }) { throw OpenProblem.newerSchema }
+            try migrator.migrate(pool)
+            return pool
+        } catch {
+            try? pool.close()
+            throw error
+        }
+    }
+
+    /// Moves the database and its WAL/SHM files to `<name>.<label>-<timestamp>` beside it (the WAL keeps its suffix, so
+    /// the moved database still opens with its last writes).
+    private static func quarantine(_ url: URL, label: String) throws -> URL {
+        let stamp = Int(Date().timeIntervalSince1970 * 1000)
+        let target = url.deletingLastPathComponent().appending(path: "\(url.lastPathComponent).\(label)-\(stamp)")
+        let manager = FileManager.default
+        try manager.moveItem(at: url, to: target)
+        for suffix in ["-wal", "-shm"] where manager.fileExists(atPath: url.path + suffix) {
+            try manager.moveItem(atPath: url.path + suffix, toPath: target.path + suffix)
+        }
+        pruneQuarantine(beside: url, keep: quarantineLimit)
+        return target
+    }
+
+    /// Quarantined copies kept beside the database (the newest; older ones are removed).
+    static let quarantineLimit = 3
+
+    private static func pruneQuarantine(beside url: URL, keep: Int) {
+        let manager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        let prefix = url.lastPathComponent + "."
+        guard let names = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
+        let stamp = { (name: String) -> Int in Int(name.split(separator: "-").last ?? "") ?? 0 }
+        let copies = names.filter { name in
+            name.hasPrefix(prefix) && !name.hasSuffix("-wal") && !name.hasSuffix("-shm")
+                && (name.contains(".corrupt-") || name.contains(".newer-"))
+        }.sorted { stamp($0) > stamp($1) }
+        for name in copies.dropFirst(keep) {
+            for suffix in ["", "-wal", "-shm"] { try? manager.removeItem(at: directory.appending(path: name + suffix)) }
+        }
+    }
+
+    /// Tests: runs before every write; throwing fails it, suspending holds it (a stalled disk).
+    private var writeHook: (@Sendable (StoreBatch) async throws -> Void)?
+    func setWriteHook(_ hook: (@Sendable (StoreBatch) async throws -> Void)?) { writeHook = hook }
 
     /// Subscribes to changes for one topic.
     public nonisolated func observe(_ topic: ChangeTopic) -> ChangeSubscription { changes.subscribe(topic) }
@@ -197,6 +389,7 @@ public actor ProjectionStore {
     /// Applies `batch` in one transaction, then publishes its changes (unless `publish` is false).
     public func apply(_ batch: StoreBatch, publish: Bool = true) async throws {
         guard !batch.isEmpty else { return }
+        if let writeHook { try await writeHook(batch) }
         let signpost = EngineSignposts.database.beginInterval("write", "\(batch.messages.count) messages")
         defer { EngineSignposts.database.endInterval("write", signpost) }
         let encoder = Self.encoder
@@ -620,6 +813,7 @@ public actor ProjectionStore {
 
     /// Stores an app-owned preference. Never store credentials here.
     public func setPreference(_ key: String, _ value: some Encodable & Sendable) async throws {
+        if let writeHook { try await writeHook(StoreBatch()) }
         let data = try Self.json(value, Self.encoder)
         let now = Date().timeIntervalSince1970
         try await writer.write { db in

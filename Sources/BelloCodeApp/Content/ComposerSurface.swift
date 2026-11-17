@@ -47,6 +47,10 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     var preferredFocusView: NSView? { composer.textView }
     var hasSendableText: Bool { !composer.currentDraft().isEmpty }
     func performSend() { composer.send(alternate: false) }
+    func insertText(_ text: String) {
+        composer.focus()
+        composer.insert(text: text)
+    }
     var runState: ComposerRunState { composer.controller.runState }
 
     // MARK: View

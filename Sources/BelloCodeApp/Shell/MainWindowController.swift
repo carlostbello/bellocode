@@ -125,7 +125,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private func updateTitle() {
         guard let window else { return }
         let root = workspace.engine.root
-        connectionView.update(root.connection, source: configuration.sourceLabel)
+        connectionView.update(root.connection, source: configuration.sourceLabel, storage: workspace.engine.storageNotice)
         var title = "BelloCode"
         var subtitle = ""
         if let context = container.context {
@@ -172,6 +172,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             composerVisible: container.composerSurface != nil, composerHasText: container.composerSurface?.hasSendableText ?? false,
             composerRunning: container.composerController.map { $0.runState != .idle } ?? false,
             isTerminalVisible: !split.contentSplit.drawerItem.isCollapsed,
+            hasUnconfirmedSend: container.context?.thread?.unconfirmedSends.contains { $0.state == .unknown } ?? false,
             availableRequestCommands: Set(RequestCommand.allCases.filter { container.requestStackController?.model?.canPerform($0) ?? false }),
             terminalAvailable: terminals?.hasContext ?? false, terminalSelected: terminals?.activeHasTerminal ?? false,
             terminalHasSelectedText: terminals?.activeHasSelection ?? false,
@@ -298,6 +299,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             } else {
                 Task { await workspace.threadModel(id).stop() }
             }
+        case .retryUnconfirmed:
+            guard let thread = container.context?.thread,
+                  let send = thread.unconfirmedSends.first(where: { $0.state == .unknown }) else { return }
+            Task { await thread.retryUnconfirmed(send.id) }
         case .chooseModel:
             container.composerController?.openModelPicker()
         case .permissionMode:
@@ -333,6 +338,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func queuePrompt(_ sender: Any?) { perform(.queueFollowUp) }
     @objc func steerPrompt(_ sender: Any?) { perform(.steerFollowUp) }
     @objc func stopAgent(_ sender: Any?) { perform(.stopRun) }
+    @objc func retryUnconfirmedSend(_ sender: Any?) { perform(.retryUnconfirmed) }
     @objc func chooseModel(_ sender: Any?) { perform(.chooseModel) }
     @objc func choosePermissionMode(_ sender: Any?) { perform(.permissionMode) }
     @objc func togglePlanMode(_ sender: Any?) { perform(.togglePlan) }
@@ -500,7 +506,17 @@ final class ConnectionStatusView: NSStackView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func update(_ status: ConnectionStatus, source: String?) {
+    /// `storage`: a local-saving problem (`Engine.storageNotice`); it takes precedence, as unsaved drafts are at risk.
+    func update(_ status: ConnectionStatus, source: String?, storage: (label: String, detail: String)? = nil) {
+        if let storage {
+            icon.image = NSImage(systemSymbolName: "externaldrive.badge.exclamationmark", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold).applying(.init(paletteColors: [DS.Palette.attention])))
+            let text = [source, storage.label, status.label].compactMap { $0 }.joined(separator: " · ")
+            label.stringValue = text
+            toolTip = storage.detail
+            setAccessibilityLabel("Connection: \(text). \(storage.detail)")
+            return
+        }
         let (symbol, tint): (String, NSColor) = switch status {
         case .live: ("circle.fill", DS.Palette.success)
         case .cached: ("clock", DS.Palette.neutral)
