@@ -1,0 +1,66 @@
+{
+  "documentHeight" : 2510159.5,
+  "environment" : {
+    "backingScale" : 2,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 8.333333333333336,
+    "displayRefreshHz" : 120,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "firstContentFrameMS" : 51.63237499073148,
+  "framesDuringHistoryLoad" : {
+    "durationS" : 0.9027861666691024,
+    "frames" : 100,
+    "maxMS" : 78.3009166480042,
+    "missedFrames" : 8,
+    "missedPercent" : 7.384546765114754,
+    "nominalIntervalMS" : 8.333333333333336,
+    "over16_7" : 1,
+    "over33" : 1,
+    "p50MS" : 8.333291654707864,
+    "p95MS" : 8.333291683811694,
+    "p99MS" : 78.3009166480042
+  },
+  "historyLoadedMS" : 977.094791654963,
+  "interactiveDefinition" : "first content frame presented with the newest 150 messages selectable and scrolled to bottom; history then streams in",
+  "maxPrependMainThreadMS" : 59.928583330474794,
+  "memoryAfterOpen" : {
+    "footprintMB" : 386.11072540283203,
+    "residentMB" : 414.171875
+  },
+  "memoryAfterSettle" : {
+    "footprintMB" : 230.86074829101562,
+    "residentMB" : 425.828125
+  },
+  "openedAtBottom" : true,
+  "processLaunchToFirstContentFrameMS" : 359.6887500025332,
+  "processToWorkloadReadyMS" : 276.99658332858235,
+  "stallsDuringHistoryLoad" : {
+    "maxMS" : 71.92762501654215,
+    "p99MS" : 32.36395833664574,
+    "pings" : 189,
+    "stallsOver100MS" : 0,
+    "stallsOver250MS" : 0,
+    "stallsOver50MS" : 1
+  },
+  "stillAtBottomAfterHistory" : true,
+  "tailInstalledMS" : 29.996750003192574,
+  "timeToInteractiveMS" : 51.63237499073148,
+  "workload" : {
+    "codeBlocks" : 1500,
+    "diffs" : 200,
+    "generationMS" : 144.09708333550952,
+    "hugeCodeBlockBytes" : 102400,
+    "images" : 100,
+    "megabytes" : 11.643311,
+    "messages" : 10000,
+    "reasoning" : 300,
+    "storageUTF16" : 7770617,
+    "tables" : 400,
+    "tools" : 2000
+  }
+}

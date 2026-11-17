@@ -1,0 +1,380 @@
+{
+  "environment" : {
+    "backingScale" : 2,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 8.333333333333336,
+    "displayRefreshHz" : 120,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "geometryJumpsOver2PT" : 1,
+  "samples" : [
+    {
+      "bestError" : 727.9194946289062,
+      "bestPx" : 100,
+      "clipY" : 50,
+      "errorAtExpected" : 727.9194946289062,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 0
+    },
+    {
+      "bestError" : 729.8649291992188,
+      "bestPx" : 100,
+      "clipY" : 100,
+      "errorAtExpected" : 729.8649291992188,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 1
+    },
+    {
+      "bestError" : 727.089599609375,
+      "bestPx" : 100,
+      "clipY" : 150,
+      "errorAtExpected" : 727.089599609375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 2
+    },
+    {
+      "bestError" : 731.8428344726562,
+      "bestPx" : 100,
+      "clipY" : 200,
+      "errorAtExpected" : 731.8428344726562,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 3
+    },
+    {
+      "bestError" : 758.7389526367188,
+      "bestPx" : 100,
+      "clipY" : 250,
+      "errorAtExpected" : 758.7389526367188,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 4
+    },
+    {
+      "bestError" : 763.3675537109375,
+      "bestPx" : 100,
+      "clipY" : 300,
+      "errorAtExpected" : 763.3675537109375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 5
+    },
+    {
+      "bestError" : 649.4532470703125,
+      "bestPx" : 100,
+      "clipY" : 350,
+      "errorAtExpected" : 649.4532470703125,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 6
+    },
+    {
+      "bestError" : 763.3675537109375,
+      "bestPx" : 100,
+      "clipY" : 400,
+      "errorAtExpected" : 763.3675537109375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 7
+    },
+    {
+      "bestError" : 763.3675537109375,
+      "bestPx" : 100,
+      "clipY" : 450,
+      "errorAtExpected" : 763.3675537109375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 8
+    },
+    {
+      "bestError" : 733.0870361328125,
+      "bestPx" : 100,
+      "clipY" : 500,
+      "errorAtExpected" : 733.0870361328125,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 9
+    },
+    {
+      "bestError" : 710.8713989257812,
+      "bestPx" : 100,
+      "clipY" : 550,
+      "errorAtExpected" : 710.8713989257812,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 10
+    },
+    {
+      "bestError" : 627.288330078125,
+      "bestPx" : 100,
+      "clipY" : 600,
+      "errorAtExpected" : 627.288330078125,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 11
+    },
+    {
+      "bestError" : 763.3675537109375,
+      "bestPx" : 100,
+      "clipY" : 650,
+      "errorAtExpected" : 763.3675537109375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 12
+    },
+    {
+      "bestError" : 652.894775390625,
+      "bestPx" : 100,
+      "clipY" : 700,
+      "errorAtExpected" : 652.894775390625,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 13
+    },
+    {
+      "bestError" : 621.3792114257812,
+      "bestPx" : 100,
+      "clipY" : 750,
+      "errorAtExpected" : 621.3792114257812,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 14
+    },
+    {
+      "bestError" : 738.211669921875,
+      "bestPx" : 100,
+      "clipY" : 800,
+      "errorAtExpected" : 738.211669921875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 15
+    },
+    {
+      "bestError" : 620.9688110351562,
+      "bestPx" : 100,
+      "clipY" : 850,
+      "errorAtExpected" : 620.9688110351562,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 16
+    },
+    {
+      "bestError" : 728.2831420898438,
+      "bestPx" : 100,
+      "clipY" : 900,
+      "errorAtExpected" : 728.2831420898438,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 17
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 950,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 18
+    },
+    {
+      "bestError" : 714.5922241210938,
+      "bestPx" : 100,
+      "clipY" : 1000,
+      "errorAtExpected" : 714.5922241210938,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 19
+    },
+    {
+      "bestError" : 628.3285522460938,
+      "bestPx" : 100,
+      "clipY" : 1050,
+      "errorAtExpected" : 628.3285522460938,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 20
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1100,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 21
+    },
+    {
+      "bestError" : 644.7467651367188,
+      "bestPx" : 100,
+      "clipY" : 1150,
+      "errorAtExpected" : 644.7467651367188,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 22
+    },
+    {
+      "bestError" : 644.755859375,
+      "bestPx" : 100,
+      "clipY" : 1200,
+      "errorAtExpected" : 644.755859375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 23
+    },
+    {
+      "bestError" : 675.2259521484375,
+      "bestPx" : 100,
+      "clipY" : 1250,
+      "errorAtExpected" : 675.2259521484375,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 24
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1300,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 25
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1350,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 26
+    },
+    {
+      "bestError" : 681.251953125,
+      "bestPx" : 100,
+      "clipY" : 1400,
+      "errorAtExpected" : 681.251953125,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 27
+    },
+    {
+      "bestError" : 700.227294921875,
+      "bestPx" : 100,
+      "clipY" : 1450,
+      "errorAtExpected" : 700.227294921875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 28
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1500,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 29
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1550,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 30
+    },
+    {
+      "bestError" : 714.4207763671875,
+      "bestPx" : 100,
+      "clipY" : 1600,
+      "errorAtExpected" : 714.4207763671875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 31
+    },
+    {
+      "bestError" : 653.3259887695312,
+      "bestPx" : 100,
+      "clipY" : 1650,
+      "errorAtExpected" : 653.3259887695312,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 32
+    },
+    {
+      "bestError" : 682.6519775390625,
+      "bestPx" : 100,
+      "clipY" : 1700,
+      "errorAtExpected" : 682.6519775390625,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 33
+    },
+    {
+      "bestError" : 702.9234008789062,
+      "bestPx" : 100,
+      "clipY" : 1750,
+      "errorAtExpected" : 702.9234008789062,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 34
+    },
+    {
+      "bestError" : 724.2662353515625,
+      "bestPx" : 100,
+      "clipY" : 1800,
+      "errorAtExpected" : 724.2662353515625,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 35
+    },
+    {
+      "bestError" : 728.166259765625,
+      "bestPx" : 100,
+      "clipY" : 1850,
+      "errorAtExpected" : 728.166259765625,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 36
+    },
+    {
+      "bestError" : 752.2714233398438,
+      "bestPx" : 100,
+      "clipY" : 1900,
+      "errorAtExpected" : 752.2714233398438,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 37
+    },
+    {
+      "bestError" : 704.4921875,
+      "bestPx" : 100,
+      "clipY" : 1950,
+      "errorAtExpected" : 704.4921875,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 38
+    },
+    {
+      "bestError" : 733.898681640625,
+      "bestPx" : 100,
+      "clipY" : 2000,
+      "errorAtExpected" : 733.898681640625,
+      "expectedPx" : 100,
+      "geometryDeviationPT" : 0,
+      "step" : 39
+    }
+  ],
+  "stepPT" : 50,
+  "steps" : 900,
+  "unmatchedSteps" : 900,
+  "visibleJumps" : 0
+}

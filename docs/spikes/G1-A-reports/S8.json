@@ -1,0 +1,134 @@
+{
+  "afterAllCyclesSettled" : {
+    "footprintMB" : 279.90892791748047,
+    "residentMB" : 2218.5
+  },
+  "afterCycles" : [
+    {
+      "footprintMB" : 721.5964050292969,
+      "residentMB" : 2210.1875
+    },
+    {
+      "footprintMB" : 737.4870529174805,
+      "residentMB" : 2223.984375
+    },
+    {
+      "footprintMB" : 737.7370529174805,
+      "residentMB" : 2224.234375
+    },
+    {
+      "footprintMB" : 733.9089279174805,
+      "residentMB" : 2224.421875
+    },
+    {
+      "footprintMB" : 734.0495529174805,
+      "residentMB" : 2224.5625
+    },
+    {
+      "footprintMB" : 734.0964279174805,
+      "residentMB" : 2224.640625
+    },
+    {
+      "footprintMB" : 734.1745529174805,
+      "residentMB" : 2224.75
+    },
+    {
+      "footprintMB" : 724.2526779174805,
+      "residentMB" : 2224.796875
+    },
+    {
+      "footprintMB" : 724.2370529174805,
+      "residentMB" : 2224.8125
+    },
+    {
+      "footprintMB" : 724.3151779174805,
+      "residentMB" : 2224.890625
+    },
+    {
+      "footprintMB" : 724.3620529174805,
+      "residentMB" : 2224.9375
+    },
+    {
+      "footprintMB" : 724.4245529174805,
+      "residentMB" : 2225.046875
+    },
+    {
+      "footprintMB" : 523.0495300292969,
+      "residentMB" : 2181.890625
+    },
+    {
+      "footprintMB" : 546.1120300292969,
+      "residentMB" : 2204.984375
+    },
+    {
+      "footprintMB" : 561.0651779174805,
+      "residentMB" : 2219.921875
+    },
+    {
+      "footprintMB" : 561.0808029174805,
+      "residentMB" : 2219.9375
+    },
+    {
+      "footprintMB" : 561.0808029174805,
+      "residentMB" : 2219.9375
+    },
+    {
+      "footprintMB" : 279.25267791748047,
+      "residentMB" : 2214.765625
+    },
+    {
+      "footprintMB" : 285.09642791748047,
+      "residentMB" : 2220.671875
+    },
+    {
+      "footprintMB" : 285.12767791748047,
+      "residentMB" : 2220.703125
+    }
+  ],
+  "afterEachScenario" : {
+    "0-start" : {
+      "footprintMB" : 31.89154052734375,
+      "residentMB" : 86.546875
+    },
+    "S1" : {
+      "footprintMB" : 226.09514617919922,
+      "residentMB" : 429.40625
+    },
+    "S2" : {
+      "footprintMB" : 446.9546356201172,
+      "residentMB" : 579.109375
+    },
+    "S3" : {
+      "footprintMB" : 491.4702835083008,
+      "residentMB" : 639.3125
+    },
+    "S4" : {
+      "footprintMB" : 433.3139877319336,
+      "residentMB" : 620.390625
+    },
+    "S5" : {
+      "footprintMB" : 417.033447265625,
+      "residentMB" : 1561.734375
+    },
+    "S6" : {
+      "footprintMB" : 496.0647888183594,
+      "residentMB" : 1686.859375
+    },
+    "S7" : {
+      "footprintMB" : 832.7213821411133,
+      "residentMB" : 2176.75
+    }
+  },
+  "environment" : {
+    "backingScale" : 1,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 6.060916666666667,
+    "displayRefreshHz" : 165,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "note" : "S1–S7 run in sequence in one process (S2 scrolls the full document at the standard velocity)."
+}

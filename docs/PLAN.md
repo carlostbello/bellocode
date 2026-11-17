@@ -215,6 +215,19 @@ Each spike is a small prototype with a pass/fail measurement. Results are record
 | G4 Packaging | Does a SwiftPM-built, re-signed bundle run? | `swift build` + bundle script + ad-hoc signing | App launches from Finder, starts the bundled opencode, runs a turn on a free model. |
 | G5 Terminal | Is SwiftTerm good enough? | SwiftTerm vs opencode PTY WebSocket feed | vim, tmux, fast output, resize all behave; latency acceptable. |
 
+### Gate results (2026-11-16)
+
+| Gate | Result | Decision | Evidence |
+| --- | --- | --- | --- |
+| G1 Transcript | A failed (57% of frames missed scrolling up, multi-second stalls on long jumps); B passed every measure with 0 pt drift and working cross-message selection | **B: virtualised rows (NSTableView, CoreText-drawn)** | [G1-A](spikes/G1-A-textkit.md), [G1-B](spikes/G1-B-rows.md) |
+| G2 Server | Passed on the second run after a resync fix (server copy wins after a restart) | Supervisor + resync as designed | [G2](spikes/G2-server.md), [engine](features/engine.md) |
+| G3 Browser | Passed: a real agent drove a WKWebView through `experimental.browser` v4 | WKWebView for v1; Chromium later behind the same interface | [G3](spikes/G3-browser-bridge.md) |
+| G4 Packaging | Passed with ad-hoc signing; Developer ID and notarization untested | SwiftPM + bundle script | [G4](spikes/G4-packaging.md) |
+| G5 Terminal | Passed with conditions | SwiftTerm as renderer, opencode owns the PTY | [G5](spikes/G5-terminal.md) |
+
+Still to re-measure with the screen unlocked and a person present: on-screen frame pacing for the transcript and
+terminal, real trackpad input, input methods, VoiceOver.
+
 ## 6. Roadmap
 
 | Milestone | Outcome | Main work packages |

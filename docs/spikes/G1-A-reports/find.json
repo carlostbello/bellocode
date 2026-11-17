@@ -1,0 +1,39 @@
+{
+  "environment" : {
+    "backingScale" : 2,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 8.333333333333336,
+    "displayRefreshHz" : 120,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "results" : [
+    {
+      "expandedCard" : "-",
+      "followingAfter" : "false",
+      "found" : "true",
+      "message" : "3001",
+      "ms" : "5611.6",
+      "needle" : "quokka-offscreen-needle",
+      "selectionMatches" : "true",
+      "stepsMS" : "expandCard=0 findIndicator=0 locateInStorage=0 relocate=5547 scrollRangeToVisible=2 searchModelOffMain=58 select=0",
+      "visibleAfterSettle" : "true",
+      "visibleImmediately" : "true"
+    },
+    {
+      "expandedCard" : "tool-7007-0",
+      "followingAfter" : "false",
+      "found" : "true",
+      "message" : "7007",
+      "ms" : "1764.6",
+      "needle" : "wombat-collapsed-needle",
+      "selectionMatches" : "true",
+      "stepsMS" : "expandCard=46 findIndicator=0 locateInStorage=0 relocate=1613 scrollRangeToVisible=0 searchModelOffMain=103 select=0",
+      "visibleAfterSettle" : "true",
+      "visibleImmediately" : "true"
+    }
+  ]
+}
