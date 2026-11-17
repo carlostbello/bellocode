@@ -156,7 +156,7 @@ public enum RenderBlocks {
         switch item.status {
         case .done: break
         case .failed: text += " · Failed"
-        case .preparing, .running: text += " · " + item.status.label + "…"
+        case .preparing, .running: text += "…"  // the progressive verb and the glyph say it is running
         case .unknown(let raw): text += " · " + raw
         }
         if let duration = item.duration, !item.status.isActive { text += " · " + DurationText.format(duration) }

@@ -12,6 +12,11 @@ public final class TranscriptContainerView: NSView {
         layer?.backgroundColor = DS.Palette.contentBackground.cgColor
     }
 
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onAppearanceChange?() }
+    }
+
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true

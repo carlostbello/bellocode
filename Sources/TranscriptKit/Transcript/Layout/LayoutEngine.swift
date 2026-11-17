@@ -177,8 +177,6 @@ public enum LayoutEngine {
             + (muted ? 18 : 0)
         let available = max(80, width - x)
         let color = muted ? theme.secondary : theme.text
-        var decorations: [Decoration] = []
-        if muted { decorations.append(Decoration(rect: .zero, fill: nil)) }
 
         func prose(_ styled: StyledText, font: CTFont, bold: Bool = false, hang: Int = 0, topSpacing: CGFloat = 0, tag: BlockLayout.KindTag)
             -> BlockLayout
@@ -188,13 +186,9 @@ public enum LayoutEngine {
             let fragment = ProseTypesetter.layout(
                 attributed, origin: CGPoint(x: x, y: 0), textStart: 0, width: available, hangUTF16: hang, fills: deco.fills,
                 strikes: deco.strikes, strikeColor: color, links: deco.links, fallbackFont: font)
-            var extra: [Decoration] = []
-            if muted {
-                extra.append(Decoration(rect: CGRect(x: x - 12, y: 0, width: 2, height: fragment.height), fill: theme.separator, radius: 1))
-            }
             return BlockLayout(
                 size: CGSize(width: width, height: fragment.height), plainLength: fragment.length, fragments: [fragment],
-                decorations: extra, isListItem: tag == .list, quoteDepth: block.quoteDepth, topSpacing: topSpacing, kindTag: tag)
+                isListItem: tag == .list, quoteDepth: block.quoteDepth, topSpacing: topSpacing, kindTag: tag, isMuted: muted)
         }
 
         switch block.kind {
@@ -438,7 +432,7 @@ public enum LayoutEngine {
             fragments.append(
                 Fragment(
                     origin: CGPoint(x: bubbleX + padX, y: fragment.origin.y), textStart: 0, length: fragment.length,
-                    width: fragment.width, height: fragment.height, content: fragment.content, fills: fragment.fills,
+                    width: bubbleWidth - 2 * padX, height: fragment.height, content: fragment.content, fills: fragment.fills,
                     links: fragment.links, string: fragment.string))
         }
         decorations.append(

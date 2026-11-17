@@ -218,6 +218,20 @@ public final class RowLayout {
     private func drawQuoteBars(context: CGContext, dirty: CGRect) {
         let visible = visibleBlockIndices
         context.setFillColor(theme.separator)
+        // Reasoning body: one bar spanning consecutive muted blocks.
+        var runStart: CGFloat?
+        var runEnd: CGFloat = 0
+        for index in visible + [-1] {
+            if index >= 0, blocks[index].isMuted {
+                let frame = blockFrame(index)
+                if runStart == nil { runStart = frame.minY }
+                runEnd = frame.maxY
+            } else if let start = runStart {
+                context.addPath(CGPath(roundedRect: CGRect(x: 6, y: start, width: 2, height: runEnd - start), cornerWidth: 1, cornerHeight: 1, transform: nil))
+                context.fillPath()
+                runStart = nil
+            }
+        }
         for (position, index) in visible.enumerated() {
             let depth = blocks[index].quoteDepth
             guard depth > 0 else { continue }

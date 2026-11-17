@@ -170,13 +170,15 @@ final class BlockLayout {
     let topSpacing: CGFloat
     /// Spacing to use before this block when it follows `previousKindTag` (list items pack tighter).
     let kindTag: KindTag
+    /// Reasoning body: drawn with a continuous bar at its left (by the row).
+    let isMuted: Bool
 
     enum KindTag: Equatable { case prose, list, code, table, rule, image, tool, toolDetail, card, other }
 
     init(
         size: CGSize, plainLength: Int, fragments: [Fragment] = [], decorations: [Decoration] = [], labels: [Label] = [],
         hotspots: [Hotspot] = [], images: [BlockImage] = [], scroll: ScrollArea? = nil, isListItem: Bool = false,
-        isHidden: Bool = false, quoteDepth: Int = 0, topSpacing: CGFloat = 0, kindTag: KindTag = .other
+        isHidden: Bool = false, quoteDepth: Int = 0, topSpacing: CGFloat = 0, kindTag: KindTag = .other, isMuted: Bool = false
     ) {
         self.size = size
         self.plainLength = plainLength
@@ -191,6 +193,7 @@ final class BlockLayout {
         self.quoteDepth = quoteDepth
         self.topSpacing = topSpacing
         self.kindTag = kindTag
+        self.isMuted = isMuted
     }
 
     static func hidden(kindTag: KindTag = .other) -> BlockLayout {

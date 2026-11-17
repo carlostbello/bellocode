@@ -216,6 +216,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     /// Binds a source (a thread). Replaces any previous one; content appears from the source at once (cached state).
     public func bind(_ source: any TranscriptSource, anchor: TranscriptAnchor? = nil) {
         unbindSource()
+        appearanceChanged()
         self.source = source
         observationGeneration += 1
         pendingRestore = .some(anchor)
@@ -669,8 +670,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     // MARK: Appearance
 
     func appearanceChanged() {
-        themeRevision += 1
         let appearance = tableView.effectiveAppearance
+        let resolved = TranscriptTheme.resolve(appearance: appearance, baseSize: baseFontSize, revision: themeRevision)
+        guard resolved != theme else { return }
+        themeRevision += 1
         theme = TranscriptTheme.resolve(appearance: appearance, baseSize: baseFontSize, revision: themeRevision)
         generation += 1
         // Visible rows re-lay out now; others when they are next needed.

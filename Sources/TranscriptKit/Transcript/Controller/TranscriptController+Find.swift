@@ -337,3 +337,8 @@ extension TranscriptController {
         return formatter
     }()
 }
+
+extension TranscriptController {
+    /// The find bar's field (harness and tests).
+    public var findBarField: NSSearchField { findBar.field }
+}

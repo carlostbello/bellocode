@@ -300,6 +300,15 @@ public enum RowBuilder {
         }
     }
 
+    /// "Edited" → "Edit" for calls that did not happen.
+    static func baseVerb(_ verb: String) -> String {
+        let map = [
+            "Read": "Read", "Edited": "Edit", "Wrote": "Write", "Patched": "Patch", "Ran": "Run", "Searched for": "Search for",
+            "Listed": "List", "Searched the web for": "Search the web for", "Fetched": "Fetch",
+        ]
+        return map[verb] ?? verb
+    }
+
     static func toolItem(_ call: ToolCall, partID: PartID) -> ToolItem {
         let input = json(call.input) as? [String: Any] ?? json(RawJSON(call.inputText)) as? [String: Any] ?? [:]
         let status: ToolItemStatus =
@@ -310,7 +319,8 @@ public enum RowBuilder {
             case .failed: .failed(call.error?.message ?? "Failed")
             case .unknown(let raw): .unknown(raw)
             }
-        let (category, verb, target) = describe(name: call.name, input: input, active: status.isActive)
+        var (category, verb, target) = describe(name: call.name, input: input, active: status.isActive)
+        if case .failed = status { verb = baseVerb(verb) }
         var inputText = ""
         var isDiff = false
         if category == .command, let command = input["command"] as? String {

@@ -202,7 +202,7 @@ final class Fragment {
 
     /// Fragment-local rects for a fragment-local range, limited to `clip`. `extendsPastEnd`: the selection continues
     /// after this fragment, so the last line's highlight runs to the fragment's right edge.
-    func rects(_ range: Range<Int>, clip: CGRect, extendsPastEnd: Bool) -> [CGRect] {
+    func rects(_ range: Range<Int>, clip: CGRect, extendsPastEnd: Bool, toEdge: Bool = true) -> [CGRect] {
         var rects: [CGRect] = []
         switch content {
         case .lines(let lines):
@@ -210,9 +210,10 @@ final class Fragment {
                 let continues = range.upperBound > line.range.upperBound || (extendsPastEnd && index == lines.count - 1 && range.upperBound >= line.range.upperBound)
                 let lo = max(range.lowerBound, line.range.lowerBound)
                 let hi = min(range.upperBound, line.range.upperBound)
-                guard lo < hi || (continues && lo <= line.range.upperBound && range.lowerBound <= line.range.upperBound) else { continue }
+                guard lo < hi || (toEdge && continues && lo <= line.range.upperBound && range.lowerBound <= line.range.upperBound) else { continue }
                 let x0 = CTLineGetOffsetForStringIndex(line.line, lo, nil)
-                let x1 = continues ? max(width - line.x, x0 + 4) : CTLineGetOffsetForStringIndex(line.line, hi, nil)
+                let lineEnd = CGFloat(CTLineGetTypographicBounds(line.line, nil, nil, nil)) - CGFloat(CTLineGetTrailingWhitespaceWidth(line.line))
+                let x1 = continues ? (toEdge ? max(width - line.x, x0 + 4) : max(lineEnd, x0 + 1)) : CTLineGetOffsetForStringIndex(line.line, hi, nil)
                 rects.append(CGRect(x: line.x + x0, y: line.top, width: max(1, x1 - x0), height: line.height))
             }
         case .mono(let mono):
@@ -262,7 +263,7 @@ final class Fragment {
     func draw(in context: CGContext, clip: CGRect) {
         for fill in fills {
             context.setFillColor(fill.color)
-            for rect in rects(fill.range, clip: clip, extendsPastEnd: false) {
+            for rect in rects(fill.range, clip: clip, extendsPastEnd: false, toEdge: false) {
                 let padded = rect.insetBy(dx: -2, dy: 1.5)
                 context.addPath(CGPath(roundedRect: padded, cornerWidth: 3.5, cornerHeight: 3.5, transform: nil))
                 context.fillPath()
@@ -275,7 +276,7 @@ final class Fragment {
                 CTLineDraw(line.line, context)
             }
             for strike in strikes {
-                for rect in rects(strike, clip: clip, extendsPastEnd: false) {
+                for rect in rects(strike, clip: clip, extendsPastEnd: false, toEdge: false) {
                     context.setFillColor(strikeColor ?? CGColor(gray: 0.5, alpha: 1))
                     context.fill(CGRect(x: rect.minX, y: rect.midY, width: rect.width, height: 1))
                 }

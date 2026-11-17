@@ -450,3 +450,21 @@ enum DSColumn {
     static let readableWidth = DS.Spacing.readableWidth
     static let margin = DS.Spacing.columnMargin
 }
+
+extension TranscriptController {
+    /// No layout, height flush, open pass or streaming job is pending (harness and tests).
+    public var isSettled: Bool {
+        openTask == nil && inflight.isEmpty && pendingHeights.isEmpty && !flushScheduled && !syncScheduled
+            && tails.values.allSatisfy { !$0.jobInFlight && $0.pendingText == nil }
+    }
+
+    /// Waits until `isSettled` (bounded).
+    public func settle(timeout: Duration = .seconds(5)) async {
+        let deadline = ContinuousClock.now + timeout
+        while !isSettled, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        try? await Task.sleep(for: .milliseconds(30))
+    }
+
+    /// The first row whose content matches.
+    public func rowID(where predicate: (TranscriptRow) -> Bool) -> RowID? { rows.first(where: predicate)?.id }
+}
