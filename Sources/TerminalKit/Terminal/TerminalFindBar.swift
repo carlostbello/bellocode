@@ -54,34 +54,38 @@ final class TerminalFindBar: NSView, NSSearchFieldDelegate {
         done.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         done.target = self
         done.action = #selector(close)
-        let stack = NSStackView(views: [field, count, navigation, caseButton, done])
-        stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        addSubview(stack)
+        let controls = NSStackView(views: [count, navigation, caseButton, done])
+        controls.orientation = .horizontal
+        controls.spacing = 6
         let separator = NSBox()
         separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(separator)
+        for view in [field, controls, separator] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        let preferredWidth = field.widthAnchor.constraint(equalToConstant: 320)
+        preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor), stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor), stack.bottomAnchor.constraint(equalTo: separator.topAnchor),
+            heightAnchor.constraint(equalToConstant: 30),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -0.5),
+            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 120), preferredWidth,
+            field.trailingAnchor.constraint(lessThanOrEqualTo: controls.leadingAnchor, constant: -8),
+            controls.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            controls.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            count.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
             separator.leadingAnchor.constraint(equalTo: leadingAnchor), separator.trailingAnchor.constraint(equalTo: trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: bottomAnchor),
-            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
-            field.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-            count.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
         ])
-        wantsLayer = true
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
 
     var searchText: String {
         get { field.stringValue }

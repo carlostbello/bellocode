@@ -75,7 +75,7 @@ final class TerminalTabStrip: NSView {
             tab.update(record: record, isSelected: record.id == selectedID, isSplit: record.id == splitID)
         }
         if ids != order || stack.arrangedSubviews.count != ids.count + (creating > 0 ? 1 : 0) {
-            for view in stack.arrangedSubviews { stack.removeArrangedSubview(view) }
+            for view in stack.arrangedSubviews { view.removeFromSuperview() }
             for id in ids { if let tab = tabs[id] { stack.addArrangedSubview(tab) } }
             if creating > 0 { stack.addArrangedSubview(creatingTab) }
             order = ids
@@ -112,7 +112,7 @@ final class TerminalTabStrip: NSView {
             var reordered = order
             reordered.remove(at: current)
             reordered.insert(tab.id, at: min(target, reordered.count))
-            for view in stack.arrangedSubviews { stack.removeArrangedSubview(view) }
+            for view in stack.arrangedSubviews { view.removeFromSuperview() }
             for id in reordered { if let tab = tabs[id] { stack.addArrangedSubview(tab) } }
             order = reordered
         }
@@ -185,8 +185,6 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
     init(id: String) {
         self.id = id
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = DS.Radius.medium
         title.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -264,10 +262,14 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
     private func updateChrome() {
         closeButton.isHidden = id.isEmpty || !(isSelected || isHovered)
         needsDisplay = true
-        needsLayout = true
-        layer?.backgroundColor = isSelected
-            ? NSColor.selectedContentBackgroundColor.withAlphaComponent(0.18).cgColor
-            : (isHovered ? NSColor.quaternaryLabelColor.cgColor : NSColor.clear.cgColor)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fill: NSColor? = isSelected
+            ? NSColor.controlAccentColor.withAlphaComponent(0.16) : (isHovered ? NSColor.quaternaryLabelColor : nil)
+        guard let fill else { return }
+        fill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: DS.Radius.medium, yRadius: DS.Radius.medium).fill()
     }
 
     override func viewDidChangeEffectiveAppearance() {

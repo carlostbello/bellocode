@@ -26,12 +26,13 @@ public final class TerminalSurfaceController: NSViewController {
     private let messageLine = NSTextField(labelWithString: "")
     private let messageBar = NSStackView()
     private let content = NSView()
-    private let splitView = NSSplitView()
+    private let splitView = TerminalSplitView()
     private let emptyState = TerminalEmptyState()
     private var observation: TerminalObservation?
     private var mounted: [TerminalPaneController] = []
     private var attached: Set<String> = []
     private var isCreatingThread = false
+    private var messageBarCollapsed: NSLayoutConstraint?
 
     init(placement: TerminalPlacement, workspace: TerminalWorkspace) {
         self.placement = placement
@@ -52,7 +53,7 @@ public final class TerminalSurfaceController: NSViewController {
     // MARK: View
 
     public override func loadView() {
-        let container = NSView()
+        let container = SurfaceBackgroundView()
         let header = NSView()
         let separator = NSBox()
         separator.boxType = .separator
@@ -90,17 +91,14 @@ public final class TerminalSurfaceController: NSViewController {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
+        // The message line takes no space unless there is a message.
+        messageBarCollapsed = messageBar.heightAnchor.constraint(equalToConstant: 0)
+        messageBarCollapsed?.isActive = true
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
             header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             header.heightAnchor.constraint(equalToConstant: 30),
-            tabStrip.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: DS.Spacing.xs),
-            tabStrip.topAnchor.constraint(equalTo: header.topAnchor),
-            tabStrip.bottomAnchor.constraint(equalTo: header.bottomAnchor),
-            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -DS.Spacing.xs),
-            buttons.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -DS.Spacing.s),
-            buttons.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             separator.topAnchor.constraint(equalTo: header.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -111,6 +109,12 @@ public final class TerminalSurfaceController: NSViewController {
             content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: DS.Spacing.xs),
+            tabStrip.topAnchor.constraint(equalTo: header.topAnchor),
+            tabStrip.bottomAnchor.constraint(equalTo: header.bottomAnchor),
+            tabStrip.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -DS.Spacing.xs),
+            buttons.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -DS.Spacing.s),
+            buttons.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             splitView.topAnchor.constraint(equalTo: content.topAnchor),
             splitView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             splitView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -156,11 +160,16 @@ public final class TerminalSurfaceController: NSViewController {
         unmountAll()
         self.terminals = terminals
         _ = view
-        render()
+        // Track the new thread's model (the previous tracking read the old one).
+        observation?.cancel()
+        observation = TerminalObservation { [weak self] in self?.render() }
     }
 
     /// Rebuilds after a terminal was replaced (restart) or closed.
-    func reload() { render() }
+    func reload() {
+        observation?.cancel()
+        observation = TerminalObservation { [weak self] in self?.render() }
+    }
 
     private func render() {
         guard isViewLoaded else { return }
@@ -178,11 +187,14 @@ public final class TerminalSurfaceController: NSViewController {
         if let message = terminals?.lastError?.userMessage {
             messageLine.stringValue = message
             messageBar.isHidden = false
+            messageBarCollapsed?.isActive = false
         } else if terminals?.isStale == true, !records.isEmpty {
             messageLine.stringValue = "opencode is not reachable: terminals reconnect when it is back."
             messageBar.isHidden = false
+            messageBarCollapsed?.isActive = false
         } else {
             messageBar.isHidden = true
+            messageBarCollapsed?.isActive = true
         }
 
         // Every running terminal of the displayed thread stays attached (its exit code is only on the socket).
@@ -242,10 +254,8 @@ public final class TerminalSurfaceController: NSViewController {
             splitView.addArrangedSubview(pane.view)
         }
         mounted = panes
-        if panes.count == 2 {
-            splitView.adjustSubviews()
-            splitView.setPosition(splitView.bounds.width / 2, ofDividerAt: 0)
-        }
+        splitView.needsEqualWidths = true
+        splitView.needsLayout = true
         for pane in panes { pane.sendSizeIfVisible() }
         if focusWasInside { panes.first?.focus() }
     }
@@ -502,4 +512,37 @@ final class TerminalEmptyState: NSView {
     }
 
     @objc private func pressed() { onNewTerminal?() }
+}
+
+/// The surface's root view: draws the window background (so the drawer reads as part of the window in both
+/// appearances, and snapshots taken with `cacheDisplay` include it).
+@MainActor
+final class SurfaceBackgroundView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
+}
+
+/// Side-by-side panes. After the panes change it fits them to its width in equal parts on its next layout (a pane
+/// moved from another surface keeps its old frame until then); later divider drags are the user's.
+@MainActor
+final class TerminalSplitView: NSSplitView {
+    var needsEqualWidths = false
+
+    override func layout() {
+        super.layout()
+        guard needsEqualWidths, bounds.width > 0 else { return }
+        needsEqualWidths = false
+        let count = arrangedSubviews.count
+        guard count > 0 else { return }
+        let available = bounds.width - dividerThickness * CGFloat(count - 1)
+        var x: CGFloat = 0
+        for view in arrangedSubviews {
+            let width = (available / CGFloat(count)).rounded()
+            view.frame = NSRect(x: x, y: 0, width: view === arrangedSubviews.last ? bounds.width - x : width, height: bounds.height)
+            x += width + dividerThickness
+        }
+        adjustSubviews()
+    }
 }

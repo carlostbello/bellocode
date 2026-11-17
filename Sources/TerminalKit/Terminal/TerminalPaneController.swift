@@ -26,7 +26,6 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     private var observation: TerminalObservation?
     private var noticeTask: Task<Void, Never>?
     private var appliedTheme: TerminalTheme?
-    private var findTopConstraint: NSLayoutConstraint?
     /// Paste confirmation is shown at most once at a time.
     private var isConfirmingPaste = false
 
@@ -67,7 +66,28 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     public override func loadView() {
         let container = TerminalPaneContainer()
         container.terminalView = terminalView
-        for subview in [terminalView, findBar, statusPill, endedBar, observerBar] as [NSView] {
+        // Bars above and below the emulator; hidden ones take no space.
+        // The emulator sits inset from the pane's edges, on the pane's background (drawn by the container).
+        let terminalHost = NSView()
+        terminalView.translatesAutoresizingMaskIntoConstraints = false
+        terminalHost.addSubview(terminalView)
+        NSLayoutConstraint.activate([
+            terminalView.topAnchor.constraint(equalTo: terminalHost.topAnchor, constant: 4),
+            terminalView.leadingAnchor.constraint(equalTo: terminalHost.leadingAnchor, constant: 8),
+            terminalView.trailingAnchor.constraint(equalTo: terminalHost.trailingAnchor),
+            terminalView.bottomAnchor.constraint(equalTo: terminalHost.bottomAnchor),
+        ])
+        terminalHost.setContentHuggingPriority(.defaultLow, for: .vertical)
+        terminalHost.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        let column = NSStackView(views: [findBar, terminalHost, endedBar, observerBar])
+        column.orientation = .vertical
+        column.spacing = 0
+        column.alignment = .width
+        column.detachesHiddenViews = true
+        column.setHuggingPriority(.defaultLow, for: .vertical)
+        terminalView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        terminalView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        for subview in [column, statusPill] as [NSView] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(subview)
         }
@@ -76,23 +96,12 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         endedBar.isHidden = true
         observerBar.isHidden = true
         findBar.delegate = self
-        let findTop = findBar.topAnchor.constraint(equalTo: container.topAnchor, constant: -40)
-        findTopConstraint = findTop
         NSLayoutConstraint.activate([
-            findTop,
-            findBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            findBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            terminalView.topAnchor.constraint(equalTo: findBar.bottomAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
-            terminalView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: endedBar.topAnchor),
-            endedBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            endedBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            endedBar.bottomAnchor.constraint(equalTo: observerBar.topAnchor),
-            observerBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            observerBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            observerBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            statusPill.topAnchor.constraint(equalTo: findBar.bottomAnchor, constant: 6),
+            column.topAnchor.constraint(equalTo: container.topAnchor),
+            column.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            column.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            statusPill.topAnchor.constraint(equalTo: terminalView.topAnchor, constant: 6),
             statusPill.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
         ])
         endedBar.onPrimary = { [weak self] in self?.restart() }
@@ -121,8 +130,7 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         let theme = TerminalTheme.current(for: appearance)
         theme.apply(to: terminalView, appearance: appearance)
         appliedTheme = theme
-        view.wantsLayer = true
-        view.layer?.backgroundColor = terminalView.nativeBackgroundColor.cgColor
+        (view as? TerminalPaneContainer)?.backgroundColor = terminalView.nativeBackgroundColor
     }
 
     /// Applies changed preferences (font, scrollback, Option as Meta).
@@ -267,19 +275,23 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     public func showFind(useSelection: Bool) {
         if useSelection, let selection = selectedText { findBar.searchText = selection }
         findBar.isHidden = false
-        findTopConstraint?.constant = 0
         findBar.focus()
         updateFindCount()
     }
 
     public func hideFind() {
         findBar.isHidden = true
-        findTopConstraint?.constant = -40
         terminalView.clearSearch()
         focus()
     }
 
     public var isFindVisible: Bool { !findBar.isHidden }
+
+    /// Sets the search text as if typed (demo and tests).
+    func findBarSet(_ text: String) {
+        findBar.searchText = text
+        findBarDidChange(findBar)
+    }
 
     func findAgain(forward: Bool) {
         let term = findBar.searchText
@@ -295,7 +307,8 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         let term = findBar.searchText
         guard !term.isEmpty else { return findBar.setCount(nil) }
         let summary = terminalView.searchMatchSummary(term, options: findBar.options)
-        findBar.setCount(summary.total == 0 ? (0, 0) : (max(summary.index, 0) + (summary.index >= 0 ? 1 : 0), summary.total))
+        // SwiftTerm's index is 1-based, 0 when no match is current.
+        findBar.setCount((summary.index, summary.total))
     }
 
     // MARK: Notices
@@ -427,14 +440,15 @@ final class TerminalEndedBar: NSView {
             stack.topAnchor.constraint(equalTo: separator.bottomAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
-        wantsLayer = true
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() { layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
 
     func show(text: String, symbol: String, primary primaryTitle: String, secondary secondaryTitle: String?) {
         label.stringValue = text

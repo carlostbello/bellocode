@@ -80,8 +80,6 @@ final class TerminalStatusPill: NSView {
 
     init() {
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 9
         stack.orientation = .horizontal
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 2, right: 8)
@@ -112,11 +110,11 @@ final class TerminalStatusPill: NSView {
         isHidden = false
     }
 
-    override func updateLayer() {
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92).cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.borderWidth = 1
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
+        NSColor.windowBackgroundColor.withAlphaComponent(0.95).setFill()
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.stroke()
     }
-
-    override var wantsUpdateLayer: Bool { true }
 }

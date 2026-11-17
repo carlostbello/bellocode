@@ -79,7 +79,11 @@ let targets: [Target] =
     + [
         // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
         .executableTarget(
-            name: "TerminalDemo", dependencies: ["TerminalKit", "Engine", "OpenCodeKit", "MockOpenCode", "BelloCore", "DesignSystem"],
+            name: "TerminalDemo",
+            dependencies: [
+                "TerminalKit", "Engine", "OpenCodeKit", "MockOpenCode", "BelloCore", "DesignSystem",
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+            ],
             swiftSettings: swiftSettings),
         .executableTarget(
             name: "BelloCodeApp",

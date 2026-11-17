@@ -121,6 +121,18 @@ public final class TerminalPaneView: TerminalView {
 @MainActor
 final class TerminalPaneContainer: NSView {
     weak var terminalView: TerminalPaneView?
+    var backgroundColor: NSColor = .textBackgroundColor { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        backgroundColor.setFill()
+        dirtyRect.fill()
+    }
+
+    /// After any layout the grid may have changed; the stream debounces and sends only a real change.
+    override func layout() {
+        super.layout()
+        terminalView?.pane?.sendSizeIfVisible()
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if let terminalView, terminalView.claimsKeyEquivalent(event) {
