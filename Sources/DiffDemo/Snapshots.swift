@@ -165,13 +165,6 @@ final class BackdropView: NSView {
     }
 }
 
-/// Placeholder until the benchmark lands.
-@MainActor
-struct Bench {
-    let window: NSWindow
-    let arguments: [String]
-    func run() async -> Bool { true }
-}
 
 /// A diff with a selection and comment marks above the comment editor (popovers are separate windows, so the editor is
 /// rendered in place for the snapshot).
