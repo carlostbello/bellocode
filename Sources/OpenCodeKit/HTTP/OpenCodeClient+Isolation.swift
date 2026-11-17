@@ -45,6 +45,12 @@ extension OpenCodeClient {
     }
 
     /// `GET /api/shell/{id}/output` (shell.output).
+    /// `DELETE /api/shell/{id}` (shell.remove): stops a running job.
+    public func deleteShellJob(_ id: String, directory: String) async throws {
+        let request = try makeRequest(.delete, ["api", "shell", id], directory: directory)
+        try await sendIgnoringBody("shell.remove", request)
+    }
+
     public func shellJobOutput(_ id: String, directory: String) async throws -> ShellJobOutput {
         let request = try makeRequest(.get, ["api", "shell", id, "output"], directory: directory)
         return try await send("shell.output", request, as: Located<ShellJobOutput>.self).data

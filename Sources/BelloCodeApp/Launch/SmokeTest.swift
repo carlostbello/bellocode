@@ -92,6 +92,16 @@ enum SmokeTest {
             }
         }
 
+        if let containerProject, ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_E2E"] == "1" {
+            let passed = await ContainerEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject, log: log)
+            log(passed ? "container end-to-end passed" : "FAIL container end-to-end")
+            guard passed else {
+                if !keep { await engine.environments.removeContainerNow(containerProject, volumes: true) }
+                await engine.stop()
+                return false
+            }
+        }
+
         guard let shellPID = await terminalRoundTrip(
             engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root, containerProject: containerProject)
         else {
