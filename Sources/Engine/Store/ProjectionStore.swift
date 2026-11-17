@@ -197,6 +197,8 @@ public struct SearchHit: Hashable, Sendable {
     public var sessionID: SessionID
     /// A short excerpt around the match, with the match in `[` `]`.
     public var snippet: String
+    /// When the message was created.
+    public var created: Timestamp = Timestamp(milliseconds: 0)
 }
 
 /// The local projection: a rebuildable SQLite cache of opencode state plus BelloCode's own per-project and per-thread
@@ -500,12 +502,15 @@ public actor ProjectionStore {
             try db.execute(
                 sql: """
                     INSERT OR REPLACE INTO app_thread
-                    (session_id, draft, visit_watermark, pinned, snoozed_until, settled, scroll_anchor, scroll_offset)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (session_id, draft, visit_watermark, pinned, snoozed_until, settled, scroll_anchor, scroll_offset,
+                     sort_key, snoozed_at, settled_at, never_auto_settle, marked_unread)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                 arguments: [
                     state.sessionID.rawValue, state.draft, state.visitWatermark?.milliseconds, state.pinned,
                     state.snoozedUntil?.milliseconds, state.settled, state.scrollAnchor?.rawValue, state.scrollOffset,
+                    state.sortKey, state.snoozedAt?.milliseconds, state.settledAt?.milliseconds, state.neverAutoSettle,
+                    state.markedUnread,
                 ])
         }
         for sync in batch.syncStates {
@@ -760,7 +765,10 @@ public actor ProjectionStore {
                     visitWatermark: (row["visit_watermark"] as Double?).map(Timestamp.init(milliseconds:)),
                     pinned: row["pinned"], snoozedUntil: (row["snoozed_until"] as Double?).map(Timestamp.init(milliseconds:)),
                     settled: row["settled"], scrollAnchor: (row["scroll_anchor"] as String?).map { MessageID($0) },
-                    scrollOffset: row["scroll_offset"])
+                    scrollOffset: row["scroll_offset"], sortKey: row["sort_key"],
+                    snoozedAt: (row["snoozed_at"] as Double?).map(Timestamp.init(milliseconds:)),
+                    settledAt: (row["settled_at"] as Double?).map(Timestamp.init(milliseconds:)),
+                    neverAutoSettle: row["never_auto_settle"], markedUnread: row["marked_unread"])
             }
         }
     }
@@ -776,7 +784,7 @@ public actor ProjectionStore {
     }
 
     /// Full-text search over user and assistant message text. `query` is matched as words (prefix match on the last).
-    public func search(_ query: String, limit: Int = 50) async throws -> [SearchHit] {
+    public func search(_ query: String, limit: Int = 50, markers: (open: String, close: String) = ("[", "]")) async throws -> [SearchHit] {
         let words = query.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         guard !words.isEmpty else { return [] }
         let pattern = words.enumerated().map { index, word in
@@ -786,16 +794,16 @@ public actor ProjectionStore {
             try Row.fetchAll(
                 db,
                 sql: """
-                    SELECT m.id AS id, m.session_id AS session_id,
-                        snippet(message_fts, 0, '[', ']', '…', 12) AS snippet
+                    SELECT m.id AS id, m.session_id AS session_id, m.created AS created,
+                        snippet(message_fts, 0, ?, ?, '…', 12) AS snippet
                     FROM message_fts JOIN message m ON m.seq = message_fts.rowid
                     WHERE message_fts MATCH ? ORDER BY rank LIMIT ?
                     """,
-                arguments: [pattern, limit]
+                arguments: [markers.open, markers.close, pattern, limit]
             ).map { row in
                 SearchHit(
                     messageID: MessageID(row["id"] as String), sessionID: SessionID(row["session_id"] as String),
-                    snippet: row["snippet"])
+                    snippet: row["snippet"], created: Timestamp(milliseconds: row["created"] as Double? ?? 0))
             }
         }
     }

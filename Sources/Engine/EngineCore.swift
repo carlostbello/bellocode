@@ -11,6 +11,9 @@ public struct EngineSnapshot: Sendable {
     public var attention: AttentionSummary
     public var catalogs: [Catalog]
     public var connection: ConnectionStatus
+    /// Every thread's sidebar organisation (threads without app state are absent: `.none`).
+    public var organisation: [SessionID: ThreadOrganisation] = [:]
+    public var organisationRules: OrganisationRules = .default
 }
 
 /// A thread as it opens: the newest window of messages plus everything pinned around the composer.
@@ -148,7 +151,9 @@ actor EngineCore {
         async let queue = store.queue()
         async let threadUI = store.threadUIStates()
         async let catalogs = store.catalogs()
+        async let rules = store.preference(Self.organisationRulesKey, as: OrganisationRules.self)
         let (p, r, s, pe, q, t, c) = try await (projects, registry, sessions, pending, queue, threadUI, catalogs)
+        if let stored = try? await rules { organisationRules = stored }
         var state = pipeline.state
         state.projects = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         state.registry = Dictionary(r.map { ($0.directory, $0) }, uniquingKeysWith: { $1 })
@@ -167,13 +172,16 @@ actor EngineCore {
         EngineSnapshot(
             projects: Array(pipeline.state.projects.values), registry: Array(pipeline.state.registry.values),
             sessions: Array(pipeline.state.sessions.values), statuses: statuses, attention: summary,
-            catalogs: Array(catalogs.values), connection: connection)
+            catalogs: Array(catalogs.values), connection: connection,
+            organisation: pipeline.state.threadUI.compactMapValues { $0.organisation == .none ? nil : $0.organisation },
+            organisationRules: organisationRules)
     }
 
     /// Starts the server (if supervised) and the event stream.
     func start() async {
         guard !started else { return }
         started = true
+        organise()
         if case .supervised(let supervisor) = configuration.server { await supervisor.start() }
         let connector = URLSessionEventStreamConnector { [weak self] in
             guard let self else { throw CancellationError() }
@@ -195,6 +203,8 @@ actor EngineCore {
     /// Stops the event stream, cancels every task this actor started, writes what is pending, and stops a supervised
     /// server.
     func stop() async {
+        organiseTask?.cancel()
+        organiseTask = nil
         let hub = self.hub
         self.hub = nil
         eventTask?.cancel()
@@ -511,6 +521,7 @@ actor EngineCore {
         summary = newSummary
         if summaryChanged { changes.append(.attention(newSummary)) }
         if publish, !changes.isEmpty { bus.publish(changes) }
+        if publish { organise() }
     }
 
     private func setConnection(_ status: ConnectionStatus) {
@@ -1563,6 +1574,7 @@ actor EngineCore {
     func markViewed(_ sessionID: SessionID) async throws {
         var ui = pipeline.state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID)
         ui.visitWatermark = .now
+        ui.markedUnread = false
         var reduction = Reduction()
         pipeline.state.putThreadUI(ui, into: &reduction)
         commit(reduction)
@@ -1638,6 +1650,90 @@ actor EngineCore {
             }
             throw error
         }
+    }
+
+    // MARK: - Thread organisation (docs/features/navigation.md)
+
+    static let organisationRulesKey = "organisation-rules"
+    private(set) var organisationRules = OrganisationRules.default
+    private var isOrganising = false
+    private var organiseTask: Task<Void, Never>?
+
+    /// Section inputs for every top-level, unarchived thread.
+    func organisationInputs() -> [ThreadSectionInput] {
+        let state = pipeline.state
+        return state.sessions.values.compactMap { session in
+            guard !session.isArchived, session.parentID.map({ state.sessions[$0] == nil }) ?? true else { return nil }
+            let ui = state.threadUI[session.id]
+            let status = statuses[session.id]
+            let seen = [session.viewedAt, ui?.visitWatermark].compactMap { $0 }.max()
+            return ThreadSectionInput(
+                sessionID: session.id, created: session.created, busySince: session.busySince, idleAt: session.idleAt,
+                seenAt: seen, status: status?.status ?? (session.isRunning ? .running : .idle), statusSince: status?.since,
+                organisation: ui?.organisation ?? .none)
+        }
+    }
+
+    /// Applies the timed and activity rules (wakes, auto-settle) and re-arms the timer for the next deadline.
+    func organise() {
+        guard !isOrganising else { return }
+        isOrganising = true
+        defer { isOrganising = false }
+        let now = Timestamp.now
+        let inputs = organisationInputs()
+        let changes = ThreadSections.pendingChanges(inputs, rules: organisationRules, now: now)
+        if !changes.isEmpty { setOrganisation(changes) }
+        scheduleOrganise(next: ThreadSections.nextDeadline(organisationInputs(), rules: organisationRules, now: now), now: now)
+    }
+
+    private func scheduleOrganise(next: Timestamp?, now: Timestamp) {
+        organiseTask?.cancel()
+        organiseTask = nil
+        guard started else { return }
+        // At least hourly, so a long sleep or a clock change is caught up.
+        let wait = min(max((next?.milliseconds ?? .infinity) - now.milliseconds, 50), 3_600_000)
+        organiseTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(wait) + 20))
+            guard !Task.isCancelled else { return }
+            await self?.organise()
+        }
+    }
+
+    /// Replaces the organisation of threads (user actions, undo, drops, wakes).
+    func setOrganisation(_ values: [SessionID: ThreadOrganisation]) {
+        var reduction = Reduction()
+        for (id, organisation) in values {
+            var ui = pipeline.state.threadUI[id] ?? ThreadUIState(sessionID: id)
+            guard ui.organisation != organisation else { continue }
+            ui.organisation = organisation
+            pipeline.state.putThreadUI(ui, into: &reduction)
+        }
+        commit(reduction)
+    }
+
+    func organisation(of id: SessionID) -> ThreadOrganisation { pipeline.state.threadUI[id]?.organisation ?? .none }
+
+    func setOrganisationRules(_ rules: OrganisationRules) async {
+        guard rules != organisationRules else { return }
+        organisationRules = rules
+        try? await store.setPreference(Self.organisationRulesKey, rules)
+        organise()
+    }
+
+    /// The pending requests of a thread and its descendants (for notification actions; the thread need not be open).
+    func pendingRequests(for sessionID: SessionID) -> [PendingRequest] {
+        let state = pipeline.state
+        func isWithin(_ id: SessionID) -> Bool {
+            var current: SessionID? = id
+            var depth = 0
+            while let candidate = current, depth < 32 {
+                if candidate == sessionID { return true }
+                current = state.sessions[candidate]?.parentID
+                depth += 1
+            }
+            return false
+        }
+        return state.pending.values.filter { isWithin($0.sessionID) }.sorted { $0.received < $1.received }
     }
 
     // MARK: - App-owned state
@@ -1732,9 +1828,25 @@ actor EngineCore {
         return (sessions, result)
     }
 
-    func search(_ query: String, limit: Int) async throws -> [SearchHit] {
+    func search(_ query: String, limit: Int, markers: (open: String, close: String) = ("[", "]")) async throws -> [SearchHit] {
         await flushWrites()
-        return try await store.search(query, limit: limit)
+        return try await store.search(query, limit: limit, markers: markers)
+    }
+
+    func sessionsByID(_ ids: Set<SessionID>) -> [SessionID: Session] {
+        var result: [SessionID: Session] = [:]
+        for id in ids {
+            guard var session = pipeline.state.sessions[id] else { continue }
+            result[id] = session
+            // Ancestors too: a sub-agent's hit is grouped under its top-level thread.
+            var depth = 0
+            while let parent = session.parentID, let next = pipeline.state.sessions[parent], depth < 32 {
+                result[parent] = next
+                session = next
+                depth += 1
+            }
+        }
+        return result
     }
 
     /// The in-memory projection, for tests.

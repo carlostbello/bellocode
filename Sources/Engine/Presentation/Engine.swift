@@ -36,6 +36,10 @@ public final class EngineRoot {
     public private(set) var attention: AttentionSummary = .empty
     /// Whether local state reaches disk. Show `storage.message` (with `preferencesUnsaved`) wherever it is not `.ok`.
     public private(set) var storage: StorageStatus = .ok
+    /// Every thread's sidebar organisation (absent = `.none`). Changes only on user action, a wake or auto-settle.
+    public internal(set) var organisation: [SessionID: ThreadOrganisation] = [:]
+    /// Auto-settle rules (Settings ▸ Threads).
+    public internal(set) var organisationRules: OrganisationRules = .default
     public let catalog = CatalogModel()
 
     @ObservationIgnored private var projectsByID: [ProjectID: Project] = [:]
@@ -112,9 +116,13 @@ public final class Engine {
     public let modelPreferences: ModelPreferencesModel
     /// Per-thread terminals on opencode's persistent PTYs (docs/features/terminal.md).
     public let terminals: TerminalService
+    /// Palette frecency (app-owned; persisted in the store).
+    public let frecency: FrecencyModel
     let core: EngineCore
 
     private let tasks = TaskBox()
+    /// The last organisation write sent to the core; each waits for the one before, so they apply in order.
+    var organisationWrite: Task<Void, Never>?
     private var openThreads: [SessionID: ThreadModel] = [:]
     private var trackedTasks: [Int: Task<Void, Never>] = [:]
     private var nextTrackedID = 0
@@ -141,6 +149,7 @@ public final class Engine {
         self.store = store
         core = EngineCore(configuration: configuration, store: store)
         modelPreferences = ModelPreferencesModel(store: store, retryBackoff: configuration.writeRetryBackoff, time: configuration.time)
+        frecency = FrecencyModel(store: store)
         terminals = TerminalService(store: store, client: { [core] in try await core.currentClient() })
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
     }
@@ -184,12 +193,14 @@ public final class Engine {
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         await modelPreferences.load()
+        await frecency.load()
         await core.start()
     }
 
     /// Closes open threads, writes pending state, stops the event stream and (if supervised) the server.
     public func stop() async {
         await modelPreferences.flush()
+        await frecency.flush()
         await terminals.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
@@ -318,6 +329,8 @@ public final class Engine {
         defer { EngineSignposts.publish.endInterval("launchSnapshot", signpost) }
         root.setProjects(snapshot.projects, registry: snapshot.registry)
         root.setAttention(snapshot.attention)
+        root.organisation = snapshot.organisation
+        root.organisationRules = snapshot.organisationRules
         let byProject = Dictionary(grouping: snapshot.sessions, by: \.projectID)
         for (projectID, sessions) in byProject where root.projectModels[projectID] == nil {
             root.projectModels[projectID] = ProjectModel(
@@ -335,6 +348,7 @@ public final class Engine {
     private func subscribeRoot() {
         let topics: [(String, ChangeTopic)] = [
             ("projects", .projects), ("attention", .attention), ("catalog", .catalog), ("connection", .connection),
+            ("organisation", .organisation),
         ]
         for (key, topic) in topics {
             let subscription = store.observe(topic)
@@ -353,6 +367,11 @@ public final class Engine {
         if let connection = change.connection { root.setConnection(connection) }
         if let storage = change.storage { root.setStorage(storage) }
         if let summary = change.attention { root.setAttention(summary) }
+        if !change.organisation.isEmpty {
+            var next = root.organisation
+            for (id, value) in change.organisation { next[id] = value == .none ? nil : value }
+            if next != root.organisation { root.organisation = next }
+        }
         if let catalog = change.catalog {
             defaultDirectory = defaultDirectory ?? root.projects.first?.directory
             root.catalog.apply(catalog, isDefault: catalog.directory == defaultDirectory)
@@ -383,6 +402,7 @@ public final class Engine {
                     self.root.setProjects(snapshot.projects, registry: snapshot.registry)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
+                    if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }
                 })
         }
     }
