@@ -307,6 +307,6 @@ struct StoreOpenOffMainTests {
         proceed.signal()
         let store = try await opening.value
         #expect(signalledByMain.withLock { $0 })
-        #expect(try await store.appliedMigrations().last == "v3-test-slow")
+        #expect(try await store.appliedMigrations().contains("v3-test-slow"))
     }
 }

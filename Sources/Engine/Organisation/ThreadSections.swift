@@ -175,8 +175,9 @@ public enum ThreadSections {
         }
     }
 
-    /// Whether the auto-settle rule settles this thread now: finished and seen, not pinned, snoozed, settled or opted
-    /// out, nothing pending, and both the run's end and the last view at least `hours` ago.
+    /// Whether the auto-settle rule settles this thread now: a finished turn, seen, not pinned, snoozed, settled or opted
+    /// out, nothing pending, and both the run's end and the last view at least `hours` ago. A thread that never ran is
+    /// never settled automatically.
     public static func shouldAutoSettle(_ input: ThreadSectionInput, rules: OrganisationRules, now: Timestamp) -> Bool {
         guard let deadline = autoSettleDeadline(input, rules: rules) else { return false }
         return deadline <= now
@@ -185,10 +186,11 @@ public enum ThreadSections {
     /// When the auto-settle rule will settle this thread (nil: it will not, as things stand).
     public static func autoSettleDeadline(_ input: ThreadSectionInput, rules: OrganisationRules) -> Timestamp? {
         let org = input.organisation
+        // Only a thread whose last turn finished: a new thread that never ran is not "done".
         guard let hours = rules.autoSettleAfterHours, !org.pinned, !org.settled, org.snoozedUntil == nil,
-              !org.neverAutoSettle, !org.markedUnread, input.status == .idle
+              !org.neverAutoSettle, !org.markedUnread, input.status == .idle, let idle = input.idleAt
         else { return nil }
-        let reference = max(input.idleAt ?? input.created, input.seenAt ?? input.created)
+        let reference = max(idle, input.seenAt ?? idle)
         return Timestamp(milliseconds: reference.milliseconds + hours * 3_600_000)
     }
 

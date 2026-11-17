@@ -99,6 +99,8 @@ struct ThreadSectionTests {
         #expect(!ThreadSections.shouldAutoSettle(input("u", idle: 1, status: .finishedUnread), rules: rules, now: t(100 * hour)))
         #expect(!ThreadSections.shouldAutoSettle(input("r", busy: 1, status: .running), rules: rules, now: t(100 * hour)))
         #expect(!ThreadSections.shouldAutoSettle(finished, rules: OrganisationRules(autoSettleAfterHours: nil), now: t(1_000 * hour)))
+        // A thread that never ran (no finished turn) is never settled, however old.
+        #expect(!ThreadSections.shouldAutoSettle(input("new", created: 1, status: .idle), rules: rules, now: t(1_000 * hour)))
     }
 
     @Test func pendingChangesWakeToTheTopAndAutoSettle() {

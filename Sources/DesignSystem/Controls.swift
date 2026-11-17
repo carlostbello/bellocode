@@ -282,6 +282,8 @@ public final class EmptyStateView: NSView {
 public final class UndoToastView: NSVisualEffectView {
     public let message = NSTextField(labelWithString: "")
     public let undoButton = NSButton(title: "Undo", target: nil, action: nil)
+    /// An opaque card under the text, so the toast stays legible over any row (and in rendered snapshots).
+    private let card = NSView()
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -298,6 +300,16 @@ public final class UndoToastView: NSVisualEffectView {
         undoButton.bezelStyle = .push
         undoButton.controlSize = .small
         undoButton.keyEquivalent = ""
+        card.wantsLayer = true
+        card.layer?.cornerRadius = DS.Radius.large
+        card.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(card)
+        NSLayoutConstraint.activate([
+            card.leadingAnchor.constraint(equalTo: leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: trailingAnchor),
+            card.topAnchor.constraint(equalTo: topAnchor),
+            card.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
         let stack = NSStackView(views: [message, undoButton])
         stack.spacing = DS.Spacing.m
         stack.edgeInsets = NSEdgeInsets(top: DS.Spacing.s, left: DS.Spacing.l, bottom: DS.Spacing.s, right: DS.Spacing.s)
@@ -317,8 +329,21 @@ public final class UndoToastView: NSVisualEffectView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateCard()
+    }
+
+    private func updateCard() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            card.layer?.backgroundColor = DS.Palette.cardBackground.withAlphaComponent(0.97).cgColor
+            layer?.borderColor = DS.Palette.separator.cgColor
+        }
+    }
+
     /// Shows `text` and announces it to VoiceOver.
     public func show(_ text: String) {
+        updateCard()
         message.stringValue = text
         setAccessibilityLabel(text)
         alphaValue = 1
