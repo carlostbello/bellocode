@@ -149,10 +149,13 @@ struct WriteBehindSafetyTests {
         let probe = WriteProbe()
         let engine = try await engine(probe)
         let id = SessionID("ses_w")
-        await probe.configure(failures: 2)
+        // Fail until the failure has been observed (no race with a fast recovery), then let the disk recover.
+        await probe.configure(failures: .max)
         await engine.core.updateThreadUI(id) { $0.draft = "keep this" }
         try await waitUntil("failure shown") { engine.root.storage == .writeFailing }
         #expect(engine.storageNotice?.label == "Not saving")
+        #expect(try await storedDraft(engine, id) == nil)
+        await probe.configure(failures: 0)
         try await waitUntil("recovered") { engine.root.storage == .ok }
         #expect(try await storedDraft(engine, id) == "keep this")
         await engine.stop()
@@ -259,11 +262,12 @@ struct PreferenceWriteSafetyTests {
         let store = try ProjectionStore(location: .inMemory)
         let probe = WriteProbe()
         await store.setWriteHook { batch in try await probe.enter(batch) }
-        await probe.configure(failures: 2)
+        await probe.configure(failures: .max)
         let model = ModelPreferencesModel(store: store, retryBackoff: BackoffPolicy(initial: .milliseconds(5), maximum: .milliseconds(20)))
         await model.load()
         model.update { $0.favourites = ["opencode/big-pickle"] }
         try await waitUntil("failure shown") { model.saveFailed }
+        await probe.configure(failures: 0)
         try await waitUntil("retried") { !model.saveFailed }
         let stored = try await store.preference(ModelPreferencesModel.key, as: ModelPreferences.self)
         #expect(stored?.favourites == ["opencode/big-pickle"])
