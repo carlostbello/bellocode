@@ -11,10 +11,26 @@ public struct ContainerExecution: Sendable, Hashable {
     public var helperURL: URL
     /// The helper's configuration file (written by the app; `BELLOCODE_EXEC_CONFIG`).
     public var execConfigURL: URL
+    /// A folder holding `git` → the helper, put first on the server's PATH so opencode's own git (snapshots, diffs,
+    /// worktrees, revert) runs confined like BelloCode's (`HostGit`, docs/features/containers.md "Host git"). Created
+    /// by `ServerConfiguration.prepareDirectories`.
+    public var gitShimDirectory: URL?
 
-    public init(helperURL: URL, execConfigURL: URL) {
+    public init(helperURL: URL, execConfigURL: URL, gitShimDirectory: URL? = nil) {
         self.helperURL = helperURL
         self.execConfigURL = execConfigURL
+        self.gitShimDirectory = gitShimDirectory
+    }
+
+    /// Creates (or repairs) `<gitShimDirectory>/git` → the helper.
+    func installGitShim() throws {
+        guard let directory = gitShimDirectory else { return }
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let link = directory.appending(path: "git")
+        if (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) == helperURL.path { return }
+        if (try? fileManager.attributesOfItem(atPath: link.path)) != nil { try fileManager.removeItem(at: link) }
+        try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: helperURL.path)
     }
 
     /// The internal command the isolation self-check invokes (its `!`…`` runs through the configured shell). Its model

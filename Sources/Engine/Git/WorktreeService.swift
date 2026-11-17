@@ -37,10 +37,31 @@ public struct WorktreeCreation: Sendable, Hashable {
 /// The outcome of a setup script.
 public struct WorktreeSetupResult: Sendable, Hashable {
     public var exitCode: Int32
-    /// The last 8 KB of combined output.
+    /// Combined output, at most about 8 KB: the beginning and the end, with a marked cut between them when longer.
     public var output: String
     public var duration: Duration
+    /// Bytes left out of `output` (0 when it is complete). Shown with the result, never silent.
+    public var omittedBytes: Int = 0
     public var succeeded: Bool { exitCode == 0 }
+
+    public init(exitCode: Int32, output: String, duration: Duration, omittedBytes: Int = 0) {
+        self.exitCode = exitCode
+        self.output = output
+        self.duration = duration
+        self.omittedBytes = omittedBytes
+    }
+
+    /// Keeps the first and last `limit / 2` bytes of `text` (at line-safe UTF-8 boundaries), marking the cut. An early
+    /// failure survives later noise (M6 in docs/reviews/M3-M6-review.md).
+    public static func headAndTail(_ text: String, limit: Int = 8_192, alreadyOmitted: Int = 0) -> (text: String, omitted: Int) {
+        let bytes = Array(text.utf8)
+        guard bytes.count > limit else { return (text, alreadyOmitted) }
+        let half = limit / 2
+        let head = String(decoding: bytes.prefix(half), as: UTF8.self)
+        let tail = String(decoding: bytes.suffix(half), as: UTF8.self)
+        let omitted = bytes.count - 2 * half + alreadyOmitted
+        return (head + "\n[… \(omitted) bytes of output omitted …]\n" + tail, omitted)
+    }
 }
 
 public struct CreatedWorktree: Sendable, Hashable {
@@ -183,7 +204,7 @@ public struct WorktreeService: Sendable {
 
     public func create(_ request: WorktreeCreation) async throws -> CreatedWorktree {
         let start = ContinuousClock.now
-        let project = GitRepository(directory: request.projectDirectory, runner: runner)
+        let project = GitRepository(directory: request.projectDirectory, runner: runner, writableRoots: [request.parentDirectory])
         let directory = Self.folder(for: request.branch, in: request.parentDirectory)
         if FileManager.default.fileExists(atPath: directory) { throw WorktreeError.directoryExists(directory) }
         if !request.useExistingBranch, try await project.resolves("refs/heads/\(request.branch)") {
@@ -281,8 +302,8 @@ public struct WorktreeService: Sendable {
         let output = try await runner.runProgram(
             URL(filePath: "/bin/zsh"), ["-lc", script], in: directory,
             environment: ["BELLOCODE_WORKTREE_PATH": directory, "BELLOCODE_PROJECT_ROOT": projectDirectory], timeout: .seconds(600))
-        let combined = String(decoding: output.stdout + output.stderr, as: UTF8.self)
-        return WorktreeSetupResult(exitCode: output.status, output: String(combined.suffix(8_192)), duration: ContinuousClock.now - start)
+        let combined = WorktreeSetupResult.headAndTail(String(decoding: output.stdout + output.stderr, as: UTF8.self))
+        return WorktreeSetupResult(exitCode: output.status, output: combined.text, duration: ContinuousClock.now - start, omittedBytes: combined.omitted)
     }
 
     // MARK: Remove and restore
@@ -320,7 +341,9 @@ public struct WorktreeService: Sendable {
         }
         let head = entry.head ?? ""
         do {
-            _ = try await project.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
+            // The worktree's folder lies outside the project: name it as a place git may write (delete) in.
+            let remover = GitRepository(directory: projectDirectory, runner: runner, writableRoots: [entry.path])
+            _ = try await remover.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
         } catch {
             if let held { try? putBack(held, into: entry.path) }
             throw error
@@ -373,7 +396,8 @@ public struct WorktreeService: Sendable {
     /// bytes come back exactly; what was staged in the index comes back as unstaged changes. Throws
     /// `heldContentsMissing` (after restoring the checkout) when those files were deleted from the Trash.
     public func restore(_ removed: RemovedWorktree) async throws {
-        let project = GitRepository(directory: removed.projectDirectory, runner: runner)
+        let project = GitRepository(
+            directory: removed.projectDirectory, runner: runner, writableRoots: [(removed.directory as NSString).deletingLastPathComponent])
         if removed.branchDeleted, let branch = removed.branch {
             _ = try await project.git(["branch", branch, removed.head])
         }

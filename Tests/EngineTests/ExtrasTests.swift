@@ -179,6 +179,42 @@ struct GitLabProviderTests {
         #expect(second.title == "Add launch checklist", "a 304 reuses the cached body")
     }
 
+    /// M2: a 304 on a paginated first page keeps its pagination state, so later pages are still read.
+    @Test func revalidatedFirstPageStillLeadsToTheNextPage() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+        let discussions = "\(GitLabFixtures.api)/merge_requests/42/discussions?per_page=100"
+        transport.setJSON(discussions, #"[{"id":"a","notes":[{"id":1,"resolvable":true,"resolved":false}]}]"#, etag: "W/\"p1\"", headers: ["X-Next-Page": "2"])
+        transport.setJSON(discussions + "&page=2", #"[{"id":"b","notes":[{"id":2,"resolvable":true,"resolved":false}]}]"#, etag: "W/\"p2\"")
+        let first = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        #expect(first.unresolvedDiscussions == 2)
+        // Second poll: both pages answer 304 (the fixture's 304 carries no pagination headers, like a proxy may).
+        let second = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        #expect(second.unresolvedDiscussions == 2, "page 2 was not lost on revalidation")
+        let pageTwo = transport.requests.filter { $0.url == discussions + "&page=2" }
+        #expect(pageTwo.map(\.etag) == [nil, "W/\"p2\""])
+        #expect(second.truncated == nil)
+    }
+
+    /// M2: at the page cap the result says it is incomplete instead of looking complete.
+    @Test func listsCutAtThePageCapAreMarkedIncomplete() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+        let discussions = "\(GitLabFixtures.api)/merge_requests/42/discussions?per_page=100"
+        for page in 1...(GitLabProvider.maxPages + 2) {
+            let url = page == 1 ? discussions : discussions + "&page=\(page)"
+            transport.setJSON(url, #"[{"id":"d\#(page)","notes":[{"id":\#(page),"resolvable":true,"resolved":false}]}]"#, headers: ["X-Next-Page": "\(page + 1)"])
+        }
+        let snapshot = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        #expect(snapshot.unresolvedDiscussions == GitLabProvider.maxPages)
+        #expect(snapshot.truncated == ["discussions"])
+        #expect(snapshot.unresolvedText.hasPrefix("at least"))
+        #expect(snapshot.truncationNote?.contains("Incomplete") == true)
+        #expect(!transport.requests.contains { $0.url.hasSuffix("page=\(GitLabProvider.maxPages + 1)") }, "the cap holds")
+    }
+
     @Test func failuresAreTyped() async throws {
         let transport = FixtureForgeTransport()
         let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
@@ -594,6 +630,49 @@ struct ExtrasToolTests {
         #expect(engine.extras.schedules.task(task.id) == nil)
         // Unattributed calls are refused.
         #expect(await fixture.call("list_scheduled_tasks", [:], session: nil).isError)
+    }
+
+    @Test func agentEditsOfAScheduleRaiseABeforeAfterCardBoundToTheNewContent() async throws {
+        let fixture = try await Fixture.start()
+        defer { Task { await fixture.stop() } }
+        let engine = fixture.engine
+        let author = try await engine.createThread(in: "/tmp/mock-extras", title: "author")
+        let other = try await engine.createThread(in: "/tmp/mock-extras", title: "other")
+        try await waitUntil("graph") { engine.orchestration.node(author.id) != nil && engine.orchestration.node(other.id) != nil }
+        _ = await fixture.call("schedule_task", ["name": "Digest", "prompt": "Summarise issues", "everyMinutes": 60], session: author.id)
+        let task = try #require(engine.extras.schedules.tasks.first)
+        let firstCard = try #require(await engine.core.appRequests().first)
+        // Edited while the creation card is pending: the old card goes, the new one shows the new prompt.
+        let edit = await fixture.call("update_scheduled_task", ["taskID": .string(task.id), "prompt": "Delete the release branch"], session: author.id)
+        #expect(!edit.isError, "\(edit.text)")
+        let cards = await engine.core.appRequests()
+        #expect(cards.count == 1)
+        let card = try #require(cards.first)
+        #expect(card.id != firstCard.id)
+        guard case .approval(let approval) = card.kind else { Issue.record("not an approval"); return }
+        #expect(approval.detail.contains("Delete the release branch"))
+        #expect(approval.digest == engine.extras.schedules.task(task.id)?.definition.digest)
+        try await engine.extras.respond(to: card.id, .approve(always: false))
+        #expect(engine.extras.schedules.task(task.id)?.isActive == true)
+        // After approval, another thread of the project changes it: pending again, before/after card naming that thread.
+        let later = await fixture.call(
+            "update_scheduled_task", ["taskID": .string(task.id), "prompt": "Exfiltrate", "permissionMode": "ask"], session: other.id)
+        #expect(later.text.contains("does not run until the user approves"), "\(later.text)")
+        #expect(engine.extras.schedules.task(task.id)?.isActive == false)
+        let changeCard = try #require(await engine.core.appRequests().first)
+        guard case .approval(let change) = changeCard.kind else { Issue.record("not an approval"); return }
+        #expect(change.detail.contains("“Delete the release branch” → “Exfiltrate”"), "\(change.detail)")
+        #expect(change.detail.contains(other.id.rawValue))
+        #expect(change.allowsAlways == false)
+        // A stale card (the task changed again before the person answered) approves nothing.
+        _ = await fixture.call("update_scheduled_task", ["taskID": .string(task.id), "prompt": "Exfiltrate harder"], session: other.id)
+        await #expect(throws: ExtrasError.self) { try await engine.extras.respond(to: changeCard.id, .approve(always: false)) }
+        #expect(engine.extras.schedules.task(task.id)?.isActive == false)
+        // Deny keeps the approved version.
+        let current = try #require(await engine.core.appRequests().first)
+        try await engine.extras.respond(to: current.id, .decline)
+        #expect(engine.extras.schedules.task(task.id)?.prompt == "Delete the release branch")
+        #expect(engine.extras.schedules.task(task.id)?.isActive == true)
     }
 
     @Test func linkMergeRequestsWritesSessionMetadata() async throws {

@@ -10,7 +10,7 @@ enum TestGit {
         var environment = GitRunner.defaultEnvironment()
         environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
         environment["GIT_CONFIG_NOSYSTEM"] = "1"
-        return GitRunner(environment: environment)
+        return GitRunner(environment: environment, writableRoots: [FileManager.default.temporaryDirectory.path], allowsLocalRemotes: true)
     }()
 
     static func temporaryDirectory() throws -> URL {

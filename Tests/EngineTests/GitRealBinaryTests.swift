@@ -13,14 +13,20 @@ import Testing
 @MainActor
 @Suite("Git real binary", .serialized, .enabled(if: EngineRepo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"), .timeLimit(.minutes(10)))
 struct GitRealBinaryTests {
-    @Test func vcsWorktreeDiffAndRevertEndpoints() async throws {
+    /// `confined`: opencode's git goes through the `git` shim (HostGit sandbox), as in the app.
+    @Test(arguments: [false, true]) func vcsWorktreeDiffAndRevertEndpoints(confined: Bool) async throws {
         let executable = try #require(EngineRepo.vendoredOpencode)
         let repo = try await TempRepo.make("project", files: ["f.txt": "a\nb\nc\n", "keep.txt": "k\n"])
         defer { repo.remove() }
-        let supervisor = ServerSupervisor(
-            configuration: ServerConfiguration(
-                executableURL: executable, dataRoot: repo.base.appending(path: "server", directoryHint: .isDirectory),
-                expectedVersion: EngineRepo.pinnedVersion))
+        let dataRoot = repo.base.appending(path: "server", directoryHint: .isDirectory)
+        var configuration = ServerConfiguration(executableURL: executable, dataRoot: dataRoot, expectedVersion: EngineRepo.pinnedVersion)
+        if confined {
+            let helper = try #require(HostGitIsolationTests.helper, "bellocode-exec is not built")
+            configuration.containerExecution = ContainerExecution(
+                helperURL: URL(filePath: helper), execConfigURL: dataRoot.appending(path: "missing.json"),
+                gitShimDirectory: dataRoot.appending(path: "git-shim", directoryHint: .isDirectory))
+        }
+        let supervisor = ServerSupervisor(configuration: configuration)
         await supervisor.start()
         var endpoint = await supervisor.endpoint
         let deadline = ContinuousClock.now + .seconds(30)

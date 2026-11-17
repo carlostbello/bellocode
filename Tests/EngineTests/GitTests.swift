@@ -20,7 +20,7 @@ struct TempRepo {
         environment["GIT_AUTHOR_EMAIL"] = "test@example.invalid"
         environment["GIT_COMMITTER_NAME"] = "Test"
         environment["GIT_COMMITTER_EMAIL"] = "test@example.invalid"
-        return GitRunner(environment: environment)
+        return GitRunner(environment: environment, writableRoots: [FileManager.default.temporaryDirectory.path], allowsLocalRemotes: true)
     }()
 
     static func make(_ name: String = "repo", files: [String: String] = ["README.md": "hello\n"]) async throws -> TempRepo {

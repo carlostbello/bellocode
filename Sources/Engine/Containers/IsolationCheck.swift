@@ -14,6 +14,8 @@ public struct IsolationReport: Sendable, Equatable {
         case off(String)
         /// Could not be checked (no project with an image, server offline, timeout).
         case skipped(String)
+        /// Ran on the Mac by design, inside a boundary that was exercised and held (host git's sandbox).
+        case confined(String)
         case failed(String)
 
         public var isProblem: Bool {
@@ -29,13 +31,14 @@ public struct IsolationReport: Sendable, Equatable {
             case .host: "HOST"
             case .off: "Off"
             case .skipped: "Skipped"
+            case .confined: "Confined"
             case .failed: "Failed"
             }
         }
 
         public var detail: String {
             switch self {
-            case .container(let text), .host(let text), .off(let text), .skipped(let text), .failed(let text): text
+            case .container(let text), .host(let text), .off(let text), .skipped(let text), .confined(let text), .failed(let text): text
             }
         }
     }
@@ -56,16 +59,43 @@ public struct IsolationReport: Sendable, Equatable {
     public var full: Bool
     public var checks: [Check]
 
+    /// The overall result. Only a report where every applicable check ran and held is `isolated`; anything that could
+    /// not be checked makes it `notVerified` (never shown as a pass); an escape or failure is a `problem`.
+    public enum Verdict: String, Sendable, Equatable {
+        case isolated
+        case notVerified
+        case problem
+
+        public var word: String {
+            switch self {
+            case .isolated: "Isolated"
+            case .notVerified: "Not verified"
+            case .problem: "Problem"
+            }
+        }
+    }
+
     /// Paths that executed on the Mac.
     public var hostPaths: [Check] { checks.filter { if case .host = $0.outcome { true } else { false } } }
     public var problems: [Check] { checks.filter(\.outcome.isProblem) }
-    /// No path ran on the host and nothing failed (skipped checks are listed but do not fail the report).
-    public var passed: Bool { problems.isEmpty }
+    /// Checks that did not run (no project, server offline, runtime refusing commands, no answer from the plugin).
+    public var unverified: [Check] { checks.filter { if case .skipped = $0.outcome { true } else { false } } }
+    public var verdict: Verdict {
+        if !problems.isEmpty { return .problem }
+        if !unverified.isEmpty || ranInContainer == 0 { return .notVerified }
+        return .isolated
+    }
+    /// Every applicable check ran and none ran on the host or failed.
+    public var passed: Bool { verdict == .isolated }
     public var ranInContainer: Int { checks.filter { if case .container = $0.outcome { true } else { false } }.count }
 
     public var summary: String {
         if !hostPaths.isEmpty { return "\(hostPaths.count) path\(hostPaths.count == 1 ? "" : "s") ran on this Mac: \(hostPaths.map(\.name).joined(separator: ", "))" }
         if !problems.isEmpty { return "\(problems.count) check\(problems.count == 1 ? "" : "s") failed" }
+        if !unverified.isEmpty {
+            return "Not verified: \(unverified.map(\.name).joined(separator: ", ")) could not be checked"
+        }
+        if ranInContainer == 0 { return "Not verified: no command path was exercised" }
         return "Isolated: \(ranInContainer) of \(checks.count) checks ran in the container\(full ? "" : " (quick check)")"
     }
 }
@@ -84,11 +114,16 @@ public enum IsolationCheck {
         public var client: @Sendable () async throws -> OpenCodeClient
         public var helperPath: String
         public var terminalEnvironment: [String: String]
+        /// opencode's `git` shim (nil: only BelloCode's own host git is probed).
+        public var gitShim: String?
 
-        public init(client: @escaping @Sendable () async throws -> OpenCodeClient, helperPath: String, terminalEnvironment: [String: String]) {
+        public init(
+            client: @escaping @Sendable () async throws -> OpenCodeClient, helperPath: String, terminalEnvironment: [String: String], gitShim: String? = nil
+        ) {
             self.client = client
             self.helperPath = helperPath
             self.terminalEnvironment = terminalEnvironment
+            self.gitShim = gitShim
         }
     }
 
@@ -167,13 +202,15 @@ public enum IsolationCheck {
     /// Runs the check against `directory` (a project whose container can run). `full` adds the session-based paths.
     @MainActor
     static func run(service: EnvironmentService, context: Context, directory: String?, full: Bool) async -> IsolationReport {
-        var checks: [IsolationReport.Check] = []
+        // Host git (BelloCode's and opencode's): a scratch repository whose configuration names a program at every git
+        // extension point; none may run. Needs neither the server nor a container.
+        var checks: [IsolationReport.Check] = [.init("Host git", await HostGitProbe.run(shim: context.gitShim))]
         let client: OpenCodeClient
         do {
             client = try await context.client()
         } catch {
-            return IsolationReport(date: Date(), directory: directory, full: full,
-                                   checks: [.init("Server", .skipped("opencode is not running: \(error)"))])
+            checks.append(.init("Server", .skipped("opencode is not running: \(error)")))
+            return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
         }
 
         // Configuration (no project needed).
@@ -193,14 +230,15 @@ public enum IsolationCheck {
         checks += configurationChecks(entries, projects: projects, helperPath: context.helperPath, guardInstalled: guardInstalled)
 
         guard let directory else {
-            checks.append(.init("Runtime paths", .skipped("no project with a container image to run the probes in")))
+            checks.append(.init("Runtime paths", .skipped("no project with a container image to run the probes in: open a project and choose an image, then verify again")))
             return IsolationReport(date: Date(), directory: nil, full: full, checks: checks)
         }
         let container: String, spec: WorkspaceSpec
         do {
             (container, spec, _) = try await service.readyContainer(directory)
         } catch {
-            checks.append(.init("Runtime paths", .off("commands are refused in this project now: \(EnvironmentService.describe(error))")))
+            // Commands are refused (nothing can escape now), but no path was exercised: not a pass.
+            checks.append(.init("Runtime paths", .skipped("not exercised: commands are refused in this project now (\(EnvironmentService.describe(error)))")))
             return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
         }
         let runtime = service.activeRuntime

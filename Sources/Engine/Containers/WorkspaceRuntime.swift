@@ -25,11 +25,23 @@ public protocol WorkspaceRuntime: Sendable {
     /// Runs one command (non-interactive, wrapped so cancellation stops its group). `environment` is set for this exec
     /// only (secrets); output is bounded.
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-             timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data)
+             timeout: Duration) async throws -> ExecResult
+    /// Runs a command that receives a secret in a one-shot sibling container (`WorkspaceManager.runSecretCommand`).
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult
+    /// Removes one-shot secret-command containers left by a crash (default: nothing).
+    func removeLeftoverSecretContainers() async
     /// The last `tail` lines of the container's own output (bounded), for display only.
     func logs(container: String, tail: Int) async throws -> Data
     func events() -> AsyncStream<EngineMonitorEvent>
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder
+}
+
+extension WorkspaceRuntime {
+    /// Removes one-shot secret-command containers left by a crash. Nothing to do in fakes.
+    public func removeLeftoverSecretContainers() async {}
 }
 
 /// Rancher Desktop through ContainerKit.
@@ -73,10 +85,18 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         try await manager.touch(container: container, user: user, paths: paths)
     }
     public func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-                    timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+                    timeout: Duration) async throws -> ExecResult {
         try await ExecSession.run(client: client, container: container, argv: argv, workingDir: workingDir, environment: environment,
                                   user: user, wrap: true, limit: 256 * 1024, timeout: timeout)
     }
+    public func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        try await manager.runSecretCommand(
+            spec, shell: shell, command: command, workingDir: workingDir, name: name, secret: secret, policy: policy, timeout: timeout)
+    }
+    public func removeLeftoverSecretContainers() async { await manager.removeLeftoverSecretContainers() }
     public func logs(container: String, tail: Int) async throws -> Data {
         var data = Data()
         for try await chunk in try await client.logs(container, follow: false, tail: String(tail)) {

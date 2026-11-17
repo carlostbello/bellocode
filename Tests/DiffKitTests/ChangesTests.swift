@@ -23,7 +23,7 @@ struct ChangesFixture {
         var environment = TestGit.runner.environment
         for key in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] { environment[key] = "Test" }
         for key in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] { environment[key] = "test@example.invalid" }
-        let runner = GitRunner(environment: environment)
+        let runner = GitRunner(environment: environment, writableRoots: [FileManager.default.temporaryDirectory.path], allowsLocalRemotes: true)
         _ = try await runner.run(["init", "-q", "-b", "main"], in: repo.path)
         for (path, text) in files { try write(repo, path, text) }
         _ = try await runner.run(["add", "-A"], in: repo.path)

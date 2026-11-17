@@ -104,7 +104,10 @@ public struct ServerConfiguration: Sendable {
         } else if let containerExecution {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(pluginDirectory: nil, container: containerExecution)
         }
-        if let containerExecution { environment.merge(containerExecution.environment) { _, container in container } }
+        if let containerExecution {
+            environment.merge(containerExecution.environment) { _, container in container }
+            if let shim = containerExecution.gitShimDirectory { environment["PATH"] = "\(shim.path):\(environment["PATH"] ?? basePath)" }
+        }
         environment.merge(extraEnvironment) { _, extra in extra }
         environment["OPENCODE_PASSWORD"] = credentials.password
         for key in environment.keys where Self.forbiddenEnvironmentPrefixes.contains(where: { key.hasPrefix($0) }) {
@@ -118,6 +121,7 @@ public struct ServerConfiguration: Sendable {
         for directory in [configDirectory, dataDirectory, stateDirectory, cacheDirectory, resolvedHomeDirectory] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+        try containerExecution?.installGitShim()
     }
 }
 

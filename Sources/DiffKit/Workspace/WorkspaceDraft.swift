@@ -154,6 +154,12 @@ public final class WorkspaceDraft {
                     setupScript: script)
                 let created = try await git.createWorktree(request, projectID: projectID)
                 phase = .idle
+                if let setup = created.setup, !setup.succeeded {
+                    // The worktree exists and the thread starts there, but the person learns the script failed (with
+                    // the start of its output, where the first error usually is; a cut is marked in the output).
+                    let first = setup.output.split(separator: "\n").first.map(String.init) ?? ""
+                    phase = .failed("The worktree was created, but its setup script failed (exit \(setup.exitCode))\(setup.omittedBytes > 0 ? ", output shortened" : ""): \(first.prefix(160))")
+                }
                 branchName = ""
                 await reloadWorktrees()
                 return (created.directory, created)

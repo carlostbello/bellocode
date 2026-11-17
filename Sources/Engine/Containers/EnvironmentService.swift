@@ -22,6 +22,8 @@ public struct ContainerConfiguration: Sendable {
     public var pollWhileUp: Duration = .seconds(30)
     /// How often idle containers are looked for.
     public var idleCheckInterval: Duration = .seconds(60)
+    /// The `git` shim first on the server's PATH (opencode's host git, confined by `HostGit`); probed by the self-check.
+    public var gitShim: URL?
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -264,6 +266,9 @@ public final class EnvironmentService {
         if runtime != state { runtime = state }
         if state.isReady && !wasReady {
             tasks.set("events", Task { [weak self] in await self?.followEvents() })
+            // Secret-command containers a crash left behind (their command had the value in its environment).
+            let runtime = activeRuntime
+            tasks.set("secret-leftovers", Task { await runtime.removeLeftoverSecretContainers() })
             for model in models.values { refreshImageAndPhase(model) }
         } else if !state.isReady {
             tasks.set("events", Task {})
@@ -744,18 +749,21 @@ public final class EnvironmentService {
 
     // MARK: Commands BelloCode itself runs in the container
 
-    /// Runs `command` in the project's container with `secret` in one exec's environment as `name` (never on disk,
-    /// never in the container's configuration, gone when the command ends). Output is bounded and every occurrence of
-    /// the value is replaced with `<secret>`.
-    public func runWithSecret(directory: String, command: String, name: String, secret: SecretValue,
-                              timeout: Duration = .seconds(300)) async throws -> (exitCode: Int, output: String) {
-        let (id, spec, shell) = try await readyContainer(directory)
+    /// Runs `command` with `secret` in the environment variable `name`, in a one-shot sibling of the project's container
+    /// (`WorkspaceManager.runSecretCommand`: no network and a read-only project unless `policy` says otherwise, no
+    /// shared home, the value on stdin, never in any configuration). Output is bounded (head and tail kept, the rest
+    /// counted) and every verbatim occurrence of the value is replaced with `<secret>`. That replacement only prevents
+    /// accidental display: a command that encodes or splits the value is not caught, which is why the user approves the
+    /// exact command first (docs/features/orchestration-extras.md, "Secrets").
+    public func runWithSecret(directory: String, command: String, name: String, secret: SecretValue, policy: SecretCommandPolicy = .init(),
+                              timeout: Duration = .seconds(300)) async throws -> (exitCode: Int, output: String, truncated: Bool) {
+        let (_, spec, shell) = try await readyContainer(directory)
+        let result = try await activeRuntime.runSecretCommand(
+            spec, shell: shell, command: command, workingDir: directory, name: name, secret: Data(secret.utf8), policy: policy, timeout: timeout)
         let value = String(decoding: secret.utf8, as: UTF8.self)
-        let result = try await activeRuntime.run(container: id, argv: [shell, "-c", command], workingDir: directory,
-                                                 environment: [name: value], user: spec.user, timeout: timeout)
-        var output = String(decoding: result.stdout + result.stderr, as: UTF8.self)
+        var output = result.output.stdout.text + result.output.stderr.text
         if !value.isEmpty { output = output.replacingOccurrences(of: value, with: "<secret>") }
-        return (result.exitCode, String(output.suffix(16_000)))
+        return (result.exitCode, output, result.output.isTruncated)
     }
 
     /// Runs a worktree setup script in the container (never on the host), in the new worktree folder.
@@ -769,9 +777,11 @@ public final class EnvironmentService {
             container: id, argv: [shell, "-c", script], workingDir: worktree,
             environment: ["BELLOCODE_WORKTREE_PATH": worktree, "BELLOCODE_PROJECT_ROOT": projectDirectory], user: spec.user,
             timeout: .seconds(600))
-        let combined = String(decoding: result.stdout + result.stderr, as: UTF8.self)
-        return WorktreeSetupResult(exitCode: Int32(truncatingIfNeeded: result.exitCode), output: String(combined.suffix(8_192)),
-                                   duration: ContinuousClock.now - start)
+        // stdout and stderr each keep their head and tail (marked when cut); the combined text keeps both ends too.
+        let combined = WorktreeSetupResult.headAndTail(
+            String(decoding: result.stdout, as: UTF8.self) + String(decoding: result.stderr, as: UTF8.self), alreadyOmitted: result.omittedBytes)
+        return WorktreeSetupResult(exitCode: Int32(truncatingIfNeeded: result.exitCode), output: combined.text,
+                                   duration: ContinuousClock.now - start, omittedBytes: combined.omitted)
     }
 
     /// Ensures the container runs and returns (id, spec, shell). Throws the blocked message otherwise.
@@ -797,6 +807,10 @@ public final class EnvironmentService {
             roots.append(data.appending(path: "opencode/worktree/\(id.rawValue.prefix(6))").path)
         }
         roots += model.extraWorktrees
+        // Worktrees made by earlier versions in the shared `~/.bellocode/worktrees/<name>` folder: only this project's own,
+        // one by one (never the folder, which same-named projects share).
+        let legacy = WorkspacePreferences.legacyParent(projectDirectory: model.directory)
+        if legacy != roots[1] { roots += WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: model.directory) }
         var seen = Set<String>()
         let standardized = roots.map { ($0 as NSString).standardizingPath }.filter { seen.insert($0).inserted }
         // A root inside another one adds nothing as a mount (the project itself always stays first).

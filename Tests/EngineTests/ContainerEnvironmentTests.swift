@@ -70,11 +70,27 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     }
     func touch(container: String, user: String, paths: [String]) async throws {}
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-             timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+             timeout: Duration) async throws -> ExecResult {
         state.withLock { s in
             s.execs.append(Exec(argv: argv, workingDir: workingDir, environment: environment))
-            return (0, s.output, Data())
+            return ExecResult(exitCode: 0, stdout: s.output, stderr: Data())
         }
+    }
+    struct SecretCall: Sendable {
+        var command: String
+        var name: String
+        var secret: Data
+        var policy: SecretCommandPolicy
+    }
+    let secretCalls = Mutex<[SecretCall]>([])
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        secretCalls.withLock { $0.append(SecretCall(command: command, name: name, secret: secret, policy: policy)) }
+        var output = BoundedOutput(limit: 1 << 20)
+        output.append(state.withLock { $0.output }, toStderr: false)
+        return WorkspaceManager.SecretCommandResult(exitCode: 0, output: output)
     }
     func logs(container: String, tail: Int) async throws -> Data { Data() }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }
@@ -177,7 +193,7 @@ struct ContainerEnvironmentTests {
         #expect(workspace.blocked == nil)
     }
 
-    @Test func secretGoesOnlyIntoOneExecAndIsRedacted() async throws {
+    @Test func secretGoesOnlyToOneOneShotCommandAndIsRedacted() async throws {
         runtime.state.withLock { $0.images = ["img:1"]; $0.output = Data("token=s3cr3t-value\n".utf8) }
         let service = try await makeService()
         defer { service.stop() }
@@ -190,8 +206,11 @@ struct ContainerEnvironmentTests {
         #expect(result.output.contains("<secret>"))
         _ = try await service.runSetup("make setup", in: project, projectDirectory: project)
         let execs = runtime.state.withLock { $0.execs }
-        #expect(execs.filter { $0.environment.values.contains("s3cr3t-value") }.count == 1)
-        #expect(execs.last?.environment["API_TOKEN"] == nil)
+        #expect(execs.allSatisfy { !$0.environment.values.contains("s3cr3t-value") }, "never in a shared-container exec")
+        let calls = runtime.secretCalls.withLock { $0 }
+        #expect(calls.count == 1)
+        #expect(calls.first.map { String(decoding: $0.secret, as: UTF8.self) } == "s3cr3t-value")
+        #expect(calls.first?.policy == SecretCommandPolicy(), "no network, read-only project by default")
         // Never in the container's configuration or the helper's file.
         await service.writeConfigNow()
         let file = try String(contentsOf: root.appending(path: "exec.json"), encoding: .utf8)
@@ -258,10 +277,13 @@ struct ContainerInterceptionTests {
         #expect(content.contains(#""formatter":false"#) || content.contains(#""formatter" : false"#))
     }
 
-    @Test func hostGitNeverRunsHooks() {
-        let environment = GitRunner().environment
-        #expect(environment["GIT_CONFIG_KEY_0"] == "core.hooksPath")
-        #expect(environment["GIT_CONFIG_VALUE_0"] == "/dev/null")
+    @Test func hostGitNeverRunsHooks() throws {
+        let runner = GitRunner()
+        let invocation = try #require(runner.invocation(["status"], in: NSTemporaryDirectory(), writableRoots: [], trusted: .init()))
+        #expect(invocation.executable == HostGit.sandboxExecutable)
+        let environment = invocation.environment
+        let pairs = (0..<(Int(environment["GIT_CONFIG_COUNT"] ?? "0") ?? 0)).map { (environment["GIT_CONFIG_KEY_\($0)"], environment["GIT_CONFIG_VALUE_\($0)"]) }
+        #expect(pairs.contains { $0.0 == "core.hooksPath" && $0.1 == "/dev/null" })
     }
 
     @Test func configurationScanFlagsEveryHostPath() {
@@ -290,5 +312,57 @@ struct ContainerInterceptionTests {
         #expect(launch.environment["SSH_AUTH_SOCK"] == nil)
         #expect(launch.environment["PATH"] == "/usr/bin:/bin")
         #expect(launch.environment["BELLOCODE_EXEC_CONFIG"] == "/data/x.json")
+    }
+}
+
+/// M5 (docs/reviews/M3-M6-review.md): same-named projects never share a worktree folder or a mount.
+@MainActor
+@Suite("Worktree folders per project", .timeLimit(.minutes(1)))
+struct WorktreeFolderIsolationTests {
+    @Test func sameNamedProjectsGetDifferentFoldersAndMountOnlyTheirOwnLegacyWorktrees() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-m5-\(UUID().uuidString)", directoryHint: .isDirectory).path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let home = root + "/home"
+        let a = try await TempRepo.make("service")
+        let b = try await TempRepo.make("service")
+        defer { a.remove(); b.remove() }
+        let parentA = WorkspacePreferences.defaultParent(projectDirectory: a.path, home: home)
+        let parentB = WorkspacePreferences.defaultParent(projectDirectory: b.path, home: home)
+        #expect(parentA != parentB)
+        #expect((parentA as NSString).lastPathComponent.hasPrefix("service-"))
+        #expect(WorkspacePreferences.defaultParent(projectDirectory: a.path, home: home) == parentA, "stable")
+
+        // Both projects made worktrees in the old shared folder.
+        let legacy = WorkspacePreferences.legacyParent(projectDirectory: a.path, home: home)
+        #expect(legacy == WorkspacePreferences.legacyParent(projectDirectory: b.path, home: home))
+        try FileManager.default.createDirectory(atPath: legacy, withIntermediateDirectories: true)
+        try await a.git("worktree", "add", "-q", "-b", "wa", legacy + "/wa")
+        try await b.git("worktree", "add", "-q", "-b", "wb", legacy + "/wb")
+        // A forged link: B's container points a folder's .git at A's repository; A's own record does not point back.
+        try FileManager.default.createDirectory(atPath: legacy + "/forged", withIntermediateDirectories: true)
+        try Data("gitdir: \(a.path)/.git/worktrees/wa\n".utf8).write(to: URL(filePath: legacy + "/forged/.git"))
+        let ownA = WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: a.path)
+        let ownB = WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: b.path)
+        #expect(ownA.map { ($0 as NSString).lastPathComponent } == ["wa"])
+        #expect(ownB.map { ($0 as NSString).lastPathComponent } == ["wb"])
+    }
+
+    @Test func aContainerMountsItsOwnFolderNeverTheSharedOne() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-m5s-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projectA = root.appending(path: "team-a/service").path
+        let projectB = root.appending(path: "team-b/service").path
+        for project in [projectA, projectB] { try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true) }
+        let service = EnvironmentService(
+            configuration: ContainerConfiguration(
+                helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"), execConfigURL: root.appending(path: "exec.json"),
+                opencodeDataDirectory: nil, runtime: FakeWorkspaceRuntime(), registryVault: InMemorySecretVault()),
+            store: try ProjectionStore(location: .inMemory))
+        let home = root.appending(path: "home").path
+        service.worktreeParent = { WorkspacePreferences.defaultParent(projectDirectory: $0, home: home) }
+        let rootsA = service.workspaceRoots(service.environment(for: projectA), create: false)
+        let rootsB = service.workspaceRoots(service.environment(for: projectB), create: false)
+        #expect(Set(rootsA).isDisjoint(with: rootsB))
+        #expect(!rootsA.contains { $0.hasSuffix("/worktrees/service") })
     }
 }

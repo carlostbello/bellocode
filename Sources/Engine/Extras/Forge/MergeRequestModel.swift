@@ -27,6 +27,10 @@ public struct GitLabInstance: Hashable, Sendable, Codable, Identifiable {
     /// The path prefix ("gitlab" for `https://h/gitlab`), empty at the root.
     public var pathPrefix: String { URL(string: baseURL)?.path().split(separator: "/").joined(separator: "/") ?? "" }
     public var apiBase: String { baseURL + "/api/v4" }
+    public var isPlainHTTP: Bool { baseURL.hasPrefix("http://") }
+    public var scheme: String { URL(string: baseURL)?.scheme ?? "https" }
+    /// The port, default ones included (443 for https, 80 for http).
+    public var effectivePort: Int { URL(string: baseURL)?.port ?? (scheme == "http" ? 80 : 443) }
 }
 
 /// `group/subgroup/project!iid` on one GitLab instance.
@@ -80,17 +84,22 @@ public struct ForgeProject: Hashable, Sendable {
     public var projectPath: String
 
     /// `git@host:group/proj.git`, `ssh://git@host:2222/group/proj.git`, `https://host/prefix/group/proj(.git)`.
-    /// The host must be a configured instance; an HTTP(S) remote must also carry the instance's path prefix (SSH
-    /// remotes never do).
+    ///
+    /// Matching (m1 in docs/reviews/M3-M6-review.md): an HTTP(S) remote matches an instance with the same scheme, host
+    /// and effective port, and must carry the instance's path prefix. An SSH remote names no web port or prefix, so it
+    /// matches only when exactly one configured instance has its host; with several (different ports or prefixes on one
+    /// host) it is ambiguous and resolves to nothing (link the MR by its URL instead).
     public static func resolve(remote raw: String, instances: [GitLabInstance]) -> ForgeProject? {
         let remote = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         var host: String
         var path: String
         var isHTTP = false
+        var origin: (scheme: String, port: Int)?
         if let url = URL(string: remote), let scheme = url.scheme?.lowercased(), let urlHost = url.host() {
             host = urlHost.lowercased()
             path = url.path()
             isHTTP = scheme == "https" || scheme == "http"
+            if isHTTP { origin = (scheme, url.port ?? (scheme == "http" ? 80 : 443)) }
         } else if let at = remote.firstIndex(of: "@"), let colon = remote[at...].firstIndex(of: ":") {
             host = remote[remote.index(after: at)..<colon].lowercased()
             path = String(remote[remote.index(after: colon)...])
@@ -102,7 +111,12 @@ public struct ForgeProject: Hashable, Sendable {
             last.removeLast(4)
             parts[parts.count - 1] = last
         }
-        let candidates = instances.filter { $0.host == host }.sorted { $0.pathPrefix.count > $1.pathPrefix.count }
+        var candidates = instances.filter { $0.host == host }.sorted { $0.pathPrefix.count > $1.pathPrefix.count }
+        if let origin {
+            candidates = candidates.filter { $0.scheme == origin.scheme && $0.effectivePort == origin.port }
+        } else if candidates.count > 1 {
+            return nil
+        }
         for instance in candidates {
             var remaining = parts
             let prefix = instance.pathPrefix.split(separator: "/").map(String.init)
@@ -348,12 +362,17 @@ public struct MergeRequestSnapshot: Hashable, Sendable, Codable {
     public var userNotes: Int
     public var unresolvedDiscussions: Int
     public var fetched: Date
+    /// Lists that hit the page cap ("pipeline jobs", "discussions"): what was read is shown as incomplete, and counts
+    /// from them are lower bounds.
+    public var truncated: [String]?
 
     public init(
         ref: MergeRequestRef, title: String, state: MergeRequestState, draft: Bool = false, sourceBranch: String = "",
         targetBranch: String = "", author: String = "", sha: String = "", webURL: String? = nil, pipeline: Pipeline? = nil,
-        approvals: MergeRequestApprovals = MergeRequestApprovals(), userNotes: Int = 0, unresolvedDiscussions: Int = 0, fetched: Date
+        approvals: MergeRequestApprovals = MergeRequestApprovals(), userNotes: Int = 0, unresolvedDiscussions: Int = 0, fetched: Date,
+        truncated: [String]? = nil
     ) {
+        self.truncated = truncated
         self.ref = ref
         self.title = title
         self.state = state
@@ -371,6 +390,15 @@ public struct MergeRequestSnapshot: Hashable, Sendable, Codable {
     }
 
     public var pipelineSummary: PipelineSummary { PipelineSummary(pipeline) }
+    /// "Incomplete: only the first 1000 discussions were read" (nil when complete).
+    public var truncationNote: String? {
+        guard let truncated, !truncated.isEmpty else { return nil }
+        return "Incomplete: GitLab has more \(truncated.joined(separator: " and ")) than BelloCode reads (\(GitLabProvider.maxPages) pages); counts are at least these"
+    }
+    /// "3 unresolved discussions", "at least 3 …" when the discussions list was cut at the cap.
+    public var unresolvedText: String {
+        (truncated?.contains("discussions") == true ? "at least " : "") + "\(unresolvedDiscussions) unresolved discussions"
+    }
     /// "Open", "Draft", "Merged", "Closed".
     public var stateLabel: String { state == .opened && draft ? "Draft" : state.label }
 }

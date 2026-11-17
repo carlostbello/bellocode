@@ -72,16 +72,19 @@ public struct GitWorktree: Sendable, Hashable, Identifiable {
 public struct GitRepository: Sendable {
     public let directory: String
     public let runner: GitRunner
+    /// Places outside the repository git may write to (a new worktree's parent folder); see `HostGit`.
+    public var writableRoots: [String]
 
-    public init(directory: String, runner: GitRunner = GitRunner()) {
+    public init(directory: String, runner: GitRunner = GitRunner(), writableRoots: [String] = []) {
         self.directory = directory
         self.runner = runner
+        self.writableRoots = writableRoots
     }
 
     public func git(_ arguments: [String], input: Data? = nil, timeout: Duration? = nil, limit: Int? = nil, allowFailure: Bool = false) async throws
         -> GitOutput
     {
-        try await runner.run(arguments, in: directory, input: input, timeout: timeout, outputLimit: limit, allowFailure: allowFailure)
+        try await runner.run(arguments, in: directory, input: input, timeout: timeout, outputLimit: limit, allowFailure: allowFailure, writableRoots: writableRoots)
     }
 
     // MARK: Location and status
@@ -195,13 +198,13 @@ public struct GitRepository: Sendable {
     public func diff(_ scope: DiffScope, paths: [String] = [], context: Int = 3, ignoreWhitespace: Bool = false, limit: Int = 64 << 20) async throws
         -> String
     {
-        var arguments = ["diff", "--no-color", "--no-ext-diff", "-M", "-U\(context)"]
+        var arguments = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U\(context)"]
         if ignoreWhitespace { arguments.append("-w") }
         switch scope {
         case .unstaged: break
         case .staged: arguments.append("--cached")
         case .commit(let hash):
-            arguments = ["show", "--format=", "--no-color", "--no-ext-diff", "-M", "-U\(context)"] + (ignoreWhitespace ? ["-w"] : []) + [hash]
+            arguments = ["show", "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U\(context)"] + (ignoreWhitespace ? ["-w"] : []) + [hash]
         case .workingTree(let from): arguments.append(from)
         case .range(let from, let to): arguments += [from, to]
         }
@@ -211,7 +214,7 @@ public struct GitRepository: Sendable {
             let untracked = try await git(["ls-files", "--others", "--exclude-standard", "-z", "--"] + paths).stdout
             for path in GitStatusParser.split(untracked).prefix(2_000) {
                 try Task.checkCancellation()
-                let output = try await git(["diff", "--no-color", "--no-index", "-U\(context)", "--", "/dev/null", path], limit: limit, allowFailure: true)
+                let output = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index", "-U\(context)", "--", "/dev/null", path], limit: limit, allowFailure: true)
                 text += output.text
             }
         default: break

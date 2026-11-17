@@ -28,6 +28,8 @@ public enum AppGrantKind: String, Sendable {
     case schedule
     /// HTML visuals may load from this host.
     case network
+    /// A saved secret may go to this exact command without asking (scope: `<account>\n<binding digest>`).
+    case secretCommand
 }
 
 extension ProjectionStore {
@@ -101,6 +103,14 @@ extension ProjectionStore {
             } else {
                 try db.execute(sql: "DELETE FROM app_grant WHERE kind = ? AND scope = ?", arguments: [kind.rawValue, scope])
             }
+        }
+    }
+
+    /// Removes every grant of `kind` whose scope starts with `prefix` (a deleted secret's command approvals).
+    public func deleteGrants(_ kind: AppGrantKind, scopePrefix prefix: String) async throws {
+        try await writer.write { db in
+            try db.execute(
+                sql: "DELETE FROM app_grant WHERE kind = ? AND substr(scope, 1, ?) = ?", arguments: [kind.rawValue, prefix.utf8.count, prefix])
         }
     }
 

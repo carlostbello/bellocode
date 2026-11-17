@@ -93,7 +93,7 @@ public enum ExtrasTools {
         ClientMCPTool(
             name: requestSecret,
             description:
-                "Ask the user for a secret (token, password) in a private card. You never see the value: when they save it you are woken with a one-use secretRef (or, with delivery file, a path that yields the value once to one command). End your turn after calling this.",
+                "Ask the user for a secret (token, password) in a private card. The value is not put in this conversation: when they save it you are woken with a one-use secretRef. In a containerised project, pass it to secret_exec with the one command that needs it; the user approves that exact command before it receives the value. End your turn after calling this.",
             inputSchema: object(
                 [
                     "label": string("What it is, e.g. \"npm publish token\"."), "reason": string("Why you need it, one sentence."),
@@ -103,17 +103,19 @@ public enum ExtrasTools {
         ClientMCPTool(
             name: secretFile,
             description:
-                "Exchange a secretRef (once) for a path that yields the secret to the first process that reads it, then disappears (10 minutes at most). Use it in one command, e.g. --token-file PATH or \"$(cat PATH)\". Never print it.",
+                "Projects without container execution only. Exchange a secretRef (once) for a path that yields the secret to the first process that reads it, then disappears (10 minutes at most). Use it in one command, e.g. --token-file PATH or \"$(cat PATH)\". Never print it.",
             inputSchema: object(["secretRef": string("From the request_secret wake message.")], required: ["secretRef"])),
         ClientMCPTool(
             name: secretExec,
             description:
-                "Run one command in this project's container with a secret in an environment variable (the value lives only in that command's environment; output is redacted). Exchange a container secretRef (bcsecretc_…) here; never print the value.",
+                "Ask to run one command with a secret in an environment variable. The user sees this exact command and approves it (or not) before it runs; then you are woken with its output. It runs in a throwaway container with no network and a read-only project unless you ask for network or writesProject (shown to the user). Exchange a container secretRef (bcsecretc_…) here. Never print, encode or store the value. End your turn after calling this.",
             inputSchema: object(
                 [
                     "secretRef": string("From the request_secret wake message."),
                     "name": string("Environment variable to hold the value, e.g. NPM_TOKEN."),
-                    "command": string("Shell command run in the project's folder in the container, e.g. npm publish."),
+                    "command": string("Shell command run in the project's folder, e.g. npm publish. Shown verbatim to the user."),
+                    "network": boolean("The command needs outbound network (for example to publish). Default false."),
+                    "writesProject": boolean("The command must write into the project folder. Default false (read-only)."),
                 ], required: ["secretRef", "name", "command"])),
         ClientMCPTool(
             name: htmlPreview,

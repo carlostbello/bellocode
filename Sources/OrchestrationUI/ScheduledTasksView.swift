@@ -221,8 +221,17 @@ public final class ScheduledTasksModel {
         select(task.id)
     }
 
+    /// Approves exactly what the editor shows (the draft loaded from the task): if an agent changed the task since,
+    /// nothing is approved.
     public func approve(_ id: String) async {
-        do { try await scheduler.approve(id, always: false) } catch { message = ExtrasError.message(error) }
+        guard let existing = scheduler.task(id) else { return }
+        let shown = draft.flatMap { $0.id == id ? $0.apply(to: existing).definition : nil } ?? existing.definition
+        do {
+            try await scheduler.approve(id, digest: shown.digest, always: false)
+        } catch {
+            message = ExtrasError.message(error)
+            if selection == id { draft = scheduler.task(id).map(ScheduleDraft.init) }
+        }
     }
 }
 
@@ -339,7 +348,7 @@ public struct ScheduledTasksView: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .contextMenu {
-            Button("Run Now") { Task { await model.runNow(task.id) } }.disabled(task.approval != .approved)
+            Button("Run Now") { Task { await model.runNow(task.id) } }.disabled(!task.isApprovedAsDefined)
             Button(task.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(task.id, !task.enabled) } }
             SwiftUI.Color.ds.border.frame(height: 1)
             Button("Delete") { Task { await model.delete(task.id) } }
@@ -449,7 +458,7 @@ public struct ScheduledTasksView: View {
                                 .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                             Button("Run Now") { Task { await model.runNow(id) } }
                                 .buttonStyle(DSButtonStyle(.outline, size: .small))
-                                .disabled(model.scheduler.task(id)?.approval != .approved || model.scheduler.running.contains(id))
+                                .disabled(model.scheduler.task(id)?.isApprovedAsDefined != true || model.scheduler.running.contains(id))
                             if model.scheduler.task(id)?.approval == .pending {
                                 Button("Approve") { Task { await model.approve(id) } }.help("Allow this agent-created task to run")
                                     .buttonStyle(DSButtonStyle(.outline, size: .small))

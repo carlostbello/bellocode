@@ -1,4 +1,5 @@
 import BelloCore
+import CryptoKit
 import Foundation
 import Observation
 import OpenCodeKit
@@ -27,7 +28,7 @@ public struct WorkspacePreferences: Codable, Sendable, Hashable {
     /// Base branch for new worktrees; nil uses opencode's base (reflog or default branch).
     public var baseBranch: String?
     public var startFromOrigin = false
-    /// Where new worktrees go; nil uses `~/.bellocode/worktrees/<project name>`.
+    /// Where new worktrees go; nil uses `~/.bellocode/worktrees/<project name>-<path hash>`.
     public var worktreeParent: String?
     public var copyOnWrite = true
     /// Runs in each new worktree; nil uses the project's opencode start command, if any.
@@ -38,8 +39,45 @@ public struct WorkspacePreferences: Codable, Sendable, Hashable {
 
     public func parentDirectory(projectDirectory: String) -> String {
         if let worktreeParent { return worktreeParent }
+        return Self.defaultParent(projectDirectory: projectDirectory)
+    }
+
+    /// `~/.bellocode/worktrees/<name>-<first 8 hex of SHA-256 of the project's real path>`: unique per project, so two
+    /// projects with the same folder name never share a folder (or a container mount; M5 in
+    /// docs/reviews/M3-M6-review.md).
+    public static func defaultParent(projectDirectory: String, home: String = NSHomeDirectory()) -> String {
         let name = (projectDirectory as NSString).lastPathComponent
-        return (NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees/\(name)")
+        let real = URL(filePath: projectDirectory).resolvingSymlinksInPath().standardizedFileURL.path
+        let hash = SHA256.hash(data: Data(real.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+        return (home as NSString).appendingPathComponent(".bellocode/worktrees/\(name)-\(hash)")
+    }
+
+    /// The folder earlier versions used (`~/.bellocode/worktrees/<name>`), shared by every project with that name.
+    /// Worktrees already there keep working; only this project's own are mounted into its container.
+    public static func legacyParent(projectDirectory: String, home: String = NSHomeDirectory()) -> String {
+        (home as NSString).appendingPathComponent(".bellocode/worktrees/\((projectDirectory as NSString).lastPathComponent)")
+    }
+
+    /// The worktrees of `projectDirectory` directly inside `folder`: a subfolder counts only when its `.git` file
+    /// points into the project's `.git/worktrees/<id>` and that entry's `gitdir` points back at it (the project's own
+    /// record, which another project's container cannot write). Read from files; no git process. At most 500 entries.
+    public static func ownWorktrees(in folder: String, projectDirectory: String) -> [String] {
+        let fileManager = FileManager.default
+        let project = URL(filePath: projectDirectory).resolvingSymlinksInPath().standardizedFileURL.path
+        guard let names = try? fileManager.contentsOfDirectory(atPath: folder) else { return [] }
+        var result: [String] = []
+        for name in names.sorted().prefix(500) {
+            let candidate = (folder as NSString).appendingPathComponent(name)
+            guard let link = try? String(contentsOfFile: candidate + "/.git", encoding: .utf8), link.hasPrefix("gitdir:") else { continue }
+            let gitdir = URL(filePath: link.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)).resolvingSymlinksInPath().standardizedFileURL.path
+            guard gitdir.hasPrefix(project + "/.git/worktrees/"),
+                  let back = try? String(contentsOfFile: gitdir + "/gitdir", encoding: .utf8)
+            else { continue }
+            let backPath = URL(filePath: back.trimmingCharacters(in: .whitespacesAndNewlines)).resolvingSymlinksInPath().standardizedFileURL.path
+            let candidateGit = URL(filePath: candidate + "/.git").resolvingSymlinksInPath().standardizedFileURL.path
+            if backPath == candidateGit { result.append(candidate) }
+        }
+        return result
     }
 }
 

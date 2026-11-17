@@ -39,6 +39,8 @@ public final class SchedulerService {
     @ObservationIgnored public let clock: any WallClock
     @ObservationIgnored private let store: ProjectionStore
     @ObservationIgnored public weak var runner: (any ScheduleRunner)?
+    /// Called when a task was found changed after its approval (it is now pending): the hub raises a card.
+    @ObservationIgnored public var needsApproval: (@MainActor (ScheduledTask) async -> Void)?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var started = false
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "scheduler")
@@ -57,6 +59,12 @@ public final class SchedulerService {
         do {
             tasks = try await store.schedules().sorted(by: Self.order)
             grantedProjects = try await store.grants(.schedule)
+            // Tasks saved before approvals were bound to a definition: the user's own keep theirs; an agent's approved
+            // task cannot prove what was approved, so it asks again (ExtrasHub raises the card).
+            for var task in tasks where task.approved == nil && task.approval == .approved {
+                if task.createdBy == nil { task.approved = task.definition } else { task.approval = .pending }
+                try? await persist(task)
+            }
         } catch {
             lastError = "Scheduled tasks could not be read: \(error.localizedDescription)"
         }
@@ -124,6 +132,8 @@ public final class SchedulerService {
         if let problem = draft.rule.problem { throw ExtrasError(problem) }
         guard !draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ExtrasError("The prompt is empty.") }
         var task = draft
+        // The user's own tasks and tasks created under a project grant are approved as they are now.
+        task.approved = task.approval == .approved ? task.definition : nil
         let now = clock.now()
         task.created = now
         task.updated = now
@@ -136,10 +146,22 @@ public final class SchedulerService {
     }
 
     /// Replaces a task's definition. A changed rule or time zone re-anchors and recomputes the next run.
-    public func update(_ edited: ScheduledTask) async throws {
+    ///
+    /// `consent`: the user made the change (Settings), so an approved task stays approved with its new definition. An
+    /// agent's change (`consent: false`) that alters the definition, or turns the task back on, puts it back to
+    /// pending: it does not run until the user approves the new definition. Returns true when it now waits.
+    @discardableResult
+    public func update(_ edited: ScheduledTask, consent: Bool = true) async throws -> Bool {
         guard let old = task(edited.id) else { throw ExtrasError("No scheduled task \(edited.id).") }
         if let problem = edited.rule.problem { throw ExtrasError(problem) }
         var task = edited
+        task.approved = old.approved
+        task.approval = old.approval
+        if consent {
+            if task.approval == .approved { task.approved = task.definition }
+        } else if task.definition != old.approved || (task.enabled && !old.enabled) {
+            task.approval = .pending
+        }
         let now = clock.now()
         task.updated = now
         if task.rule != old.rule || task.timeZoneID != old.timeZoneID || (task.enabled && !old.enabled) {
@@ -148,6 +170,7 @@ public final class SchedulerService {
         }
         try await persist(task)
         restartLoop()
+        return task.approval == .pending
     }
 
     public func setEnabled(_ id: String, _ enabled: Bool) async throws {
@@ -180,18 +203,43 @@ public final class SchedulerService {
     /// Runs a task now ("Run Now"); its schedule is unchanged.
     public func runNow(_ id: String) async throws {
         guard let task = task(id) else { throw ExtrasError("No scheduled task \(id).") }
-        guard task.approval == .approved else { throw ExtrasError("This task waits for your approval.") }
+        guard task.isApprovedAsDefined else { throw ExtrasError("This task waits for your approval.") }
         guard !running.contains(id) else { throw ExtrasError("It is already running.") }
         let now = clock.now()
         await execute(id, trigger: .manual, due: now, missed: 0)
     }
 
-    /// Approves an agent-created task (and, with `always`, every later one in its project).
-    public func approve(_ id: String, always: Bool) async throws {
-        guard var task = task(id) else { return }
+    /// Approves an agent-created task as the card showed it (and, with `always`, lets agents create tasks in its
+    /// project without asking; edits still ask). `digest` is the definition the card showed: if the task changed since,
+    /// nothing is approved.
+    public func approve(_ id: String, digest: String?, always: Bool) async throws {
+        guard var task = task(id) else { throw ExtrasError("That scheduled task no longer exists.") }
+        guard let digest, digest == task.definition.digest else {
+            throw ExtrasError("“\(task.name)” changed after this card was shown; nothing was approved. The current version has its own card.")
+        }
         task.approval = .approved
+        task.approved = task.definition
         if always { try await setProjectGrant(task.directory, true) }
-        try await update(task)
+        try await persist(task)
+        restartLoop()
+    }
+
+    /// Declining an agent's change: back to the definition the user approved (approved again), or nil when there was
+    /// never one (the caller deletes the task).
+    @discardableResult
+    public func revertToApproved(_ id: String) async throws -> ScheduledTask? {
+        guard var task = task(id), let approved = task.approved else { return nil }
+        let ruleChanged = approved.rule != task.rule || approved.timeZoneID != task.timeZoneID
+        task.definition = approved
+        task.approval = .approved
+        if ruleChanged {
+            let now = clock.now()
+            task.anchor = now
+            task.nextRun = ScheduleCalendar.next(after: now, rule: task.rule, timeZone: task.timeZone, anchor: now)
+        }
+        try await persist(task)
+        restartLoop()
+        return task
     }
 
     public func setProjectGrant(_ directory: String, _ granted: Bool) async throws {
@@ -202,7 +250,19 @@ public final class SchedulerService {
     // MARK: Running
 
     private func execute(_ id: String, trigger: ScheduleRun.Trigger, due: Date, missed: Int) async {
-        guard let task = task(id) else { return }
+        guard var task = task(id) else { return }
+        // The definition must be exactly the approved one (whatever path changed it).
+        guard task.isApprovedAsDefined else {
+            task.approval = .pending
+            try? await persist(task)
+            let run = ScheduleRun(
+                scheduleID: id, started: clock.now(), due: due, trigger: trigger,
+                outcome: .failed("it changed after it was approved; it waits for approval"), missed: missed)
+            try? await store.recordScheduleRun(run)
+            restartLoop()
+            await needsApproval?(task)
+            return
+        }
         running.insert(id)
         defer { running.remove(id) }
         let started = clock.now()

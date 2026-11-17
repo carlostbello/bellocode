@@ -173,9 +173,15 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
     }
     func touch(container: String, user: String, paths: [String]) async throws {}
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
-             timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+             timeout: Duration) async throws -> ExecResult {
         // The isolation probes read their markers here: answer as the container would.
-        (0, Data("container Linux\n".utf8), Data())
+        ExecResult(exitCode: 0, stdout: Data("container Linux\n".utf8), stderr: Data())
+    }
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        WorkspaceManager.SecretCommandResult(exitCode: 0, output: BoundedOutput(limit: 1024))
     }
     func logs(container: String, tail: Int) async throws -> Data { Data("VITE v6.0.3  ready in 412 ms\n".utf8) }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }

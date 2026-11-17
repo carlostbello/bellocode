@@ -1,4 +1,5 @@
 import BelloCore
+import CryptoKit
 import Foundation
 
 // Scheduled tasks (docs/features/orchestration-extras.md): definitions, run records and the pure arithmetic that
@@ -64,10 +65,59 @@ public enum ScheduleDestination: Hashable, Sendable, Codable {
     case thread(SessionID)
 }
 
-/// An agent-created task waits for the user's approval (first time in a project) before it can run.
+/// An agent-created task waits for the user's approval (first time in a project, and after any material change an
+/// agent makes) before it can run.
 public enum ScheduleApproval: String, Hashable, Sendable, Codable {
     case approved
     case pending
+}
+
+/// Everything about a task that decides what a run does: the approval is bound to exactly this (C2 in
+/// docs/reviews/M3-M6-review.md). Enabling is not part of it but an agent turning a task back on needs approval too.
+public struct ScheduleDefinition: Hashable, Sendable, Codable {
+    public var name: String
+    public var prompt: String
+    public var rule: ScheduleRule
+    public var timeZoneID: String
+    public var directory: String
+    public var destination: ScheduleDestination
+    public var agent: String?
+    public var model: ModelSelection?
+    public var permissionMode: PermissionMode?
+    public var catchUp: Bool
+
+    /// SHA-256 of the canonical JSON encoding (hex).
+    public var digest: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = (try? encoder.encode(self)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// "Prompt: “old” → “new”" lines for each field that differs (an approval card's before/after).
+    public func changes(to new: ScheduleDefinition) -> [String] {
+        func quoted(_ text: String) -> String { "“\(text.count > 300 ? String(text.prefix(300)) + "…" : text)”" }
+        func place(_ value: ScheduleDestination) -> String {
+            switch value {
+            case .newThread: "a new thread each run"
+            case .thread(let id): "thread \(id.rawValue)"
+            }
+        }
+        var lines: [String] = []
+        if name != new.name { lines.append("Name: \(quoted(name)) → \(quoted(new.name))") }
+        if prompt != new.prompt { lines.append("Prompt: \(quoted(prompt)) → \(quoted(new.prompt))") }
+        if rule != new.rule || timeZoneID != new.timeZoneID {
+            lines.append("When: \(rule.summary(timeZone: TimeZone(identifier: timeZoneID) ?? .current)) (\(timeZoneID)) → \(new.rule.summary(timeZone: TimeZone(identifier: new.timeZoneID) ?? .current)) (\(new.timeZoneID))")
+        }
+        if destination != new.destination { lines.append("Destination: \(place(destination)) → \(place(new.destination))") }
+        if agent != new.agent { lines.append("Agent: \(agent ?? "default") → \(new.agent ?? "default")") }
+        if model != new.model { lines.append("Model: \(model.map { "\($0.providerID)/\($0.modelID)" } ?? "default") → \(new.model.map { "\($0.providerID)/\($0.modelID)" } ?? "default")") }
+        if permissionMode != new.permissionMode { lines.append("Permission mode: \(permissionMode?.rawValue ?? "default") → \(new.permissionMode?.rawValue ?? "default")") }
+        if catchUp != new.catchUp { lines.append("Catch up missed runs: \(catchUp ? "yes" : "no") → \(new.catchUp ? "yes" : "no")") }
+        if directory != new.directory { lines.append("Project: \(directory) → \(new.directory)") }
+        return lines
+    }
 }
 
 public struct ScheduledTask: Hashable, Sendable, Codable, Identifiable {
@@ -95,6 +145,9 @@ public struct ScheduledTask: Hashable, Sendable, Codable, Identifiable {
     public var anchor: Date
     public var nextRun: Date?
     public var lastRun: ScheduleRun?
+    /// The definition the user approved (created by the user, approved on a card, or created under a project grant).
+    /// A task runs only while its current definition is exactly this one.
+    public var approved: ScheduleDefinition?
 
     public init(
         id: String = ScheduledTask.makeID(), name: String, prompt: String, rule: ScheduleRule,
@@ -119,12 +172,37 @@ public struct ScheduledTask: Hashable, Sendable, Codable, Identifiable {
         self.created = created
         self.updated = created
         self.anchor = created
+        // Made approved (by the user, or under a grant): approved as defined here.
+        if approval == .approved { self.approved = definition }
     }
 
     public static func makeID() -> String { "bsch_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased() }
 
     public var timeZone: TimeZone { TimeZone(identifier: timeZoneID) ?? .current }
-    public var isActive: Bool { enabled && approval == .approved }
+    /// Enabled, approved, and unchanged since the approval.
+    public var isActive: Bool { enabled && isApprovedAsDefined }
+    /// Approved, and the definition is exactly what was approved.
+    public var isApprovedAsDefined: Bool { approval == .approved && approved == definition }
+
+    public var definition: ScheduleDefinition {
+        get {
+            ScheduleDefinition(
+                name: name, prompt: prompt, rule: rule, timeZoneID: timeZoneID, directory: directory, destination: destination, agent: agent,
+                model: model, permissionMode: permissionMode, catchUp: catchUp)
+        }
+        set {
+            name = newValue.name
+            prompt = newValue.prompt
+            rule = newValue.rule
+            timeZoneID = newValue.timeZoneID
+            directory = newValue.directory
+            destination = newValue.destination
+            agent = newValue.agent
+            model = newValue.model
+            permissionMode = newValue.permissionMode
+            catchUp = newValue.catchUp
+        }
+    }
     public var summary: String { rule.summary(timeZone: timeZone) }
 }
 

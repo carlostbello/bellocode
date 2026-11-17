@@ -64,8 +64,8 @@ struct SecretRequestCard: View {
                     Image(systemName: "lock").font(.system(size: DS.Size.iconPointMeta)).foregroundStyle(SwiftUI.Color.ds.text3)
                     Text(
                         prompt.delivery == .file
-                            ? "Saved in your Keychain. The agent gets a path that yields the value once to one command, never the value itself."
-                            : "Saved in your Keychain. The agent gets a one-use reference, never the value itself."
+                            ? "Saved in your Keychain. The agent gets a path that yields the value once to the first command that reads it; that command, which the agent chooses, can reveal it."
+                            : "Saved in your Keychain. The agent gets a one-use reference, not the value. In a container project you approve the exact command that receives it; any command that receives it can reveal it."
                     )
                     .font(.ds(.label))
                     .foregroundStyle(SwiftUI.Color.ds.text3)
@@ -127,7 +127,7 @@ struct AppApprovalCard: View {
                 request: .app(request), count: count)
             VStack(alignment: .leading, spacing: DS.Space.s8) {
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
-                    Image(systemName: approval.action == .schedule ? "calendar.badge.clock" : "network")
+                    Image(systemName: approval.action == .schedule ? "calendar.badge.clock" : approval.action == .secretCommand ? "key" : "network")
                         .font(.system(size: DS.Size.iconPointRow))
                         .foregroundStyle(SwiftUI.Color.ds.icon)
                         .accessibilityHidden(true)
@@ -150,7 +150,7 @@ struct AppApprovalCard: View {
                     }
                     .buttonStyle(DSButtonStyle(.outline, hint: AgentShortcut.deny.display))
                     .keyboardShortcut(.deny)
-                    .help(approval.action == .schedule ? "The scheduled task is deleted." : "The visual stays offline.")
+                    .help(denyHelp)
                     if approval.allowsAlways {
                         Button(alwaysTitle) {
                             Task { await model.respond(request, .approve(always: true)) }
@@ -175,7 +175,19 @@ struct AppApprovalCard: View {
     }
 
     private var alwaysTitle: String {
-        approval.action == .schedule ? "Always in This Project" : "Always for These Hosts"
+        switch approval.action {
+        case .schedule: "Always in This Project"
+        case .network: "Always for These Hosts"
+        case .secretCommand: "Always for This Command"
+        }
+    }
+
+    private var denyHelp: String {
+        switch approval.action {
+        case .schedule: approval.allowsAlways ? "The scheduled task is deleted." : "The task keeps the version you approved."
+        case .network: "The visual stays offline."
+        case .secretCommand: "The command does not run and the secret is not used."
+        }
     }
 
     private var scopeText: String {
@@ -184,6 +196,8 @@ struct AppApprovalCard: View {
             "Project: \(approval.scope). “Always” lets agents create scheduled tasks in this project without asking again (Settings ▸ Scheduled Tasks can revoke it)."
         case .network:
             "Hosts: \(approval.scope). “Always” lets HTML visuals load from these hosts without asking again."
+        case .secretCommand:
+            "Project: \(approval.scope). The command receives the value and can reveal it (print, encode, send or save it): allow only a command you trust with it. “Always” runs exactly this command with this secret, in this project, without asking again (deleting the secret revokes it)."
         }
     }
 }

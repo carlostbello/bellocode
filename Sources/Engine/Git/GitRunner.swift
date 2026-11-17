@@ -1,3 +1,4 @@
+import ContainerKit
 import Foundation
 import Synchronization
 import os
@@ -58,15 +59,22 @@ public enum GitError: Error, Sendable, Equatable, CustomStringConvertible {
     }
 }
 
-/// Runs `git` as a child process off the main actor.
+/// Runs `git` as a child process off the main actor, always confined (`HostGit`, docs/features/containers.md "Host
+/// git"): a sandbox lets git execute only itself (no fsmonitor, filters, diff drivers, hooks, helpers or pagers from a
+/// repository's configuration), with no network except for fetch/push and writes only inside the repository; when the
+/// sandbox is unavailable git is not run (`GitError.launchFailed`).
 ///
 /// Both pipes are drained as data arrives (a full pipe never blocks the child), output is bounded, a timeout stops the
 /// process, and cancelling the calling task terminates it. Git never prompts (`GIT_TERMINAL_PROMPT=0`), never takes
 /// optional locks (`GIT_OPTIONAL_LOCKS=0`, so a status refresh does not contend with the user's own git), and quotes
 /// no paths (`core.quotePath=false`; callers use `-z` where paths are parsed).
 public struct GitRunner: Sendable {
-    public var executable: URL
+    /// The caller's environment; `HostGit` keeps only an allowlist of it and adds the confinement settings.
     public var environment: [String: String]
+    /// Extra places git may write besides the repository (a local remote in tests, a worktree parent).
+    public var writableRoots: [String]
+    /// Lets fetch/push use local-path remotes (`protocol.file`). Off in the app; tests use local bare repositories.
+    public var allowsLocalRemotes: Bool
     public var defaultTimeout: Duration
     /// Default stdout limit (bytes).
     public var outputLimit: Int
@@ -75,46 +83,77 @@ public struct GitRunner: Sendable {
     static let signposter = OSSignposter(subsystem: "dev.bellocode.engine", category: .pointsOfInterest)
 
     public init(
-        executable: URL = URL(filePath: "/usr/bin/git"), environment: [String: String]? = nil, defaultTimeout: Duration = .seconds(30),
-        outputLimit: Int = 128 << 20
+        environment: [String: String]? = nil, writableRoots: [String] = [], allowsLocalRemotes: Bool = false,
+        defaultTimeout: Duration = .seconds(30), outputLimit: Int = 128 << 20
     ) {
-        self.executable = executable
         self.environment = environment ?? Self.defaultEnvironment()
+        self.writableRoots = writableRoots
+        self.allowsLocalRemotes = allowsLocalRemotes
         self.defaultTimeout = defaultTimeout
         self.outputLimit = outputLimit
     }
 
-    /// The parent's PATH, HOME and SSH agent (push needs them), plus non-interactive settings.
+    /// The parent's HOME and identity, the SSH agent (passed to network operations only), plus non-interactive
+    /// settings. `HostGit` fixes PATH, disables hooks and the rest (docs/features/containers.md).
     public static func defaultEnvironment() -> [String: String] {
         let parent = ProcessInfo.processInfo.environment
         var environment: [String: String] = [:]
-        for key in ["PATH", "HOME", "USER", "LOGNAME", "SSH_AUTH_SOCK", "TMPDIR", "LANG"] { environment[key] = parent[key] }
-        environment["PATH"] = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["GIT_TERMINAL_PROMPT"] = "0"
+        for key in ["HOME", "USER", "LOGNAME", "SSH_AUTH_SOCK", "TMPDIR", "LANG", "DEVELOPER_DIR"] { environment[key] = parent[key] }
         environment["GIT_OPTIONAL_LOCKS"] = "0"
-        environment["GIT_PAGER"] = "cat"
-        environment["GIT_EDITOR"] = "true"
         environment["LC_ALL"] = "C"
-        // Repository hooks (husky, pre-commit…) would run project code on the Mac: host git never runs them
-        // (docs/features/containers.md). Commits that need hooks run git inside the project's container.
-        environment["GIT_CONFIG_COUNT"] = "1"
-        environment["GIT_CONFIG_KEY_0"] = "core.hooksPath"
-        environment["GIT_CONFIG_VALUE_0"] = "/dev/null"
         return environment
+    }
+
+    /// The confined launch for `arguments` (nil when the sandbox or git is unavailable).
+    func invocation(_ arguments: [String], in directory: String, writableRoots extra: [String], trusted: HostGit.TrustedConfiguration) -> HostGit.Invocation? {
+        var environment = environment
+        if allowsLocalRemotes {
+            let count = Int(environment["GIT_CONFIG_COUNT"] ?? "0") ?? 0
+            environment["GIT_CONFIG_KEY_\(count)"] = "protocol.file.allow"
+            environment["GIT_CONFIG_VALUE_\(count)"] = "always"
+            environment["GIT_CONFIG_COUNT"] = String(count + 1)
+        }
+        return HostGit.invocation(
+            arguments: arguments, directory: directory, mode: Self.mode(of: arguments), environment: environment,
+            writableRoots: writableRoots + extra, trusted: trusted)
+    }
+
+    /// Network for fetch/push/clone/ls-remote and remote updates; local for everything else.
+    static func mode(of arguments: [String]) -> HostGit.Mode {
+        guard let index = arguments.firstIndex(where: { !$0.hasPrefix("-") && !$0.contains("=") }) else { return .local }
+        let subcommand = arguments[index]
+        if subcommand == "remote" {
+            let next = arguments.dropFirst(index + 1).first { !$0.hasPrefix("-") }
+            return ["update", "prune", "show", "set-head"].contains(next ?? "") ? .network : .local
+        }
+        return HostGit.networkSubcommands.contains(subcommand) ? .network : .local
     }
 
     /// Runs git in `directory`. Throws `GitError.failed` for a non-zero exit unless `allowFailure`.
     @concurrent
     public func run(
         _ arguments: [String], in directory: String, input: Data? = nil, timeout: Duration? = nil, outputLimit: Int? = nil,
-        allowFailure: Bool = false
+        allowFailure: Bool = false, writableRoots extra: [String] = []
     ) async throws -> GitOutput {
         try Task.checkCancellation()
         let name = arguments.first(where: { !$0.hasPrefix("-") && !$0.contains("=") }) ?? "git"
         let interval = Self.signposter.beginInterval("git", "\(name, privacy: .public)")
         defer { Self.signposter.endInterval("git", interval) }
+        var trusted = HostGit.TrustedConfiguration()
+        if Self.mode(of: arguments) == .network {
+            // The user's own credential helpers and ssh command (never the repository's), read confined.
+            if let query = invocation(HostGit.trustedQuery, in: directory, writableRoots: [], trusted: trusted),
+               let output = try? await execute(
+                URL(filePath: query.executable), query.arguments, environment: query.environment, in: directory, input: nil,
+                timeout: .seconds(10), limit: 64 << 10, name: "config")
+            {
+                trusted = HostGit.parseTrusted(output.stdout)
+            }
+        }
+        guard let launch = invocation(["-c", "core.quotePath=false", "-c", "color.ui=false"] + arguments, in: directory, writableRoots: extra, trusted: trusted)
+        else { throw GitError.launchFailed("the git sandbox is unavailable") }
         let output = try await execute(
-            executable, ["-c", "core.quotePath=false", "-c", "color.ui=false"] + arguments, in: directory, input: input,
+            URL(filePath: launch.executable), launch.arguments, environment: launch.environment, in: directory, input: input,
             timeout: timeout ?? defaultTimeout, limit: outputLimit ?? self.outputLimit, name: name)
         if output.status != 0, !allowFailure {
             if output.message.contains("not a git repository") { throw GitError.notARepository(directory) }
@@ -130,13 +169,15 @@ public struct GitRunner: Sendable {
         _ program: URL, _ arguments: [String], in directory: String, environment extra: [String: String] = [:], timeout: Duration,
         outputLimit: Int = 4 << 20
     ) async throws -> GitOutput {
-        var runner = self
-        runner.environment.merge(extra) { _, new in new }
-        return try await runner.execute(program, arguments, in: directory, input: nil, timeout: timeout, limit: outputLimit, name: program.lastPathComponent)
+        var environment = environment
+        environment["PATH"] = HostGit.fixedPath
+        environment.merge(extra) { _, new in new }
+        return try await execute(program, arguments, environment: environment, in: directory, input: nil, timeout: timeout, limit: outputLimit, name: program.lastPathComponent)
     }
 
     private func execute(
-        _ executable: URL, _ arguments: [String], in directory: String, input: Data?, timeout: Duration, limit: Int, name: String
+        _ executable: URL, _ arguments: [String], environment: [String: String], in directory: String, input: Data?, timeout: Duration, limit: Int,
+        name: String
     ) async throws -> GitOutput {
         let process = Process()
         process.executableURL = executable

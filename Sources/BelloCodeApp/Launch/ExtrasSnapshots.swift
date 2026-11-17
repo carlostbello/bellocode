@@ -92,7 +92,7 @@ extension SnapshotRunner {
                     "bellocode_app_request_secret",
                     input: ["label": "npm publish token", "reason": "To publish @acme/rocket 2.0.0.", "url": "https://www.npmjs.com/settings/tokens"],
                     output: askedText, duration: 15)
-                TurnStep.text("I'll continue once you save it; I never see the token itself.")
+                TurnStep.text("I'll continue once you save it; you'll approve the command that uses it.")
             }, for: secretThread)
         driver.type("Publish 2.0.0 to npm.")
         driver.send()
