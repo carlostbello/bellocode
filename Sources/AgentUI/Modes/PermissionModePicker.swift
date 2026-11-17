@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import Engine
 import SwiftUI
+import DesignSystem
 
 /// What a permission mode allows, in plain words. The rules behind each are `PermissionModeRules` (verified on
 /// opencode 2.3.0; see docs/features/agent-ui.md).
@@ -79,20 +80,15 @@ public struct PermissionModePicker: View {
             highlighted.value = current ?? .ask
             isOpen.value.toggle()
         } label: {
-            HStack(spacing: 4) {
-                if let current {
-                    let option = PermissionModeOption.option(current)
-                    Image(systemName: option.symbolName)
-                    Text(option.shortTitle)
-                } else {
-                    Image(systemName: PermissionModeOption.unset.symbolName)
-                    Text(PermissionModeOption.unset.shortTitle)
-                }
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(style.secondaryText)
+            HStack(spacing: DS.Space.s6) {
+                let symbol = current.map { PermissionModeOption.option($0).symbolName } ?? PermissionModeOption.unset.symbolName
+                let title = current.map { PermissionModeOption.option($0).shortTitle } ?? PermissionModeOption.unset.shortTitle
+                Image(systemName: symbol).font(.system(size: DS.Size.iconPointRow)).foregroundStyle(SwiftUI.Color.ds.icon)
+                Text(title)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text4)
             }
-            .font(style.smallFont)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(ComposerSelectStyle(isOpen: isOpen.value))
         .keyboardShortcut(.permissionMode)
         .onChange(of: trigger.count) {
             highlighted.value = current ?? .ask
@@ -101,7 +97,7 @@ public struct PermissionModePicker: View {
         .help("Permission mode (\(AgentShortcut.permissionMode.display))")
         .accessibilityLabel("Permission mode")
         .accessibilityValue(current.map { PermissionModeOption.option($0).title } ?? PermissionModeOption.unset.title)
-        .popover(isPresented: $isOpen.value, arrowEdge: .top) {
+        .glassPopover(isPresented: $isOpen.value, width: 340) {
             PermissionModePopover(
                 current: current, agent: source.session?.agent, agents: agents, highlighted: $highlighted.value,
                 choose: { mode in
@@ -163,36 +159,48 @@ public struct PermissionModePopover: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: style.spacing * 2) {
-            Text("Permissions").font(style.smallFont.weight(.semibold)).foregroundStyle(style.secondaryText)
-            VStack(spacing: 2) {
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            sectionHeader("Permissions")
+            VStack(spacing: 0) {
                 ForEach(PermissionModeOption.all) { option in
                     row(option)
                 }
             }
             if current == nil {
                 Text(PermissionModeOption.unset.detail)
-                    .font(style.smallFont).foregroundStyle(style.secondaryText).fixedSize(horizontal: false, vertical: true)
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, DS.Space.s8)
             }
-            Divider()
-            Text("Agent").font(style.smallFont.weight(.semibold)).foregroundStyle(style.secondaryText)
-            HStack(spacing: style.spacing * 2) {
+            SwiftUI.Color.ds.border.frame(height: 1).padding(.horizontal, DS.Space.s4)
+            sectionHeader("Agent")
+            HStack(spacing: DS.Space.s12) {
                 ForEach(agentChoices, id: \.id) { choice in
+                    let isOn = (agent ?? "build") == choice.id
                     Button {
                         chooseAgent(choice.id)
                     } label: {
-                        Label(choice.name, systemImage: (agent ?? "build") == choice.id ? "checkmark.circle.fill" : "circle")
+                        HStack(spacing: DS.Space.s8) {
+                            DSToggleMark(kind: .radio, isOn: isOn)
+                            Text(choice.name).font(.ds(.body)).foregroundStyle(SwiftUI.Color.ds.text)
+                        }
+                        .frame(minHeight: DS.Size.menuRow)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .help(choice.detail)
-                    .accessibilityAddTraits((agent ?? "build") == choice.id ? .isSelected : [])
+                    .accessibilityAddTraits(isOn ? .isSelected : [])
                 }
             }
-            .font(style.bodyFont)
-            Text("Plan: \(AgentShortcut.togglePlan.display) toggles between plan and build.")
-                .font(style.smallFont).foregroundStyle(style.secondaryText)
+            .padding(.horizontal, DS.Space.s8)
+            HStack(spacing: DS.Space.s4) {
+                DSKbdView(AgentShortcut.togglePlan.display)
+                Text("toggles plan and build")
+            }
+            .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
+            .padding(.horizontal, DS.Space.s8)
+            .padding(.bottom, DS.Space.s4)
         }
-        .padding(style.spacing * 3)
+        .padding(DS.Space.s4)
         .frame(width: 340)
         .focusable()
         .focused($focused)
@@ -214,29 +222,45 @@ public struct PermissionModePopover: View {
         return .handled
     }
 
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.ds(.metaEmph))
+            .foregroundStyle(SwiftUI.Color.ds.text3)
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Size.menuGroupHeader, alignment: .bottomLeading)
+            .accessibilityAddTraits(.isHeader)
+    }
+
     private func row(_ option: PermissionModeOption) -> some View {
         let selected = option.mode == current
         let isHighlighted = option.mode == highlighted
         return Button {
             choose(option.mode)
         } label: {
-            HStack(alignment: .top, spacing: style.spacing * 2) {
-                Image(systemName: option.symbolName).frame(width: 18).padding(.top, 1)
+            HStack(alignment: .top, spacing: DS.Space.s8) {
+                Image(systemName: option.symbolName)
+                    .font(.system(size: DS.Size.iconPointRow))
+                    .foregroundStyle(SwiftUI.Color.ds.icon)
+                    .frame(width: 16)
+                    .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(option.title).font(style.bodyFont.weight(.medium))
-                        if selected { Image(systemName: "checkmark").foregroundStyle(style.accent).accessibilityHidden(true) }
-                    }
-                    Text(option.allows).font(style.smallFont).foregroundStyle(style.secondaryText)
-                    Text(option.asks).font(style.smallFont).foregroundStyle(style.secondaryText)
+                    Text(option.title).font(.ds(.body)).foregroundStyle(SwiftUI.Color.ds.text)
+                    Text(option.allows).font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
+                    Text(option.asks).font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
+                Image(systemName: "checkmark")
+                    .font(.system(size: DS.Size.iconPointMeta, weight: .semibold))
+                    .foregroundStyle(SwiftUI.Color.ds.accent)
+                    .opacity(selected ? 1 : 0)
+                    .padding(.top, 3)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, style.spacing * 2)
-            .padding(.vertical, style.spacing * 1.5)
+            .padding(.horizontal, DS.Space.s8)
+            .padding(.vertical, DS.Space.s6)
             .contentShape(Rectangle())
-            .background(isHighlighted ? style.accent.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 5))
+            .background(isHighlighted ? SwiftUI.Color.ds.highlight : .clear, in: RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { if $0 { highlighted = option.mode } }
@@ -260,10 +284,14 @@ public struct PlanModeToggle: View {
         Button {
             Task { await source.setAgent(isPlan ? "build" : "plan") }
         } label: {
-            Label(isPlan ? "Plan" : "Build", systemImage: isPlan ? "list.bullet.clipboard" : "hammer")
-                .font(style.smallFont)
+            HStack(spacing: DS.Space.s6) {
+                Image(systemName: isPlan ? "list.bullet.clipboard" : "hammer")
+                    .font(.system(size: DS.Size.iconPointRow))
+                    .foregroundStyle(SwiftUI.Color.ds.icon)
+                Text(isPlan ? "Plan" : "Build")
+            }
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(ComposerSelectStyle())
         .keyboardShortcut(.togglePlan)
         .help(isPlan ? "Plan agent: read-only. Switch to build (\(AgentShortcut.togglePlan.display))"
               : "Build agent: can change files. Switch to plan (\(AgentShortcut.togglePlan.display))")

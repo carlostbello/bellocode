@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import Engine
 import SwiftUI
+import DesignSystem
 
 // MARK: - Import
 
@@ -46,6 +47,8 @@ public struct ImportCredentialsView: View {
                 if let onDone { Button("Back", action: onDone) }
             }
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .noImplicitAnimation()
     }
 
@@ -54,12 +57,12 @@ public struct ImportCredentialsView: View {
         switch phase.value {
         case .intro:
             HStack {
-                Button("Look for Accounts") { look(source) }.buttonStyle(.borderedProminent)
+                Button("Look for Accounts") { look(source) }.buttonStyle(DSButtonStyle(.primary))
                 if let onDone { Button("Cancel", action: onDone) }
             }
         case .looking, .importing:
             HStack(spacing: style.spacing * 2) {
-                ProgressView().controlSize(.small)
+                StatusLabel(.running, showsText: false)
                 Text(phase.value == .looking ? "Reading the account list…" : "Importing…").font(style.smallFont)
             }
         case .preview(let items) where items.isEmpty:
@@ -78,23 +81,23 @@ public struct ImportCredentialsView: View {
                 }
             }
             .padding(style.spacing * 2)
-            .background(style.inset, in: RoundedRectangle(cornerRadius: 6))
+            .background(style.inset, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
             Text("Accounts already in BelloCode are skipped. The secrets travel only between the two opencode programs.")
                 .font(style.smallFont).foregroundStyle(style.secondaryText)
             HStack {
                 Button("Import \(items.count) \(items.count == 1 ? "Account" : "Accounts")") { run(source) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(DSButtonStyle(.primary))
                 Button("Cancel") { if let onDone { onDone() } else { phase.value = .intro } }
             }
         case .done(let result):
             Label(
                 "Imported \(result.imported) \(result.imported == 1 ? "account" : "accounts")"
                     + (result.skipped > 0 ? " (\(result.skipped) already here)" : "") + ".",
-                systemImage: "checkmark.circle.fill")
+                systemImage: "checkmark")
                 .foregroundStyle(style.success)
-            if let onDone { Button("Done", action: onDone).buttonStyle(.borderedProminent) }
+            if let onDone { Button("Done", action: onDone).buttonStyle(DSButtonStyle(.primary)) }
         case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(style.danger).font(style.smallFont)
+            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(style.danger).font(style.smallFont)
             HStack {
                 Button("Try Again") { look(source) }
                 if let onDone { Button("Cancel", action: onDone) }
@@ -162,13 +165,13 @@ public struct OnboardingView: View {
             case .connect:
                 VStack(alignment: .leading, spacing: 0) {
                     backBar(title: "Connect a provider")
-                    Divider()
+                    DSHairline()
                     ProviderConnectView(auth: auth, onDone: { onFinish(.connected) })
                 }
             case .importing:
                 VStack(alignment: .leading, spacing: 0) {
                     backBar(title: "Import from opencode")
-                    Divider()
+                    DSHairline()
                     ImportCredentialsView(auth: auth, source: importSource, onDone: { onFinish(.imported) })
                         .padding(style.spacing * 6)
                         .frame(maxWidth: 560, alignment: .leading)
@@ -176,6 +179,8 @@ public struct OnboardingView: View {
                 }
             }
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .noImplicitAnimation()
     }
 
@@ -186,11 +191,11 @@ public struct OnboardingView: View {
             } label: {
                 Label("Back", systemImage: "chevron.left")
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(DSButtonStyle(.ghost, size: .small))
             .keyboardShortcut("[", modifiers: .command)
             Text(title).font(style.titleFont)
             Spacer()
-            Button("Skip for Now") { onFinish(.skipped) }.buttonStyle(.borderless)
+            Button("Skip for Now") { onFinish(.skipped) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
         }
         .padding(.horizontal, style.spacing * 4)
         .padding(.vertical, style.spacing * 2.5)
@@ -199,7 +204,7 @@ public struct OnboardingView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: style.spacing * 5) {
             VStack(alignment: .leading, spacing: style.spacing * 2) {
-                Text("Welcome to BelloCode").font(.system(size: 22, weight: .semibold))
+                Text("Welcome to BelloCode").font(.ds(.proseH1)).foregroundStyle(SwiftUI.Color.ds.text)
                 Text("You can start right away: opencode’s free built-in models work without an account. "
                     + "Connect a provider when you want your own models, plans or higher limits. You can change this any time in Settings ▸ Accounts.")
                     .font(style.bodyFont).foregroundStyle(style.secondaryText).fixedSize(horizontal: false, vertical: true)
@@ -238,24 +243,24 @@ public struct OnboardingView: View {
         Button(action: action) {
             HStack(spacing: style.spacing * 3) {
                 Image(systemName: symbol)
-                    .font(.system(size: 18))
-                    .foregroundStyle(prominent ? style.accent : style.secondaryText)
-                    .frame(width: 26)
+                    .font(.system(size: 16))
+                    .foregroundStyle(SwiftUI.Color.ds.icon)
+                    .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(style.bodyFont.weight(.medium)).foregroundStyle(style.primaryText)
                     Text(detail).font(style.smallFont).foregroundStyle(style.secondaryText).multilineTextAlignment(.leading)
                 }
                 Spacer()
-                Text("⌘\(String(shortcut))").font(style.smallFont).foregroundStyle(style.secondaryText).accessibilityHidden(true)
-                Image(systemName: "chevron.right").foregroundStyle(style.secondaryText).accessibilityHidden(true)
+                DSKbdView("⌘\(String(shortcut))")
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text4).accessibilityHidden(true)
             }
             .padding(.horizontal, style.spacing * 3)
             .padding(.vertical, style.spacing * 2.5)
             .contentShape(Rectangle())
-            .background(style.surface, in: RoundedRectangle(cornerRadius: style.cornerRadius))
+            .background(SwiftUI.Color.ds.raised, in: RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: style.cornerRadius)
-                    .strokeBorder(prominent ? style.accent.opacity(0.6) : style.separator, lineWidth: prominent ? 1 : 0.5))
+                RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous)
+                    .strokeBorder(prominent ? SwiftUI.Color.ds.borderStrong : SwiftUI.Color.ds.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
@@ -296,13 +301,13 @@ public struct AccountsSettingsView: View {
             case .add(let id):
                 VStack(alignment: .leading, spacing: 0) {
                     backBar("Add account")
-                    Divider()
+                    DSHairline()
                     ProviderConnectView(auth: auth, initialIntegrationID: id, onDone: { finishAdding() })
                 }
             case .importing:
                 VStack(alignment: .leading, spacing: 0) {
                     backBar("Import from opencode")
-                    Divider()
+                    DSHairline()
                     ImportCredentialsView(auth: auth, source: importSource, onDone: { mode.value = .list })
                         .padding(style.spacing * 5)
                     Spacer(minLength: 0)
@@ -323,6 +328,8 @@ public struct AccountsSettingsView: View {
         } message: { credential in
             Text("opencode deletes this saved \(credential.kind == "key" ? "API key" : "sign-in"). This cannot be undone; you would need to connect again.")
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .noImplicitAnimation()
     }
 
@@ -340,7 +347,7 @@ public struct AccountsSettingsView: View {
                 auth.clearFlow()
                 mode.value = .list
             } label: { Label("Accounts", systemImage: "chevron.left") }
-                .buttonStyle(.borderless)
+                .buttonStyle(DSButtonStyle(.ghost, size: .small))
             Text(title).font(style.titleFont)
             Spacer()
         }
@@ -367,19 +374,19 @@ public struct AccountsSettingsView: View {
                     .help("Refresh")
                     .accessibilityLabel("Refresh accounts")
                 Button("Import from opencode…") { mode.value = .importing }
-                Button("Add Account…") { mode.value = .add(nil) }.buttonStyle(.borderedProminent)
+                Button("Add Account…") { mode.value = .add(nil) }.buttonStyle(DSButtonStyle(.primary))
             }
             .padding(style.spacing * 4)
-            Divider()
+            DSHairline()
             if let error = auth.lastError {
-                Label(error.userMessage, systemImage: "exclamationmark.triangle.fill")
+                Label(error.userMessage, systemImage: "exclamationmark.triangle")
                     .font(style.smallFont).foregroundStyle(style.danger)
                     .padding(.horizontal, style.spacing * 4).padding(.top, style.spacing * 2)
             }
             switch auth.listState {
             case .loading where auth.integrations.isEmpty:
                 HStack(spacing: style.spacing * 2) {
-                    ProgressView().controlSize(.small)
+                    StatusLabel(.running, showsText: false)
                     Text("Loading accounts…").font(style.smallFont)
                 }
                 .padding(style.spacing * 4)
@@ -417,17 +424,17 @@ public struct AccountsSettingsView: View {
             HStack {
                 Text(item.name).font(style.bodyFont.weight(.semibold))
                 if let problem = item.connections.first(where: { $0.problem != nil })?.problem {
-                    Label(problem, systemImage: "exclamationmark.triangle.fill").font(style.smallFont).foregroundStyle(style.attention)
+                    Label(problem, systemImage: "exclamationmark.triangle").font(style.smallFont).foregroundStyle(style.attention)
                 } else {
-                    Label("Connected", systemImage: "checkmark.circle.fill").font(style.smallFont).foregroundStyle(style.success)
+                    Label("Connected", systemImage: "checkmark").font(style.smallFont).foregroundStyle(style.success)
                 }
                 Spacer()
-                Button("Add Account…") { mode.value = .add(item.id) }.buttonStyle(.borderless).font(style.smallFont)
+                Button("Add Account…") { mode.value = .add(item.id) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(style.smallFont)
             }
             VStack(spacing: 0) {
                 ForEach(credentials) { credential in
                     credentialRow(credential, canSwitch: credentials.count > 1)
-                    if credential.id != credentials.last?.id || !environment.isEmpty { Divider().padding(.leading, 28) }
+                    if credential.id != credentials.last?.id || !environment.isEmpty { DSHairline().padding(.leading, 28) }
                 }
                 ForEach(environment) { connection in
                     HStack(spacing: style.spacing * 2) {
@@ -439,8 +446,8 @@ public struct AccountsSettingsView: View {
                     .frame(minHeight: 28)
                 }
             }
-            .background(style.surface, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(style.separator, lineWidth: 0.5))
+            .background(style.surface, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(SwiftUI.Color.ds.border, lineWidth: 1))
         }
     }
 
@@ -449,17 +456,16 @@ public struct AccountsSettingsView: View {
             Button {
                 Task { await auth.activate(credential.id) }
             } label: {
-                Image(systemName: credential.isActive ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(credential.isActive ? style.accent : style.secondaryText)
+                DSToggleMark(kind: .radio, isOn: credential.isActive)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(DSButtonStyle(.ghost, size: .small))
             .disabled(credential.isActive)
             .help(credential.isActive ? "In use" : "Use this account")
             .accessibilityLabel(credential.isActive ? "\(credential.label), in use" : "Use \(credential.label)")
             .frame(width: 16)
             if renaming.value == credential.id {
                 TextField("Account name", text: $renameText.value)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(DSTextFieldStyle())
                     .onSubmit {
                         let name = renameText.value
                         renaming.value = nil
@@ -479,12 +485,13 @@ public struct AccountsSettingsView: View {
                     renameText.value = credential.label
                     renaming.value = credential.id
                 }
-                Divider()
+                DSHairline()
                 Button("Remove…", role: .destructive) { confirmRemoval.value = credential }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("Actions for \(credential.label)")
