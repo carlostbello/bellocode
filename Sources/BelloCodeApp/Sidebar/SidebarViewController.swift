@@ -35,24 +35,29 @@ extension NSPasteboard.PasteboardType {
 /// apply to every selected thread.
 @MainActor
 final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate,
-    NSTextFieldDelegate, NSSearchFieldDelegate
+    NSTextFieldDelegate
 {
     let workspace: WorkspaceController
     weak var delegate: (any SidebarDelegate)?
 
     let outlineView = SidebarOutlineView()
-    let filterField = NSSearchField()
-    private let optionsButton = NSButton()
+    /// The search field (filters threads by title or project; ⌥⌘F). `filterField` is its editable text field.
+    let filterBox = DSTextField(style: .search, placeholder: "Search")
+    var filterField: NSTextField { filterBox.field }
+    private let optionsButton = DSButton(icon: "line.3.horizontal.decrease", accessibilityTitle: "Sidebar options", size: .small)
     let scrollView = NSScrollView()
     private let emptyState = EmptyStateView(
-        symbolName: "folder.badge.plus", title: "No Projects",
-        detail: "Add a folder to start a thread, or drop one here.", actionTitle: "Add Project…",
+        symbolName: "folder.badge.plus", title: "No projects",
+        detail: "Add a folder to start a thread, or drop one here.", actionTitle: "Add project…",
         action: #selector(MainWindowController.addProject(_:)))
     let toast = UndoToastView()
     let dropBadge = DropBadgeView()
     /// Places the badge beside the insertion point.
     private lazy var dropBadgeCenter = dropBadge.centerYAnchor.constraint(equalTo: scrollView.topAnchor, constant: 40)
-    private let addButton = NSButton()
+    /// The footer (44): "Add project", the connection state and Settings.
+    private let addButton = DSButton(title: "Add project", variant: .ghost, size: .small, symbolName: "plus", action: #selector(MainWindowController.addProject(_:)))
+    let connectionView = ConnectionStatusView()
+    private let settingsButton = DSButton(icon: "gearshape", accessibilityTitle: "Settings", size: .small, action: #selector(AppDelegate.showSettings(_:)))
 
     private(set) var roots: [SidebarNode] = []
     /// Parent of every node in `roots` (computed once per structure change).
@@ -93,10 +98,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         outlineView.addTableColumn(column)
         outlineView.outlineTableColumn = column
         outlineView.headerView = nil
-        outlineView.style = .sourceList
+        // Plain style, no system selection: `SidebarRowBackground` draws the neutral row recipe (visual-language.md
+        // §6), cells indent themselves (children by 22 with a guide line), and disclosure is the cells' own chevrons.
+        outlineView.style = .plain
+        outlineView.selectionHighlightStyle = .none
+        outlineView.backgroundColor = .clear
+        outlineView.intercellSpacing = .zero
         outlineView.rowSizeStyle = .custom
-        outlineView.rowHeight = DS.Spacing.sidebarRowHeight
-        outlineView.indentationPerLevel = DS.Spacing.sidebarIndent - 4
+        outlineView.rowHeight = DS.Size.sidebarRow
+        outlineView.indentationPerLevel = 0
+        outlineView.indentationMarkerFollowsCell = false
         outlineView.floatsGroupRows = false
         outlineView.autoresizesOutlineColumn = false
         outlineView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -104,6 +115,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         outlineView.allowsMultipleSelection = true
         outlineView.dataSource = self
         outlineView.delegate = self
+        outlineView.target = self
+        outlineView.action = #selector(rowClicked(_:))
         outlineView.registerForDraggedTypes([.fileURL, .sidebarThread, .sidebarProject])
         outlineView.setDraggingSourceOperationMask(.copy, forLocal: false)
         outlineView.setDraggingSourceOperationMask(.move, forLocal: true)
@@ -120,40 +133,30 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: DS.Space.s4, left: 0, bottom: DS.Space.s8, right: 0)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.contentView.postsBoundsChangedNotifications = true
+        DSScroller.install(on: scrollView)
 
-        filterField.placeholderString = "Filter threads"
-        filterField.controlSize = .small
-        filterField.font = DS.Typography.current.caption
+        filterBox.shortcutHint = "⌥⌘F"
+        filterBox.showsHalo = false
         filterField.delegate = self
-        filterField.sendsSearchStringImmediately = true
-        filterField.target = self
-        filterField.action = #selector(filterChanged(_:))
         filterField.setAccessibilityLabel("Filter threads")
-        filterField.toolTip = "Filter threads by title or project (⌥⌘F)"
-        filterField.translatesAutoresizingMaskIntoConstraints = false
+        filterBox.toolTip = "Filter threads by title or project (⌥⌘F)"
+        filterBox.translatesAutoresizingMaskIntoConstraints = false
 
-        optionsButton.isBordered = false
-        optionsButton.bezelStyle = .accessoryBarAction
-        optionsButton.imagePosition = .imageOnly
-        optionsButton.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Sidebar options")
-        optionsButton.contentTintColor = DS.Palette.secondaryText
+        optionsButton.isMuted = true
         optionsButton.target = self
         optionsButton.action = #selector(showOptions(_:))
         optionsButton.toolTip = "Group threads, auto-settle"
-        optionsButton.setAccessibilityLabel("Sidebar options")
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
 
-        addButton.title = "Add Project"
-        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
-        addButton.imagePosition = .imageLeading
-        addButton.isBordered = false
-        addButton.font = DS.Typography.current.caption
-        addButton.contentTintColor = DS.Palette.secondaryText
-        addButton.action = #selector(MainWindowController.addProject(_:))
+        addButton.isMuted = true
         addButton.toolTip = "Add Project… (⇧⌘O)"
-        addButton.translatesAutoresizingMaskIntoConstraints = false
+        settingsButton.toolTip = "Settings (⌘,)"
+        let footerDivider = DSDivider()
+        for view in [addButton, connectionView, settingsButton, footerDivider] as [NSView] { view.translatesAutoresizingMaskIntoConstraints = false }
 
         emptyState.translatesAutoresizingMaskIntoConstraints = false
         emptyState.isHidden = true
@@ -164,29 +167,42 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
         let container = SidebarDropView()
         container.onDrop = { [weak self] urls in self?.addProjects(urls) ?? false }
-        for subview in [filterField, optionsButton, scrollView, emptyState, addButton, toast, dropBadge] { container.addSubview(subview) }
+        for subview in [filterBox, optionsButton, scrollView, emptyState, footerDivider, addButton, connectionView, settingsButton, toast, dropBadge] {
+            container.addSubview(subview)
+        }
+        let inset = DS.Size.sidebarRowInset
         NSLayoutConstraint.activate([
-            filterField.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: DS.Spacing.xs),
-            filterField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: DS.Spacing.m),
-            filterField.trailingAnchor.constraint(equalTo: optionsButton.leadingAnchor, constant: -DS.Spacing.xs),
-            optionsButton.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
-            optionsButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Spacing.s),
-            optionsButton.widthAnchor.constraint(equalToConstant: 26),
-            scrollView.topAnchor.constraint(equalTo: filterField.bottomAnchor, constant: DS.Spacing.xs),
+            // The window's header bar covers the top 52 pt (traffic lights, sidebar and new-thread buttons).
+            filterBox.topAnchor.constraint(equalTo: container.topAnchor, constant: DS.Size.header),
+            filterBox.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: inset),
+            filterBox.trailingAnchor.constraint(equalTo: optionsButton.leadingAnchor, constant: -DS.Space.s4),
+            filterBox.heightAnchor.constraint(equalToConstant: DS.Size.control),
+            optionsButton.centerYAnchor.constraint(equalTo: filterBox.centerYAnchor),
+            optionsButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
+            scrollView.topAnchor.constraint(equalTo: filterBox.bottomAnchor, constant: DS.Space.s8),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: addButton.topAnchor, constant: -DS.Spacing.xs),
-            addButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: DS.Spacing.l),
-            addButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
+            scrollView.bottomAnchor.constraint(equalTo: footerDivider.topAnchor),
+            footerDivider.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            footerDivider.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            footerDivider.heightAnchor.constraint(equalToConstant: DS.Border.hairline),
+            footerDivider.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Size.sidebarFooter),
+            addButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: inset),
+            addButton.centerYAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Size.sidebarFooter / 2),
+            settingsButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
+            settingsButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
+            connectionView.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -DS.Space.s6),
+            connectionView.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
+            connectionView.leadingAnchor.constraint(greaterThanOrEqualTo: addButton.trailingAnchor, constant: DS.Space.s8),
             emptyState.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             emptyState.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            emptyState.topAnchor.constraint(equalTo: filterField.bottomAnchor),
-            emptyState.bottomAnchor.constraint(equalTo: addButton.topAnchor),
-            toast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: DS.Spacing.m),
-            toast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Spacing.m),
-            toast.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
-            dropBadge.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Spacing.m),
-            dropBadge.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: DS.Spacing.l),
+            emptyState.topAnchor.constraint(equalTo: filterBox.bottomAnchor),
+            emptyState.bottomAnchor.constraint(equalTo: footerDivider.topAnchor),
+            toast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: inset),
+            toast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
+            toast.bottomAnchor.constraint(equalTo: footerDivider.topAnchor, constant: -inset),
+            dropBadge.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Space.s12),
+            dropBadge.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: DS.Space.s16),
             dropBadgeCenter,
         ])
         view = container
@@ -195,7 +211,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     override func viewDidLoad() {
         super.viewDidLoad()
         structureLoop = ObservationLoop { [weak self] in self?.updateStructure() }
-        selectionLoop = ObservationLoop { [weak self] in self?.applySelection(self?.workspace.selection) }
+        selectionLoop = ObservationLoop { [weak self] in
+            self?.applySelection(self?.workspace.selection)
+            self?.updateActiveRows()
+        }
         workspace.undo.onToastChange = { [weak self] entry in self?.showToast(entry) }
         clock = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshVisibleRows() }
@@ -285,7 +304,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         if let forcedPreview { newRoots = Self.insertingGap(into: newRoots, section: forcedPreview.section, at: forcedPreview.index) }
         emptyState.isHidden = !root.projects.isEmpty
         scrollView.isHidden = root.projects.isEmpty && root.attention.items.isEmpty
-        filterField.isHidden = root.projects.isEmpty
+        filterBox.isHidden = root.projects.isEmpty
+        optionsButton.isHidden = root.projects.isEmpty
         if newRoots != roots { apply(newRoots) }
         lastInputMilliseconds = PaletteController.milliseconds(since: start) - PaletteController.milliseconds(since: built)
         lastStructureMilliseconds = PaletteController.milliseconds(since: start)
@@ -382,7 +402,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private func refreshHeaders() {
         outlineView.enumerateAvailableRowViews { rowView, row in
             guard let item = outlineView.item(atRow: row) as? SidebarItem else { return }
-            if let cell = rowView.view(atColumn: 0) as? SidebarSectionCell { cell.configure(item.id, count: sectionCounts[item.id] ?? 0) }
+            if let cell = rowView.view(atColumn: 0) as? SidebarSectionCell {
+                cell.configure(item.id, count: sectionCounts[item.id] ?? 0, expanded: outlineView.isItemExpanded(item))
+            }
             if let cell = rowView.view(atColumn: 0) as? SidebarTextCell, item.id == .needsYouHeader {
                 cell.badge.count = sectionCounts[item.id] ?? 0
             }
@@ -715,12 +737,50 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        guard let id = (item as? SidebarItem)?.id else { return DS.Spacing.sidebarRowHeight }
+        guard let id = (item as? SidebarItem)?.id else { return DS.Size.sidebarRow }
         switch id {
-        case .needsYouHeader, .projectsHeader, .section(nil, _): return 26
-        case .section: return 20
-        default: return DS.Spacing.sidebarRowHeight
+        case .needsYouHeader: return DS.Size.sidebarRow
+        // The gap between "Needs you" and the projects (there is no "Projects" label, as in the mock).
+        case .projectsHeader: return DS.Space.s8
+        case .attention: return DS.Size.sidebarRowTwoLine
+        case .project: return DS.Size.sidebarProjectRow
+        case .section(nil, _): return DS.Size.sidebarRow
+        case .section: return DS.Size.sidebarGroupLabel
+        default: return DS.Size.sidebarRow
         }
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let row = outlineView.makeView(withIdentifier: SidebarRowBackground.identifier, owner: nil) as? SidebarRowBackground ?? {
+            let row = SidebarRowBackground()
+            row.identifier = SidebarRowBackground.identifier
+            return row
+        }()
+        let id = (item as? SidebarItem)?.id
+        row.tracksHover = id.map { Self.selection(for: $0) != nil } ?? false
+        row.updateTrackingAreas()
+        row.isActive = id != nil && id == node(for: workspace.selection)
+        return row
+    }
+
+    /// Marks the row of the displayed thread (or draft) as the active one (`rowActive`), others plain or selected.
+    func updateActiveRows() {
+        let active = node(for: workspace.selection)
+        outlineView.enumerateAvailableRowViews { rowView, row in
+            guard let rowView = rowView as? SidebarRowBackground else { return }
+            rowView.isActive = active != nil && (outlineView.item(atRow: row) as? SidebarItem)?.id == active
+        }
+    }
+
+    /// Nesting depth of a thread row below its top-level thread (child threads indent with a guide line).
+    private func threadDepth(_ id: SidebarNodeID) -> Int {
+        var depth = 0
+        var parent = parentMap[id] ?? nil
+        while let current = parent, case .thread = current {
+            depth += 1
+            parent = parentMap[current] ?? nil
+        }
+        return depth
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -730,18 +790,23 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             let cell = outlineView.makeView(withIdentifier: SidebarTextCell.headerIdentifier, owner: nil) as? SidebarTextCell
                 ?? SidebarTextCell(identifier: SidebarTextCell.headerIdentifier)
             let isNeedsYou = item.id == .needsYouHeader
-            cell.label.stringValue = isNeedsYou ? "Needs You" : "Projects"
+            cell.label.stringValue = isNeedsYou ? "Needs you" : ""
+            cell.needsLayout = true
+            cell.label.isHidden = !isNeedsYou
             cell.badge.count = isNeedsYou ? item.children.count : 0
+            cell.setAccessibilityElement(isNeedsYou)
             return cell
         case .section:
             let cell = outlineView.makeView(withIdentifier: SidebarSectionCell.identifier, owner: nil) as? SidebarSectionCell
                 ?? SidebarSectionCell()
-            cell.configure(item.id, count: item.children.count { $0.id != .dropGap })
+            cell.configure(item.id, count: item.children.count { $0.id != .dropGap }, expanded: outlineView.isItemExpanded(item))
             return cell
         case .emptyProject, .noResults:
             let cell = outlineView.makeView(withIdentifier: SidebarTextCell.placeholderIdentifier, owner: nil) as? SidebarTextCell
                 ?? SidebarTextCell(identifier: SidebarTextCell.placeholderIdentifier)
             cell.label.stringValue = item.id == .noResults ? "No threads match “\(workspace.filterText)”" : "No threads yet"
+            cell.labelX = item.id == .noResults ? SidebarMetrics.glyphX : SidebarMetrics.titleX
+            cell.needsLayout = true
             return cell
         case .dropGap:
             let cell = outlineView.makeView(withIdentifier: DropGapCell.identifier, owner: nil) as? DropGapCell ?? DropGapCell()
@@ -752,6 +817,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
                 cell.identifier = ProjectCell.identifier
                 cell.accessoryButton.target = self
                 cell.accessoryButton.action = #selector(newThreadFromRowButton(_:))
+                cell.disclosure.target = self
+                cell.disclosure.action = #selector(disclosureClicked(_:))
                 return cell
             }()
             cell.bind(directory, workspace: workspace)
@@ -761,20 +828,46 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .thread(let id), .attention(let id):
             let isAttention = { if case .attention = item.id { true } else { false } }()
             let showsProject = isAttention || workspace.grouping == .byState
-            let identifier = showsProject ? ThreadCell.attentionIdentifier : ThreadCell.identifier
+            let identifier = isAttention ? ThreadCell.attentionIdentifier : ThreadCell.identifier
             let cell = outlineView.makeView(withIdentifier: identifier, owner: nil) as? ThreadCell ?? {
                 let cell = ThreadCell(frame: .zero)
                 cell.identifier = identifier
                 cell.title.delegate = self
+                cell.disclosure.target = self
+                cell.disclosure.action = #selector(disclosureClicked(_:))
                 return cell
             }()
-            cell.bind(id, workspace: workspace, showsProject: showsProject)
+            cell.depth = isAttention ? 0 : threadDepth(item.id)
+            cell.recedes = { if case .section(_, .settled) = parentMap[item.id] ?? nil { true } else { false } }()
+            cell.hasChildren = !item.children.isEmpty
+            cell.isExpanded = outlineView.isItemExpanded(item)
+            cell.bind(id, workspace: workspace, showsProject: showsProject, twoLine: isAttention)
             return cell
         }
     }
 
+    /// A click on a group or section label toggles it (they are not selectable).
+    @objc private func rowClicked(_ sender: Any?) {
+        let row = outlineView.clickedRow
+        guard row >= 0, let item = outlineView.item(atRow: row) as? SidebarItem else { return }
+        switch item.id {
+        case .needsYouHeader, .section:
+            if outlineView.isItemExpanded(item) { outlineView.collapseItem(item) } else { outlineView.expandItem(item) }
+        default:
+            break
+        }
+    }
+
+    /// The chevron of a project or of a thread with nested children.
+    @objc private func disclosureClicked(_ sender: NSView) {
+        let row = outlineView.row(for: sender)
+        guard row >= 0, let item = outlineView.item(atRow: row) else { return }
+        if outlineView.isItemExpanded(item) { outlineView.collapseItem(item) } else { outlineView.expandItem(item) }
+    }
+
     func outlineViewSelectionDidChange(_ notification: Notification) {
         updateSelectedProjectAccessory()
+        defer { updateActiveRows() }
         guard !isApplyingSelection, !isApplyingStructure, let node = selectedNode, let selection = Self.selection(for: node) else { return }
         let signpost = ShellSignposts.sidebar.beginInterval("selectThread")
         workspace.select(selection)
@@ -787,8 +880,13 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private func expansionChanged(_ notification: Notification, collapsed: Bool) {
         guard let item = notification.userInfo?["NSObject"] as? SidebarItem else { return }
         let row = outlineView.row(forItem: item)
-        if row >= 0, let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ProjectCell {
-            cell.isCollapsed = collapsed
+        if row >= 0 {
+            switch outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) {
+            case let cell as ProjectCell: cell.isCollapsed = collapsed
+            case let cell as ThreadCell: cell.isExpanded = !collapsed
+            case let cell as SidebarSectionCell: cell.isExpanded = !collapsed
+            default: break
+            }
         }
         guard !isApplyingStructure, workspace.filterText.isEmpty else { return }
         switch item.id {
@@ -812,9 +910,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     // MARK: - Filter
 
-    @objc private func filterChanged(_ sender: NSSearchField) {
-        guard workspace.filterText != sender.stringValue else { return }
-        workspace.filterText = sender.stringValue
+    func controlTextDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextField) === filterField else { return }
+        guard workspace.filterText != filterField.stringValue else { return }
+        workspace.filterText = filterField.stringValue
     }
 
     /// Focuses the filter field (⌥⌘F).
@@ -856,7 +955,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         return false
     }
 
-    @objc private func showOptions(_ sender: NSButton) {
+    @objc private func showOptions(_ sender: NSView) {
         makeOptionsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }
 
@@ -891,7 +990,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         }
     }
 
-    @objc private func newThreadFromRowButton(_ sender: NSButton) {
+    @objc private func newThreadFromRowButton(_ sender: NSView) {
         let row = outlineView.row(for: sender)
         guard row >= 0, let item = outlineView.item(atRow: row) as? SidebarItem, case .project(let directory) = item.id else { return }
         delegate?.sidebar(self, perform: .newThread, on: .project(directory: directory, isPinned: false), threads: [])
@@ -1194,6 +1293,16 @@ final class SidebarOutlineView: NSOutlineView {
         onHoverChange?(old, row)
     }
 
+    /// No native disclosure triangles: projects and parent threads draw their own chevrons, sections toggle on click.
+    override func frameOfOutlineCell(atRow row: Int) -> NSRect { .zero }
+
+    /// Cells span the full row (they indent themselves).
+    override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
+        let frame = super.frameOfCell(atColumn: column, row: row)
+        let rowRect = rect(ofRow: row)
+        return NSRect(x: rowRect.minX, y: frame.minY, width: rowRect.width, height: frame.height)
+    }
+
     override func keyDown(with event: NSEvent) {
         let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
         if plain {
@@ -1207,14 +1316,27 @@ final class SidebarOutlineView: NSOutlineView {
     }
 }
 
-/// The sidebar's background view; accepts folder drops on the empty state (the outline view handles its own).
+/// The sidebar's background view (solid `sidebar` token); accepts folder drops on the empty state (the outline view
+/// handles its own).
 @MainActor
 final class SidebarDropView: NSView {
     var onDrop: (([URL]) -> Bool)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         registerForDraggedTypes([.fileURL])
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        DS.Color.sidebar.setFill()
+        dirtyRect.fill()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     @available(*, unavailable)

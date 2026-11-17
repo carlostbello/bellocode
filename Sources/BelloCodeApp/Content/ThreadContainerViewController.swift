@@ -45,7 +45,7 @@ final class ThreadContainerViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func loadView() {
-        view = NSView()
+        view = PanelBackgroundView()
         view.setAccessibilityLabel("Thread")
     }
 
@@ -105,7 +105,8 @@ final class ThreadContainerViewController: NSViewController {
         newContent.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(newContent)
         NSLayoutConstraint.activate([
-            newContent.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            // The window's header bar (52 pt) sits over the top edge and shows this content's title and crumbs.
+            newContent.topAnchor.constraint(equalTo: view.topAnchor, constant: DS.Size.header),
             newContent.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             newContent.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             newContent.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -146,10 +147,7 @@ final class ThreadContainerViewController: NSViewController {
 
     private func makeThread(_ context: ThreadSurfaceContext) -> NSView {
         let container = NSView()
-        let header = makeHeader(context)
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
+        _ = makeHeader(context)
         let transcript = surfaces.transcript(context)
         self.transcript = transcript
         let transcriptView = adopt(transcript)
@@ -184,17 +182,11 @@ final class ThreadContainerViewController: NSViewController {
             banner.translatesAutoresizingMaskIntoConstraints = false
             banner.heightAnchor.constraint(equalToConstant: 0).isActive = true
         }
-        for subview in [header, separator, transcriptView, requests, banner, composerView] { container.addSubview(subview) }
+        for subview in [transcriptView, requests, banner, composerView] { container.addSubview(subview) }
         let column = DS.Spacing.readableWidth
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: container.topAnchor),
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            separator.topAnchor.constraint(equalTo: header.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             // Full width: the transcript centres its own text column (TranscriptKit), so its scroller sits at the edge.
-            transcriptView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            transcriptView.topAnchor.constraint(equalTo: container.topAnchor),
             transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
@@ -216,28 +208,26 @@ final class ThreadContainerViewController: NSViewController {
 
     private func makeDraft(_ context: ThreadSurfaceContext) -> NSView {
         let container = NSView()
-        let header = makeHeader(context)
+        _ = makeHeader(context)
         let heading = NSTextField(labelWithString: "What should we work on in \(context.projectName)?")
-        heading.font = .systemFont(ofSize: DS.Typography.current.baseSize + 9, weight: .semibold)
+        heading.font = .systemFont(ofSize: DS.Typography.current.baseSize + 7, weight: .semibold)
+        heading.textColor = DS.Color.text
         heading.alignment = .center
         heading.lineBreakMode = .byTruncatingTail
         heading.translatesAutoresizingMaskIntoConstraints = false
         // The header and the composer's context line already show where the agent acts; no third path here.
         let path = NSTextField(labelWithString: "Free built-in models work without signing in. Choose another with ⇧⌘M.")
-        path.font = DS.Typography.current.caption
-        path.textColor = DS.Palette.secondaryText
+        path.font = DS.TextRole.label.font
+        path.textColor = DS.Color.text3
         path.alignment = .center
         path.translatesAutoresizingMaskIntoConstraints = false
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
-        for subview in [header, heading, path, composerView] { container.addSubview(subview) }
+        for subview in [heading, path, composerView] { container.addSubview(subview) }
         let width = composerView.widthAnchor.constraint(equalToConstant: DS.Spacing.readableWidth)
         width.priority = Self.columnPreference
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: container.topAnchor),
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             heading.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             heading.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -2 * DS.Spacing.xl),
             path.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: DS.Spacing.xs),

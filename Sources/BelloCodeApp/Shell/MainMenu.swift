@@ -110,16 +110,13 @@ enum MainMenu {
 
     private static func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
-        menu.addItem(
-            title: "Show Toolbar", action: #selector(NSWindow.toggleToolbarShown(_:)), key: "t", modifiers: [.command, .option])
-        menu.addItem(title: "Customize Toolbar…", action: #selector(NSWindow.runToolbarCustomizationPalette(_:)), key: "")
-        menu.addItem(.separator())
-        // AppKit retitles these to Show/Hide Sidebar and Show/Hide Inspector as the state changes.
+        // The window retitles these to Show/Hide Sidebar and Show/Hide Right Panel as the state changes. (No toolbar
+        // items: the header bar is drawn by the window, so there is nothing to show, hide or customise.)
         menu.addItem(
             title: "Show Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), key: "s",
             modifiers: [.command, .control])
         menu.addItem(
-            title: "Show Inspector", action: #selector(NSSplitViewController.toggleInspector(_:)), key: "i",
+            title: "Show Right Panel", action: #selector(NSSplitViewController.toggleInspector(_:)), key: "i",
             modifiers: [.command, .option])
         menu.add(.toggleTerminal)
         menu.addItem(.separator())

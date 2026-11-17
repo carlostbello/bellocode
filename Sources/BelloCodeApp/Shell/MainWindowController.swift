@@ -7,14 +7,15 @@ import Engine
 import TerminalKit
 import UniformTypeIdentifiers
 
-/// The main window: unified toolbar over sidebar | thread (+ terminal drawer) | right panel.
+/// The main window: a transparent title bar and a 52 pt header bar (`ShellHeaderBar`) over
+/// sidebar | thread (+ terminal drawer) | right panel.
 ///
-/// It is the responder-chain endpoint for every `ShellActions` command (menu and toolbar items have a nil target),
-/// validates them through `CommandContext`, keeps the window title/subtitle on project / thread / status, shows the
-/// connection state unobtrusively, and restores layout and selection.
+/// It is the responder-chain endpoint for every `ShellActions` command (menu items and header buttons have a nil
+/// target), validates them through `CommandContext`, keeps the window title/subtitle on project / thread / status,
+/// shows the connection state in the sidebar's footer, and restores layout and selection.
 @MainActor
-final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation,
-    NSToolbarItemValidation, SidebarDelegate, ShellActions, TerminalShell, BrowserShell
+final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, SidebarDelegate,
+    ShellActions, TerminalShell, BrowserShell
 {
     @MainActor
     struct Configuration {
@@ -26,22 +27,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     private static let toolbarIdentifier = "BelloCodeMainToolbar"
-    private static let newThreadItem = NSToolbarItem.Identifier("newThread")
-    private static let connectionItem = NSToolbarItem.Identifier("connection")
-    private static let terminalItem = NSToolbarItem.Identifier("toggleTerminal")
-    /// M6-A: the container runtime's state (glyph + text; Settings ▸ Containers on click).
-    private static let containersItem = NSToolbarItem.Identifier("containers")
 
     let workspace: WorkspaceController
     let sidebar: SidebarViewController
     let container: ThreadContainerViewController
     let split: MainSplitViewController
     let rightPanel: RightPanelViewController
+    /// The window's content root: the split view under the header bar.
+    let root: ShellRootViewController
+    var header: ShellHeaderBar { root.header }
     /// ⌘K / ⌘P / ⇧⌘F (built with the window so the first opening is instant).
     let palette = PaletteController()
     private let configuration: Configuration
     private var titleLoop: ObservationLoop?
-    private let connectionView = ConnectionStatusView()
+    private var connectionView: ConnectionStatusView { sidebar.connectionView }
     private var isRestoringLayout = false
     /// The window's terminals (drawer and "Terminal" tab), found through the drawer's host controller.
     private(set) var terminals: TerminalSurfaces?
@@ -66,6 +65,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             thread: container, drawer: surfaces.terminalDrawer(), autosaveName: suffix.map { "BelloCodeContentSplit\($0)" })
         split = MainSplitViewController(
             sidebar: sidebar, content: content, panel: rightPanel, autosaveName: suffix.map { "BelloCodeMainSplit\($0)" })
+        root = ShellRootViewController(split: split)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
@@ -77,10 +77,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.titleVisibility = .hidden
         window.minSize = NSSize(width: 760, height: 460)
         window.isReleasedWhenClosed = false
+        // A transparent title bar over full-size content: the header bar is the title bar. The toolbar stays empty;
+        // it only gives the title bar its unified height, so the traffic lights sit centred in the top 52 pt.
+        window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
-        window.titlebarSeparatorStyle = .automatic
+        window.titlebarSeparatorStyle = .none
         window.tabbingMode = .disallowed
-        window.contentViewController = split
+        window.backgroundColor = DS.Color.canvas
+        window.contentViewController = root
         window.setContentSize(NSSize(width: 1280, height: 800))
         window.center()
         if let suffix { window.setFrameAutosaveName("BelloCodeMainWindow\(suffix)") }
@@ -88,19 +92,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         window.delegate = self
 
         let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
-        toolbar.delegate = self
         toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = true
-        toolbar.autosavesConfiguration = suffix != nil
+        toolbar.allowsUserCustomization = false
+        toolbar.showsBaselineSeparator = false
         window.toolbar = toolbar
+        configureHeader()
 
         sidebar.delegate = self
         rightPanel.onTabChange = { [weak self] id in
             self?.workspace.updateLayout(rightPanelTab: id)
             self?.recordThreadPanel()
         }
-        split.onLayoutChange = { [weak self] in self?.recordLayout() }
+        split.onLayoutChange = { [weak self] in
+            self?.recordLayout()
+            self?.root.layoutHeader()
+            self?.updateHeaderToggles()
+        }
         container.onDisplay = { [weak self] context in
+            self?.header.setTitleView(self?.container.header)
             self?.updateTitle()
             self?.terminals?.display(context)
             self?.applyThreadPanel()
@@ -114,7 +123,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
         terminals?.bind(engine: workspace.engine, shell: self)
-        content.onLayoutChange = { [weak self] in self?.terminals?.recordDrawerState() }
+        content.onLayoutChange = { [weak self] in
+            self?.terminals?.recordDrawerState()
+            self?.updateHeaderToggles()
+        }
         changes = surfaces.changes
         changes?.bind(engine: workspace.engine, shell: self)
         browser = surfaces.browser
@@ -176,12 +188,70 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         container.context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
     }
 
+    // MARK: - Header bar
+
+    private func configureHeader() {
+        let runtime = RuntimeStatusButton(service: workspace.engine.environments)
+        header.runtimeView = runtime
+        let menu = NSMenu(title: "Open")
+        menu.addItem(withTitle: ShellCommand.revealInFinder.title, action: ShellCommand.revealInFinder.selector, keyEquivalent: "")
+        let terminal = menu.addItem(withTitle: "Open in Terminal", action: #selector(openProjectInTerminal(_:)), keyEquivalent: "")
+        terminal.target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: ShellCommand.copyPath.title, action: ShellCommand.copyPath.selector, keyEquivalent: "")
+        header.openButton.popUpMenu = menu
+        updateHeaderToggles()
+    }
+
+    /// The toggles' on state follows the panels (any route: menu, shortcut, divider drag).
+    func updateHeaderToggles() {
+        header.terminalToggle.isSelected = !split.contentSplit.drawerItem.isCollapsed
+        header.panelToggle.isSelected = !split.panelItem.isCollapsed
+        header.sidebarButton.setAccessibilityLabel(split.sidebarItem.isCollapsed ? "Show Sidebar" : "Hide Sidebar")
+    }
+
+    /// "Open" and "Commit n" act on the displayed thread's directory; hidden without one, Commit disabled outside a
+    /// repository. Observed (called from the title loop), so the count follows the repository's status.
+    private func updateHeaderActions() {
+        guard let context = container.context else {
+            header.openButton.isHidden = true
+            header.commitButton.isHidden = true
+            header.needsLayout = true
+            return
+        }
+        let repository = workspace.engine.git.repository(for: context.directory.isEmpty ? context.projectDirectory : context.directory)
+        let changed = repository.status?.files.count ?? 0
+        let isRepository = repository.phase != .notRepository
+        let hint = changed > 0 ? "\(changed)" : nil
+        if header.commitButton.shortcutHint != hint { header.commitButton.shortcutHint = hint }
+        header.commitButton.accessibilityTitle = changed == 1 ? "Commit, 1 changed file" : "Commit, \(changed) changed files"
+        header.commitButton.isEnabled = isRepository
+        let hiddenChanged = header.openButton.isHidden || header.commitButton.isHidden != !isRepository
+        header.openButton.isHidden = false
+        header.commitButton.isHidden = !isRepository
+        if hiddenChanged || hint != nil { header.needsLayout = true }
+    }
+
+    @objc func openProjectInTerminal(_ sender: Any?) {
+        guard let directory = currentProjectDirectory, !directory.isEmpty,
+              let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+        else { return NSSound.beep() }
+        NSWorkspace.shared.open([URL(fileURLWithPath: directory)], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Header and menu route for Show/Hide Sidebar when no view in the split has focus.
+    @objc func toggleSidebar(_ sender: Any?) { split.toggleSidebar(sender) }
+
+    /// Header and menu route for Show/Hide Right Panel when no view in the split has focus.
+    @objc func toggleInspector(_ sender: Any?) { split.toggleInspector(sender) }
+
     // MARK: - Title and connection
 
     private func updateTitle() {
         guard let window else { return }
         let root = workspace.engine.root
         connectionView.update(root.connection, source: configuration.sourceLabel, storage: workspace.engine.storageNotice)
+        updateHeaderActions()
         var title = "BelloCode"
         var subtitle = ""
         if let context = container.context {
@@ -270,6 +340,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleSidebar(_:)) || menuItem.action == #selector(toggleInspector(_:)) {
+            return split.validateUserInterfaceItem(menuItem)
+        }
         guard let action = menuItem.action, let command = ShellCommand.command(for: action) else { return true }
         let context = commandContext()
         // Snooze presets keep their submenu titles.
@@ -278,11 +351,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
         if let checked = command.isChecked(in: context) { menuItem.state = checked ? .on : .off }
         return context.isEnabled(command)
-    }
-
-    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
-        guard let action = item.action, let command = ShellCommand.command(for: action) else { return true }
-        return commandContext().isEnabled(command)
     }
 
     // MARK: - SidebarDelegate
@@ -662,97 +730,87 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     func presentPalette(_ mode: PaletteMode) {
         palette.show(mode, in: self)
     }
-
-    // MARK: - NSToolbarDelegate
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [
-            .toggleSidebar, .sidebarTrackingSeparator, Self.newThreadItem, .flexibleSpace, Self.containersItem, Self.connectionItem,
-            Self.terminalItem, .inspectorTrackingSeparator, .toggleInspector,
-        ]
-    }
-
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [.space]
-    }
-
-    func toolbar(
-        _ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool
-    ) -> NSToolbarItem? {
-        switch itemIdentifier {
-        case Self.newThreadItem:
-            return ToolbarButton.make(
-                itemIdentifier, label: "New Thread", symbolName: "square.and.pencil", action: ShellCommand.newThread.selector,
-                toolTip: "New Thread (⌘N)")
-        case Self.terminalItem:
-            return ToolbarButton.make(
-                itemIdentifier, label: "Terminal", symbolName: "terminal", action: ShellCommand.toggleTerminal.selector,
-                toolTip: "Show or Hide Terminal (⌃`)")
-        case Self.containersItem:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Containers"
-            item.paletteLabel = "Containers"
-            item.view = RuntimeStatusButton(service: workspace.engine.environments)
-            item.visibilityPriority = .low
-            return item
-        case Self.connectionItem:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Connection"
-            item.paletteLabel = "Connection"
-            item.view = connectionView
-            item.visibilityPriority = .low
-            return item
-        default:
-            return nil
-        }
-    }
 }
 
-/// "● Connected" in the toolbar: glyph + text, secondary colour; never blanks content (content stays visible in
-/// every state). Offline shows the reason in the tooltip.
+/// "● Connected" in the sidebar's footer (visual-language.md §6 "Sidebar"): a 6 pt dot + the state's word in `label
+/// text2`; never colour alone, never blanks content (content stays visible in every state). Offline and storage
+/// problems use a glyph in the warning tone; the reason is in the tooltip and the accessibility label.
 @MainActor
-final class ConnectionStatusView: NSStackView {
-    private let icon = NSImageView()
-    private let label = NSTextField(labelWithString: "")
+final class ConnectionStatusView: NSView {
+    private(set) var text = ""
+    private var tone: DS.Tone = .neutral
+    private var symbolName: String?
 
-    init() {
-        super.init(frame: .zero)
-        label.font = DS.Typography.current.caption
-        label.textColor = DS.Palette.secondaryText
-        spacing = DS.Spacing.xs
-        addArrangedSubview(icon)
-        addArrangedSubview(label)
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setContentHuggingPriority(.required, for: .horizontal)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    override var isFlipped: Bool { true }
+
+    private var font: NSFont { DS.TextRole.label.font }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil(14 + DSDraw.width(of: text, font: font)), height: DS.Size.controlSmall)
+    }
+
     /// `storage`: a local-saving problem (`Engine.storageNotice`); it takes precedence, as unsaved drafts are at risk.
     func update(_ status: ConnectionStatus, source: String?, storage: (label: String, detail: String)? = nil) {
+        let newText: String
         if let storage {
-            icon.image = NSImage(systemSymbolName: "externaldrive.badge.exclamationmark", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold).applying(.init(paletteColors: [DS.Palette.attention])))
-            let text = [source, storage.label, status.label].compactMap { $0 }.joined(separator: " · ")
-            label.stringValue = text
+            symbolName = "externaldrive.badge.exclamationmark"
+            tone = .warning
+            newText = [storage.label, status.label, source].compactMap { $0 }.joined(separator: " · ")
             toolTip = storage.detail
-            setAccessibilityLabel("Connection: \(text). \(storage.detail)")
-            return
+            setAccessibilityLabel("Connection: \(newText). \(storage.detail)")
+        } else {
+            (symbolName, tone) = switch status {
+            case .live: (nil, .success)
+            case .cached: ("clock", .neutral)
+            case .connecting, .syncing: ("arrow.triangle.2.circlepath", .neutral)
+            case .offline: ("bolt.horizontal.circle", .warning)
+            case .stopped: ("stop.circle", .neutral)
+            }
+            // The state first: a long source label ("Mock (demo)") truncates, never the state.
+            newText = [status.label, source].compactMap { $0 }.joined(separator: " · ")
+            if case .offline(let reason) = status { toolTip = "Offline: \(reason). Cached content is shown." } else { toolTip = newText }
+            setAccessibilityLabel("Connection: \(newText)")
         }
-        let (symbol, tint): (String, NSColor) = switch status {
-        case .live: ("circle.fill", DS.Palette.success)
-        case .cached: ("clock", DS.Palette.neutral)
-        case .connecting, .syncing: ("arrow.triangle.2.circlepath", DS.Palette.neutral)
-        case .offline: ("bolt.horizontal.circle", DS.Palette.attention)
-        case .stopped: ("stop.circle", DS.Palette.neutral)
+        if newText != text {
+            text = newText
+            invalidateIntrinsicContentSize()
         }
-        let size: CGFloat = status == .live ? 7 : 11
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: size, weight: .semibold).applying(.init(paletteColors: [tint])))
-        let text = [source, status.label].compactMap { $0 }.joined(separator: " · ")
-        label.stringValue = text
-        if case .offline(let reason) = status { toolTip = "Offline: \(reason). Cached content is shown." } else { toolTip = text }
-        setAccessibilityLabel("Connection: \(text)")
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let colors = DS.Color.tone(tone)
+        let glyphColor = tone == .neutral ? DS.Color.text3 : (tone == .success ? colors.fill : colors.text)
+        if let symbolName, let image = DSDraw.symbol(symbolName, pointSize: DS.Size.iconPointMeta + 1) {
+            DSDraw.draw(template: image, in: NSRect(x: 0, y: 0, width: 10, height: bounds.height), color: glyphColor)
+        } else {
+            DSDraw.fill(NSRect(x: 2, y: (bounds.height - 6) / 2, width: 6, height: 6), radius: 3, color: glyphColor)
+        }
+        var rect = bounds
+        rect.origin.x = 14
+        rect.size.width -= 14
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attributed = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: DS.Color.text2, .paragraphStyle: style])
+        let height = ceil(font.ascender - font.descender + font.leading)
+        attributed.draw(with: NSRect(x: rect.minX, y: (bounds.height - height) / 2, width: rect.width, height: height), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 }
