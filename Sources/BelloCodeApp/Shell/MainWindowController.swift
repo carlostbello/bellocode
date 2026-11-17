@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 /// connection state unobtrusively, and restores layout and selection.
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation,
-    NSToolbarItemValidation, SidebarDelegate, ShellActions, TerminalShell
+    NSToolbarItemValidation, SidebarDelegate, ShellActions, TerminalShell, BrowserShell
 {
     @MainActor
     struct Configuration {
@@ -41,6 +41,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var isRestoringLayout = false
     /// The window's terminals (drawer and "Terminal" tab), found through the drawer's host controller.
     private(set) var terminals: TerminalSurfaces?
+    /// The window's built-in browser ("Browser" tab).
+    private(set) var browser: BrowserSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -88,11 +90,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         container.onDisplay = { [weak self] context in
             self?.updateTitle()
             self?.terminals?.display(context)
+            self?.browser?.display(context)
         }
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
         terminals?.bind(engine: workspace.engine, shell: self)
         content.onLayoutChange = { [weak self] in self?.terminals?.recordDrawerState() }
+        browser = surfaces.browser
+        browser?.bind(engine: workspace.engine, shell: self)
+        terminals?.browser = browser
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -149,7 +155,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     func windowDidBecomeKey(_ notification: Notification) { container.windowDidBecomeKey() }
 
-    func windowWillClose(_ notification: Notification) { workspace.saveNow() }
+    func windowWillClose(_ notification: Notification) {
+        workspace.saveNow()
+        if let browser { Task { await browser.close() } }
+    }
 
     /// One undo manager per window, owned by the workspace (text views share it, as AppKit intends).
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { workspace.undoManager }
@@ -362,6 +371,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func restartTerminal(_ sender: Any?) { perform(.restartTerminal) }
     @objc func moveTerminal(_ sender: Any?) { perform(.moveTerminal) }
     @objc func sendTerminalSelectionToComposer(_ sender: Any?) { perform(.sendTerminalSelection) }
+
+    // MARK: - BrowserShell
+
+    var browserComposer: ComposerViewController? { container.composerController?.composer }
+
+    func showBrowserPanel() {
+        if split.panelItem.isCollapsed {
+            split.setCollapsed(split.panelItem, false)
+            recordLayout()
+        }
+        rightPanel.select("browser")
+    }
+
+    var isBrowserPanelShown: Bool { !split.panelItem.isCollapsed && rightPanel.selectedID == "browser" }
 
     // MARK: - TerminalShell
 

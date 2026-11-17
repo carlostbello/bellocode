@@ -34,6 +34,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 controller.sizingOptions = [.preferredContentSize]
                 return controller
             },
+            SettingsPane(id: "browser", title: "Browser", symbolName: "globe") {
+                let browse = BrowseStatusModel(configDirectory: AppRuntime.applicationSupport().appending(path: "opencode/config"))
+                let controller = NSHostingController(rootView: BrowserSettingsView(settings: settings, browse: browse))
+                controller.sizingOptions = [.preferredContentSize]
+                return controller
+            },
         ]
         if let auth {
             panes.append(

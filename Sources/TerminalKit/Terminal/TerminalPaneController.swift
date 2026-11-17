@@ -39,7 +39,7 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         // OSC payloads are untrusted; one OSC is capped at 1 MiB instead of SwiftTerm's 65 MiB default.
         options.maximumOscBytes = 1 << 20
         terminalView = TerminalPaneView(frame: NSRect(x: 0, y: 0, width: 640, height: 320), font: preferences.font, options: options)
-        stream = service.makeStream(record.id, in: terminals, sink: TerminalFeedSink(sender: terminalView.feedSender))
+        stream = service.makeStream(record.id, in: terminals, sink: TerminalFeedSink(sender: terminalView.feedSender, tail: outputTail))
         super.init(nibName: nil, bundle: nil)
         terminalView.pane = self
         terminalView.terminalDelegate = self
@@ -54,7 +54,11 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    private var screenScan: Task<Void, Never>?
+    private let outputTail = OutputTail()
+
     isolated deinit {
+        screenScan?.cancel()
         observation?.cancel()
         noticeTask?.cancel()
     }
@@ -373,7 +377,17 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
 
     public func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
 
-    public func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    public func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
+        // Throttled: one look at the output's last 4 KB, 400 ms after output starts changing the screen.
+        guard workspace.delegate != nil, screenScan == nil else { return }
+        screenScan = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled else { return }
+            self.screenScan = nil
+            guard let text = self.outputTail.takeIfChanged() else { return }
+            self.workspace.delegate?.terminalWorkspace(self.workspace, screenText: text)
+        }
+    }
 }
 
 extension TerminalPaneController: TerminalFindBarDelegate {

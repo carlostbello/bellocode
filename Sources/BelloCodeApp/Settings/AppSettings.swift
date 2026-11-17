@@ -50,6 +50,10 @@ final class AppSettings {
             save(terminalPreferences.confirmsMultilinePaste, Keys.terminalConfirmPaste)
         }
     }
+    /// Settings ▸ Browser: terminal links open in the built-in browser (⇧-click opens the other one).
+    var terminalLinksOpenInBuiltInBrowser: Bool { didSet { save(terminalLinksOpenInBuiltInBrowser, Keys.terminalLinksBuiltIn) } }
+    /// Settings ▸ Browser: offer dev-server URLs seen in terminal or agent output.
+    var offersDevServers: Bool { didSet { save(offersDevServers, Keys.offersDevServers) } }
     /// Onboarding finished or skipped once; it is then offered from Settings ▸ Accounts only.
     var hasCompletedOnboarding: Bool { didSet { save(hasCompletedOnboarding, Keys.onboarding) } }
 
@@ -65,6 +69,8 @@ final class AppSettings {
         static let terminalClipboardWrites = "BelloCodeTerminalAllowsClipboardWrites"
         static let terminalOptionAsMeta = "BelloCodeTerminalOptionAsMeta"
         static let terminalConfirmPaste = "BelloCodeTerminalConfirmsMultilinePaste"
+        static let terminalLinksBuiltIn = "BelloCodeTerminalLinksOpenInBuiltInBrowser"
+        static let offersDevServers = "BelloCodeBrowserOffersDevServers"
     }
 
     /// `defaults` nil keeps everything in memory (tests and snapshots).
@@ -75,6 +81,8 @@ final class AppSettings {
         baseFontSize = min(max(size, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         appearance = defaults?.string(forKey: Keys.appearance).flatMap(Appearance.init(rawValue:)) ?? .system
         hasCompletedOnboarding = defaults?.bool(forKey: Keys.onboarding) ?? false
+        terminalLinksOpenInBuiltInBrowser = defaults?.object(forKey: Keys.terminalLinksBuiltIn) as? Bool ?? true
+        offersDevServers = defaults?.object(forKey: Keys.offersDevServers) as? Bool ?? true
         let defaultTerminal = TerminalPreferences()
         terminalPreferences = TerminalPreferences(
             fontSize: CGFloat(defaults?.object(forKey: Keys.terminalFontSize) as? Double ?? Double(defaultTerminal.fontSize)),
@@ -103,6 +111,9 @@ final class AppSettings {
         case .dark: NSAppearance(named: .darkAqua)
         }
     }
+
+    /// Settings kept in memory only (tests and snapshots): they also get ephemeral browser profiles.
+    var isEphemeral: Bool { defaults == nil }
 
     private func save(_ value: Any, _ key: String) { defaults?.set(value, forKey: key) }
 }
