@@ -7,7 +7,12 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
 - **Engine** `Git/`: `GitRunner` runs git off the main actor. Both pipes are drained, output is bounded, there is a timeout, cancellation kills the process, and git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_OPTIONAL_LOCKS=0`. The other pieces:
   - `GitStatusParser`: porcelain v2 and numstat.
   - `UnifiedPatchParser` and `HunkApplier`: a hunk applies only on an exact match at its line, or at the nearest unique match within 300 lines. A stale or ambiguous hunk throws.
-  - `WorkingCopy`: all-or-nothing writes, each checked against the bytes it was planned from, with Undo snapshots.
+  - `WorkingCopy`: all-or-nothing writes with Undo snapshots. Each file is replaced by a compare-and-swap
+    (`renamex_np` with `RENAME_SWAP`/`RENAME_EXCL`, then a comparison of the bytes swapped out), so an edit saved after
+    the preflight check is never overwritten: the revert fails with the file left as the other writer saved it. Rollback
+    and Undo use the same check and restore exact bytes and permissions or refuse. Limit: a writer that keeps the old
+    file open and writes into it in the microseconds between the swap and the comparison cannot be serialized without
+    its cooperation.
   - `GitRepository`: status, branches, commits, diffs, stage, commit, push, worktree list and the GitHub compare URL.
   - `WorktreeService`: create, with APFS `clonefile` copies and a setup script; remove; restore.
   - `GitService` (`engine.git`): bounded per-directory `GitRepositoryModel`s with FSEvents watching (250 ms debounce, coalesced refreshes, generation checks), workspace preferences (`app_preference`, so no migration) and turn revert.
@@ -32,7 +37,8 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
 
 ## Behaviour
 - **Scopes**: This Turn (pick any turn), Branch vs base, Uncommitted (HEAD → working tree, with per-file staged and unstaged checkboxes), Commit (newest 100).
-- **Revert**: menu titles state the scope ("Discard Uncommitted Changes to X", "Revert This Turn’s Changes to X"). Revert hunk, file or turn apply at once with Undo (toast and ⌘Z). The only confirmations are removing a worktree with uncommitted files, and turn revert when files changed after the turn.
+- **Revert**: menu titles state the scope ("Discard Uncommitted Changes to X", "Revert This Turn’s Changes to X"). Revert hunk, file or turn apply at once with Undo (toast and ⌘Z). The only confirmations are removing a worktree that holds files of its own, and turn revert when files changed after the turn.
+- **Removing a worktree**: "clean" means no uncommitted, untracked *or ignored* files (`WorktreeService.contents`; ignored folders count once). A clean worktree is removed at once with Undo. Otherwise the confirmation names the counts and up to five paths (`.env`, `build/`); on confirmation those files are moved to the Trash in a folder named after the worktree (`RemovedWorktree.heldContents`), and Undo re-checks out the branch and moves them back byte for byte (staged changes come back unstaged). If the Trash was emptied meanwhile, Undo restores the checkout and says the files are gone. Redo repeats the confirmed removal.
 - **Commands** (Changes menu): Show Changes ⇧⌘D, Next/Previous Change ⌃⌘↓/↑, Next/Previous File ⌃⌘→/←, Add Review Comment ⇧⌘K, Open in Editor ⌘O, Choose Workspace ⇧⌘E, Choose Branch ⇧⌘B. Revert Hunk/File/Turn, Commit, Push, Open Pull Request, Side-by-Side, Ignore Whitespace, Wrap Lines and Remove Worktree have no shortcut.
 - **Keys in a focused diff**: n/j and p/k move between hunks, ]/[ between files, c comments, ←/→ scroll long lines, ⌘F/⌘G/⌘E find, ⌘C copies, Escape closes find.
 - **Review comments**: ComposerKit has no review-comment chip, so a comment becomes a named text attachment chip ("Review path:12–14.md") with the quoted lines.
@@ -75,7 +81,16 @@ Other measurements:
 - **States**: pass by test or snapshot for empty (per scope), loading, stale ("Updating…", content kept), offline or failed (message plus last content), not a repository, binary, image, large file, preparing a worktree, and failure.
 - **Speed**: rows are built off the main actor (16–51 ms); a cached model shows at once when switching threads.
 - **Keyboard**: every action has a menu item; the pickers work by keyboard; driven programmatically only.
-- **Accessibility**: statuses are a letter plus a word (+/− markers, "Added", "Staged"), and accessibility rows exist. VoiceOver itself is unverified.
+- **Accessibility**: statuses are a letter plus a word (+/− markers, "Added", "Staged"). Every row of the diff is a
+  virtual accessibility element (`DiffContentView+Accessibility.swift`), not only the drawn ones: the list reports all
+  rows through the ranged children API (count, index range, index of child), lists every row directly for documents up
+  to 2,048 rows and the rows around the viewport beyond that, and makes elements on demand (bounded cache of 4,096,
+  dropped on each rebuild). Labels give file headers (path, status, counts), change headers ("Change 3: @@ …"), and
+  lines (added/removed/unchanged, line number, text; old and new in split). Focusing an element scrolls it into view.
+  Drawn controls are actions: file header press toggles it; gap press shows 20 more lines, with a "Show All Lines"
+  action; "Revert Hunk" on change headers of revertable files; "Add Comment" on lines. After an action, the new state
+  is announced once and focus moves to the element for the acted-on row. Tested through the accessibility API in
+  process; VoiceOver itself (rotor, VO-arrow traversal through the ranged API, speech) is unverified.
 - **Artifacts and safety**: pass. Hunk revert after a manual edit fails explicitly (test); turn revert keeps or explicitly replaces later edits; Undo restores exact bytes.
 - **Persistence**: diff options and workspace defaults persist. The panel's scope is not restored after relaunch.
 

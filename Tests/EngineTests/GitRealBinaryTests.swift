@@ -60,6 +60,7 @@ struct GitRealBinaryTests {
         // Worktrees: one created with git is adopted after a refresh; a session there belongs to the project.
         let projectID = try await client.location(directory: repo.path).project.id
         let service = GitService(client: { client }, store: nil, runner: repo.runner)
+        service.worktrees = WorktreeService.holding(in: repo)
         let created = try await service.createWorktree(
             WorktreeCreation(projectDirectory: repo.path, branch: "bellocode/real", base: "main", parentDirectory: repo.base.appending(path: "wt").path),
             projectID: ProjectID(projectID))

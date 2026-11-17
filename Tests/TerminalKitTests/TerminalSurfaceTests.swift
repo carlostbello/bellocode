@@ -216,7 +216,8 @@ struct TerminalSurfaceTests {
         }()
         // The mock shell marks its prompt with OSC 133 A/B and has bracketed paste off.
         try await waitFor("prompt") { fixture.screen(record.id).contains("$ ") }
-        try await Task.sleep(for: .milliseconds(50))
+        // Barrier: the emulator's OSC observer has seen the prompt mark (no fixed sleep; review m3).
+        try await waitFor("OSC 133 prompt") { pane.prompt.atPrompt == true }
         #expect(pane.shouldConfirmPaste("one\ntwo"))
         #expect(!pane.shouldConfirmPaste("one line"))
         #expect(!pane.shouldConfirmPaste("one line\n"), "a single line with its newline runs one command, as typed")
@@ -224,11 +225,12 @@ struct TerminalSurfaceTests {
         try await waitFor("bracketed paste on") { pane.terminalView.bracketedPasteMode }
         #expect(!pane.shouldConfirmPaste("one\ntwo"), "bracketed paste is safe")
         await fixture.server.writeToPTY(record.id, "\u{1B}[?2004l\u{1B}]133;C\u{7}")
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitFor("bracketed paste off") { !pane.terminalView.bracketedPasteMode }
+        try await waitFor("OSC 133 command running") { pane.prompt.atPrompt == false }
         #expect(!pane.shouldConfirmPaste("one\ntwo"), "a running program gets its paste as is")
         fixture.workspace.preferences.confirmsMultilinePaste = false
         await fixture.server.writeToPTY(record.id, "\u{1B}]133;A\u{7}")
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitFor("OSC 133 prompt again") { pane.prompt.atPrompt == true }
         #expect(!pane.shouldConfirmPaste("one\ntwo"), "the setting turns it off")
         await fixture.stop()
     }

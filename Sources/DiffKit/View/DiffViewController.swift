@@ -132,6 +132,7 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         content.onToggleFile = { [weak self] index in self?.toggleFile(index) }
         content.onExpandGap = { [weak self] row, all in self?.expand(row, all: all) }
         content.onRevertHunk = { [weak self] file, hunk in self?.requestRevert(file: file, hunk: hunk) }
+        content.onComment = { [weak self] in self?.beginComment() }
         content.onSelectionChange = { [weak self] in self?.view.window?.toolbar?.validateVisibleItems() }
         content.contextMenuProvider = { [weak self] row, _ in self?.contextMenu(row: row) }
         content.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }

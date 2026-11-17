@@ -29,8 +29,9 @@ final class WorkspaceController {
     private(set) var selection: ShellSelection?
     /// Threads marked unread by the user (local).
     private(set) var manualUnread: Set<SessionID> = []
-    /// Threads deleted in the last few seconds: hidden now, deleted on the server when their Undo window ends.
-    var hiddenThreads: Set<SessionID> = []
+    /// Threads deleted in the last few seconds: hidden now, deleted on the server when their Undo window ends. Shared
+    /// by every window of the engine (`PendingThreadDeletions`, observed).
+    var hiddenThreads: Set<SessionID> { deletions.hidden }
     /// How the sidebar groups threads (restored).
     private(set) var grouping: SidebarGrouping = .byProject
     /// The sidebar filter (not restored: a relaunch shows everything).
@@ -40,7 +41,10 @@ final class WorkspaceController {
     @ObservationIgnored var forwardStack: [ShellSelection] = []
     /// Threads that left the window (archived, deleted, settled or snoozed while shown), most recent last.
     @ObservationIgnored var closedThreads: [SessionID] = []
-    @ObservationIgnored var pendingDeletes: [SessionID: DeferredDelete] = [:]
+    /// App-level deferred deletes (one per engine, shared by its windows).
+    @ObservationIgnored let deletions: PendingThreadDeletions
+    /// Threads this window left because they were deleted, with where it went instead (restored on Undo).
+    @ObservationIgnored var leftForDeletion: [SessionID: ShellSelection?] = [:]
     /// The next sidebar structure change comes from a user action (pin, settle, snooze from a menu) and may animate
     /// the rows it moves. Drops and engine updates never animate.
     @ObservationIgnored var animatesNextStructureChange = false
@@ -57,9 +61,10 @@ final class WorkspaceController {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var isClosed = false
 
-    init(engine: Engine, stateStore: ShellStateStore) {
+    init(engine: Engine, stateStore: ShellStateStore, deletions: PendingThreadDeletions? = nil) {
         self.engine = engine
         self.stateStore = stateStore
+        self.deletions = deletions ?? .shared(for: engine)
         let loaded = stateStore.load()
         state = loaded
         selection = loaded.selection
@@ -69,6 +74,7 @@ final class WorkspaceController {
         manager.levelsOfUndo = 100
         undoManager = manager
         undo = UndoCoordinator(undoManager: { manager })
+        self.deletions.register(self)
     }
 
     // MARK: - Selection
@@ -400,10 +406,11 @@ final class WorkspaceController {
         stateStore.save(state)
     }
 
-    /// Saves state, carries out deletes still in their Undo window, and closes every open thread model.
+    /// Saves state and closes every open thread model. Pending deletes stay pending while another window is open;
+    /// closing the last window carries them out (`PendingThreadDeletions.unregister`).
     func close() {
         guard !isClosed else { return }
-        commitPendingDeletes()
+        deletions.unregister(self)
         saveNow()
         isClosed = true
         for model in openThreads.values { model.close() }

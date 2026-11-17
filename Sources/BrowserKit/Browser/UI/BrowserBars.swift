@@ -291,6 +291,15 @@ private final class DownloadChip: NSView {
         case .cancelled:
             state.stringValue = "Cancelled"
             action.isHidden = true
+        case .queued:
+            state.stringValue = "Queued"
+            action.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "Cancel Download")
+            action.action = #selector(cancel)
+            action.toolTip = "Cancel"
+        case .refused(let reason):
+            state.stringValue = "Refused"
+            state.toolTip = reason
+            action.isHidden = true
         }
         let stack = NSStackView(views: [icon, name, state, action])
         stack.spacing = DS.Spacing.xs

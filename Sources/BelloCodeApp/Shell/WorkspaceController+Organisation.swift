@@ -2,17 +2,6 @@ import AppKit
 import BelloCore
 import Engine
 
-/// A delete waiting out its Undo window. Shared by the action's apply and revert (and redo), so whichever runs last
-/// wins and the server delete happens at most once.
-@MainActor
-final class DeferredDelete {
-    let ids: [SessionID]
-    /// Weak: the undo coordinator keeps the token (and through it this box) alive.
-    weak var token: UndoToken?
-    var task: Task<Void, Never>?
-    init(ids: [SessionID]) { self.ids = ids }
-}
-
 /// A message to reveal once its thread's transcript is on screen (global search results).
 struct PendingReveal: Equatable, Sendable {
     var sessionID: SessionID
@@ -100,69 +89,18 @@ extension WorkspaceController {
 
     // MARK: - Deferred delete
 
-    /// Hides threads now and deletes them on the server when the Undo window (5 s) ends; Undo (toast or ⌘Z) within it
-    /// brings them back untouched. Closing the window or quitting carries the delete out at once.
+    /// Hides threads now (in every window) and deletes them on the server when the Undo window (5 s) ends; Undo (toast
+    /// or ⌘Z, in any window) within it brings them back untouched. Closing the last window or quitting carries the
+    /// delete out at once. See `PendingThreadDeletions`.
     func delete(_ id: SessionID) { delete([id]) }
 
     func delete(_ ids: [SessionID]) {
-        let ids = ids.filter { !hiddenThreads.contains($0) }
-        guard !ids.isEmpty else { return }
-        let selected = state.selection?.threadID.flatMap { ids.contains($0) ? $0 : nil }
-        let fallback = selected.flatMap { neighbour(of: $0, excluding: Set(ids)) }
-        let deferred = DeferredDelete(ids: ids)
-        deferred.token = undo.perform(
-            ReversibleAction(
-                name: ids.count == 1 ? "Delete Thread" : "Delete Threads", message: "Deleted \(describe(ids))",
-                apply: { [weak self] in
-                    guard let self else { return }
-                    self.hiddenThreads.formUnion(ids)
-                    if selected != nil { self.select(fallback) }
-                    for id in ids { self.pendingDeletes[id] = deferred }
-                    deferred.task?.cancel()
-                    deferred.task = Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: Self.deleteDelay)
-                        guard !Task.isCancelled, let self else { return }
-                        self.carryOut(deferred)
-                    }
-                },
-                revert: { [weak self] in
-                    guard let self else { return }
-                    deferred.task?.cancel()
-                    deferred.task = nil
-                    self.hiddenThreads.subtract(ids)
-                    for id in ids where self.pendingDeletes[id] === deferred { self.pendingDeletes[id] = nil }
-                    if let selected { self.select(.thread(selected)) }
-                }))
-        // Keep the box alive for as long as its delete is pending.
-        for id in ids { pendingDeletes[id] = deferred }
+        deletions.delete(
+            ids, name: ids.count == 1 ? "Delete Thread" : "Delete Threads", message: "Deleted \(describe(ids))", from: self)
     }
 
-    /// Sends a pending delete to opencode; it can no longer be undone.
-    func carryOut(_ deferred: DeferredDelete) {
-        deferred.task?.cancel()
-        deferred.task = nil
-        if let token = deferred.token { undo.retire(token) }
-        for id in deferred.ids where pendingDeletes[id] === deferred {
-            pendingDeletes[id] = nil
-            closeThreadModel(id)
-            let engine = self.engine
-            Task { @MainActor [weak self] in
-                do {
-                    try await engine.deleteThread(id)
-                } catch {
-                    // The engine restored the row; show it again and say why.
-                    self?.hiddenThreads.remove(id)
-                    self?.undo.showNotice((error as? EngineError)?.userMessage ?? "The thread could not be deleted.")
-                    return
-                }
-                self?.hiddenThreads.remove(id)
-            }
-        }
-    }
-
-    func commitPendingDeletes() {
-        for box in Array(pendingDeletes.values) { carryOut(box) }
-    }
+    /// Sends every pending delete now (they can no longer be undone).
+    func commitPendingDeletes() { deletions.commitAll() }
 
     // MARK: - History and reopen
 
@@ -209,12 +147,7 @@ extension WorkspaceController {
     /// it back from a shelf.
     func reopenClosedThread() {
         while let id = closedThreads.popLast() {
-            if let deferred = pendingDeletes[id] {
-                deferred.task?.cancel()
-                if let token = deferred.token { undo.retire(token) }
-                for other in deferred.ids where pendingDeletes[other] === deferred { pendingDeletes[other] = nil }
-                hiddenThreads.subtract(deferred.ids)
-            }
+            deletions.restore(thread: id)
             guard let session = session(id) else { continue }
             if session.isArchived { run { try await self.engine.setArchived(id, false) } }
             let organisation = engine.organisation(of: id)
@@ -265,6 +198,29 @@ extension WorkspaceController {
     func panel(for id: SessionID) -> ThreadPanelState? { state.threadPanels[id.rawValue] }
 
     func closeThreadModel(_ id: SessionID) { forgetThread(id) }
+}
+
+extension WorkspaceController: PendingDeletionListener {
+    func pendingDeletionHid(_ ids: [SessionID]) {
+        guard let shown = selection?.threadID, ids.contains(shown) else { return }
+        let fallback = neighbour(of: shown, excluding: Set(ids))
+        leftForDeletion[shown] = fallback
+        select(fallback)
+    }
+
+    func pendingDeletionRestored(_ ids: [SessionID]) {
+        for id in ids {
+            guard let fallback = leftForDeletion.removeValue(forKey: id) else { continue }
+            if selection == fallback { select(.thread(id)) }
+        }
+    }
+
+    func pendingDeletionCommitted(_ ids: [SessionID]) {
+        for id in ids {
+            leftForDeletion[id] = nil
+            closeThreadModel(id)
+        }
+    }
 }
 
 extension CommandContext {
