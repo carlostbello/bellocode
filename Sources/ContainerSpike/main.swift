@@ -5,6 +5,7 @@
 //   up <dir> <config>      create/start the workspace container for <dir>; write the helper config to <config>
 //   bench <dir>            measurements (writes docs/spikes/G6/measurements.json)
 //   forward <dir> <port>   forward host loopback to an unpublished container port until killed
+//   e2e [--no-prompts]     the end-to-end run with the pinned opencode (writes docs/spikes/G6/e2e.json)
 //   cleanup                remove every container, volume, network and image labelled bellocode.spike=1
 
 import ContainerKit
@@ -37,6 +38,8 @@ do {
         print("http://127.0.0.1:\(forwarder.hostPort)")
         fflush(stdout)
         await forwarder.run()
+    case "e2e":
+        try await EndToEnd.run(repo: FileManager.default.currentDirectoryPath, prompts: !args.contains("--no-prompts"))
     case "cleanup":
         try await Cleanup.run(images: args.contains("--images"))
     default:
