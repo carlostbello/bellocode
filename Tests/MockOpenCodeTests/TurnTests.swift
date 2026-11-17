@@ -286,15 +286,19 @@ struct TurnTests {
     @Test func steerAndQueueDelivery() async throws {
         try await withStream(options: MockServerOptions(clock: .realTime, heartbeatInterval: nil)) { server, client, reader in
             let session = try await client.createSession()
-            await server.enqueueScript(TurnScript { TurnStep.delay(150); TurnStep.text("first") })
+            // The first turn waits on a question (not a delay) so the steer and the queued prompt always arrive while
+            // it runs, however loaded the machine is.
+            await server.enqueueScript(TurnScript { TurnStep.question("Hold", key: "hold", options: ["go"]); TurnStep.text("first") })
             await server.enqueueScript(TurnScript { TurnStep.text("steered") })
             await server.enqueueScript(TurnScript { TurnStep.text("queued") })
             _ = try await client.prompt(session, "one")
-            _ = try await reader.collect(until: isType("session.inbox.delivered"))
+            let created = try await reader.collect(until: isType("form.created")).last!
+            let formID = try #require(created["data"]?["form"]?["id"]?.stringValue)
             _ = try await client.prompt(session, "two", delivery: "steer")
             _ = try await client.prompt(session, "three", delivery: "queue")
             let pending = try await client.get("/api/session/\(session)/inbox")["data"]?.arrayValue ?? []
             #expect(pending.count == 2)
+            _ = try await client.request("POST", "/api/session/\(session)/form/\(formID)/reply", json: ["answer": ["hold": "go"]])
             let first = try await reader.collect(until: isType("session.execution.succeeded"))
             // The steered prompt joins the running execution; the queued one waits for the next.
             #expect(first.filter { $0.type == "session.inbox.delivered" }.count == 1)
