@@ -95,7 +95,7 @@ private struct DSField: ViewModifier {
 private struct SectionLabel: View {
     let text: String
     init(_ text: String) { self.text = text }
-    var body: some View { Text(text.uppercased()).font(.ds(.metaEmph)).foregroundStyle(DSColor.text3).padding(.top, DS.Space.s8) }
+    var body: some View { Text(text).font(.ds(.labelEmph)).foregroundStyle(DSColor.text3).padding(.top, DS.Space.s8) }
 }
 
 private struct Row<Trailing: View>: View {
