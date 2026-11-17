@@ -678,14 +678,23 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     // MARK: Appearance
 
     func appearanceChanged() {
-        let appearance = tableView.effectiveAppearance
+        let appearance = container.effectiveAppearance
         let resolved = TranscriptTheme.resolve(appearance: appearance, baseSize: baseFontSize, revision: themeRevision)
         guard resolved != theme else { return }
         themeRevision += 1
         theme = TranscriptTheme.resolve(appearance: appearance, baseSize: baseFontSize, revision: themeRevision)
         generation += 1
-        // Visible rows re-lay out now; others when they are next needed.
+        // Visible rows re-lay out now, synchronously (a one-off: a stale-coloured frame would flash); others when
+        // they are next needed.
+        let fonts = TranscriptFonts(theme: theme)
+        for (index, view) in visibleCells() where tails[rows[index].id] == nil {
+            let layout = LayoutEngine.layoutNow(layoutInput(row: index), fonts: fonts)
+            store(layout)
+            acceptHeight(layout, row: index)
+            configure(view, index: index)
+        }
         for (index, _) in availableCells() { requestLayout(row: index, priority: true) }
+        flushHeights()
         relayoutTails()
         scheduleMeasureAll()
         container.needsDisplay = true

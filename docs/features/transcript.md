@@ -42,7 +42,31 @@ responder: Find in Thread ⌘F, Find Next/Previous ⌘G/⇧⌘G, Use Selection f
 ⇧⌥⌘C, Copy Code, Jump to Latest ⇧⌘J, Previous/Next Prompt ⌥⌘↑/⌥⌘↓, Go to Last Failure ⌥⌘L.
 
 ## Measured (release, Apple M5 Max, 120 Hz, window 900×900, `.build/release/TranscriptDemo --scenario all`)
-BENCH_TABLE
+Spike: G1-B report (120 Hz, 9,983 rows from an in-process workload). Production: the Engine fed by MockOpenCode
+`.large` (10,000 messages → 13,579 rows, 2.2 M pt), display at 165 Hz (6.06 ms frames, so ">16.7 ms" means ≥3 missed
+refreshes instead of 2). Frames: p50/p95/p99/max ms. Reports: `docs/features/transcript-bench/*.json` (S2–S4, S7 run
+alone; S1, S5, S6, S8 from one `--scenario all` run).
+
+| Scenario | Spike | Production |
+|---|---|---|
+| S1 open → first content frame | 96 ms (open pass 72); exact heights for all 570 ms; 224→138 MB | 98 ms (open pass 94; newest 70-row window 35 ms); all 13,567 rows exact 789 ms; 329→205 MB¹ |
+| S2 3× flicks down / up | 8.3/8.3/16.9/50.7, >16.7 1.2 %, >33: 1 / 8.3/16.7/19.6/90.5, 5.0 %, 5 | 6.1/15.1/22.8/143, 3.4 %, 65 / 6.1/16.8/22.5/36.7, 5.2 %, 15 |
+| S2 realistic 1× (60 s) | 8.3/8.3/18.5/23.4, 3.6 %, >33: 0 | 6.1/15.6/19.8/29.3, 3.3 %, >33: 0 |
+| S2 watchdog, sync layouts, geometry error | 2 stalls >50 ms (122); 26; 0 pt | 0 stalls >50 ms (max 40); 21; 0 pt |
+| S3 stream following, 100 deltas/s | 8.3/8.3/8.3/17.9; delta→visible 24.9 / 40.2 ms (p50/p95) | 6.1/6.1/10.5/16.3, 0 >16.7; mock delta→laid out 29.8 / 43.1 ms; Engine publish→laid out 6.6 / 9.7 ms; →shown (line buffer) 52 / 89 ms; 0 pt from bottom; text equal |
+| S4 stream, reading 3 viewports up | 8.3/8.3/8.3/20.9; drift 0 pt | 6.1/6.1/6.1/15.2; drift 0 pt over 8 pauses; released, pill, rejoined (distance 0) |
+| S5 anchors (expand above, late image, prepend, expand while scrolling 900 pt/s) | 0 / 0 / 0 / 0 pt | 0 / 0 / 0 / 0 pt |
+| S6 resize 900→1400→900 | 8.3/8.3/8.3/10.9; 0 pt | 6.1/17.8/20.2/20.8 (column fixed at 760 pt); re-wrapping 560→1000→560: 6.2/23.8/28.5/48.8; 0 pt |
+| S7 drag-select + copy; find | 25 messages, copy 3.1 ms; find 26 ms / collapsed 123 ms | 60 rows, autoscroll 0 frames >16.7, copy 2.6 ms (16,341 chars), survives ±30k pt; find 305 ms² / collapsed 81 ms |
+| S8 memory | 174 MB after; cycles plateau 111 MB | 266 MB after; 20 cycles 393–437 MB, live malloc flat 141–157 MB; 246 MB after close¹ |
+
+¹ Includes the in-process mock server and Engine (each holding the 10,000-message thread; 112 MB live at open) and
+decoded 640×360 images (bounded 96 MB; the spike's were 32×32). During S2's full traversal footprint peaks at 863 MB
+(live malloc 594 MB): a regression from the spike's ~380 MB, bounded (no growth across S8 cycles) but not yet explained.
+² First query builds the index for 13,579 rows (parse + case/diacritic folding); later queries take tens of ms.
+Differences: rows are richer than the spike's (syntax-highlighted code, real tables, tool lines), so 3×-speed flicks
+show more >33 ms frames (65 vs 1 going down, mostly at row-mix boundaries); at realistic speed there are none. The
+streaming path adds the Engine's 33 ms coalescing and the T3 line buffer by design.
 
 ## docs/research/03 section E (by the agent; no human at the screen)
 Purpose/context: pass (prompts, replies, tool lines name verb, target, status and time; sub-agent cards name agent

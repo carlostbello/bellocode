@@ -8,7 +8,7 @@ Status: integrated 2026-11-16 against MockOpenCode and opencode 2.3.0 (`opencode
   the main window, Settings (⌘,: General = send key, text size, appearance; Accounts = AgentUI) and, on first launch,
   the non-modal onboarding window (free models work at once). "Connect…" in the model picker opens a Connect window.
   `--smoke-test`, `--snapshot <name>` (12 states, see `Launch/SnapshotRunner.swift`).
-- **Content column** (`Content/`): header › transcript (temporary placeholder; seam unchanged for TranscriptKit) ›
+- **Content column** (`Content/`): header › transcript (TranscriptKit, docs/features/transcript.md) ›
   request stack (AgentUI, `RequestStackSurface.swift`) › "Status unknown" banner › queued follow-ups (Queued / Steering /
   Parked, Steer Now, Remove) › composer (ComposerKit, `ComposerSurface.swift`). One centred column (760 pt max,
   24 pt margins). Drafts use the hero composer (3 lines) and dock once the first send creates the thread.

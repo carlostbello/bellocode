@@ -1,0 +1,127 @@
+{
+  "afterClose" : {
+    "footprintMB" : 245.8,
+    "mallocInUseMB" : 118.8,
+    "residentMB" : 842.5
+  },
+  "afterScenarios" : {
+    "footprintMB" : 266.1,
+    "mallocInUseMB" : 113.5,
+    "residentMB" : 838.7
+  },
+  "cycles" : [
+    {
+      "footprintMB" : 429,
+      "mallocInUseMB" : 141.2,
+      "residentMB" : 839.3
+    },
+    {
+      "footprintMB" : 437.1,
+      "mallocInUseMB" : 144.1,
+      "residentMB" : 839.4
+    },
+    {
+      "footprintMB" : 424.5,
+      "mallocInUseMB" : 142.3,
+      "residentMB" : 839.8
+    },
+    {
+      "footprintMB" : 425,
+      "mallocInUseMB" : 142.5,
+      "residentMB" : 840
+    },
+    {
+      "footprintMB" : 429.7,
+      "mallocInUseMB" : 143.8,
+      "residentMB" : 839.8
+    },
+    {
+      "footprintMB" : 424,
+      "mallocInUseMB" : 143.2,
+      "residentMB" : 840.6
+    },
+    {
+      "footprintMB" : 425,
+      "mallocInUseMB" : 144.2,
+      "residentMB" : 840.5
+    },
+    {
+      "footprintMB" : 397.5,
+      "mallocInUseMB" : 144.6,
+      "residentMB" : 840.8
+    },
+    {
+      "footprintMB" : 410.2,
+      "mallocInUseMB" : 144.8,
+      "residentMB" : 840
+    },
+    {
+      "footprintMB" : 408.3,
+      "mallocInUseMB" : 143.3,
+      "residentMB" : 840.1
+    },
+    {
+      "footprintMB" : 405.3,
+      "mallocInUseMB" : 143.3,
+      "residentMB" : 840.5
+    },
+    {
+      "footprintMB" : 399.2,
+      "mallocInUseMB" : 144,
+      "residentMB" : 843
+    },
+    {
+      "footprintMB" : 396.8,
+      "mallocInUseMB" : 145.4,
+      "residentMB" : 839.1
+    },
+    {
+      "footprintMB" : 394.7,
+      "mallocInUseMB" : 145.9,
+      "residentMB" : 839.4
+    },
+    {
+      "footprintMB" : 397.3,
+      "mallocInUseMB" : 145.1,
+      "residentMB" : 841.8
+    },
+    {
+      "footprintMB" : 404.1,
+      "mallocInUseMB" : 143.4,
+      "residentMB" : 839.7
+    },
+    {
+      "footprintMB" : 395.7,
+      "mallocInUseMB" : 143.5,
+      "residentMB" : 840
+    },
+    {
+      "footprintMB" : 393.1,
+      "mallocInUseMB" : 148,
+      "residentMB" : 842.7
+    },
+    {
+      "footprintMB" : 399,
+      "mallocInUseMB" : 147.9,
+      "residentMB" : 842.8
+    },
+    {
+      "footprintMB" : 400.6,
+      "mallocInUseMB" : 147.2,
+      "residentMB" : 844.5
+    }
+  ],
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T02:58:26Z",
+    "memory" : {
+      "footprintMB" : 245.8,
+      "mallocInUseMB" : 118.8,
+      "residentMB" : 842.5
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S8",
+    "window" : "900x900"
+  }
+}
