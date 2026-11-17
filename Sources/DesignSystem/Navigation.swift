@@ -90,14 +90,15 @@ public enum ShortcutText {
 /// Bold runs for matched characters (fuzzy match positions, search snippet highlights).
 public enum MatchHighlight {
     public static func attributed(
-        _ text: String, positions: [Int], font: NSFont, color: NSColor = DS.Palette.text, highlightColor: NSColor? = nil
+        _ text: String, positions: [Int], font: NSFont, color: NSColor = DS.Palette.text, highlightColor: NSColor? = nil,
+        highlightFont: NSFont? = nil
     ) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         let result = NSMutableAttributedString(
             string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
         guard !positions.isEmpty else { return result }
-        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let bold = highlightFont ?? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         let characters = Array(text)
         var utf16Offsets: [Int] = []
         utf16Offsets.reserveCapacity(characters.count + 1)

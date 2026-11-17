@@ -5,14 +5,14 @@ import Engine
 
 /// Shown above the composer when opencode restarted while this thread's turn ran: the server still lists it as busy
 /// but nothing runs it. BelloCode does not act on its own; the user chooses Stop (mark it interrupted) or Resume
-/// (mark it interrupted and ask the agent to continue). Offline, the toolbar's connection state explains instead.
+/// (mark it interrupted and ask the agent to continue). Offline, the sidebar footer's connection state explains instead.
 @MainActor
 final class StatusUnknownBanner: NSView {
     private let thread: ThreadModel
     private let engine: Engine
     private let message = NSTextField(wrappingLabelWithString: "")
-    private let stopButton = NSButton(title: "Stop", target: nil, action: nil)
-    private let resumeButton = NSButton(title: "Resume", target: nil, action: nil)
+    private let stopButton = DSButton(title: "Stop", variant: .outline, size: .small)
+    private let resumeButton = DSButton(title: "Resume", variant: .primary, size: .small)
     private var collapsed: NSLayoutConstraint!
     private var loop: ObservationLoop?
     private var busy = false
@@ -23,23 +23,25 @@ final class StatusUnknownBanner: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        let glyph = NSImageView(image: StatusGlyph(.unknown).image(pointSize: 13) ?? NSImage())
-        message.font = DS.Typography.current.body
+        let glyph = DSStatusGlyphView()
+        glyph.status = .unknown
+        glyph.pointSize = DS.Size.iconPoint
+        glyph.setAccessibilityElement(false)
+        message.font = DS.TextRole.body.font
+        message.textColor = DS.Color.text
         message.stringValue = "Status unknown: opencode restarted while this thread was running, and nothing is running it now."
         message.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stopButton.target = self
         stopButton.action = #selector(stop)
-        stopButton.controlSize = .small
         stopButton.toolTip = "Mark the turn as stopped (⌘.)"
         resumeButton.target = self
         resumeButton.action = #selector(resume)
-        resumeButton.controlSize = .small
-        resumeButton.keyEquivalent = ""
         resumeButton.toolTip = "Mark it stopped and ask the agent to continue where it left off"
         let row = NSStackView(views: [glyph, message, stopButton, resumeButton])
         row.alignment = .centerY
-        row.spacing = DS.Spacing.m
-        row.edgeInsets = NSEdgeInsets(top: DS.Spacing.m, left: DS.Spacing.l, bottom: DS.Spacing.m, right: DS.Spacing.m)
+        row.spacing = DS.Space.s8
+        row.setCustomSpacing(DS.Space.s10, after: glyph)
+        row.edgeInsets = NSEdgeInsets(top: DS.Space.s10, left: DS.Space.s14, bottom: DS.Space.s10, right: DS.Space.s10)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         collapsed = heightAnchor.constraint(equalToConstant: 0)
@@ -74,11 +76,13 @@ final class StatusUnknownBanner: NSView {
 
     override var wantsUpdateLayer: Bool { true }
 
+    /// A `raised` card (`r.xl`) with the composer's outline, like the request cards it sits with.
     override func updateLayer() {
-        layer?.cornerRadius = DS.Radius.card
-        layer?.borderWidth = 1
-        layer?.backgroundColor = DS.Palette.cardBackground.cgColor
-        layer?.borderColor = DS.Palette.cardBorder.cgColor
+        layer?.cornerRadius = DS.Radius.xl
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = DS.Border.hairline
+        layer?.backgroundColor = DS.Color.raised.cgColor
+        layer?.borderColor = DS.Color.composerOutline.cgColor
     }
 
     @objc func stop() {

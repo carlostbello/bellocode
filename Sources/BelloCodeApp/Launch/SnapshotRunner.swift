@@ -2,6 +2,7 @@ import AgentUI
 import AppKit
 import BelloCore
 import ComposerKit
+import DesignSystem
 import DiffKit
 import Engine
 import MockOpenCode
@@ -326,10 +327,10 @@ struct SnapshotRunner {
         let size = NSSize(width: 64, height: 40)
         let image = NSImage(size: size, flipped: false) { rect in
             NSColor.systemTeal.setFill()
-            rect.fill()
+            rect.fill(using: .sourceOver)
             NSColor.white.setFill()
-            NSRect(x: 8, y: 8, width: 30, height: 6).fill()
-            NSRect(x: 8, y: 20, width: 46, height: 6).fill()
+            NSRect(x: 8, y: 8, width: 30, height: 6).fill(using: .sourceOver)
+            NSRect(x: 8, y: 20, width: 46, height: 6).fill(using: .sourceOver)
             return true
         }
         let rep = image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))
@@ -399,7 +400,7 @@ struct SnapshotRunner {
                 guard let frameView = window.contentView?.superview,
                       let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds)
                 else { continue }
-                frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+                SnapshotRunner.draw(frameView, into: bitmap)
                 await compositeWebViews(in: frameView, onto: bitmap)
                 composite(driver.overlayWindows, onto: bitmap, origin: window.frame.origin)
                 let mode = appearanceName == .darkAqua ? "dark" : "light"
@@ -434,7 +435,7 @@ struct SnapshotRunner {
         }
         for overlay in overlays {
             guard let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
-            overlay.cacheDisplay(in: overlay.bounds, to: rep)
+            SnapshotRunner.draw(overlay, into: rep)
             let image = NSImage(size: overlay.bounds.size)
             image.addRepresentation(rep)
             layers.append((image, overlay.convert(overlay.bounds, to: frameView)))
@@ -459,7 +460,7 @@ struct SnapshotRunner {
             guard let view = overlay.contentView?.superview ?? overlay.contentView,
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
             else { continue }
-            view.cacheDisplay(in: view.bounds, to: rep)
+            SnapshotRunner.draw(view, into: rep)
             let rect = NSRect(
                 x: overlay.frame.minX - origin.x, y: overlay.frame.minY - origin.y, width: overlay.frame.width,
                 height: overlay.frame.height)
@@ -475,6 +476,17 @@ struct SnapshotRunner {
             NSShadow().set()
         }
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Renders a view into a bitmap like `cacheDisplay`, but without font smoothing: in-process rendering otherwise
+    /// thickens stems so 13 pt regular reads as medium, unlike the screen (docs/design/implementation-guide.md).
+    /// Glass surfaces draw their opaque fallback (in-process rendering cannot capture vibrancy).
+    static func draw(_ view: NSView, into bitmap: NSBitmapImageRep) {
+        DSGlassView.forcesSolidFallback = true
+        guard let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return view.cacheDisplay(in: view.bounds, to: bitmap) }
+        context.cgContext.setAllowsFontSmoothing(false)
+        context.cgContext.setShouldSmoothFonts(false)
+        view.displayIgnoringOpacity(view.bounds, in: context)
     }
 
     func log(_ message: String) {

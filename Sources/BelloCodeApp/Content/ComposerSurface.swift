@@ -265,9 +265,11 @@ final class ComposerContextLine: NSStackView {
     private let branchLabel = ComposerContextLine.item(symbol: "arrow.triangle.branch")
     private let workspaceLabel = ComposerContextLine.item(symbol: "laptopcomputer")
 
+    /// The 26 pt context strip under the composer (visual-language.md §6 "Composer"): project, branch, worktree in
+    /// `meta text3` with 12 pt glyphs. Display only.
     init() {
         super.init(frame: .zero)
-        spacing = DS.Spacing.l
+        spacing = DS.Space.s16
         for view in [projectLabel, branchLabel, workspaceLabel] { addArrangedSubview(view) }
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -277,23 +279,18 @@ final class ComposerContextLine: NSStackView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    private static func item(symbol: String) -> NSButton {
-        let button = NSButton(title: "", image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!, target: nil, action: nil)
-        button.isBordered = false
-        button.imagePosition = .imageLeading
-        button.imageHugsTitle = true
-        button.font = DS.Typography.current.caption
-        button.contentTintColor = DS.Palette.secondaryText
-        button.symbolConfiguration = .init(pointSize: DS.Typography.current.caption.pointSize - 1, weight: .regular)
-        button.refusesFirstResponder = true
-        button.setButtonType(.momentaryChange)
-        button.isEnabled = true
-        return button
+    private static func item(symbol: String) -> HeaderCrumb {
+        let crumb = HeaderCrumb(symbolName: symbol)
+        crumb.font = DS.TextRole.meta.font
+        crumb.color = DS.Color.text3
+        crumb.glyphPointSize = DS.Size.iconPointMeta + 1
+        crumb.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return crumb
     }
 
     private func render() {
         let shortPath = (directory as NSString).abbreviatingWithTildeInPath
-        projectLabel.title = project
+        projectLabel.text = project
         projectLabel.toolTip = directory
         let branch: String
         if let git, let name = git.branch {
@@ -303,14 +300,13 @@ final class ComposerContextLine: NSStackView {
         } else {
             branch = "…"
         }
-        branchLabel.title = branch
-        branchLabel.image = NSImage(
-            systemSymbolName: git?.workspace == .plainFolder ? "folder" : "arrow.triangle.branch", accessibilityDescription: nil)
+        branchLabel.text = branch
+        branchLabel.symbolName = git?.workspace == .plainFolder ? "folder" : "arrow.triangle.branch"
         branchLabel.toolTip = git?.workspace == .plainFolder ? directory : "Branch"
-        workspaceLabel.title = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
+        workspaceLabel.text = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
+        workspaceLabel.symbolName = git?.workspace == .worktree || workspaceOverride != nil ? "square.on.square.dashed" : "laptopcomputer"
         workspaceLabel.isHidden = git?.workspace == .plainFolder
-        for label in [projectLabel, branchLabel, workspaceLabel] { label.contentTintColor = DS.Palette.secondaryText }
-        setAccessibilityLabel("Acts in \(project), \(branch), \(workspaceLabel.isHidden ? shortPath : workspaceLabel.title)")
+        setAccessibilityLabel("Acts in \(project), \(branch), \(workspaceLabel.isHidden ? shortPath : workspaceLabel.text)")
     }
 }
 

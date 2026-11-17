@@ -23,15 +23,15 @@ final class UnconfirmedSendsView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = DS.Spacing.xxs
+        stack.spacing = 0
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         collapsed = heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Spacing.l),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.s),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: DS.Spacing.xs),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DS.Spacing.xs).withPriority(.defaultHigh),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Space.s14),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Space.s6),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: DS.Space.s2),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DS.Space.s2).withPriority(.defaultHigh),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.list)
@@ -68,13 +68,15 @@ final class UnconfirmedSendsView: NSView {
         case .checking: ("Checking…", "arrow.triangle.2.circlepath", "Asking opencode whether it has this message.")
         case .notSent(let reason): ("Not sent", "exclamationmark.circle", reason)
         }
-        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
-        icon.contentTintColor = DS.Palette.attention
+        let icon = ProjectIcon()
+        icon.symbolName = symbol
+        icon.tint = DS.Color.warningText
         let label = NSTextField(labelWithString: state)
-        label.font = .systemFont(ofSize: DS.Typography.current.caption.pointSize, weight: .semibold)
-        label.textColor = DS.Palette.secondaryText
+        label.font = DS.TextRole.labelEmph.font
+        label.textColor = DS.Color.warningText
         let text = NSTextField(labelWithString: send.text.replacingOccurrences(of: "\n", with: " "))
-        text.font = DS.Typography.current.caption
+        text.font = DS.TextRole.label.font
+        text.textColor = DS.Color.text
         text.lineBreakMode = .byTruncatingTail
         text.setContentCompressionResistancePriority(.defaultLow - 10, for: .horizontal)
         let spacer = NSView()
@@ -93,8 +95,9 @@ final class UnconfirmedSendsView: NSView {
             views.append(edit)
         }
         let row = NSStackView(views: views)
-        row.spacing = DS.Spacing.s
+        row.spacing = DS.Space.s8
         row.alignment = .centerY
+        row.heightAnchor.constraint(equalToConstant: DS.Size.control).isActive = true
         row.toolTip = detail
         row.setAccessibilityElement(true)
         row.setAccessibilityRole(.row)
@@ -102,22 +105,17 @@ final class UnconfirmedSendsView: NSView {
         return row
     }
 
-    private static func button(_ title: String, target: AnyObject, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: target, action: action)
-        button.isBordered = false
-        button.font = DS.Typography.current.caption
-        button.contentTintColor = DS.Palette.secondaryText
-        button.controlSize = .small
-        return button
+    private static func button(_ title: String, target: AnyObject, action: Selector) -> DSButton {
+        DSButton(title: title, variant: .outline, size: .small, target: target, action: action)
     }
 
-    @objc private func retry(_ sender: NSButton) {
+    @objc private func retry(_ sender: NSView) {
         guard let raw = sender.identifier?.rawValue else { return }
         let thread = thread
         Task { await thread.retryUnconfirmed(MessageID(raw)) }
     }
 
-    @objc private func edit(_ sender: NSButton) {
+    @objc private func edit(_ sender: NSView) {
         guard let raw = sender.identifier?.rawValue else { return }
         let thread = thread
         Task { [weak self] in

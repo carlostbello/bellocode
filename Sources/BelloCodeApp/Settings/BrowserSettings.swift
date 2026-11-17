@@ -1,3 +1,4 @@
+import DesignSystem
 import Foundation
 import Observation
 import Synchronization
@@ -116,41 +117,47 @@ struct BrowserSettingsView: View {
     @Bindable var browse: BrowseStatusModel
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Open terminal links in the built-in browser", isOn: $settings.terminalLinksOpenInBuiltInBrowser)
-                Text("Hold ⇧ while clicking a link to use the other browser.").font(.caption).foregroundStyle(.secondary)
-                Toggle("Offer to open dev servers seen in terminal or agent output", isOn: $settings.offersDevServers)
+        SettingsPaneBody {
+            SettingsGroup("Links", footer: "Hold ⇧ while clicking a link to use the other browser.") {
+                SettingsToggleRow("Open terminal links in the built-in browser", divided: false, isOn: $settings.terminalLinksOpenInBuiltInBrowser)
+                SettingsToggleRow("Offer to open dev servers seen in terminal or agent output", isOn: $settings.offersDevServers)
             }
-            Section("Built-in browser and your Chrome") {
-                Text("The built-in browser is for previews and for the agent: each project has its own website data, each thread its own tabs, and the agent only uses tabs it opened or you shared. For tasks that need your real logins, passkeys and extensions, the separate browse tool drives your own Chrome.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                LabeledContent("browse:") { statusText }
-                LabeledContent("In BelloCode's opencode:") {
+            SettingsGroup(
+                "Built-in browser and your Chrome",
+                footer: "BelloCode only reads this status. It does not change browse's setup, your opencode configuration or BelloCode's own."
+            ) {
+                SettingsRow(
+                    "browse",
+                    detail: "The built-in browser is for previews and for the agent: each project has its own website data, each thread its own tabs, and the agent only uses tabs it opened or you shared. For tasks that need your real logins, passkeys and extensions, the separate browse tool drives your own Chrome.",
+                    divided: false
+                ) { EmptyView() }
+                SettingsRow("Status") { statusText.font(.ds(.label)).lineLimit(1).truncationMode(.middle) }
+                SettingsRow("In BelloCode's opencode") {
                     Text(browse.configuredForBelloCode ? "Configured" : "Not configured")
-                        .foregroundStyle(.secondary)
+                        .font(.ds(.label)).foregroundStyle(Color.ds.text2)
                         .help(browse.configFile.path)
                 }
-                HStack {
-                    Button("Check Again") { Task { await browse.refresh() } }
-                    Button("Run Doctor") { Task { await browse.run("doctor") } }
-                        .disabled(!isInstalled || browse.isRunning)
-                    if browse.isRunning { ProgressView().controlSize(.small) }
+                SettingsRow("Check") {
+                    HStack(spacing: DS.Space.s8) {
+                        if browse.isRunning { DSStatusGlyphRepresentable(status: .running).frame(width: 14, height: 14) }
+                        Button("Check Again") { Task { await browse.refresh() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                        Button("Run Doctor") { Task { await browse.run("doctor") } }
+                            .buttonStyle(DSButtonStyle(.outline, size: .small))
+                            .disabled(!isInstalled || browse.isRunning)
+                    }
                 }
                 if !browse.report.isEmpty {
                     ScrollView {
-                        Text(browse.report).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(browse.report).font(.ds(.codeSmall)).foregroundStyle(Color.ds.text).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(DS.Space.s8)
                     }
                     .frame(height: 140)
+                    .background(Color.ds.codeFill, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                    .padding(DS.Space.s8)
                     .accessibilityLabel("browse output")
                 }
-                Text("BelloCode only reads this status. It does not change browse's setup, your opencode configuration or BelloCode's own.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 520)
         .task { if browse.state == .unknown { await browse.refresh() } }
     }
 
@@ -160,9 +167,9 @@ struct BrowserSettingsView: View {
 
     @ViewBuilder private var statusText: some View {
         switch browse.state {
-        case .unknown, .checking: Text("Checking…").foregroundStyle(.secondary)
-        case .notInstalled: Text("Not installed (github.com/anomalyco/browse)").foregroundStyle(.secondary)
-        case .installed(let path, let version): Text("\(version) at \((path as NSString).abbreviatingWithTildeInPath)").foregroundStyle(.secondary)
+        case .unknown, .checking: Text("Checking…").foregroundStyle(Color.ds.text2)
+        case .notInstalled: Text("Not installed (github.com/anomalyco/browse)").foregroundStyle(Color.ds.text2)
+        case .installed(let path, let version): Text("\(version) at \((path as NSString).abbreviatingWithTildeInPath)").foregroundStyle(Color.ds.text2)
         }
     }
 }

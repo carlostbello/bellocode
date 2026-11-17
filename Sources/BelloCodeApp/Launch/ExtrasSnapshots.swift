@@ -204,7 +204,7 @@ extension SnapshotRunner {
             guard let frameView = window.contentView?.superview, let bitmap = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else {
                 continue
             }
-            frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+            SnapshotRunner.draw(frameView, into: bitmap)
             let mode = appearanceName == .darkAqua ? "dark" : "light"
             let file = directory.appending(path: "\(name)-\(state)-\(mode).png")
             guard let data = bitmap.representation(using: .png, properties: [:]), (try? data.write(to: file)) != nil else { continue }
