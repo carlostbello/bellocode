@@ -99,20 +99,24 @@ public final class ExecSession: Sendable {
 
     public func close() { connection.cancel() }
 
-    /// Runs a non-interactive command to completion, keeping at most `limit` bytes of each stream (the tail).
+    /// Runs a non-interactive command to completion, keeping at most `limit` bytes of each stream (the tail), within
+    /// `timeout` (the exec is cancelled after it: its stdin closes, so the wrapper stops the command's group).
     public static func run(client: EngineClient, container: String, argv: [String], workingDir: String? = nil,
                            environment: [String: String] = [:], user: String? = nil, wrap: Bool = true,
-                           limit: Int = 1 << 20) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
+                           limit: Int = 1 << 20, timeout: Duration = .seconds(120)) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
         let session = try await start(client: client, container: container, argv: wrap ? ExecWrapper.nonInteractive(argv) : argv,
                                       workingDir: workingDir, environment: environment, user: user, tty: false)
         defer { session.close() }
-        var out = Data(), err = Data()
-        for try await chunk in session.output() {
-            switch chunk.stream {
-            case .stderr, .system: err.append(chunk.bytes); if err.count > limit { err = err.suffix(limit) }
-            default: out.append(chunk.bytes); if out.count > limit { out = out.suffix(limit) }
+        let output = try await withDeadline(timeout, operation: "exec") {
+            var out = Data(), err = Data()
+            for try await chunk in session.output() {
+                switch chunk.stream {
+                case .stderr, .system: err.append(chunk.bytes); if err.count > limit { err = err.suffix(limit) }
+                default: out.append(chunk.bytes); if out.count > limit { out = out.suffix(limit) }
+                }
             }
+            return (out, err)
         }
-        return (try await session.exitCode(), out, err)
+        return (try await session.exitCode(), output.0, output.1)
     }
 }

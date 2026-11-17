@@ -19,7 +19,7 @@ struct LiveEngineTests {
         var spec = ContainerCreate(image: image)
         spec.entrypoint = ["sleep"]
         spec.cmd = ["infinity"]
-        spec.labels = ["bellocode.spike": "1", "bellocode.test": "1"]
+        spec.labels = ["app.bellocode.test": "1"]
         var host = HostConfig()
         host.init_ = true
         spec.hostConfig = host

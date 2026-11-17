@@ -63,7 +63,7 @@ let targets: [Target] =
     library("BelloCore")
     + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
     + library(
-        "Engine", dependencies: ["BelloCore", "OpenCodeKit", .product(name: "GRDB", package: "GRDB.swift")],
+        "Engine", dependencies: ["BelloCore", "OpenCodeKit", "ContainerKit", .product(name: "GRDB", package: "GRDB.swift")],
         testDependencies: ["MockOpenCode"]
     )
     + library("DesignSystem", dependencies: ["BelloCore"])
@@ -91,14 +91,14 @@ let targets: [Target] =
     + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine", "DesignSystem"], testDependencies: ["MockOpenCode"])
     // M3-A: Agents panel, lineage rows, header strip text (docs/features/orchestration.md). Engine owns the task graph.
     + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
-    // G6 spike: Docker Engine API client over a unix socket, workspace containers (docs/spikes/G6-containers.md).
+    // M6-A: Docker Engine API client over Rancher Desktop's socket, workspace containers (docs/features/containers.md).
     + library("ContainerKit")
     + [
-        // G6: the shell opencode is configured with; forwards every command into the workspace container.
+        // M6-A: the shell opencode is configured with; forwards every command into the workspace container. Bundled in
+        // Contents/Helpers.
         .executableTarget(name: "bellocode-exec", dependencies: ["ContainerKit"], swiftSettings: swiftSettings),
-        // G6 harness: measurements and end-to-end checks against Rancher Desktop.
-        .executableTarget(
-            name: "ContainerSpike", dependencies: ["ContainerKit", "OpenCodeKit", "Engine", "BelloCore"], swiftSettings: swiftSettings),
+        // M6-A harness: runtime status, production-path measurements, cleanup of test resources.
+        .executableTarget(name: "ContainerDemo", dependencies: ["ContainerKit"], swiftSettings: swiftSettings),
         // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
         .executableTarget(
             name: "TerminalDemo",

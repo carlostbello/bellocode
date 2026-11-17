@@ -2,39 +2,43 @@ import Darwin
 import Dispatch
 import Foundation
 import Synchronization
+import os
+
+private let signposter = OSSignposter(subsystem: "app.bellocode.ContainerKit", category: "forward")
 
 /// Forwards a host loopback port to a port inside the workspace container *without* publishing it: every accepted TCP
-/// connection becomes one exec running a tiny relay that connects to `127.0.0.1:<port>` inside the container. It works
-/// for ports chosen after the container was created and for servers that listen only on the container's loopback
-/// (Vite, Next and many others do by default), which a published port cannot reach.
+/// connection becomes one exec running a relay (`ContainerProbes.relayScript`) that connects to the port on the
+/// container's loopback. It needs no recreate or sidecar, works for ports chosen after the container was created, and
+/// reaches servers that listen only on the container's loopback, which a published port cannot.
+///
+/// The host side listens on 127.0.0.1 only, so nothing on the network can reach it (unlike a Rancher Desktop published
+/// port bound to 0.0.0.0, which is forwarded to every interface of the Mac). Connections are bounded (`maxConnections`);
+/// beyond that a connection is closed at once. Each connection's task is owned by the forwarder and cancelled by `stop()`.
 public final class PortForwarder: Sendable {
     public let client: EngineClient
     public let container: String
     public let containerPort: Int
-    public let relay: [String]
+    public let containerHost: String
+    public let user: String?
+    public let maxConnections: Int
     private let listener: FileStream
     public let hostPort: Int
     private let tasks = Mutex<[Int: Task<Void, Never>]>([:])
     private let counter = Mutex(0)
+    private let served = Mutex(0)
     private let acceptQueue = DispatchQueue(label: "bellocode.forward.accept")
 
-    /// Relay argv run inside the container; `$1` is the port. Needs bash (for /dev/tcp) and cat: present in
-    /// Debian/Ubuntu-based images. A production image ships a static relay instead (see the spike report).
-    public static func bashRelay(port: Int) -> [String] {
-        let script = """
-        exec 3<>/dev/tcp/127.0.0.1/$1 || exit 7
-        ( cat <&3; kill -TERM -$$ 2>/dev/null ) &
-        cat >&3
-        kill -TERM -$$ 2>/dev/null
-        """
-        return ["bash", "-c", script, "relay", String(port)]
-    }
-
-    public init(client: EngineClient, container: String, containerPort: Int, hostPort: Int = 0, relay: [String]? = nil) throws {
+    /// - Parameters:
+    ///   - containerHost: where the relay connects inside the container (`127.0.0.1`, or `::1` for an IPv6 listener).
+    ///   - hostPort: 0 picks a free port; otherwise the same port number is tried (keeps URLs stable).
+    public init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
+                hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64) throws {
         self.client = client
         self.container = container
         self.containerPort = containerPort
-        self.relay = relay ?? Self.bashRelay(port: containerPort)
+        self.containerHost = containerHost
+        self.user = user
+        self.maxConnections = maxConnections
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketError.system(operation: "socket", errno: errno) }
         var on: Int32 = 1
@@ -60,22 +64,33 @@ public final class PortForwarder: Sendable {
         listener = FileStream(fd: fd, owned: true, isSocket: true)
     }
 
-    /// Accepts until `stop()`. Each connection is relayed by its own task, owned by this forwarder.
+    /// `http://127.0.0.1:<hostPort>/`
+    public var url: URL { URL(string: "http://127.0.0.1:\(hostPort)/")! }
+
+    /// Accepts until `stop()` or cancellation. Each connection is relayed by its own task, owned by this forwarder.
     public func run() async {
-        while !Task.isCancelled, !listener.isCancelled {
-            guard let fd = await accept() else { break }
-            var on: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-            let peer = FileStream(fd: fd, owned: true, isSocket: true)
-            let id = counter.withLock { value -> Int in
-                value += 1
-                return value
+        await withTaskCancellationHandler {
+            while !Task.isCancelled, !listener.isCancelled {
+                guard let fd = await accept() else { break }
+                var on: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                let peer = FileStream(fd: fd, owned: true, isSocket: true)
+                if activeConnections >= maxConnections {
+                    peer.cancel()
+                    continue
+                }
+                let id = counter.withLock { value -> Int in
+                    value += 1
+                    return value
+                }
+                let task = Task { [self] in
+                    await relayConnection(peer)
+                    _ = tasks.withLock { $0.removeValue(forKey: id) }
+                }
+                tasks.withLock { $0[id] = task }
             }
-            let task = Task { [self] in
-                await relayConnection(peer)
-                _ = tasks.withLock { $0.removeValue(forKey: id) }
-            }
-            tasks.withLock { $0[id] = task }
+        } onCancel: {
+            stop()
         }
     }
 
@@ -98,11 +113,16 @@ public final class PortForwarder: Sendable {
     }
 
     private func relayConnection(_ peer: FileStream) async {
-        guard let session = try? await ExecSession.start(client: client, container: container, argv: relay,
-                                                          workingDir: nil, environment: [:], tty: false) else {
+        let state = signposter.beginInterval("connection")
+        defer { signposter.endInterval("connection", state) }
+        guard let session = try? await ExecSession.start(
+            client: client, container: container, argv: ContainerProbes.relayScript(host: containerHost, port: containerPort),
+            workingDir: nil, environment: [:], user: user, tty: false)
+        else {
             peer.cancel()
             return
         }
+        served.withLock { $0 += 1 }
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
                 // host → container
@@ -112,7 +132,7 @@ public final class PortForwarder: Sendable {
                 session.closeStdin()
             }
             group.addTask {
-                // container → host
+                // container → host. stderr (the relay's own message) is dropped, never shown to the browser.
                 do {
                     for try await chunk in session.output() where chunk.stream == .stdout {
                         try await peer.write(chunk.bytes)
@@ -125,6 +145,8 @@ public final class PortForwarder: Sendable {
     }
 
     public var activeConnections: Int { tasks.withLock { $0.count } }
+    /// Connections relayed so far.
+    public var connectionCount: Int { served.withLock { $0 } }
 
     public func stop() {
         listener.cancel()

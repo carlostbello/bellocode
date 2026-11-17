@@ -18,7 +18,7 @@ struct EngineClientTests {
         #expect(try await server.client.ping() == "1.56")
         let version = try await server.client.version()
         #expect(version.apiVersion == "1.56" && version.arch == "arm64")
-        #expect(server.requests.withLock { $0.map(\.target) } == ["/_ping", "/v1.45/version"])
+        #expect(server.requests.withLock { $0.map(\.target) } == ["/_ping", "/v1.44/version"])
     }
 
     @Test func createContainerSendsTheSpecAndMapsErrors() async throws {
@@ -33,7 +33,7 @@ struct EngineClientTests {
         }
         defer { server.stop() }
         let spec = WorkspaceSpec(projectRoot: "/Users/me/src/app", extraMounts: ["/Users/me/wt"], image: "img:1", user: "501:20",
-                                 publishedPorts: [3000], environment: ["CI": "1"], extraLabels: ["bellocode.spike": "1"])
+                                 publishedPorts: [3000], environment: ["CI": "1"], extraLabels: ["app.bellocode.test": "1"])
         let id = try await server.client.createContainer(name: spec.containerName, spec.createBody(imageID: "sha256:1"))
         #expect(id == "abc123")
         let request = try #require(server.requests.withLock { $0.first })
@@ -50,7 +50,7 @@ struct EngineClientTests {
         let bindings = try #require((host["PortBindings"] as? [String: [[String: String]]])?["3000/tcp"])
         #expect(bindings == [["HostIp": "127.0.0.1", "HostPort": ""]], "loopback only")
         #expect(try await server.client.inspectImage("x") == nil)
-        await #expect(throws: EngineError.conflict("container is not running")) { try await server.client.killContainer("abc123") }
+        await #expect(throws: ContainerError.conflict("container is not running")) { try await server.client.killContainer("abc123") }
     }
 
     @Test func chunkedEventStreamIsDecodedIncrementally() async throws {
@@ -77,7 +77,7 @@ struct EngineClientTests {
         }
         defer { server.stop() }
         let seen = Mutex(0)
-        await #expect(throws: EngineError.progress("denied: requested access to the resource is denied")) {
+        await #expect(throws: ContainerError.progress("denied: requested access to the resource is denied")) {
             try await server.client.pullImage("x:1") { _ in seen.withLock { $0 += 1 } }
         }
         #expect(seen.withLock { $0 } == 1)
@@ -125,6 +125,68 @@ struct EngineClientTests {
         #expect(body["Env"] as? [String] == ["SECRET=s3cr3t"], "secrets travel per exec, in the request body only")
         let start = try #require(server.requests.withLock { $0.first { $0.path.hasSuffix("/start") } })
         #expect(start.headers["upgrade"] == "tcp")
+    }
+
+    @Test func registryRefusalNeedsSignIn() async throws {
+        let server = try FakeEngineServer { _, stream in
+            try await stream.respond(401, json: #"{"message":"Head \"https://registry/v2/x/manifests/1\": unauthorized"}"#)
+        }
+        defer { server.stop() }
+        do {
+            try await server.client.pullImage("registry.corp.example/x:1")
+            Issue.record("expected a failure")
+        } catch let error as ContainerError {
+            #expect(error.needsRegistrySignIn)
+            if case .unauthorized = error {} else { Issue.record("not mapped to unauthorized: \(error)") }
+        }
+        let header = server.requests.withLock { $0.first?.headers["x-registry-auth"] }
+        #expect(header == nil, "no credentials sent unless configured")
+    }
+
+    @Test func pullSendsCredentialsOnlyInTheHeader() async throws {
+        let server = try FakeEngineServer { _, stream in
+            try await stream.respondChunked(200, chunks: [Data(#"{"status":"Downloaded newer image"}"#.utf8 + Data("\n".utf8))])
+        }
+        defer { server.stop() }
+        let auth = RegistryAuth(username: "u", password: "pw-secret", serverAddress: "r.example")
+        try await WorkspaceManager(client: server.client).pull("r.example/img:1", auth: auth)
+        let request = try #require(server.requests.withLock { $0.first })
+        #expect(request.headers["x-registry-auth"] == auth.headerValue)
+        #expect(!request.target.contains("pw-secret") && !String(decoding: request.body, as: UTF8.self).contains("pw-secret"))
+    }
+
+    @Test func unaryCallsTimeOut() async throws {
+        let server = try FakeEngineServer { _, stream in
+            try await Task.sleep(for: .seconds(5))
+            try await stream.respond(200, json: "{}")
+        }
+        defer { server.stop() }
+        var client = server.client
+        client.requestTimeout = .milliseconds(200)
+        let start = ContinuousClock.now
+        await #expect(throws: ContainerError.self) { _ = try await client.info() }
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
+    @Test func eventMonitorReconnectsAndReportsEachConnect() async throws {
+        let connections = Mutex(0)
+        let server = try FakeEngineServer { _, stream in
+            let n = connections.withLock { value -> Int in
+                value += 1
+                return value
+            }
+            let line = Data(#"{"Type":"container","Action":"die","Actor":{"ID":"c\#(n)","Attributes":{}}}"#.utf8 + Data("\n".utf8))
+            try await stream.respondChunked(200, chunks: [line])
+        }
+        defer { server.stop() }
+        let monitor = EngineEventMonitor(client: server.client, labels: [], initialBackoff: .milliseconds(20))
+        var seen: [EngineMonitorEvent] = []
+        for await event in monitor.stream() {
+            seen.append(event)
+            if seen.count >= 6 { break }
+        }
+        #expect(seen.filter { $0 == .connected }.count >= 2, "a reconnect is announced so the consumer resyncs")
+        #expect(seen.contains { if case .event(let e) = $0 { e.actorID == "c2" } else { false } })
     }
 
     @Test func refusedSocketIsReportedAsNotRunning() async throws {
