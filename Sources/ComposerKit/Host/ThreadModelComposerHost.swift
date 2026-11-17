@@ -45,23 +45,48 @@ extension ThreadModel: ComposerThreadSource {
 
 /// Rich draft state (tokens, attachments, selection) that the Engine does not persist, kept per thread in memory and
 /// bounded. Used only while its text still matches the thread's persisted draft.
+///
+/// Entries are scoped to the source that stored them (a thread model) as well as to the key (the session ID): two
+/// sources with the same session ID (two engines in one process, as in tests that run the same mock fixture side by
+/// side) never replace each other's rich state. A source without an entry of its own (a thread model reopened after
+/// eviction) gets the newest entry for the key whose text matches.
 @MainActor
 public final class ComposerDraftCache {
     public static let shared = ComposerDraftCache()
     public let capacity: Int
-    private var drafts: [String: ComposerDraft] = [:]
-    private var order: [String] = []
+
+    struct Key: Hashable {
+        var key: String
+        var owner: ObjectIdentifier?
+    }
+
+    private var drafts: [Key: ComposerDraft] = [:]
+    /// Least recently stored first.
+    private var order: [Key] = []
 
     public init(capacity: Int = 64) {
         self.capacity = capacity
     }
 
-    public func draft(for key: String) -> ComposerDraft? { drafts[key] }
+    /// The newest draft stored for `key`, by any owner.
+    public func draft(for key: String) -> ComposerDraft? {
+        order.last { $0.key == key }.flatMap { drafts[$0] }
+    }
 
-    public func store(_ draft: ComposerDraft, for key: String) {
-        drafts[key] = draft
-        order.removeAll { $0 == key }
-        order.append(key)
+    /// The draft `owner` stored for `key` if its text is `text`; else the newest one for `key` with that text.
+    public func draft(for key: String, owner: ObjectIdentifier?, matching text: String) -> ComposerDraft? {
+        if let own = drafts[Key(key: key, owner: owner)], own.text == text { return own }
+        for candidate in order.reversed() where candidate.key == key {
+            if let draft = drafts[candidate], draft.text == text { return draft }
+        }
+        return nil
+    }
+
+    public func store(_ draft: ComposerDraft, for key: String, owner: ObjectIdentifier? = nil) {
+        let entry = Key(key: key, owner: owner)
+        drafts[entry] = draft
+        order.removeAll { $0 == entry }
+        order.append(entry)
         while order.count > capacity { drafts[order.removeFirst()] = nil }
     }
 }
@@ -93,12 +118,11 @@ public final class ThreadModelComposerHost: ComposerHost {
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
-        if let cached = cache.draft(for: draftKey), cached.text == text { return cached }
-        return ComposerDraft(text: text)
+        return cache.draft(for: draftKey, owner: ObjectIdentifier(source), matching: text) ?? ComposerDraft(text: text)
     }
 
     public func saveDraft(_ draft: ComposerDraft) {
-        cache.store(draft, for: draftKey)
+        cache.store(draft, for: draftKey, owner: ObjectIdentifier(source))
         if source.draft != draft.text { source.draft = draft.text }
     }
 
