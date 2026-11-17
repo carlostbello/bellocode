@@ -566,9 +566,22 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         return index < heights.count ? max(1, heights[index]) : 1
     }
 
-    public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { TranscriptRowView() }
+    /// Row views are dequeued by identifier. A fresh, unidentified row view per row is never reused: NSTableView
+    /// parks every row view that leaves the screen in its row-view purgatory, which then grew by one view (with its own
+    /// layout engine and backing layer) per row ever shown: 11,600 views and ~400 MB after one 10,000-message traversal.
+    public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        if let reused = tableView.makeView(withIdentifier: TranscriptRowView.identifier, owner: nil) as? TranscriptRowView {
+            return reused
+        }
+        TranscriptProfiler.shared.count("rowViewsCreated")
+        return TranscriptRowView()
+    }
 
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        TranscriptProfiler.shared.measure(.viewCreation) { makeView(row: row) }
+    }
+
+    private func makeView(row: Int) -> NSView? {
         if row == 0 {
             let view = tableView.makeView(withIdentifier: TranscriptEdgeView.identifier, owner: nil) as? TranscriptEdgeView
                 ?? TranscriptEdgeView(frame: .zero)
@@ -578,7 +591,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         let index = row - 1
         guard index < rows.count else { return nil }
         let view = tableView.makeView(withIdentifier: TranscriptCellView.identifier, owner: nil) as? TranscriptCellView
-            ?? TranscriptCellView(frame: .zero)
+            ?? {
+                TranscriptProfiler.shared.count("cellViewsCreated")
+                return TranscriptCellView(frame: .zero)
+            }()
         view.controller = self
         configure(view, index: index)
         return view
@@ -598,6 +614,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     }
 
     func configure(_ view: TranscriptCellView, index: Int) {
+        TranscriptProfiler.shared.measure(.configure) { configureNow(view, index: index) }
+    }
+
+    private func configureNow(_ view: TranscriptCellView, index: Int) {
         guard index < rows.count else { return }
         let row = rows[index]
         let layout = displayLayout(row: index, allowPlaceholder: true)
@@ -610,7 +630,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         view.updateCanvas(force: true)
         if changed {
             view.invalidate()
-            view.updateAccessibility()
+            TranscriptProfiler.shared.measure(.accessibility) { view.updateAccessibility() }
         }
         if let layout { requestImages(in: layout, row: row.id) }
     }

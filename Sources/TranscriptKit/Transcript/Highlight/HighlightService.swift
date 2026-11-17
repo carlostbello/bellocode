@@ -97,6 +97,10 @@ public final class TokenizerHighlighter: HighlightService {
         return runs
     }
 
+    public func removeAll() { cache.withLock { $0 = Cache() } }
+
+    public var statistics: (entries: Int, cost: Int) { cache.withLock { ($0.entries.count, $0.cost) } }
+
     /// For tests: number of cached entries.
     var cachedEntryCount: Int { cache.withLock { $0.entries.count } }
 }

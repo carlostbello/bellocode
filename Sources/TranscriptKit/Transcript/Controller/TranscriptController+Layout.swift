@@ -180,12 +180,17 @@ extension TranscriptController {
 
     /// Evicts least recently used layouts just until the cache is back under its bounds, so deallocation is spread out.
     func evictLayouts() {
+        TranscriptProfiler.shared.measure(.eviction) { evictLayoutsNow() }
+    }
+
+    private func evictLayoutsNow() {
         let keep = Set(availableCells().map { rows[$0.index].id })
         let candidates = layoutTick.filter { !keep.contains($0.key) && tails[$0.key] == nil }.sorted { $0.value < $1.value }
         for (id, _) in candidates {
             guard layouts.count > layoutCacheLimit || layoutCacheCost > layoutCacheCostLimit else { break }
             if let old = layouts.removeValue(forKey: id) { layoutCacheCost -= old.cost }
             layoutTick[id] = nil
+            TranscriptProfiler.shared.count("layoutsEvicted")
         }
     }
 
@@ -208,7 +213,9 @@ extension TranscriptController {
             return nil
         }
         let signpost = transcriptSignposter.beginInterval("syncLayout")
-        let layout = LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+        let layout = TranscriptProfiler.shared.measure(.syncLayout) {
+            LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+        }
         transcriptSignposter.endInterval("syncLayout", signpost)
         metrics.syncLayouts += 1
         store(layout)
@@ -234,6 +241,10 @@ extension TranscriptController {
     }
 
     func didFinishLayout(_ layout: RowLayout) {
+        TranscriptProfiler.shared.measure(.layoutApply) { applyFinishedLayout(layout) }
+    }
+
+    private func applyFinishedLayout(_ layout: RowLayout) {
         let id = layout.key.rowID
         if inflight[id] == layout.key {
             inflight[id] = nil
@@ -258,6 +269,10 @@ extension TranscriptController {
     /// Visible rows first; then rows ahead in the scroll direction (0.5 s of travel, at least 1.5 viewports), then
     /// one viewport behind. At most `maxInflightPrefetch` prefetch layouts run at once.
     func updatePrefetch(force: Bool = false) {
+        TranscriptProfiler.shared.measure(.prefetch) { updatePrefetchNow(force: force) }
+    }
+
+    private func updatePrefetchNow(force: Bool) {
         guard !rows.isEmpty else { return }
         let visible = tableView.visibleRect
         guard visible.height > 0 else { return }
@@ -295,6 +310,10 @@ extension TranscriptController {
 
     /// Applies all pending height changes in one table update and restores the anchor.
     public func flushHeights() {
+        TranscriptProfiler.shared.measure(.heightFlush) { flushHeightsNow() }
+    }
+
+    private func flushHeightsNow() {
         flushScheduled = false
         guard !pendingHeights.isEmpty else { return }
         let signpost = transcriptSignposter.beginInterval("flushHeights")

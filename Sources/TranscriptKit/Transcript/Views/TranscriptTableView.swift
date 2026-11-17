@@ -1,4 +1,5 @@
 import AppKit
+import Synchronization
 
 /// Single-column, view-based table. Row selection is off: text selection is the controller's transcript-level model.
 /// The table owns all mouse handling; rows are passive renderers configured from controller state, so selection,
@@ -171,6 +172,23 @@ public final class TranscriptTableView: NSTableView, NSMenuItemValidation {
 
 /// Row view without selection drawing; never a hit-test target, so the table receives every mouse event.
 final class TranscriptRowView: NSTableRowView {
+    static let identifier = NSUserInterfaceItemIdentifier("TranscriptRow")
+    /// Live row views, including AppKit's reuse queue and purgatory (cache report; a regression guard).
+    nonisolated static let liveCount = Atomic<Int>(0)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = Self.identifier
+        Self.liveCount.add(1, ordering: .relaxed)
+    }
+
+    convenience init() { self.init(frame: .zero) }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit { Self.liveCount.subtract(1, ordering: .relaxed) }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func drawSelection(in dirtyRect: NSRect) {}
     override func drawBackground(in dirtyRect: NSRect) {}
@@ -223,9 +241,12 @@ final class TranscriptCellView: NSView {
     var drawState = RowLayout.DrawState(selectionColor: NSColor.selectedTextBackgroundColor.cgColor)
     private(set) var isHovered = false
     let canvas = TranscriptCanvasView()
+    /// Live cell views, including AppKit's reuse queue (cache report).
+    nonisolated static let liveCount = Atomic<Int>(0)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        Self.liveCount.add(1, ordering: .relaxed)
         identifier = Self.identifier
         canvas.owner = self
         addSubview(canvas)
@@ -235,6 +256,8 @@ final class TranscriptCellView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit { Self.liveCount.subtract(1, ordering: .relaxed) }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -340,6 +363,10 @@ final class TranscriptCanvasView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let owner, let layout = owner.layout, let context = NSGraphicsContext.current?.cgContext else { return }
+        TranscriptProfiler.shared.measure(.draw) { drawNow(dirtyRect, owner: owner, layout: layout, context: context) }
+    }
+
+    private func drawNow(_ dirtyRect: NSRect, owner: TranscriptCellView, layout: RowLayout, context: CGContext) {
         let signpost = transcriptSignposter.beginInterval("draw")
         defer { transcriptSignposter.endInterval("draw", signpost) }
         // Canvas coordinates: x = 0 is `gutter` points left of the text column; y follows the row.

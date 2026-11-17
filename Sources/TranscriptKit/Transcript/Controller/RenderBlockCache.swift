@@ -63,6 +63,10 @@ public final class RenderBlockCache: Sendable {
 
     public var count: Int { state.withLock { $0.entries.count } }
 
+    public var statistics: (entries: Int, cost: Int, costLimit: Int) {
+        state.withLock { ($0.entries.count, $0.cost, costLimit) }
+    }
+
     public func removeAll() { state.withLock { $0 = State() } }
 
     private static func cost(_ row: TranscriptRow) -> Int {

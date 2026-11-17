@@ -87,6 +87,11 @@ extension ScenarioRunner {
         var hugeRowHeight: Double
         var tableGeometryErrorPt: Double
         var memoryAfter: Memory
+        var display: DisplayInfo.Info?
+        /// Footprint and live malloc peaks during the 3× traversal, with the cache report at the footprint peak.
+        var traversalPeak: PeakSampler.Report?
+        /// With `--profile`: main-thread time by phase, all frames and slow frames (both directions).
+        var attribution: FrameAttribution.Report?
     }
 
     func runS2() async {
@@ -105,9 +110,14 @@ extension ScenarioRunner {
         var flick = Flick()
         var travelled = 0.0
         var duration = 0.0
+        let sampler = PeakSampler()
+        let attribution = arguments.contains("--profile") ? FrameAttribution(nominal: nominal) : nil
+        var firstFrame = true
         watchdog.start()
         recorder.start()
         await perFrame { [self] dt, _ in
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution?.frame(interval: dt) }
+            sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: d)
             travelled += d
@@ -119,7 +129,10 @@ extension ScenarioRunner {
         log("S2 down done (\(downIntervals.count) frames)")
         recorder.start()
         flick = Flick()
+        firstFrame = true
         await perFrame { [self] dt, _ in
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution?.frame(interval: dt) }
+            sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: -d)
             travelled += d
@@ -128,6 +141,7 @@ extension ScenarioRunner {
         }
         let upIntervals = recorder.stop()
         let upTags = recorder.tags
+        let profile = attribution?.finish()
         recorder.tagProvider = nil
         log("S2 up done (\(upIntervals.count) frames)")
         let huge = zip(downIntervals + upIntervals, downTags + upTags).filter(\.1).map(\.0)
@@ -157,7 +171,8 @@ extension ScenarioRunner {
                 meanVelocityPtPerS: round2(travelled / max(duration, 0.001)),
                 realisticMeanVelocityPtPerS: round2(realTravel / max(realDuration, 0.001)), traversalSpeedMultiplier: scrollSpeed,
                 watchdog: watchdog.stop(), metrics: controller.metrics, hugeRowHeight: Double(controller.rowRect(hugeIndex).height),
-                tableGeometryErrorPt: geometryError(), memoryAfter: Memory.now()),
+                tableGeometryErrorPt: geometryError(), memoryAfter: Memory.now(), display: DisplayInfo.current(window: window),
+                traversalPeak: sampler.report, attribution: profile),
             name: "S2")
     }
 
