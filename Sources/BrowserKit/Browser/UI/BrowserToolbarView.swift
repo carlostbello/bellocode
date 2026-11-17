@@ -290,6 +290,16 @@ final class BrowserToolbarView: NSView {
         return button
     }
 
+    /// Narrow panes keep the address field usable: secondary tools move to the More and Browser menus.
+    override func layout() {
+        super.layout()
+        let width = bounds.width
+        viewport.isHidden = width < 560
+        appearanceButton.isHidden = width < 560
+        share.isHidden = width < 460
+        pick.isHidden = width < 400
+    }
+
     func update(tab: BrowserTab?, picking: Bool) {
         back.isEnabled = tab?.canGoBack ?? false
         forward.isEnabled = tab?.canGoForward ?? false

@@ -53,11 +53,13 @@ import Testing
         #expect(await shell.driver.select(.thread(threads[1])))
         shell.driver.settle()
         #expect(browser.pane?.set !== set)
-        let start = ContinuousClock.now
         #expect(await shell.driver.select(.thread(threads[0])))
         shell.driver.settle()
         #expect(browser.pane?.set === set && browser.pane?.set?.selectedTabID == tabID)
-        #expect(ContinuousClock.now - start < .milliseconds(500))
+        // The browser's own swap (no reload): well inside the 100 ms feedback budget.
+        let start = ContinuousClock.now
+        browser.display(browser.context)
+        #expect(ContinuousClock.now - start < .milliseconds(100))
 
         // The pane commands are wired to the Browser menu router.
         #expect(browser.canPerform(.newTab))

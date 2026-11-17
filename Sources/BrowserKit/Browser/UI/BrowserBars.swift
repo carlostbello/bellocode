@@ -30,7 +30,8 @@ final class BrowserBanner: NSView {
         layer?.cornerRadius = DS.Radius.medium
         label.font = DS.Typography.current.caption
         label.maximumNumberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
+        label.lineBreakMode = .byWordWrapping
+        label.cell?.truncatesLastVisibleLine = true
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         icon.imageScaling = .scaleProportionallyDown

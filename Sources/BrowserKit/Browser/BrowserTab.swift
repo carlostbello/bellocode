@@ -211,9 +211,11 @@ public final class BrowserTab: NSObject {
 
     /// The bridge's view of this tab.
     public var info: BrowserTabInfo {
+        // Live values when the web view exists: KVO updates can lag the navigation delegate by a run-loop turn.
         BrowserTabInfo(
-            id: id, url: (url ?? pendingURL)?.absoluteString ?? "about:blank", title: title, loading: isLoading, loadError: loadError,
-            canGoBack: canGoBack, canGoForward: canGoForward, generation: generation)
+            id: id, url: (webView?.url ?? url ?? pendingURL)?.absoluteString ?? "about:blank", title: webView?.title ?? title,
+            loading: webView?.isLoading ?? false, loadError: loadError, canGoBack: webView?.canGoBack ?? canGoBack,
+            canGoForward: webView?.canGoForward ?? canGoForward, generation: generation)
     }
 
     // MARK: Web view lifecycle

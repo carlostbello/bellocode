@@ -488,15 +488,24 @@ public final class BrowserPaneController: NSViewController {
 
     @objc private func morePressed(_ sender: NSButton) {
         let menu = NSMenu()
-        let entries: [(String, BrowserPaneCommand)] = [
+        var entries: [(String, BrowserPaneCommand)] = [
             ("Open in Default Browser", .openInDefaultBrowser), ("Find in Page…", .findInPage),
             ("Zoom In", .zoomIn), ("Zoom Out", .zoomOut), ("Actual Size", .actualSize),
             ("New Private Tab", .newPrivateTab), ("Reopen Closed Tab", .reopenClosedTab),
             (workspace.isWebInspectorEnabled ? "Disallow Web Inspector" : "Allow Web Inspector", .toggleWebInspector),
             ("Clear Site Data for This Project…", .clearSiteData),
         ]
+        if toolbar.share.isHidden, let tab = set?.selectedTab {
+            entries.append((tab.isShared ? "Stop Sharing Tab with Agent" : "Share Tab with Agent", .shareTab))
+        }
+        if toolbar.pick.isHidden { entries.append(("Pick Element for Composer", .pickElement)) }
+        if toolbar.appearanceButton.isHidden {
+            entries.append(("Page Appearance: Match BelloCode", .appearanceSystem))
+            entries.append(("Page Appearance: Light", .appearanceLight))
+            entries.append(("Page Appearance: Dark", .appearanceDark))
+        }
         for (index, entry) in entries.enumerated() {
-            if [2, 5, 7].contains(index) { menu.addItem(.separator()) }
+            if [2, 5, 7, 9].contains(index) { menu.addItem(.separator()) }
             let item = NSMenuItem(title: entry.0, action: #selector(menuCommand(_:)), keyEquivalent: "")
             item.representedObject = entry.1.rawValue
             item.target = self
