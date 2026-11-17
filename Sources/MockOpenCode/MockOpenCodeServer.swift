@@ -136,6 +136,8 @@ public actor MockOpenCodeServer {
         didSet { if recordedCommands.count > 200 { recordedCommands.removeFirst(recordedCommands.count - 200) } }
     }
     var queuedSessionScripts: [String: [TurnScript]] = [:]
+    /// Persistent PTYs and their WebSocket attachments (PTYRoutes.swift).
+    var pty = MockPTYState()
 
     public init(scenario: Scenario = .empty(), options: MockServerOptions = MockServerOptions()) {
         self.options = options
@@ -474,6 +476,7 @@ public actor MockOpenCodeServer {
         for (subscriberID, subscriber) in subscribers where subscriber.connectionID == id {
             closeSubscriber(subscriberID, abrupt: false)
         }
+        closePTYSubscribers(connectionID: id)
     }
 
     /// Applies injected faults, then auth, then routing.
@@ -551,9 +554,61 @@ public actor MockOpenCodeServer {
             case let .eventStream(subscriberID):
                 await streamEvents(io, subscriberID: subscriberID, server: server)
                 return
+            case let .ptySocket(subscriberID, handshake):
+                await streamPTY(io, parser: parser, subscriberID: subscriberID, handshake: handshake, server: server)
+                return
             }
         }
         io.finish()
+    }
+
+    /// A PTY WebSocket: writes the attachment's frames and reads the client's until either side closes.
+    @concurrent
+    private static func streamPTY(
+        _ io: ConnectionIO, parser: HTTPRequestParser, subscriberID: Int, handshake: Data, server: MockOpenCodeServer
+    ) async {
+        do {
+            try await io.send(handshake)
+        } catch {
+            await server.closePTYSubscriber(subscriberID)
+            io.reset()
+            return
+        }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var frames = WebSocket.Parser()
+                frames.append(parser.remainder)
+                while !Task.isCancelled {
+                    do {
+                        while let message = try frames.next() {
+                            await server.ptySocketMessage(subscriberID, message)
+                            if case .close = message { return }
+                        }
+                        guard let data = try await io.receive() else { break }
+                        frames.append(data)
+                    } catch {
+                        break
+                    }
+                }
+                await server.closePTYSubscriber(subscriberID)
+            }
+            group.addTask {
+                while let batch = await server.nextPTYBatch(subscriberID) {
+                    var bytes = Data()
+                    for frame in batch.frames { bytes.append(frame) }
+                    if let close = batch.close, !batch.abrupt { bytes.append(WebSocket.close(code: close.code, reason: close.reason)) }
+                    if !bytes.isEmpty { try? await io.send(bytes) }
+                    if batch.close != nil {
+                        if batch.abrupt { io.reset() } else { io.finish() }
+                        return
+                    }
+                }
+                io.finish()
+            }
+            await group.next()
+            group.cancelAll()
+            io.reset()
+        }
     }
 
     @concurrent
@@ -614,6 +669,8 @@ struct EventBatch: Sendable {
 enum ResponsePlan: Sendable {
     case response(HTTPResponse)
     case eventStream(subscriberID: Int)
+    /// Upgrade to a PTY WebSocket: send `handshake` (101), then frames.
+    case ptySocket(subscriberID: Int, handshake: Data)
     case reset
 }
 

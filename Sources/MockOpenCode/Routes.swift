@@ -76,6 +76,7 @@ extension MockOpenCodeServer {
             return .eventStream(subscriberID: openSubscriber(connectionID: connectionID, types: eventTypes(request)))
         }
 
+        if let plan = routePTY(method, parts, request, connectionID: connectionID) { return plan }
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
         if let response = routeWorkspace(method, parts, request) { return .response(response) }
         let response: HTTPResponse

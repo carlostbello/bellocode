@@ -91,6 +91,7 @@ public struct HTTPResponse: Sendable, Error {
     static func reason(_ status: Int) -> String {
         switch status {
         case 200: "OK"
+        case 101: "Switching Protocols"
         case 204: "No Content"
         case 400: "Bad Request"
         case 401: "Unauthorized"
@@ -133,6 +134,9 @@ struct HTTPRequestParser {
     private var buffer = Data()
 
     mutating func append(_ data: Data) { buffer.append(data) }
+
+    /// Bytes received after the last complete request (the start of a WebSocket stream after an upgrade).
+    var remainder: Data { buffer }
 
     /// Returns the next complete request, or `nil` if more bytes are needed.
     mutating func next() throws(HTTPParseError) -> HTTPRequest? {
