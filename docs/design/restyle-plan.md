@@ -1,104 +1,85 @@
 # Restyle plan: current code → `visual-language.md`
 
-Order keeps `swift build` green after every step: tokens first (additive), then shared controls, then modules
-one at a time, deleting old tokens last. Each step's evidence is the listed `docs/snapshots/` scenarios re-rendered
-in both appearances and compared with `docs/design/mock/*.png`. Snapshots cannot show materials, so every glass
-surface must also have its opaque fallback (that is what the PNG shows). Re-run AGENTS.md UX checklist (03 §E).
+Order keeps `swift build` green after every step: tokens first (additive), then shared controls, then one module
+per PR, old tokens deleted last. Evidence = the listed `docs/snapshots/` scenarios re-rendered in light and dark,
+compared with `docs/design/mock/*.png`. Snapshots cannot capture materials, so each glass surface's opaque fallback
+is what the PNG shows. Run the AGENTS.md UX checklist (03 §E) per step.
 
-## 0. DesignSystem (one PR, additive, no visual change yet)
-- `Tokens.swift`: add `DS.Color` (every token in visual-language §1) as dynamic `NSColor`s resolved for
-  aqua/darkAqua/HC-aqua/HC-darkAqua; `DS.Color.accent` honours the Multicolor rule. Add `DS.Font` roles
-  (`prose`, `composer`, `body`, `bodyEmph`, `title`, `label`, `meta`, `code`, `codeSmall`, `terminal`, headings)
-  as `base + delta`, plus paragraph styles with the line heights. Add `DS.Radius.xs/sm/md/lg/xl`, `DS.Size`
-  (header 52, row 28, control 28/24, sidebar 264, panel 416, column 736), `DS.Shadow` recipes, `DS.Motion`
-  (`popIn` 120 ms + curve, `press` scale). Keep `DS.Palette`/`Typography` as deprecated aliases.
-- New `Controls/` files, each layer-backed, `wantsUpdateLayer`, no cells, states from §6, unit-tested for state →
-  colour mapping and accessibility role/label:
-  `DSButton` (primary/outline/ghost/destructive/icon × regular/small, optional shortcut hint),
-  `DSTabBar` (ghost pill tabs with counts), `DSSegmented` (track + thumbs), `DSSelectButton` (ghost select that
-  opens a `DSMenuPanel`), `DSMenuPanel` (glass `NSPanel`, rows, headers, separators, keyboard nav),
-  `DSTextField` (ring + focus halo), `DSCheckbox`/`DSRadio`/`DSSwitch`, `DSKbd`, `DSPill`, `DSSpinner` (arc,
-  stepped, pauses off-screen), `DSScroller` (6 pt overlay knob), `DSGlassView` (NSVisualEffectView + tint +
-  Reduce Transparency fallback), `DSRowBackgroundView` (inset 6 pt row fill), `DSStatusGlyph` (shape + word).
-- SwiftUI mirrors: `DSButtonStyle`, `DSMenuRowStyle`, `DSToggleStyle`, `Color.ds.*`, `Font.ds.*`.
-- Replace `MonogramView` uses with a `ProjectIcon` (folder glyph or favicon). Redo `CountBadge`, `UndoToastView`
-  (glass, ghost Undo), `EmptyStateView` (outline button), `ToolbarButton.make` → `DSButton.icon`.
-- Package: add `DesignSystem` to `AgentUI` dependencies (smallest change; it already builds against BelloCore)
-  so cards and pickers use the shared styles instead of re-deriving them through `AgentUIStyle`.
-- Evidence: a new `DesignSystemDemo` snapshot of every control × state × appearance (gallery PNG).
+## 0. DesignSystem (additive, no visual change yet)
+- `Tokens.swift`: `DS.Color` (all §1 tokens, dynamic for aqua / darkAqua / both HC variants; accent honours the
+  Multicolor rule), `DS.Font` roles as `base + delta` with paragraph styles, `DS.Radius` xs–xl, `DS.Size` (header
+  52, row 28, controls 28/24, sidebar 264, panel 416, column 736), `DS.Shadow`, `DS.Motion.popIn/press`. Keep
+  `DS.Palette`/`Typography` as deprecated aliases until step 11.
+- New controls (layer-backed, `wantsUpdateLayer`, no cells; state→colour and accessibility unit-tested):
+  `DSButton` (primary/outline/ghost/destructive/icon × regular/small, shortcut hint), `DSTabBar`, `DSSegmented`,
+  `DSSelectButton`, `DSMenuPanel` (glass `NSPanel`, rows, headers, keyboard nav), `DSTextField`,
+  `DSCheckbox`/`DSRadio`/`DSSwitch`, `DSKbd`, `DSPill`, `DSSpinner` (stepped, pauses off-screen), `DSScroller`,
+  `DSGlassView` (effect view + tint + Reduce Transparency fallback), `DSRowBackgroundView`, `DSStatusGlyph`.
+  SwiftUI mirrors: `DSButtonStyle`, `DSMenuRowStyle`, `DSToggleStyle`, `Color.ds`, `Font.ds`.
+- Rework `CountBadge`, `UndoToastView`, `EmptyStateView`, `ToolbarButton`; replace `MonogramView` with
+  `ProjectIcon` (folder glyph or favicon).
+- Package (smallest change outside DesignSystem): add `DesignSystem` to `AgentUI`'s dependencies.
+- Evidence: new gallery snapshot of every control × state × appearance.
 
 ## 1. Shell and sidebar (`BelloCodeApp/Shell`, `Sidebar`, `Content/ThreadHeaderView`)
-- [ ] Window: transparent title bar, full-size content, `canvas` background; header 52 holds title + crumbs +
-  actions on one line; traffic lights sit in the sidebar's top 52.
-- [ ] `MainSplitViewController`: replace the right-panel `NSSegmentedControl` with `DSTabBar`; dividers `border`.
-- [ ] Sidebar: plain outline view, `DSRowBackgroundView`, rows 28 regular weight, glyph slot via `DSStatusGlyph`,
-  two-line Needs-you rows, project header with folder icon + count + chevron, group labels sentence case, child
-  guide lines, footer with connection word. Remove emoji glyphs and coloured dots; unread = dot + medium title.
-- [ ] Search field → `DSTextField` variant with ⌘K `DSKbd`. `SnoozePicker` → `DSMenuPanel`.
-- Evidence: `app-approval-shell-dark-1280x800`, `app-running-queued-light-1280x800`, `app-draft-dark-1280x800`,
-  `nav-sections-light`, `nav-multiselect-dark`, `nav-snooze-dark`, `nav-drag-gap-light`, `orch-fanout-sidebar-dark`.
+Transparent title bar, one-line 52 pt header (title, crumbs, outline actions, panel toggles); `DSTabBar` replaces
+the right-panel `NSSegmentedControl`; plain outline view with `DSRowBackgroundView`, regular-weight 28 pt rows,
+`DSStatusGlyph`, two-line Needs-you rows, folder project headers, sentence-case groups, child guides, footer; no
+emoji, no dots-as-status; search via `DSTextField` + ⌘K; `SnoozePicker` on `DSMenuPanel`.
+Evidence: `app-approval-shell-dark-1280x800`, `app-running-queued-light-1280x800`, `app-draft-dark-1280x800`,
+`nav-sections-light`, `nav-multiselect-dark`, `nav-snooze-dark`, `nav-drag-gap-light`, `orch-fanout-sidebar-dark`.
 
-## 2. Transcript (`TranscriptKit/Layout/TranscriptTheme.swift`, `RowLayout`, `BlockLayout`, `Views/Overlays`)
-- [ ] `TranscriptTheme.resolve` reads `DS.Color`/`DS.Font` (prose 14/22, code 12.5/19); bubble `message` r16;
-  code block `codeFill` r8 with 28 pt header; tables without outer border; inline code style; syntax token table.
-- [ ] Work group, tool rows, reasoning, running sweep (stepped, Reduce Motion static), system events as one meta
-  line, errors as inline rows. Cache keys gain theme revision (rule 4) so a token change re-lays once.
-- [ ] Find bar (`Overlays.swift`): `DSTextField` + icon buttons, no `.push` Done.
-- Evidence: `transcript-mixed-light`, `transcript-cards-dark`, `transcript-workgroup-expanded-dark`,
-  `transcript-tool-live-dark`, `transcript-streaming-table-light`, `transcript-find-dark`, `transcript-selection-light`,
-  `transcript-wide-table-long-line-light`.
+## 2. Transcript (`TranscriptKit/Layout/TranscriptTheme`, `RowLayout`, `BlockLayout`, `Views/Overlays`)
+Theme from `DS` (prose 14/22, code 12.5/19, syntax table); bubble `message` r16; code block r8 + 28 pt header;
+borderless tables; work groups, tool rows, reasoning, stepped running sweep, one-line system events, inline errors;
+theme revision in the layout cache key (rule 4); find bar on DS controls.
+Evidence: `transcript-mixed-light`, `transcript-cards-dark`, `transcript-workgroup-expanded-dark`,
+`transcript-tool-live-dark`, `transcript-streaming-table-light`, `transcript-find-dark`, `transcript-selection-light`.
 
 ## 3. Composer (`ComposerKit/View/*`, `AppStyle.composer`)
-- [ ] `ComposerStyle` gains radius 16, glass + outline + shadow, prompt font 14/21, insets 12/14/4, control 26.
-- [ ] `ComposerControls`: controls bar as ghost selects; Send 30 pt accent circle; Stop outline capsule with red
-  square; context strip (project, branch, worktree). `CompletionPanel` → `DSMenuPanel` rows. Attachment chips r8.
-- Evidence: `app-draft-dark-1280x800`, `app-running-queued-light-1280x800`, `app-completion-dark-980x640`.
+Glass r16 container with outline and shadow, prompt 14/21, ghost-select controls bar, 30 pt accent Send, outline
+Stop with red square, context strip; `CompletionPanel` on `DSMenuPanel`.
+Evidence: `app-draft-dark-1280x800`, `app-running-queued-light-1280x800`, `app-completion-dark-980x640`.
 
 ## 4. AgentUI cards and pickers (`AgentUI/Requests`, `Models`, `Modes`, `Accounts`)
-- [ ] `PendingRequestStackView`: attached glass card (top r16, overlaps composer 16, 4.5 % semantic tint), no
-  left bar or caps label; buttons `DSButtonStyle` outline/outline/primary with hints; custom radios.
-- [ ] `ModelPickerView`: `DSMenuPanel` look: search row, provider headers, check slot, meta, Free in success,
-  Connect… links, effort `DSSegmented`, kbd footer. `PermissionModePicker`, `AccountsViews`: same row recipe.
-- Evidence: `app-approval-shell-dark-1280x800`, `app-question-light-980x640`, `app-child-approval-dark-980x640`,
-  `app-model-picker-dark-1280x800`, `app-error-offline-light-980x640`.
+Request card attached to the composer (top r16, 16 pt overlap, 4.5 % tint), no accent bar or caps label, outline /
+outline / primary buttons with hints, custom radios; model picker with provider headers, check slot, Free in
+success, Connect… links, effort `DSSegmented`, kbd footer; mode and account pickers on the same row recipe.
+Evidence: `app-approval-shell-dark-1280x800`, `app-question-light-980x640`, `app-child-approval-dark-980x640`,
+`app-model-picker-dark-1280x800`, `app-error-offline-light-980x640`.
 
-## 5. Diff (`DiffKit/View/DiffTheme.swift`, `Changes/ChangesPanelController`)
-- [ ] `DiffTheme` from `DS.Color` diff tokens; line height 19, gutter 34, word emphasis; sticky file header 34;
-  hunk bar 24; collapsed-context row; hunk actions on hover only.
-- [ ] Toolbar: `DSSelectButton` for scope/turn, `DSSegmented` for unified/split, `DSButton.icon` overflow; file
-  rows with M/A/D badges. Remove `NSPopUpButton`/`NSSegmentedControl`.
-- Evidence: `diff-app-changes-dark-1280x800`, `diff-panel-uncommitted-light`, `diff-split-dark`,
-  `diff-unified-light`, `diff-words-light`, `diff-comment-dark`, `diff-pickers-light`.
+## 5. Diff (`DiffKit/View/DiffTheme`, `Changes/ChangesPanelController`, `DiffViewController`)
+Diff tokens, 19 pt lines, 34 pt gutter, word emphasis, sticky file header, hunk bar, collapsed-context row, hover-only
+hunk actions; toolbar on `DSSelectButton`/`DSSegmented`/icon button; M/A/D badges. No pop-ups or segmented controls.
+Evidence: `diff-app-changes-dark-1280x800`, `diff-panel-uncommitted-light`, `diff-split-dark`, `diff-unified-light`,
+`diff-words-light`, `diff-comment-dark`, `diff-pickers-light`.
 
-## 6. Terminal (`TerminalKit/Terminal/TerminalTheme`, `TerminalTabStrip`, `TerminalFindBar`)
-- [ ] ANSI palette and cursor/selection from tokens; SF Mono 12. Tab strip 32 with ghost tabs; find bar on
-  `DSTextField` + icon buttons; exited-state banner with outline Restart.
-- Evidence: `terminal-drawer-one-dark`, `terminal-drawer-split-dark`, `terminal-drawer-find-light`,
-  `terminal-drawer-exited-light`.
+## 6. Terminal (`TerminalKit/Terminal/TerminalTheme`, `TerminalTabStrip`, `TerminalFindBar`, pane/surface)
+Token ANSI palette, cursor and selection; SF Mono 12; 32 pt ghost tab strip; DS find bar; outline Restart.
+Evidence: `terminal-drawer-one-dark`, `terminal-drawer-split-dark`, `terminal-drawer-find-light`,
+`terminal-drawer-exited-light`.
 
 ## 7. Browser (`BrowserKit/Browser/UI/*`)
-- [ ] One 36 pt toolbar: icon buttons + URL `DSTextField`; tab strip as ghost tabs; agent-control banner as a tinted
-  info row with ghost Stop / outline Take over; `DSSwitch` for Agent control; dialogs/downloads on `DSMenuPanel`.
-- Evidence: `browser-app-panel-light`, `browser-agent-control-dark`, `browser-dialog-downloads-light`,
-  `browser-find-light`, `browser-inspect-light`, `browser-responsive-dark`.
+One 36 pt toolbar (icon buttons, URL `DSTextField`), ghost tabs, agent banner as a tinted info row (ghost Stop,
+outline Take over), `DSSwitch`, dialogs and downloads on `DSMenuPanel`.
+Evidence: `browser-app-panel-light`, `browser-agent-control-dark`, `browser-dialog-downloads-light`,
+`browser-find-light`, `browser-inspect-light`, `browser-responsive-dark`.
 
-## 8. Navigation and palette (`BelloCodeApp/Palette`, `Navigation.swift`)
-- [ ] Palette panel 600 wide, scrim over window, 48 input, grouped rows 34 with neutral highlight, match ranges in
-  semibold `text`, kbd footer. Undo toast and drop badge via `DSGlassView`.
-- Evidence: `nav-palette-files-dark-1280x800`, `nav-search-light-1280x800`, `nav-undo-toast-light-1280x800`.
+## 8. Navigation and palette (`BelloCodeApp/Palette`, `DesignSystem/Navigation.swift`)
+600 pt glass palette, window scrim, 48 pt input, grouped 34 pt rows with neutral highlight and semibold match
+ranges, kbd footer; undo toast and drop badge on `DSGlassView`.
+Evidence: `nav-palette-files-dark-1280x800`, `nav-search-light-1280x800`, `nav-undo-toast-light-1280x800`.
 
-## 9. Orchestration (`OrchestrationUI/AgentsPanelView`, transcript child cards)
-- [ ] Summary pills, tree rows with guides, status glyph + word, agent-tag pills, hover actions, report boxes.
-- Evidence: `orch-agents-tree-dark`, `orch-agents-tree-light`, `orch-waiting-reports-dark`, `orch-child-view-light`,
-  `orch-transcript-cards-light`.
+## 9. Orchestration (`OrchestrationUI/AgentsPanelView`, child cards in the transcript)
+Summary pills, tree rows with guide lines, glyph + word status, agent-tag pills, hover actions, report boxes.
+Evidence: `orch-agents-tree-dark`, `orch-agents-tree-light`, `orch-waiting-reports-dark`, `orch-child-view-light`,
+`orch-transcript-cards-light`.
 
 ## 10. Settings and onboarding (last, light touch)
-- [ ] Keep the native Settings window and form layout; swap stock checkboxes/radios/buttons for DS controls only
-  where they sit inside our panes; sentence-case section labels; empty/onboarding states use `EmptyStateView`.
-- Evidence: `nav-settings-notifications-dark` plus onboarding/first-run scenarios (add one if missing).
+Keep the native Settings window and form; DS controls only inside our panes; sentence-case labels; first-run and
+empty states on `EmptyStateView`. Evidence: `nav-settings-notifications-dark`, plus a first-run scenario (add one).
 
 ## 11. Clean-up
-- Delete deprecated `DS.Palette`/`Typography` aliases and `AppStyle` re-mapping; grep must show zero
-  `bezelStyle`, `NSSegmentedControl`, `NSPopUpButton`, `.borderedProminent`, `.bordered`, `controlAccentColor` row
-  fills and `selectedContentBackgroundColor` outside DesignSystem. Update snapshot fixtures to realistic titles.
-- Add T3 Code's MIT notice to the acknowledgements (see visual-language.md, Attribution).
+Delete the deprecated aliases and `AppStyle` re-mapping. Grep outside DesignSystem must find no `bezelStyle`,
+`NSSegmentedControl`, `NSPopUpButton`, `.borderedProminent`, `.bordered`, or accent/`selectedContentBackgroundColor`
+row fills. Switch snapshot fixtures to realistic thread titles. Add T3 Code's MIT notice to the acknowledgements.
