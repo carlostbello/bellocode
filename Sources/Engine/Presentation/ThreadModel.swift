@@ -179,9 +179,14 @@ public final class ThreadModel: Identifiable {
     /// A turn is running (or stopping).
     public var isRunning: Bool {
         switch status?.status {
-        case .running, .stopping, .awaitingApproval, .awaitingAnswer: true
-        case .unknown, .failed, .finishedUnread, .idle: false
-        case nil: session?.isRunning ?? false
+        case .running, .stopping: return true
+        case .awaitingApproval, .awaitingAnswer:
+            // BelloCode's own requests (a secret card, an app approval) do not hold a run open: the agent ended its
+            // turn and will be woken. The thread needs the person but is not running.
+            if !pendingRequests.isEmpty, pendingRequests.allSatisfy(\.isApp) { return session?.isRunning ?? false }
+            return true
+        case .unknown, .failed, .finishedUnread, .idle: return false
+        case nil: return session?.isRunning ?? false
         }
     }
 

@@ -74,6 +74,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                                 .sorted { $0.created > $1.created }.prefix(40).map { ($0.title, $0.id) }
                         }
                         model.openThread = { id in openThread?(id) }
+                        ScheduledTasksModelRegistry.last = model
                         let controller = NSHostingController(rootView: ScheduledTasksView(model: model))
                         controller.sizingOptions = [.preferredContentSize]
                         return controller

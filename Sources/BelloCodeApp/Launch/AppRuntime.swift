@@ -107,6 +107,11 @@ final class AppRuntime {
         let connection = ServerConnection(baseURL: endpoint.url, credentials: ServerCredentials(password: endpoint.password ?? ""))
         var configuration = EngineConfiguration(server: .fixed(connection), store: .file(directory.appending(path: "projection.sqlite")))
         configuration.defaultDirectory = data.defaultDirectory
+        // Orchestration extras on mock data: nothing reaches the Keychain, GitHub or the user's caches.
+        configuration.secretVault = InMemorySecretVault()
+        configuration.gitHub = MockGitHub.transport()
+        configuration.pullRequestPoll = .seconds(2)
+        configuration.visualsDirectory = directory.appending(path: "visuals", directoryHint: .isDirectory)
         let suite = "com.bellocode.app.mock"
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .mock(scenario),

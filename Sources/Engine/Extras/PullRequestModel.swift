@@ -406,9 +406,11 @@ public struct PullRequestWatchRecord: Hashable, Sendable, Codable {
 public enum PullRequestWakeText {
     public static let prefix = "[BelloCode PR watch]"
 
+    /// The first line is what the transcript shows as the wake note, so it says why: "[BelloCode PR watch] a/b#1:
+    /// Checks finished on 9f2c1ab: 1 check failed."
     public static func message(_ snapshot: PullRequestSnapshot, events: [PullRequestWakeEvent]) -> String {
-        var lines = ["\(prefix) \(snapshot.ref) “\(snapshot.title)” changed:"]
-        lines += events.map { "- " + $0.text }
+        var lines = ["\(prefix) \(snapshot.ref): " + events.map(\.text).joined(separator: " ")]
+        lines.append("Pull request: “\(snapshot.title)” (\(snapshot.state.label), \(snapshot.reviewDecision.label), \(snapshot.checksSummary.text)).")
         lines.append("PR: \(snapshot.ref.url). Act on this if it needs you (fix failures, answer reviews); otherwise reply briefly.")
         if events.contains(where: { if case .closed = $0 { true } else { false } }) {
             lines.append("Watching has stopped.")

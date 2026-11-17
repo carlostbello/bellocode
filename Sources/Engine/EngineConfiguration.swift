@@ -60,6 +60,8 @@ public struct EngineConfiguration: Sendable {
     /// PR watch polling: base interval, longest backoff after failures.
     public var pullRequestPoll: Duration = .seconds(120)
     public var pullRequestMaxBackoff: Duration = .seconds(1800)
+    /// Where HTML visuals are kept (default: `~/Library/Caches/BelloCode/visuals`).
+    public var visualsDirectory: URL?
     /// Off in tests that do not exercise scheduling; the app always starts it.
     public var startsExtras = true
 

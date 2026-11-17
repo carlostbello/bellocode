@@ -101,6 +101,10 @@ public enum RowBuilder {
             if let report = subagentReport(user.text) {
                 return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: report)))]
             }
+            // BelloCode's own wakes (PR watch, secret answers) are not the person's message: one line saying why.
+            if let note = belloCodeWake(user.text) {
+                return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: note)))]
+            }
             let files = message.parts.compactMap { part -> FileChip? in
                 guard case .file(let file) = part.content else { return nil }
                 return chip(file)
@@ -317,6 +321,26 @@ public enum RowBuilder {
         return "↩ “\(description)” \(verb)" + (clipped.isEmpty ? "" : ": " + clipped)
     }
 
+    /// "[BelloCode PR watch] a/b#1: Checks finished…" → "PR watch woke this thread: a/b#1: Checks finished…";
+    /// "[BelloCode secret] The user saved “X”. secretRef: …" → "Secret: The user saved “X”." (references stay out of
+    /// the note). nil for other text.
+    static func belloCodeWake(_ text: String) -> String? {
+        guard text.hasPrefix("[BelloCode ") else { return nil }
+        let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
+        if first.hasPrefix("[BelloCode PR watch] ") {
+            let rest = first.dropFirst("[BelloCode PR watch] ".count)
+            return "↻ PR watch woke this thread: " + (rest.count > 200 ? rest.prefix(199) + "…" : rest)
+        }
+        if first.hasPrefix("[BelloCode secret] ") {
+            var rest = String(first.dropFirst("[BelloCode secret] ".count))
+            for marker in [" secretRef:", " One-read path:"] {
+                if let range = rest.range(of: marker) { rest = String(rest[..<range.lowerBound]) }
+            }
+            return "Secret request: " + (rest.count > 200 ? String(rest.prefix(199)) + "…" : rest)
+        }
+        return nil
+    }
+
     /// BelloCode's `html_render` app tool (`bellocode_app_html_render`) as a visual card, from the call's title and the
     /// result's `visualID:`/`height:`/`note:` lines. nil for other tools.
     static func visualCard(_ call: ToolCall) -> VisualCardContent? {
@@ -364,8 +388,30 @@ public enum RowBuilder {
             for key in keys { if let value = input[key] as? String, !value.isEmpty { return value } }
             return ""
         }
-        let lower = name.lowercased()
+        var lower = name.lowercased()
+        // BelloCode's app tools (client MCP `bellocode_app_*`, docs/features/orchestration-extras.md) read as actions.
+        if lower.hasPrefix("bellocode_app_") { lower.removeFirst("bellocode_app_".count) }
         switch lower {
+        case "request_secret":
+            return (.other, active ? "Asking for secret" : "Asked for secret", string("label"))
+        case "secret_file":
+            return (.other, active ? "Preparing one-read secret file" : "Prepared one-read secret file", "")
+        case "schedule_task", "update_scheduled_task":
+            return (.other, active ? "Scheduling" : lower == "schedule_task" ? "Scheduled" : "Updated schedule", string("name", "taskID"))
+        case "list_scheduled_tasks":
+            return (.other, active ? "Listing scheduled tasks" : "Listed scheduled tasks", "")
+        case "delete_scheduled_task", "run_scheduled_task_now":
+            return (.other, lower.hasPrefix("delete") ? (active ? "Deleting schedule" : "Deleted schedule") : (active ? "Running schedule" : "Ran schedule"), string("taskID"))
+        case "link_pull_requests", "unlink_pull_requests":
+            let urls = (input["urls"] as? [String] ?? []).compactMap { url in url.split(separator: "/").last.map { "#" + $0 } }
+            return (.other, lower.hasPrefix("link") ? (active ? "Linking PR" : "Linked PR") : (active ? "Unlinking PR" : "Unlinked PR"), urls.joined(separator: ", "))
+        case "list_thread_pull_requests":
+            return (.other, active ? "Checking linked PRs" : "Checked linked PRs", "")
+        case "watch_pull_request", "unwatch_pull_request":
+            let number = string("url").split(separator: "/").last.map { "#" + $0 } ?? ""
+            return (.other, lower.hasPrefix("watch") ? (active ? "Watching PR" : "Watching PR") : "Stopped watching PR", number)
+        case "html_preview":
+            return (.other, active ? "Previewing visual" : "Previewed visual", string("path"))
         case "read", "view", "cat":
             return (.read, active ? "Reading" : "Read", string("filePath", "file_path", "path"))
         case "edit", "multiedit", "str_replace":

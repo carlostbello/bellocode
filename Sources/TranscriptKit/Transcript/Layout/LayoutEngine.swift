@@ -675,7 +675,7 @@ public enum LayoutEngine {
         let actionLines = actions.map { (CTLineCreateWithAttributedString(fonts.plain($0.0, font: fonts.small, color: theme.link)), $0.1, $0.0) }
         let actionsWidth = actionLines.reduce(CGFloat(0)) { $0 + CGFloat(CTLineGetTypographicBounds($1.0, nil, nil, nil)) + 14 }
         let title = ProseTypesetter.layout(attributed, origin: CGPoint(x: 0, y: 0), textStart: 0, width: max(80, width - actionsWidth - 8), truncate: true)
-        let imageWidth = min(width, 760)
+        let imageWidth = min(width, 720)
         let rect = CGRect(x: 0, y: title.frame.maxY + 6, width: imageWidth, height: CGFloat(visual.displayHeight))
         var labels: [Label] = []
         var hotspots: [Hotspot] = [Hotspot(rect: rect, action: .openFile(visual.actionURL("focus")), label: "Interact with \(visual.title)")]

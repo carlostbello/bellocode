@@ -95,7 +95,10 @@ public enum HTMLVisualDocument {
     public static func contentRules(allowedHosts: [String]) -> String {
         var rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block"]],
-            ["trigger": ["url-filter": "^(about|data|blob):"], "action": ["type": "ignore-previous-rules"]],
+            // WebKit's rule regexes have no disjunctions: one rule per scheme.
+            ["trigger": ["url-filter": "^about:"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^data:"], "action": ["type": "ignore-previous-rules"]],
+            ["trigger": ["url-filter": "^blob:"], "action": ["type": "ignore-previous-rules"]],
         ]
         for host in allowedHosts {
             let escaped = NSRegularExpression.escapedPattern(for: host)
@@ -133,6 +136,8 @@ public final class HTMLVisualWebView: NSObject, WKNavigationDelegate, WKUIDelega
     /// Navigations refused after the first load (tests and diagnostics).
     public private(set) var refusedNavigations: [String] = []
     public private(set) var refusedWindows = 0
+    /// Whether the content rule list compiled and is installed (the CSP applies either way).
+    public private(set) var rulesInstalled = false
     private var loaded: CheckedContinuation<Void, Never>?
     private var firstLoadDone = false
 
@@ -160,7 +165,12 @@ public final class HTMLVisualWebView: NSObject, WKNavigationDelegate, WKUIDelega
     public func load(_ html: String, theme: HTMLVisualTheme, allowedHosts: [String]) async {
         let controller = webView.configuration.userContentController
         controller.removeAllContentRuleLists()
-        if let rules = await HTMLVisualRules.list(allowedHosts: allowedHosts) { controller.add(rules) }
+        if let rules = await HTMLVisualRules.list(allowedHosts: allowedHosts) {
+            controller.add(rules)
+            rulesInstalled = true
+        } else {
+            rulesInstalled = false
+        }
         webView.appearance = NSAppearance(named: theme.dark ? .darkAqua : .aqua)
         firstLoadDone = false
         await withCheckedContinuation { continuation in
@@ -181,7 +191,7 @@ public final class HTMLVisualWebView: NSObject, WKNavigationDelegate, WKUIDelega
     }
 
     public func contentHeight() async -> Double {
-        let value = try? await webView.evaluateJavaScript("Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0))")
+        let value = try? await webView.evaluateJavaScript("document.body ? Math.ceil(Math.max(document.body.scrollHeight, document.body.getBoundingClientRect().height)) : 0")
         return (value as? NSNumber)?.doubleValue ?? 0
     }
 

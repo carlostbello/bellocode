@@ -292,7 +292,7 @@ public final class OrchestrationService {
     public var hostedDirectories: [String] { Array(hosts.keys).sorted() }
 
     /// Runs one app tool call. Calls must be attributed to a session; targets must be in the caller's project.
-    func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
+    public func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
         guard let caller = call.sessionID.map({ SessionID($0) }), let callerNode = graph.nodes[caller] else {
             return .error("BelloCode could not tell which thread made this call.")
         }

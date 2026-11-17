@@ -106,6 +106,7 @@ struct HTMLVisualSandboxTests {
         let result = try await sandbox.webView.evaluateJavaScript("JSON.stringify(window.__r)") as? String ?? "{}"
         let values = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: String] ?? [:]
         print("M3-B sandbox: \(values); refused \(sandbox.refusedNavigations); windows \(sandbox.refusedWindows); opened \(opened); connections \(counter.count)")
+        #expect(sandbox.rulesInstalled, "the content rule list compiled and is installed")
         #expect(counter.count == 0, "no request reached the network")
         #expect(values["fetch"] == "blocked")
         #expect(values["webkit"] == "undefined", "no app message handlers are reachable")
@@ -116,6 +117,11 @@ struct HTMLVisualSandboxTests {
         #expect(sandbox.webView.url?.absoluteString ?? "about:blank" == "about:blank", "still on the document")
         let height = await sandbox.contentHeight()
         #expect(height > 20)
+    }
+
+    @Test func contentRulesCompileWithAndWithoutHosts() async {
+        #expect(await HTMLVisualRules.list(allowedHosts: []) != nil)
+        #expect(await HTMLVisualRules.list(allowedHosts: ["cdn.jsdelivr.net", "fonts.gstatic.com"]) != nil)
     }
 
     @Test func rendererProducesHeightPNGAndConsole() async throws {

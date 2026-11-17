@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     /// Offscreen sandbox for HTML visuals (M3-B): html_preview, snapshots, PNG export.
     private let visualRenderer = HTMLVisualRenderer()
-    private var wakeObserver: NSObjectProtocol?
+    private var wakeObserver: (any NSObjectProtocol)?
 
     init(options: LaunchOptions) {
         self.options = options

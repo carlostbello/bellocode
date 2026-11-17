@@ -41,7 +41,7 @@ final class VisualOverlay {
     private let visuals: VisualService
     private var live: [String: HTMLVisualWebView] = [:]
     private var order: [String] = []
-    private var observers: [NSObjectProtocol] = []
+    private var observers: [any NSObjectProtocol] = []
     private var revisionLoop: ObservationLoop?
     private var lastRevision = -1
     var openExternally: (URL) -> Void = { NSWorkspace.shared.open($0) }

@@ -53,7 +53,7 @@ public final class ExtrasHub {
             store: store, clock: configuration.wallClock, provider: configuration.gitHub,
             baseInterval: configuration.pullRequestPoll.seconds, maxBackoff: configuration.pullRequestMaxBackoff.seconds)
         secrets = SecretService(vault: configuration.secretVault, store: store, clock: configuration.wallClock)
-        visuals = VisualService(store: store)
+        visuals = VisualService(store: store, directory: configuration.visualsDirectory)
         schedules.runner = self
         pullRequests.host = self
     }
@@ -387,6 +387,9 @@ public final class ExtrasHub {
     }
 
     // MARK: - App requests (the person's answers)
+
+    /// BelloCode's own pending requests (harnesses, diagnostics).
+    public func pendingAppRequests() async -> [AppRequest] { await core.appRequests() }
 
     /// Applies the person's answer to one of BelloCode's own requests. The request disappears only once handled; a
     /// failure leaves it pinned with `lastError` set on the service concerned.

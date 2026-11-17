@@ -401,7 +401,7 @@ public final class PullRequestService {
     }
 
     /// Waits for fetches in flight (tests).
-    func waitForFetches() async {
+    public func waitForFetches() async {
         for task in Array(fetches.values) { _ = await task.value }
     }
 
