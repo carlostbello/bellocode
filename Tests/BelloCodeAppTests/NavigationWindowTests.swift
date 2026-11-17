@@ -286,7 +286,11 @@ final class RecordingDelivery: NotificationDelivering {
         shell.driver.perform(.quickOpen)
         palette.setQuery("/Pars")
         await palette.settleSearches()
-        #expect(palette.rows.contains { row in if case .item(let item) = row { item.title == "Parser.swift" } else { false } })
+        // The search answers through the mock server; on a loaded machine the answer can land after the first settle.
+        let found = await waitUntil(timeout: .seconds(15)) {
+            palette.rows.contains { row in if case .item(let item) = row { item.title == "Parser.swift" } else { false } }
+        }
+        #expect(found, "Parser.swift listed")
         palette.hide()
     }
 
@@ -436,6 +440,7 @@ final class RecordingDelivery: NotificationDelivering {
         // Sidebar: structure rebuild and scrolling through every row.
         let sidebar = controller.sidebar
         let reloadsAfterLoad = sidebar.fullReloads
+        let rowsUnfiltered = sidebar.outlineView.numberOfRows
         var structure: [Double] = []
         for _ in 0..<10 {
             workspace.filterText = "x"
@@ -445,6 +450,11 @@ final class RecordingDelivery: NotificationDelivering {
             structure.append(sidebar.lastStructureMilliseconds)
         }
         let reloadsAfterFilter = sidebar.fullReloads
+        // Clearing the filter restores every row; let that structure change land before measuring one-thread changes
+        // (otherwise the first pin carries the restore's 3,788 row edits).
+        let restored = await waitUntil(timeout: .seconds(30)) { sidebar.outlineView.numberOfRows == rowsUnfiltered }
+        #expect(restored, "rows restored after the filter (\(sidebar.outlineView.numberOfRows) of \(rowsUnfiltered))")
+        await driver.idle(2)
         // A typical change: one thread pinned and unpinned (moves between two sections).
         var typical: [Double] = []
         var inputs: [Double] = []

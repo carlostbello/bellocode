@@ -74,8 +74,9 @@ struct FaultAndColdStartTests {
 
     @Test func faultyRunEndsIdenticalToFaultFreeRun() async throws {
         let clean = try await run(faults: false)
-        #expect(normalized(clean.shown) == normalized(clean.listed))
-        #expect(normalized(clean.cached) == normalized(clean.listed))
+        let cleanStats = "statistics \(await clean.engine.core.statistics); requests \(await clean.harness.server.recordedRequests().suffix(30))"
+        #expect(normalized(clean.shown) == normalized(clean.listed), "\(cleanStats)")
+        #expect(normalized(clean.cached) == normalized(clean.listed), "\(cleanStats)")
         await clean.engine.stop()
         await clean.harness.stop()
 

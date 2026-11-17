@@ -68,6 +68,7 @@ struct QueueOrderingTests {
         let times = try await serverTimes(harness, session)
         #expect(thread.queue.map(\.created) == [times[second], times[third]])
         await thread.steer(second)
+        try await threadBarrier(engine, thread)
         #expect(thread.queue.first?.delivery == .steer)
 
         await thread.stop()
@@ -87,9 +88,12 @@ struct QueueOrderingTests {
             await harness.server.holdEvents(types: Self.inboxEvents)
             let second = try #require(await thread.send("second"))
             let third = try #require(await thread.send("third"))
+            // The thread model applies the core's changes on its own task: read it after a barrier, not in the same turn.
+            try await threadBarrier(engine, thread)
             await expect(thread.queue.map(\.id) == [second, third], "both queued, in order")
             await thread.steer(second)
             await thread.cancelQueued(third)
+            try await threadBarrier(engine, thread)
             await expect(thread.lastError == nil, "no error")
             await expect(thread.queue.map(\.id) == [second], "withdrawn at once")
             await expect(thread.queue.first?.delivery == .steer, "steered at once")
@@ -142,6 +146,7 @@ struct QueueOrderingTests {
         await thread.steer(second)
         await thread.cancelQueued(third)
         let fourth = try #require(await thread.send("fourth"))
+        try await threadBarrier(engine, thread)
         #expect(thread.lastError == nil)
         await harness.server.releaseResponses(gate: "inbox")
         while await engine.core.statistics.resyncs == resyncs || engine.root.connection != .live {
