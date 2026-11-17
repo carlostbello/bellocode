@@ -29,6 +29,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private static let newThreadItem = NSToolbarItem.Identifier("newThread")
     private static let connectionItem = NSToolbarItem.Identifier("connection")
     private static let terminalItem = NSToolbarItem.Identifier("toggleTerminal")
+    /// M6-A: the container runtime's state (glyph + text; Settings ▸ Containers on click).
+    private static let containersItem = NSToolbarItem.Identifier("containers")
 
     let workspace: WorkspaceController
     let sidebar: SidebarViewController
@@ -167,6 +169,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         if split.panelItem.isCollapsed == panel.isRightPanelVisible {
             DS.Motion.withoutAnimation { split.panelItem.isCollapsed = !panel.isRightPanelVisible }
         }
+    }
+
+    /// The project of the thread or draft shown (Project Environment…).
+    var currentProjectDirectory: String? {
+        container.context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
     }
 
     // MARK: - Title and connection
@@ -454,6 +461,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             showMergeRequestsPanel()
         case .showScheduledTasks:
             (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
+        case .showContainers, .showEnvironment, .verifyIsolation:
+            NSApp.sendAction(command.selector, to: nil, from: nil)
         }
     }
 
@@ -658,7 +667,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
-            .toggleSidebar, .sidebarTrackingSeparator, Self.newThreadItem, .flexibleSpace, Self.connectionItem,
+            .toggleSidebar, .sidebarTrackingSeparator, Self.newThreadItem, .flexibleSpace, Self.containersItem, Self.connectionItem,
             Self.terminalItem, .inspectorTrackingSeparator, .toggleInspector,
         ]
     }
@@ -679,6 +688,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return ToolbarButton.make(
                 itemIdentifier, label: "Terminal", symbolName: "terminal", action: ShellCommand.toggleTerminal.selector,
                 toolTip: "Show or Hide Terminal (⌃`)")
+        case Self.containersItem:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Containers"
+            item.paletteLabel = "Containers"
+            item.view = RuntimeStatusButton(service: workspace.engine.environments)
+            item.visibilityPriority = .low
+            return item
         case Self.connectionItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.label = "Connection"

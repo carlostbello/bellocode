@@ -111,7 +111,7 @@ let targets: [Target] =
             name: "BelloCodeApp",
             dependencies: [
                 "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
-                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI",
+                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI", "ContainerKit",
             ],
             swiftSettings: swiftSettings
         ),

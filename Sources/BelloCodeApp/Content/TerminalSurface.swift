@@ -50,6 +50,14 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
         panelHost.owner = self
     }
 
+    /// The strip above a terminal surface: the blocked banner, or "Container · image" when terminals run there.
+    func makeEnvironmentStrip() -> NSView? {
+        guard let engine, engine.environments.isEnabled else { return nil }
+        return TerminalEnvironmentStrip(engine: engine) { [weak self] in
+            self?.context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
+        }
+    }
+
     func makeDrawerController() -> NSViewController { drawerHost }
     func makePanelController() -> NSViewController { panelHost }
 
@@ -226,7 +234,18 @@ final class TerminalHostController: NSViewController, FocusableSurface {
 
     private func embed(_ surface: TerminalSurfaceController) {
         addChild(surface)
-        pin(surface.view)
+        guard let strip = owner?.makeEnvironmentStrip() else {
+            pin(surface.view)
+            return
+        }
+        // Containerised execution (M6-A): where the terminal runs, or why it cannot, above the terminals.
+        let stack = NSStackView(views: [strip, surface.view])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 0
+        stack.detachesHiddenViews = true
+        for view in [strip, surface.view] { view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        pin(stack)
     }
 
     private func embedPlaceholder() {

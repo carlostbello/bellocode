@@ -139,7 +139,8 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
             statusLabel.stringValue = context.isCreatingThread ? "Creating…" : "Draft — created when you send"
         }
         let repository = context.engine.git.repository(for: context.directory)
-        gitLabel.stringValue = Self.gitText(repository)
+        gitLabel.stringValue = [Self.gitText(repository), Self.containerText(context.engine.environments, directory: context.directory)]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
         gitDot.isHidden = gitLabel.stringValue.isEmpty
         gitLabel.isHidden = gitLabel.stringValue.isEmpty
         gitLabel.toolTip = repository.status.map(\.accessibleSummary)
@@ -189,6 +190,12 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         } else {
             context.onShowAgents?()
         }
+    }
+
+    /// "Container: node:22 (Running)" while commands run in the project's container (M6-A); empty when off.
+    static func containerText(_ service: EnvironmentService, directory: String) -> String {
+        guard service.isEnabled, !directory.isEmpty, let environment = service.project(containing: directory) else { return "" }
+        return "Container: \(environment.image ?? "no image") (\(environment.phase.label))"
     }
 
     /// "⎇ main · Local checkout · 3 changed ↑2" (words, not colour; empty outside a repository).

@@ -218,7 +218,7 @@ public enum EnvironmentFix: String, Sendable, Equatable, CaseIterable {
     case retry
     case openSettings
 
-    init?(_ fix: RuntimeState.Fix?) {
+    public init?(_ fix: RuntimeState.Fix?) {
         switch fix {
         case .startRancher: self = .startRancher
         case .switchEngine: self = .switchEngine
