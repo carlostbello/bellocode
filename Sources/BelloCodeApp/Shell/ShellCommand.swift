@@ -49,6 +49,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case sendMessage, queueFollowUp, steerFollowUp, stopRun
     case chooseModel, permissionMode, togglePlan
     case allowOnce, allowAlways, denyRequest, submitAnswer, previousRequest, nextRequest
+    case findInThread, findNext, findPrevious, useSelectionForFind
+    case copyMessage, copyAsMarkdown, copyCode, jumpToLatest, previousTurn, nextTurn, lastFailure
     case showSettings, connectProvider, showWelcome
 
     @MainActor var selector: Selector {
@@ -81,6 +83,18 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .submitAnswer: #selector(MainWindowController.submitRequestAnswer(_:))
         case .previousRequest: #selector(MainWindowController.showPreviousRequest(_:))
         case .nextRequest: #selector(MainWindowController.showNextRequest(_:))
+        // The transcript's table answers these itself when focused; the window forwards them otherwise.
+        case .findInThread: #selector(MainWindowController.findInTranscript(_:))
+        case .findNext: #selector(MainWindowController.findNextInTranscript(_:))
+        case .findPrevious: #selector(MainWindowController.findPreviousInTranscript(_:))
+        case .useSelectionForFind: #selector(MainWindowController.useSelectionForTranscriptFind(_:))
+        case .copyMessage: #selector(MainWindowController.copyTranscriptMessage(_:))
+        case .copyAsMarkdown: #selector(MainWindowController.copyTranscriptMarkdown(_:))
+        case .copyCode: #selector(MainWindowController.copyTranscriptCode(_:))
+        case .jumpToLatest: #selector(MainWindowController.jumpToLatestOutput(_:))
+        case .previousTurn: #selector(MainWindowController.showPreviousTurn(_:))
+        case .nextTurn: #selector(MainWindowController.showNextTurn(_:))
+        case .lastFailure: #selector(MainWindowController.showLastFailure(_:))
         case .showSettings: #selector(AppDelegate.showSettings(_:))
         case .connectProvider: #selector(AppDelegate.connectProvider(_:))
         case .showWelcome: #selector(AppDelegate.showWelcome(_:))
@@ -121,6 +135,17 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .submitAnswer: "Submit Answer"
         case .previousRequest: "Previous Request"
         case .nextRequest: "Next Request"
+        case .findInThread: "Find in Thread…"
+        case .findNext: "Find Next"
+        case .findPrevious: "Find Previous"
+        case .useSelectionForFind: "Use Selection for Find"
+        case .copyMessage: "Copy Message"
+        case .copyAsMarkdown: "Copy as Markdown"
+        case .copyCode: "Copy Code"
+        case .jumpToLatest: "Jump to Latest"
+        case .previousTurn: "Previous Prompt"
+        case .nextTurn: "Next Prompt"
+        case .lastFailure: "Go to Last Failure"
         case .showSettings: "Settings…"
         case .connectProvider: "Connect Provider…"
         case .showWelcome: "Welcome to BelloCode…"
@@ -132,6 +157,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     var shortcut: (key: String, modifiers: NSEvent.ModifierFlags) {
         let f6 = String(UnicodeScalar(UInt16(NSF6FunctionKey))!)
         let backspace = String(UnicodeScalar(UInt16(NSBackspaceCharacter))!)
+        let up = String(UnicodeScalar(UInt16(NSUpArrowFunctionKey))!)
+        let down = String(UnicodeScalar(UInt16(NSDownArrowFunctionKey))!)
         func agent(_ shortcut: AgentShortcut) -> (String, NSEvent.ModifierFlags) {
             (shortcut.menuKeyEquivalent, shortcut.menuModifierMask)
         }
@@ -165,6 +192,16 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .submitAnswer: agent(.submitAnswer)
         case .previousRequest: agent(.previousRequest)
         case .nextRequest: agent(.nextRequest)
+        case .findInThread: ("f", .command)
+        case .findNext: ("g", .command)
+        case .findPrevious: ("g", [.command, .shift])
+        case .useSelectionForFind: ("e", .command)
+        case .copyMessage, .copyCode: ("", [])
+        case .copyAsMarkdown: ("c", [.command, .option, .shift])
+        case .jumpToLatest: ("j", [.command, .shift])
+        case .previousTurn: (up, [.command, .option])
+        case .nextTurn: (down, [.command, .option])
+        case .lastFailure: ("l", [.command, .option])
         case .showSettings: (",", .command)
         case .connectProvider, .showWelcome: ("", [])
         }
@@ -226,6 +263,8 @@ struct CommandContext: Equatable, Sendable {
     var isTerminalVisible = false
     /// Request commands the displayed thread's front request accepts now.
     var availableRequestCommands: Set<RequestCommand> = []
+    /// Transcript commands the displayed transcript can run now.
+    var availableTranscriptCommands: Set<ShellCommand> = []
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -244,6 +283,9 @@ struct CommandContext: Equatable, Sendable {
         case .chooseModel, .permissionMode, .togglePlan: return composerVisible
         case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
             return command.requestCommand.map(availableRequestCommands.contains) ?? false
+        case .findInThread, .findNext, .findPrevious, .useSelectionForFind, .copyMessage, .copyAsMarkdown, .copyCode, .jumpToLatest,
+            .previousTurn, .nextTurn, .lastFailure:
+            return availableTranscriptCommands.contains(command)
         case .showSettings, .connectProvider, .showWelcome: return true
         }
     }

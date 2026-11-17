@@ -8,7 +8,7 @@ import SwiftUI
 // Seams where other modules mount their views. The shell owns layout, selection, focus and lifecycle; a surface
 // owns its own view controller. To integrate a real module, change `ShellSurfaces.builtIn` below (one file):
 //
-//   transcript   → TranscriptKit   (replaces TemporaryTranscriptViewController)
+//   transcript   → TranscriptKit   (TranscriptSurfaceController, Content/TranscriptSurface.swift)
 //   requestStack → AgentUI         (RequestStackSurfaceController, Content/RequestStackSurface.swift)
 //   composer     → ComposerKit     (ComposerSurfaceController, Content/ComposerSurface.swift)
 //   rightPanel   → DiffKit / BrowserKit tabs (replaces the placeholder tabs)
@@ -37,7 +37,7 @@ struct ShellSurfaces {
 
     static func builtIn(services: AppServices) -> ShellSurfaces {
         ShellSurfaces(
-            transcript: { TemporaryTranscriptViewController(context: $0) },
+            transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
             composer: { ComposerSurfaceController(context: $0, services: services) },
             rightPanelTabs: [
@@ -120,6 +120,8 @@ final class ThreadSurfaceContext {
     @ObservationIgnored var onThreadCreated: ((SessionID) -> Void)?
     /// Opens (or reuses) a thread model; the shell owns their lifetime.
     @ObservationIgnored var openThread: ((SessionID) -> ThreadModel)?
+    /// Shows another thread (a sub-agent's) in the window: the shell changes the selection.
+    @ObservationIgnored var onOpenThread: ((SessionID) -> Void)?
 
     init(engine: Engine, directory: String, projectName: String, thread: ThreadModel?, newThreadDraft: String = "") {
         self.engine = engine

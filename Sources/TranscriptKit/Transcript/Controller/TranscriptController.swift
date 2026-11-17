@@ -691,3 +691,8 @@ enum TranscriptMetrics {
     static let bottomPadding: CGFloat = 20
     static let turnTopInset: CGFloat = 12
 }
+
+extension TranscriptController {
+    /// Messages whose rows are built (tests: the transcript shows everything the thread has loaded).
+    public var renderedMessageCount: Int { openTask == nil ? knownIDs.count : 0 }
+}
