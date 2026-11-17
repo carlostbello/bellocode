@@ -88,7 +88,7 @@ let targets: [Target] =
         testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
-    + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine"], testDependencies: ["MockOpenCode"])
+    + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine", "DesignSystem"], testDependencies: ["MockOpenCode"])
     // M3-A: Agents panel, lineage rows, header strip text (docs/features/orchestration.md). Engine owns the task graph.
     + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
     + [

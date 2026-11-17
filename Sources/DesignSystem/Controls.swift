@@ -1,70 +1,63 @@
 import AppKit
 
-// Shared AppKit controls. Small, dense, appearance-following, and accessible: each exposes a text label so nothing is
-// conveyed by colour or shape alone. All are `@MainActor` (NSView).
+// Shared AppKit controls that predate the visual language, restyled onto it (CountBadge, EmptyStateView, UndoToastView)
+// or kept for the shell restyle (MonogramView, SidebarRowView, ToolbarButton). New controls live in `Controls/`.
 
 // MARK: - Count badge
 
-/// A capsule with a number ("3"). Hidden when the count is zero. Accessibility: "<count> <noun>".
+/// A count ("3"), hidden when zero. Prominent (attention) counts are a pill: the tint's 16 % (dark) / 10 % (light)
+/// surface with the tint as text ("Needs you 2"); others are plain `meta` digits in the tint (`text3` by default).
+/// Accessibility: "<count> <noun>".
 @MainActor
 public final class CountBadge: NSView {
-    private let label = NSTextField(labelWithString: "")
     public var noun = "items" { didSet { updateAccessibility() } }
-    public var tint: NSColor = DS.Palette.secondaryText { didSet { needsDisplay = true } }
-    /// Filled badges (attention) use the tint as fill with white text; others a subtle fill with tinted text.
-    public var isProminent = false { didSet { applyStyle() } }
+    public var tint: NSColor = DS.Color.text3 { didSet { needsDisplay = true } }
+    public var isProminent = false { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
 
     public var count = 0 {
         didSet {
             guard count != oldValue else { return }
-            label.stringValue = count > 999 ? "999+" : "\(count)"
             isHidden = count == 0
             invalidateIntrinsicContentSize()
+            needsDisplay = true
             updateAccessibility()
         }
     }
 
+    private var text: String { count > 999 ? "999+" : "\(count)" }
+    private var font: NSFont { DS.TextRole.metaEmph.font(base: DS.Typography.current.baseSize, monospacedDigits: true) }
+
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        label.font = DS.Typography.current.badge
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         isHidden = true
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
-        applyStyle()
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    public override var isFlipped: Bool { true }
+
     public override var intrinsicContentSize: NSSize {
-        let text = label.intrinsicContentSize
-        return NSSize(width: max(16, text.width + 8), height: 15)
+        let width = DSDraw.width(of: text, font: font)
+        return isProminent ? NSSize(width: max(DS.Size.pill, width + 10), height: DS.Size.pill) : NSSize(width: width + 2, height: 16)
     }
 
-    public override func updateLayer() {
-        layer?.cornerRadius = DS.Radius.capsule(height: bounds.height)
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (isProminent ? tint : NSColor.quaternaryLabelColor.withAlphaComponent(0.25)).cgColor
+    public override func draw(_ dirtyRect: NSRect) {
+        if isProminent {
+            let dark = DS.Variant(effectiveAppearance).isDark
+            DSDraw.fill(bounds, radius: DS.Radius.xs, color: tint.withAlphaComponent(dark ? 0.16 : 0.1))
         }
+        DSDraw.text(text, in: bounds, font: font, color: tint, alignment: .center)
     }
 
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    public override var wantsUpdateLayer: Bool { true }
-
-    private func applyStyle() {
-        label.textColor = isProminent ? .white : tint
         needsDisplay = true
     }
 
@@ -76,6 +69,9 @@ public final class CountBadge: NSView {
 // MARK: - Monogram
 
 /// A project's two-letter monogram on a colour derived from its name (stable across launches).
+///
+/// - Deprecated: coloured monograms are out of the visual language (audit #5). Use `ProjectIcon` (folder glyph or
+///   favicon). Kept until the shell restyle (restyle-plan step 1) removes its last use.
 @MainActor
 public final class MonogramView: NSView {
     private let label = NSTextField(labelWithString: "")
@@ -204,7 +200,8 @@ open class SidebarRowView: NSTableCellView {
     public required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     open override func updateLayer() {
-        unreadDot.layer?.backgroundColor = DS.Palette.accent.cgColor
+        // Unread is an `infoText` dot plus a medium title (visual-language.md §6 Sidebar), never the accent.
+        unreadDot.layer?.backgroundColor = DS.Color.infoText.cgColor
     }
 
     open override var wantsUpdateLayer: Bool { true }
@@ -225,38 +222,37 @@ open class SidebarRowView: NSTableCellView {
 
 // MARK: - Empty state
 
-/// A centred symbol, title, one line of detail and an optional action button. For empty, offline and failure
-/// states; never a bare spinner.
+/// A centred empty, offline or failure state (visual-language.md §6): 32 pt glyph `text4`, `body` title, `label text2`
+/// hint, one outline button. No illustrations; never a bare spinner.
 @MainActor
 public final class EmptyStateView: NSView {
     public let symbol = NSImageView()
     public let title = NSTextField(labelWithString: "")
     public let detail = NSTextField(wrappingLabelWithString: "")
-    public let button = NSButton()
+    public let button: DSButton
 
     public init(symbolName: String, title: String, detail: String, actionTitle: String? = nil, action: Selector? = nil) {
+        button = DSButton(title: actionTitle ?? "", variant: .outline, action: action)
         super.init(frame: .zero)
         symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 28, weight: .light))
-        symbol.contentTintColor = DS.Palette.tertiaryText
+        symbol.contentTintColor = DS.Color.text4
         self.title.stringValue = title
-        self.title.font = DS.Typography.current.title
+        self.title.font = DS.TextRole.bodyEmph.font
+        self.title.textColor = DS.Color.text
         self.title.alignment = .center
         self.detail.stringValue = detail
-        self.detail.font = DS.Typography.current.body
-        self.detail.textColor = DS.Palette.secondaryText
+        self.detail.font = DS.TextRole.label.font
+        self.detail.textColor = DS.Color.text2
         self.detail.alignment = .center
         self.detail.preferredMaxLayoutWidth = 320
-        button.bezelStyle = .push
-        button.controlSize = .regular
-        button.title = actionTitle ?? ""
-        button.action = action
         button.isHidden = actionTitle == nil
 
         let stack = NSStackView(views: [symbol, self.title, self.detail, button])
         stack.orientation = .vertical
-        stack.spacing = DS.Spacing.m
-        stack.setCustomSpacing(DS.Spacing.l, after: self.detail)
+        stack.spacing = DS.Space.s6
+        stack.setCustomSpacing(DS.Space.s10, after: symbol)
+        stack.setCustomSpacing(DS.Space.s14, after: self.detail)
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.detachesHiddenViews = true
         addSubview(stack)
@@ -276,46 +272,39 @@ public final class EmptyStateView: NSView {
 
 // MARK: - Undo toast
 
-/// "Archived 'Fix tests'  [Undo]" at the bottom of a region. The owner decides when to show and hide it (5 s by
-/// convention); showing and hiding are instant under Reduce Motion.
+/// "Archived 'Fix tests'  [Undo]" (visual-language.md §6 Toast): glass, `r.lg`, 36 high, icon + text + ghost "Undo".
+/// The owner decides when to show and hide it (`DS.Motion.toastDismissDelay`, 6 s); showing and hiding are instant.
 @MainActor
-public final class UndoToastView: NSVisualEffectView {
+public final class UndoToastView: NSView {
     public let message = NSTextField(labelWithString: "")
-    public let undoButton = NSButton(title: "Undo", target: nil, action: nil)
-    /// An opaque card under the text, so the toast stays legible over any row (and in rendered snapshots).
-    private let card = NSView()
+    public let undoButton = DSButton(title: "Undo", variant: .ghost, size: .small)
+    public let icon = NSImageView()
+    private let glass = DSGlassView(surface: .popover, radius: DS.Radius.lg)
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        material = .popover
-        blendingMode = .withinWindow
-        state = .active
         wantsLayer = true
-        layer?.cornerRadius = DS.Radius.large
-        layer?.borderWidth = DS.Spacing.hairline
-        layer?.borderColor = DS.Palette.separator.cgColor
-        message.font = DS.Typography.current.body
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        message.font = DS.TextRole.body.font
+        message.textColor = DS.Color.text
         message.lineBreakMode = .byTruncatingMiddle
         message.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        undoButton.bezelStyle = .push
-        undoButton.controlSize = .small
-        undoButton.keyEquivalent = ""
-        card.wantsLayer = true
-        card.layer?.cornerRadius = DS.Radius.large
-        card.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(card)
-        NSLayoutConstraint.activate([
-            card.leadingAnchor.constraint(equalTo: leadingAnchor),
-            card.trailingAnchor.constraint(equalTo: trailingAnchor),
-            card.topAnchor.constraint(equalTo: topAnchor),
-            card.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-        let stack = NSStackView(views: [message, undoButton])
-        stack.spacing = DS.Spacing.m
-        stack.edgeInsets = NSEdgeInsets(top: DS.Spacing.s, left: DS.Spacing.l, bottom: DS.Spacing.s, right: DS.Spacing.s)
+        icon.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointRow, weight: .regular))
+        icon.contentTintColor = DS.Color.icon
+        let stack = NSStackView(views: [icon, message, undoButton])
+        stack.spacing = DS.Space.s8
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s12, bottom: 0, right: DS.Space.s6)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        glass.contentView.addSubview(stack)
         NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: DS.Size.toast),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
@@ -329,21 +318,9 @@ public final class UndoToastView: NSVisualEffectView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    public override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateCard()
-    }
-
-    private func updateCard() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            card.layer?.backgroundColor = DS.Palette.cardBackground.withAlphaComponent(0.97).cgColor
-            layer?.borderColor = DS.Palette.separator.cgColor
-        }
-    }
-
     /// Shows `text` and announces it to VoiceOver.
     public func show(_ text: String) {
-        updateCard()
+        glass.applyFallback()
         message.stringValue = text
         setAccessibilityLabel(text)
         alphaValue = 1
