@@ -44,6 +44,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await runtime.engine.start()
                 Task { await runtime.auth.refresh() }
                 if !settings.hasCompletedOnboarding { await showOnboardingWhenReady() }
+            } catch let error as ProjectionStore.OpenError {
+                // Transient (locked, I/O, permission, failed migration): the database is untouched; let the user retry.
+                let alert = NSAlert()
+                alert.messageText = "BelloCode could not open its local data"
+                alert.informativeText = "\(error.description) Your drafts and settings are still in it. Close other copies of BelloCode or free disk space, then try again."
+                alert.addButton(withTitle: "Try Again")
+                alert.addButton(withTitle: "Quit")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    applicationDidFinishLaunching(notification)
+                } else {
+                    NSApp.terminate(nil)
+                }
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "BelloCode could not start"

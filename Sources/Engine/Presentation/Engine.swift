@@ -34,6 +34,8 @@ public final class EngineRoot {
     public private(set) var hiddenProjects: [ProjectItem] = []
     /// The global "Needs you" list (urgency, then age) and badge counts.
     public private(set) var attention: AttentionSummary = .empty
+    /// Whether local state reaches disk. Show `storage.message` (with `preferencesUnsaved`) wherever it is not `.ok`.
+    public private(set) var storage: StorageStatus = .ok
     public let catalog = CatalogModel()
 
     @ObservationIgnored private var projectsByID: [ProjectID: Project] = [:]
@@ -82,6 +84,10 @@ public final class EngineRoot {
     fileprivate func setAttention(_ summary: AttentionSummary) {
         if summary != attention { attention = summary }
     }
+
+    fileprivate func setStorage(_ status: StorageStatus) {
+        if status != storage { storage = status }
+    }
 }
 
 /// The engine facade: wires the server (supervised or attached), the event stream, the projection store and the
@@ -113,11 +119,37 @@ public final class Engine {
     private var defaultDirectory: String?
     private var started = false
 
-    public init(configuration: EngineConfiguration) throws {
+    /// Opens the store on the calling thread. Prefer `make(configuration:)` from the main actor: opening and migrating
+    /// SQLite can take a while on a slow disk.
+    public convenience init(configuration: EngineConfiguration) throws {
+        let store = try ProjectionStore(location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
+        self.init(configuration: configuration, store: store)
+    }
+
+    /// Opens (and migrates) the store off the main actor, then creates the engine. Throws `ProjectionStore.OpenError`
+    /// for a database that cannot be opened now (it is left unchanged; offer to try again).
+    public static func make(configuration: EngineConfiguration) async throws -> Engine {
+        let store = try await ProjectionStore.open(
+            location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
+        return Engine(configuration: configuration, store: store)
+    }
+
+    init(configuration: EngineConfiguration, store: ProjectionStore) {
         self.configuration = configuration
-        store = try ProjectionStore(location: configuration.store, changes: ChangeBus(subscriberLimit: configuration.subscriberLimit))
+        self.store = store
         core = EngineCore(configuration: configuration, store: store)
-        modelPreferences = ModelPreferencesModel(store: store)
+        modelPreferences = ModelPreferencesModel(store: store, retryBackoff: configuration.writeRetryBackoff, time: configuration.time)
+        if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
+    }
+
+    /// What to tell the user about local saving, if anything: database writes or model preferences failing, or a
+    /// database set aside at launch. `label` is a short status ("Not saving"), `detail` the explanation.
+    public var storageNotice: (label: String, detail: String)? {
+        if root.storage == .writeFailing || modelPreferences.saveFailed, let detail = StorageStatus.writeFailing.message {
+            return ("Not saving", detail)
+        }
+        if let detail = root.storage.message { return ("Local data set aside", detail) }
+        return nil
     }
 
     /// Creates the provider sign-in service for this engine's server. Create one per app (Settings and onboarding share
@@ -315,6 +347,7 @@ public final class Engine {
 
     private func applyRoot(_ change: ChangeSet) {
         if let connection = change.connection { root.setConnection(connection) }
+        if let storage = change.storage { root.setStorage(storage) }
         if let summary = change.attention { root.setAttention(summary) }
         if let catalog = change.catalog {
             defaultDirectory = defaultDirectory ?? root.projects.first?.directory

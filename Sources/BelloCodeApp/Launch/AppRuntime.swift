@@ -56,13 +56,13 @@ final class AppRuntime {
         if let source = ServerSource.fromEnvironment(), case .fixed(let connection) = source {
             let configuration = EngineConfiguration(server: source, store: .file(try storeURL()))
             return AppRuntime(
-                engine: try Engine(configuration: configuration), source: .attached(connection.baseURL), defaults: .standard,
+                engine: try await Engine.make(configuration: configuration), source: .attached(connection.baseURL), defaults: .standard,
                 autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
         }
         let server = bundledServerConfiguration(bundle: bundle)
         let configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         return AppRuntime(
-            engine: try Engine(configuration: configuration), source: .bundled(executable: server.executableURL),
+            engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
     }
 
@@ -101,7 +101,7 @@ final class AppRuntime {
         configuration.defaultDirectory = data.defaultDirectory
         let suite = "com.bellocode.app.mock"
         return AppRuntime(
-            engine: try Engine(configuration: configuration), source: .mock(scenario),
+            engine: try await Engine.make(configuration: configuration), source: .mock(scenario),
             defaults: UserDefaults(suiteName: suite) ?? .standard, autosaveSuffix: ".mock", mockServer: server,
             temporaryDirectory: directory)
     }

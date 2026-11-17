@@ -47,6 +47,7 @@ public enum ProjectionChange: Sendable {
     case attention(AttentionSummary)
     case catalog(Catalog)
     case connection(ConnectionStatus)
+    case storage(StorageStatus)
 
     /// The topics this change is delivered to.
     var topics: [ChangeTopic] {
@@ -67,7 +68,31 @@ public enum ProjectionChange: Sendable {
         case .threadReset(let id), .threadHistory(let id, _): [.thread(id)]
         case .attention: [.attention]
         case .catalog: [.catalog]
-        case .connection: [.connection]
+        case .connection, .storage: [.connection]
+        }
+    }
+}
+
+/// Whether local state reaches disk, as the UI should present it (AGENTS.md UX rule 8).
+public enum StorageStatus: Hashable, Sendable {
+    case ok
+    /// Writes to the local database are failing. Changes are kept in memory (app-owned ones without limit, the opencode
+    /// cache until a resync replaces it) and retried; they may be lost if the app quits now.
+    case writeFailing
+    /// At launch the database was unreadable or from a newer BelloCode and was moved aside; opencode data reloads from
+    /// the server, but drafts and local settings in the old file are not in use.
+    case recovered(ProjectionStore.Recovery)
+
+    public var message: String? {
+        switch self {
+        case .ok: nil
+        case .writeFailing:
+            "Changes are not being saved to disk. BelloCode keeps them and keeps retrying; quitting now may lose drafts."
+        case .recovered(.quarantinedCorrupt(let url)):
+            "The local database was damaged and was set aside as \(url.lastPathComponent). Threads reload from opencode; earlier drafts are in that file."
+        case .recovered(.quarantinedNewerSchema(let url)):
+            "The local database was written by a newer BelloCode and was set aside as \(url.lastPathComponent). Threads reload from opencode."
+        case .recovered(.none): nil
         }
     }
 }
@@ -125,6 +150,7 @@ public struct ChangeSet: Sendable {
     public var attention: AttentionSummary?
     public var catalog: Catalog?
     public var connection: ConnectionStatus?
+    public var storage: StorageStatus?
     /// Too many changes accumulated; reload the topic.
     public var overflowed = false
 
@@ -139,7 +165,7 @@ public struct ChangeSet: Sendable {
     }
 
     public var isEmpty: Bool {
-        entityCount == 0 && attention == nil && catalog == nil && connection == nil && !overflowed
+        entityCount == 0 && attention == nil && catalog == nil && connection == nil && storage == nil && !overflowed
     }
 
     mutating func merge(_ change: ProjectionChange) {
@@ -204,6 +230,8 @@ public struct ChangeSet: Sendable {
             self.catalog = catalog
         case .connection(let status):
             connection = status
+        case .storage(let status):
+            storage = status
         }
     }
 }

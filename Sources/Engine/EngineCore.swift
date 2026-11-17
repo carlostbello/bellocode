@@ -80,7 +80,14 @@ actor EngineCore {
     private var eventTask: Task<Void, Never>?
     private var deltaTask: Task<Void, Never>?
     private var writeTask: Task<Void, Never>?
-    private var writeChain: Task<Void, Never>?
+    /// A write is in flight (at most one); callers of `flushWrites` wait in `writeWaiters` until it ends.
+    private var writing = false
+    private var writeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var consecutiveWriteFailures = 0
+    private var failedCacheWrites = 0
+    /// Failed attempts after which a batch's opencode-cache rows are dropped for a resync (app-owned rows never are).
+    let cacheWriteAttempts = 3
+    private(set) var storage: StorageStatus = .ok
     private var effectTask: Task<Void, Never>?
     private var backgroundTasks: [Int: Task<Void, Never>] = [:]
     private var nextTaskID = 0
@@ -114,6 +121,7 @@ actor EngineCore {
         var resyncs = 0
         var writeBatches = 0
         var writeFailures = 0
+        var cacheWritesDropped = 0
         var duplicatesDropped = 0
     }
 
@@ -122,6 +130,7 @@ actor EngineCore {
     init(configuration: EngineConfiguration, store: ProjectionStore) {
         self.configuration = configuration
         self.store = store
+        storage = store.recovery == .none ? .ok : .recovered(store.recovery)
         pipeline = EventPipeline(
             state: ProjectionState(messageCapacity: configuration.messageCacheCapacity), cadence: configuration.streamCadence)
     }
@@ -201,9 +210,21 @@ actor EngineCore {
         commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
         pendingWrites.messages += pipeline.state.messages.dirtyMessages
         pipeline.state.messages.markPersisted(pipeline.state.messages.dirtyMessages.map(\.id))
-        await flushWrites()
         writeTask?.cancel()
         writeTask = nil
+        await flushWrites()
+        // A failing disk at quit: a few short retries, then give up (the storage status already says so).
+        var attempt = 0
+        while !pendingWrites.isEmpty, attempt < 3 {
+            attempt += 1
+            try? await time.sleep(for: .milliseconds(100 * attempt))
+            await flushWrites()
+        }
+        writeTask?.cancel()
+        writeTask = nil
+        if !pendingWrites.isEmpty {
+            EngineSignposts.log.error("projection writes lost at stop: \(self.pendingWrites.rowCount, privacy: .public) rows")
+        }
         if case .supervised(let supervisor) = configuration.server { await supervisor.stop() }
         setConnection(.stopped)
         started = false
@@ -380,48 +401,94 @@ actor EngineCore {
 
     // MARK: - Persistence
 
-    private func scheduleWrite() {
+    /// Starts the write-behind timer. One timer and one write at a time: while a write is slow or failing, newer writes
+    /// coalesce into `pendingWrites` (one entry per row) instead of queueing tasks or batches.
+    private func scheduleWrite(after delay: Duration? = nil) {
         guard writeTask == nil else { return }
-        let interval = configuration.writeInterval
+        let interval = delay ?? configuration.writeInterval
         writeTask = Task { [weak self, time] in
-            try? await time.sleep(for: interval)
+            do { try await time.sleep(for: interval) } catch { return }
             await self?.writeTick()
         }
     }
 
     private func writeTick() async {
-        writeTask = nil
         await flushWrites()
+        writeTask = nil
+        if !pendingWrites.isEmpty {
+            scheduleWrite(after: consecutiveWriteFailures > 0 ? writeRetryDelay() : nil)
+        }
     }
 
-    /// Writes everything pending, in order after any write already in flight.
+    private func writeRetryDelay() -> Duration {
+        configuration.writeRetryBackoff.delay(forAttempt: consecutiveWriteFailures, random: Double.random(in: 0..<1))
+    }
+
+    /// Writes everything pending, after any write already in flight (at most one runs). A failed write is not lost:
+    /// app-owned rows go back in front of newer writes and are retried until they succeed; opencode cache rows are
+    /// retried `cacheWriteAttempts` times, then dropped and rebuilt by a resync. Storage status is published so the UI
+    /// can say that changes are not being saved.
     func flushWrites() async {
+        // Wait (without polling) for the write in flight; it resumes waiters when it ends.
+        while writing { await withCheckedContinuation { writeWaiters.append($0) } }
         let batch = pendingWrites
+        guard !batch.isEmpty else { return }
         pendingWrites = StoreBatch()
-        let previous = writeChain
-        guard !batch.isEmpty else {
-            await previous?.value
+        writing = true
+        let succeeded: Bool
+        do {
+            try await store.apply(batch, publish: false)
+            succeeded = true
+        } catch {
+            EngineSignposts.log.error("projection write failed: \(String(describing: type(of: error)), privacy: .public)")
+            succeeded = false
+        }
+        writing = false
+        let waiters = writeWaiters
+        writeWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        statistics.writeBatches += 1
+        if succeeded {
+            consecutiveWriteFailures = 0
+            failedCacheWrites = 0
+            setStorage(.ok)
             return
         }
-        let store = self.store
-        let task = Task { [weak self] in
-            await previous?.value
-            do {
-                try await store.apply(batch, publish: false)
-                await self?.recordWrite(failed: false)
-            } catch {
-                EngineSignposts.log.error("projection write failed: \(String(describing: type(of: error)), privacy: .public)")
-                await self?.recordWrite(failed: true)
-            }
+        statistics.writeFailures += 1
+        consecutiveWriteFailures += 1
+        failedCacheWrites += 1
+        var retained = batch.appOwned
+        if failedCacheWrites < cacheWriteAttempts {
+            retained.merge(batch.cacheOnly)
+        } else {
+            // The cache part keeps failing (it may be what fails): drop it and rebuild it from the server instead.
+            failedCacheWrites = 0
+            statistics.cacheWritesDropped += 1
+            if connection.isLive { spawn { await $0.resyncOutsideLoop(.overflow) } }
         }
-        writeChain = task
-        await task.value
+        retained.merge(pendingWrites)
+        pendingWrites = retained
+        setStorage(.writeFailing)
+        scheduleWrite(after: writeRetryDelay())
     }
 
-    private func recordWrite(failed: Bool) {
-        statistics.writeBatches += 1
-        if failed { statistics.writeFailures += 1 }
+    private func setStorage(_ status: StorageStatus) {
+        // A launch recovery notice stays until a write fails (then that is the more urgent message).
+        if status == .ok, case .recovered = storage { return }
+        guard status != storage else { return }
+        storage = status
+        bus.publish([.storage(status)])
     }
+
+    /// For tests: queues writes as a reduction would.
+    func enqueueWritesForTesting(_ batch: StoreBatch) {
+        var reduction = Reduction()
+        reduction.writes = batch
+        commit(reduction)
+    }
+
+    /// For tests and diagnostics: rows waiting to be written.
+    var pendingWriteRows: Int { pendingWrites.rowCount }
 
     /// Publishes buffered stream deltas and writes everything pending (tests, thread open, shutdown).
     func flush() async {
@@ -554,7 +621,7 @@ actor EngineCore {
             } catch is CancellationError {
                 return
             } catch {
-                EngineSignposts.log.error("resync attempt \(attempt, privacy: .public) failed: \(EngineError.from(error).description, privacy: .public)")
+                EngineSignposts.log.error("resync attempt \(attempt, privacy: .public) failed: \(EngineError.logSummary(error), privacy: .public)")
                 if attempt == 3 {
                     // Still connected (events keep arriving) but the cached state may be missing what the gap lost:
                     // show it as out of date and keep retrying until a rebuild succeeds.
@@ -917,7 +984,7 @@ actor EngineCore {
             pipeline.state = state
             commit(reduction)
         } catch {
-            EngineSignposts.log.info("window refresh failed: \(EngineError.from(error).description, privacy: .public)")
+            EngineSignposts.log.info("window refresh failed: \(EngineError.logSummary(error), privacy: .public)")
         }
     }
 
@@ -999,7 +1066,7 @@ actor EngineCore {
             reduction.writes.catalogs.append(catalog)
             commit(reduction)
         } catch {
-            EngineSignposts.log.info("catalog refresh failed: \(EngineError.from(error).description, privacy: .public)")
+            EngineSignposts.log.info("catalog refresh failed: \(EngineError.logSummary(error), privacy: .public)")
         }
     }
 

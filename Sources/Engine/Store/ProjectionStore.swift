@@ -38,26 +38,114 @@ public struct StoreBatch: Sendable {
             && syncStates.isEmpty
     }
 
-    /// Appends `other`; later writes to the same row win.
+    /// Folds `other` (newer) into this batch. Later writes to the same row replace earlier ones, so a batch holds at most
+    /// one write per row (it is bounded by the number of distinct rows, however long writes are deferred), and a later
+    /// removal cancels earlier writes of that row and of what it owns. Applying the merged batch leaves the database as
+    /// applying both in order would.
     public mutating func merge(_ other: StoreBatch) {
-        projects += other.projects
-        replaceAllProjects = replaceAllProjects || other.replaceAllProjects
-        sessions += other.sessions
-        removedSessions += other.removedSessions
-        messages += other.messages
-        removedMessages += other.removedMessages
+        if other.replaceAllProjects {
+            projects = other.projects
+            replaceAllProjects = true
+        } else {
+            projects = Self.upserting(projects, other.projects, by: \.id)
+        }
+
+        let removedSessionIDs = Set(other.removedSessions)
+        if !removedSessionIDs.isEmpty {
+            sessions.removeAll { removedSessionIDs.contains($0.id) }
+            messages.removeAll { removedSessionIDs.contains($0.sessionID) }
+            pending.removeAll { removedSessionIDs.contains($0.sessionID) }
+            queue.removeAll { removedSessionIDs.contains($0.sessionID) }
+            syncStates.removeAll { removedSessionIDs.contains($0.sessionID) }
+            truncatedHistory = truncatedHistory.filter { !removedSessionIDs.contains($0.key) }
+        }
+        removedSessions = Self.unique(removedSessions + other.removedSessions)
+        sessions = Self.upserting(sessions, other.sessions, by: \.id)
+
+        // Truncation runs before message upserts: drop earlier writes it would have deleted.
+        for (sessionID, key) in other.truncatedHistory {
+            messages.removeAll { $0.sessionID == sessionID && $0.sortKey < key }
+        }
         truncatedHistory.merge(other.truncatedHistory) { $1 }
-        pending += other.pending
-        resolvedRequests += other.resolvedRequests
-        replaceAllPending = replaceAllPending || other.replaceAllPending
-        queue += other.queue
-        removedQueue += other.removedQueue
+        let removedMessageIDs = Set(other.removedMessages)
+        if !removedMessageIDs.isEmpty { messages.removeAll { removedMessageIDs.contains($0.id) } }
+        removedMessages = Self.unique(removedMessages + other.removedMessages)
+        messages = Self.upserting(messages, other.messages, by: \.id)
+
+        if other.replaceAllPending {
+            pending = other.pending
+            resolvedRequests = other.resolvedRequests
+            replaceAllPending = true
+        } else {
+            let resolved = Set(other.resolvedRequests)
+            if !resolved.isEmpty { pending.removeAll { resolved.contains($0.id) } }
+            resolvedRequests = Self.unique(resolvedRequests + other.resolvedRequests)
+            pending = Self.upserting(pending, other.pending, by: \.id)
+        }
+
+        if !other.replaceQueue.isEmpty { queue.removeAll { other.replaceQueue.contains($0.sessionID) } }
         replaceQueue.formUnion(other.replaceQueue)
-        catalogs += other.catalogs
-        registry += other.registry
-        removedRegistry += other.removedRegistry
-        threadUI += other.threadUI
-        syncStates += other.syncStates
+        let removedQueueIDs = Set(other.removedQueue)
+        if !removedQueueIDs.isEmpty { queue.removeAll { removedQueueIDs.contains($0.id) } }
+        removedQueue = Self.unique(removedQueue + other.removedQueue)
+        queue = Self.upserting(queue, other.queue, by: \.id)
+
+        catalogs = Self.upserting(catalogs, other.catalogs, by: \.directory)
+        let removedDirectories = Set(other.removedRegistry)
+        if !removedDirectories.isEmpty { registry.removeAll { removedDirectories.contains($0.directory) } }
+        removedRegistry = Self.unique(removedRegistry + other.removedRegistry)
+        registry = Self.upserting(registry, other.registry, by: \.directory)
+        threadUI = Self.upserting(threadUI, other.threadUI, by: \.sessionID)
+        syncStates = Self.upserting(syncStates, other.syncStates, by: \.sessionID)
+    }
+
+    /// The rows only BelloCode owns (projects added, drafts and per-thread state): never dropped on a write failure.
+    var appOwned: StoreBatch {
+        var batch = StoreBatch()
+        batch.registry = registry
+        batch.removedRegistry = removedRegistry
+        batch.threadUI = threadUI
+        return batch
+    }
+
+    /// Everything else: a cache of opencode state that a resync can rebuild.
+    var cacheOnly: StoreBatch {
+        var batch = self
+        batch.registry = []
+        batch.removedRegistry = []
+        batch.threadUI = []
+        return batch
+    }
+
+    /// Rows written (for bounds and diagnostics).
+    var rowCount: Int {
+        projects.count + sessions.count + removedSessions.count + messages.count + removedMessages.count
+            + truncatedHistory.count + pending.count + resolvedRequests.count + queue.count + removedQueue.count
+            + catalogs.count + registry.count + removedRegistry.count + threadUI.count + syncStates.count
+    }
+
+    /// `existing` with `newer` applied: a row already present is replaced in place, a new one appended.
+    private static func upserting<Row, Key: Hashable>(_ existing: [Row], _ newer: [Row], by key: KeyPath<Row, Key>) -> [Row] {
+        guard !newer.isEmpty else { return existing }
+        var result = existing
+        var index: [Key: Int] = [:]
+        index.reserveCapacity(result.count + newer.count)
+        for (offset, row) in result.enumerated() { index[row[keyPath: key]] = offset }
+        for row in newer {
+            let id = row[keyPath: key]
+            if let offset = index[id] {
+                result[offset] = row
+            } else {
+                index[id] = result.count
+                result.append(row)
+            }
+        }
+        return result
+    }
+
+    private static func unique<T: Hashable>(_ values: [T]) -> [T] {
+        var seen = Set<T>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     /// The changes this batch represents, for publishing.
@@ -188,7 +276,12 @@ public actor ProjectionStore {
     /// Opens (and migrates) the store off the caller's actor, so a slow disk or migration never blocks the main thread.
     @concurrent
     public static func open(location: Location, changes: ChangeBus = ChangeBus()) async throws -> ProjectionStore {
-        try ProjectionStore(location: location, changes: changes)
+        try ProjectionStore(location: location, changes: changes, migrator: ProjectionSchema.migrator)
+    }
+
+    @concurrent
+    static func open(location: Location, changes: ChangeBus, migrator: DatabaseMigrator) async throws -> ProjectionStore {
+        try ProjectionStore(location: location, changes: changes, migrator: migrator)
     }
 
     private static func configuration() -> Configuration {
@@ -284,6 +377,10 @@ public actor ProjectionStore {
         }
     }
 
+    /// Tests: runs before every write; throwing fails it, suspending holds it (a stalled disk).
+    private var writeHook: (@Sendable (StoreBatch) async throws -> Void)?
+    func setWriteHook(_ hook: (@Sendable (StoreBatch) async throws -> Void)?) { writeHook = hook }
+
     /// Subscribes to changes for one topic.
     public nonisolated func observe(_ topic: ChangeTopic) -> ChangeSubscription { changes.subscribe(topic) }
 
@@ -292,6 +389,7 @@ public actor ProjectionStore {
     /// Applies `batch` in one transaction, then publishes its changes (unless `publish` is false).
     public func apply(_ batch: StoreBatch, publish: Bool = true) async throws {
         guard !batch.isEmpty else { return }
+        if let writeHook { try await writeHook(batch) }
         let signpost = EngineSignposts.database.beginInterval("write", "\(batch.messages.count) messages")
         defer { EngineSignposts.database.endInterval("write", signpost) }
         let encoder = Self.encoder
@@ -715,6 +813,7 @@ public actor ProjectionStore {
 
     /// Stores an app-owned preference. Never store credentials here.
     public func setPreference(_ key: String, _ value: some Encodable & Sendable) async throws {
+        if let writeHook { try await writeHook(StoreBatch()) }
         let data = try Self.json(value, Self.encoder)
         let now = Date().timeIntervalSince1970
         try await writer.write { db in

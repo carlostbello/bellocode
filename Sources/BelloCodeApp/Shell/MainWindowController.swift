@@ -115,7 +115,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private func updateTitle() {
         guard let window else { return }
         let root = workspace.engine.root
-        connectionView.update(root.connection, source: configuration.sourceLabel)
+        connectionView.update(root.connection, source: configuration.sourceLabel, storage: workspace.engine.storageNotice)
         var title = "BelloCode"
         var subtitle = ""
         if let context = container.context {
@@ -421,7 +421,17 @@ final class ConnectionStatusView: NSStackView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func update(_ status: ConnectionStatus, source: String?) {
+    /// `storage`: a local-saving problem (`Engine.storageNotice`); it takes precedence, as unsaved drafts are at risk.
+    func update(_ status: ConnectionStatus, source: String?, storage: (label: String, detail: String)? = nil) {
+        if let storage {
+            icon.image = NSImage(systemSymbolName: "externaldrive.badge.exclamationmark", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold).applying(.init(paletteColors: [DS.Palette.attention])))
+            let text = [source, storage.label, status.label].compactMap { $0 }.joined(separator: " · ")
+            label.stringValue = text
+            toolTip = storage.detail
+            setAccessibilityLabel("Connection: \(text). \(storage.detail)")
+            return
+        }
         let (symbol, tint): (String, NSColor) = switch status {
         case .live: ("circle.fill", DS.Palette.success)
         case .cached: ("clock", DS.Palette.neutral)
