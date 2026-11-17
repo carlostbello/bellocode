@@ -27,6 +27,7 @@ const GUIDANCE_KEY = "bellocode.orchestration"
 // Shared by every location's instance (one module): dedupe of events seen by several instances, cascades in progress.
 const seenEvents = new Set<string>()
 const cascading = new Map<string, number>()
+const guided = new Set<string>()
 const CASCADE_WINDOW_MS = 15_000
 
 function remember(id: string | undefined): boolean {
@@ -180,6 +181,8 @@ export default {
     }
 
     const putGuidance = async (session: Session) => {
+      guided.add(session.id)
+      if (guided.size > 4_000) guided.delete(guided.values().next().value as string)
       const depth = L.depthOf([session, ...(await ancestors(session))])
       const value = L.guidance({ depth, limits, delegated: Boolean(session.parentID) })
       await ctx.session.instructions.entry.put({ sessionID: session.id, key: GUIDANCE_KEY, value }).catch(() => undefined)
@@ -639,6 +642,8 @@ export default {
           await putGuidance(await get(sessionID))
           return
         case "session.execution.started": {
+          // Sessions created before the plugin (or while it reloaded) get their guidance at their next run.
+          if (!guided.has(sessionID)) await putGuidance(await get(sessionID)).catch(() => undefined)
           // A child's cancelled report wakes its parent; inside a cascade window that restart is cut at once.
           const until = cascading.get(sessionID)
           if (until && until > Date.now()) await ctx.session.interrupt({ sessionID }).catch(() => undefined)

@@ -122,6 +122,9 @@ public final class Engine {
     public let git: GitService
     /// Per-thread agent control of the built-in browser (`experimental.browser` bridge; docs/features/browser.md).
     public let browser: BrowserBridgeService
+    /// Orchestration: the task graph, Agents panel models, cascade stop and app-hosted agent tools
+    /// (docs/features/orchestration.md). Created in `init`, started by `start()`.
+    public private(set) var orchestration: OrchestrationService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -160,7 +163,11 @@ public final class Engine {
             store: store, client: { [core] in try await core.currentClient() },
             subscribe: { [core] in await core.subscribeBrowserControl() })
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
+        orchestration = OrchestrationService(core: core, store: store, engine: self)
     }
+
+    /// The model of a thread that is open now, without opening it.
+    func loadedThread(_ id: SessionID) -> ThreadModel? { openThreads[id] }
 
     /// What to tell the user about local saving, if anything: database writes or model preferences failing, or a
     /// database set aside at launch. `label` is a short status ("Not saving"), `detail` the explanation.
@@ -200,6 +207,7 @@ public final class Engine {
         started = true
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
+        orchestration.start()
         await modelPreferences.load()
         await frecency.load()
         await core.start()
@@ -212,6 +220,7 @@ public final class Engine {
         await terminals.shutdown()
         git.shutdown()
         await browser.shutdown()
+        await orchestration.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
@@ -355,6 +364,17 @@ public final class Engine {
         for catalog in snapshot.catalogs { root.catalog.apply(catalog, isDefault: catalog.directory == defaultDirectory) }
     }
 
+    /// On every (re)connect: check the plugin and serve the app tools for the visible projects.
+    private func connectOrchestration() {
+        let directories = root.projects.map(\.directory)
+        let orchestration = self.orchestration!
+        track(
+            Task {
+                if let first = directories.first ?? self.configuration.defaultDirectory { await orchestration.checkPlugin(directory: first) }
+                await orchestration.hostAppTools(directories: directories)
+            })
+    }
+
     private func subscribeRoot() {
         let topics: [(String, ChangeTopic)] = [
             ("projects", .projects), ("attention", .attention), ("catalog", .catalog), ("connection", .connection),
@@ -374,7 +394,11 @@ public final class Engine {
     }
 
     private func applyRoot(_ change: ChangeSet) {
-        if let connection = change.connection { root.setConnection(connection) }
+        if let connection = change.connection {
+            let wasLive = root.connection.isLive
+            root.setConnection(connection)
+            if connection.isLive, !wasLive { connectOrchestration() }
+        }
         if let storage = change.storage { root.setStorage(storage) }
         if let summary = change.attention { root.setAttention(summary) }
         if !change.organisation.isEmpty {

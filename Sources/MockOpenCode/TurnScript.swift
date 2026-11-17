@@ -176,6 +176,9 @@ public struct SubagentStep: Sendable, Equatable, Codable {
     /// When true the parent's `subagent` tool completes only after the child turn ends. The real tool returns at once
     /// with `{"status": "running"}` and the child runs in the background; that is the default.
     public var wait: Bool?
+    /// The tool that starts the child: `subagent` (opencode's own, the default) or `delegate_task` (the bellocode
+    /// plugin's: the child gets `metadata.bellocode` and a summary when it settles, as the plugin writes them).
+    public var tool: String?
 }
 
 /// One step of a ``TurnScript``.
@@ -245,6 +248,16 @@ extension TurnStep {
             SubagentStep(
                 agent: agent, description: description, prompt: prompt, script: TurnScript(steps: steps()),
                 wait: wait))
+    }
+
+    /// A `delegate_task` call of the bellocode plugin: like `subagent`, plus the plugin's child metadata and summary.
+    public static func delegate(
+        agent: String = "general", description: String, task: String, @TurnScriptBuilder _ steps: () -> [TurnStep]
+    ) -> TurnStep {
+        .subagent(
+            SubagentStep(
+                agent: agent, description: description, prompt: task, script: TurnScript(steps: steps()), wait: false,
+                tool: "delegate_task"))
     }
 
     public static func fail(_ message: String, type: String = "provider", status: Int? = nil) -> TurnStep {

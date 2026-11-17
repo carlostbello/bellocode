@@ -195,13 +195,17 @@ enum Mapping {
 
     /// Wraps a tool call as `.subagent` when it is the sub-agent tool, else `.tool`.
     static func toolContent(_ call: BelloCore.ToolCall) -> PartContent {
-        guard call.name == "subagent" || call.name == "task" else { return .tool(call) }
+        // opencode's native `subagent` (v1 `task`) and the bellocode plugin's `delegate_task` both start a child session;
+        // the child's ID is in the call metadata once it exists (`progress` sets it before the call returns).
+        let isDelegate = call.name == OrchestrationContract.Tool.delegateTask
+        guard call.name == "subagent" || call.name == "task" || isDelegate else { return .tool(call) }
         let input = call.input.flatMap(json)
         let metadata = call.metadata.flatMap(json)
-        let child = metadata?["sessionID"]?.stringValue ?? input?["sessionID"]?.stringValue
+        let child = metadata?["sessionID"]?.stringValue ?? (isDelegate ? nil : input?["sessionID"]?.stringValue)
+        let agent = input?["agent"]?.stringValue ?? metadata?["agent"]?.stringValue ?? (isDelegate ? "general" : nil)
         return .subagent(
             SubagentReference(
-                call: call, childSessionID: child.map { SessionID($0) }, agent: input?["agent"]?.stringValue,
+                call: call, childSessionID: child.map { SessionID($0) }, agent: agent,
                 description: input?["description"]?.stringValue))
     }
 

@@ -25,6 +25,13 @@ public struct ClientMCPCall: Sendable, Equatable {
     public var sessionID: String?
     /// The location (directory) the connection serves.
     public var directory: String
+
+    public init(tool: String, arguments: JSONValue, sessionID: String?, directory: String) {
+        self.tool = tool
+        self.arguments = arguments
+        self.sessionID = sessionID
+        self.directory = directory
+    }
 }
 
 /// A tool result: text blocks, flagged as an error when the call was refused or failed (shown to the model, which can

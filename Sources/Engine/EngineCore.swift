@@ -1839,6 +1839,17 @@ actor EngineCore {
         return (sessions, result)
     }
 
+    /// A thread's queued prompts (any thread, open or not), oldest first.
+    func queuedPrompts(_ sessionID: SessionID) -> [QueuedPrompt] {
+        pipeline.state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.id < $1.id }
+    }
+
+    /// Every session and status (the orchestration graph's seed and its reload after an overflow).
+    func allSessions() -> (sessions: [Session], statuses: [SessionAttention]) {
+        let sessions = Array(pipeline.state.sessions.values)
+        return (sessions, sessions.compactMap { statuses[$0.id] })
+    }
+
     func search(_ query: String, limit: Int, markers: (open: String, close: String) = ("[", "]")) async throws -> [SearchHit] {
         await flushWrites()
         return try await store.search(query, limit: limit, markers: markers)

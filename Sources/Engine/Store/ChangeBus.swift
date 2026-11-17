@@ -19,6 +19,9 @@ public enum ChangeTopic: Hashable, Sendable {
     case connection
     /// Every thread's sidebar organisation (pinned, snoozed, settled, order). Changes only on user action or a wake.
     case organisation
+    /// Sessions and statuses of every project, for the orchestration task graph (docs/features/orchestration.md).
+    /// Session and status changes only (busy/idle, metadata, title, attention): never message content or tokens.
+    case lineage
 }
 
 /// One change to the projection, as published by the store (after commit) or the engine (live, ahead of disk).
@@ -57,9 +60,9 @@ public enum ProjectionChange: Sendable {
     var topics: [ChangeTopic] {
         switch self {
         case .project, .projectRemoved, .registry, .registryRemoved: [.projects]
-        case .session(let session): [.sessions(session.projectID), .thread(session.id)]
-        case .sessionRemoved(let id, let projectID): [.sessions(projectID), .thread(id)]
-        case .status(let status): [.sessions(status.projectID), .thread(status.sessionID)]
+        case .session(let session): [.sessions(session.projectID), .thread(session.id), .lineage]
+        case .sessionRemoved(let id, let projectID): [.sessions(projectID), .thread(id), .lineage]
+        case .status(let status): [.sessions(status.projectID), .thread(status.sessionID), .lineage]
         case .message(let message): [.thread(message.sessionID)]
         case .messageRemoved(_, let sessionID): [.thread(sessionID)]
         case .pending(let request, let ancestors): [.thread(request.sessionID)] + ancestors.map(ChangeTopic.thread)
