@@ -1,0 +1,130 @@
+{
+  "blockHeightPT" : 35902.17830508482,
+  "down" : {
+    "clipMovedPT" : 35237,
+    "clipShortfallPT" : 1522.883499908261,
+    "deviationsOver1PT" : 2,
+    "deviationsOver2PT" : 2,
+    "distancePT" : 36703.88325001113,
+    "documentHeightEnd" : 2285923.5,
+    "documentHeightStart" : 2285923.5,
+    "events" : 1468,
+    "jumps" : [
+      {
+        "anchor" : 0,
+        "anchorFragmentHeight" : 15,
+        "clipMoved" : 0,
+        "clipY" : 16,
+        "deviation" : 29.06662499299273,
+        "docHeight" : 2285923.5,
+        "requested" : 29.06662499299273,
+        "t" : 0.009688874997664243,
+        "topNow" : 0
+      },
+      {
+        "anchor" : 0,
+        "anchorFragmentHeight" : 15,
+        "clipMoved" : 53,
+        "clipY" : 69,
+        "deviation" : -28.000124948564917,
+        "docHeight" : 2285923.5,
+        "requested" : 24.999875051435083,
+        "t" : 0.018022166681475937,
+        "topNow" : 4
+      }
+    ],
+    "maxDeviationPT" : 29.06662499299273,
+    "probeEnabled" : true,
+    "reachedTarget" : false,
+    "seconds" : 12.242961041687522,
+    "slowFramesByDecile" : [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "sumAbsDeviationPT" : 1522.883499908261
+  },
+  "environment" : {
+    "backingScale" : 2,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 8.333333333333336,
+    "displayRefreshHz" : 120,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "framesDown" : {
+    "durationS" : 12.242961041687522,
+    "frames" : 1469,
+    "maxMS" : 9.688874997664243,
+    "missedFrames" : 0,
+    "missedPercent" : 0,
+    "nominalIntervalMS" : 8.333333333333336,
+    "over16_7" : 0,
+    "over33" : 0,
+    "p50MS" : 8.333291654707864,
+    "p95MS" : 8.333291683811694,
+    "p99MS" : 8.333291683811694
+  },
+  "framesUp" : {
+    "durationS" : 12.241651791671757,
+    "frames" : 1462,
+    "maxMS" : 45.37316664936952,
+    "missedFrames" : 7,
+    "missedPercent" : 0.476515214825982,
+    "nominalIntervalMS" : 8.333333333333336,
+    "over16_7" : 2,
+    "over33" : 1,
+    "p50MS" : 8.333291654707864,
+    "p95MS" : 8.333291683811694,
+    "p99MS" : 8.333291683811694
+  },
+  "revealMS" : 5923.386041657068,
+  "stalls" : {
+    "maxMS" : 45.22116665611975,
+    "p99MS" : 2.44566667242907,
+    "pings" : 3588,
+    "stallsOver100MS" : 0,
+    "stallsOver250MS" : 0,
+    "stallsOver50MS" : 0
+  },
+  "up" : {
+    "clipMovedPT" : 35242,
+    "clipShortfallPT" : 1457.9555000511464,
+    "deviationsOver1PT" : 0,
+    "deviationsOver2PT" : 0,
+    "distancePT" : 36699.95550005115,
+    "documentHeightEnd" : 2285923.5,
+    "documentHeightStart" : 2285923.5,
+    "events" : 1461,
+    "jumps" : [
+
+    ],
+    "maxDeviationPT" : 0.9998750514350832,
+    "probeEnabled" : true,
+    "reachedTarget" : false,
+    "seconds" : 12.241651791671757,
+    "slowFramesByDecile" : [
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "sumAbsDeviationPT" : 1457.9555000511464
+  }
+}

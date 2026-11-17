@@ -1,0 +1,59 @@
+{
+  "bottomGapMaxPT" : 17,
+  "environment" : {
+    "backingScale" : 1,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 6.060916666666667,
+    "displayRefreshHz" : 165,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "followedToEnd" : true,
+  "frames" : {
+    "durationS" : 60.3248844583577,
+    "frames" : 7316,
+    "maxMS" : 160.14391666976735,
+    "missedFrames" : 2639,
+    "missedPercent" : 26.51436339571363,
+    "nominalIntervalMS" : 6.060916666666667,
+    "over16_7" : 404,
+    "over33" : 201,
+    "p50MS" : 6.0608749918174,
+    "p95MS" : 18.04150000680238,
+    "p99MS" : 59.84770835493691
+  },
+  "memoryAfter" : {
+    "footprintMB" : 484.3140335083008,
+    "residentMB" : 632.15625
+  },
+  "stalls" : {
+    "maxMS" : 33.563291683094576,
+    "p99MS" : 31.087125011254102,
+    "pings" : 368,
+    "stallsOver100MS" : 0,
+    "stallsOver250MS" : 0,
+    "stallsOver50MS" : 0
+  },
+  "stream" : {
+    "bytes" : 50916,
+    "commitEditMaxMS" : 12.976708356291056,
+    "commitEditP95MS" : 2.3159583215601742,
+    "commitMaxMS" : 143.96758333896287,
+    "commitP50MS" : 5.2701250242535025,
+    "commitP95MS" : 14.108041679719463,
+    "commits" : 1289,
+    "cpuPercent" : 34.838833358840176,
+    "deltaToVisibleMaxMS" : 260.55687497137114,
+    "deltaToVisibleP50MS" : 38.11987501103431,
+    "deltaToVisibleP95MS" : 170.89091666275635,
+    "deltas" : 5982,
+    "parseMaxMS" : 0.5027916631661355,
+    "parseP50MS" : 0.08749999688006938,
+    "parseP95MS" : 0.22579167853109539,
+    "seconds" : 60.33973304164829,
+    "tailMatchesFullRender" : true
+  }
+}

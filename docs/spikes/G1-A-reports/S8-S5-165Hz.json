@@ -1,0 +1,111 @@
+{
+  "cases" : [
+    {
+      "compensated" : true,
+      "driftImmediatePT" : 1911.577172593235,
+      "driftSettledPT" : 1911.577172593235,
+      "heightChangePT" : 469539,
+      "name" : "expand tool card just above viewport",
+      "note" : "",
+      "pixelShiftPT" : 0
+    },
+    {
+      "compensated" : true,
+      "driftImmediatePT" : 15,
+      "driftSettledPT" : 15,
+      "heightChangePT" : 64,
+      "name" : "expand tool card far above (unlaid)",
+      "note" : "",
+      "pixelShiftPT" : 0
+    },
+    {
+      "compensated" : false,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : -106375.77270714403,
+      "heightChangePT" : -107330,
+      "name" : "expand tool card just above viewport",
+      "note" : "",
+      "pixelShiftPT" : "nan"
+    },
+    {
+      "compensated" : false,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : 1298.6383839163464,
+      "heightChangePT" : 1299,
+      "name" : "expand tool card far above (unlaid)",
+      "note" : "",
+      "pixelShiftPT" : "nan"
+    },
+    {
+      "compensated" : true,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : 0,
+      "heightChangePT" : 0,
+      "name" : "late image arrives just above viewport",
+      "note" : "img-5113-0",
+      "pixelShiftPT" : 0
+    },
+    {
+      "compensated" : true,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : 0,
+      "heightChangePT" : 0,
+      "name" : "late image arrives far above (unlaid)",
+      "note" : "img-4377-0",
+      "pixelShiftPT" : 0
+    },
+    {
+      "compensated" : false,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : -97667.53915005096,
+      "heightChangePT" : 517324,
+      "name" : "late image arrives just above viewport",
+      "note" : "img-5217-0",
+      "pixelShiftPT" : "nan"
+    },
+    {
+      "compensated" : false,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : 0,
+      "heightChangePT" : 0,
+      "name" : "late image arrives far above (unlaid)",
+      "note" : "img-4519-0",
+      "pixelShiftPT" : 0
+    },
+    {
+      "compensated" : true,
+      "driftImmediatePT" : -16,
+      "driftSettledPT" : 0,
+      "heightChangePT" : 0,
+      "name" : "prepend 100 older messages",
+      "note" : "main-thread insert 1290.1 ms",
+      "pixelShiftPT" : 14
+    },
+    {
+      "compensated" : false,
+      "driftImmediatePT" : 0,
+      "driftSettledPT" : 16532.350163008832,
+      "heightChangePT" : 0,
+      "name" : "prepend 100 older messages",
+      "note" : "main-thread insert 830.9 ms",
+      "pixelShiftPT" : -484
+    }
+  ],
+  "clickToggle" : {
+    "headerDriftAfterCollapsePT" : 0,
+    "headerDriftAfterExpandPT" : 0
+  },
+  "clickToggleWorked" : true,
+  "environment" : {
+    "backingScale" : 1,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 6.060916666666667,
+    "displayRefreshHz" : 165,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "1100×848"
+  },
+  "passes2PT" : false
+}

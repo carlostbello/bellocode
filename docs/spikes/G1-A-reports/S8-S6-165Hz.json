@@ -1,0 +1,58 @@
+{
+  "anchorDriftAfterRoundTripPT" : 0,
+  "anchorMessageStillTop" : false,
+  "containerTracksWidth" : true,
+  "environment" : {
+    "backingScale" : 1,
+    "build" : "swift build -c release",
+    "displayLinkNominalMS" : 6.060916666666667,
+    "displayRefreshHz" : 165,
+    "machine" : "Apple M5 Max, 36 GB",
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "textKit1FallbackObserved" : false,
+    "textKit2" : true,
+    "windowPoints" : "900×848"
+  },
+  "followingRun" : {
+    "durationS" : 20.84613374999026,
+    "frames" : 70,
+    "maxMS" : 7418.601166660665,
+    "missedFrames" : 3369,
+    "missedPercent" : 97.95211186347466,
+    "nominalIntervalMS" : 6.060916666666667,
+    "over16_7" : 4,
+    "over33" : 4,
+    "p50MS" : 6.0608749918174,
+    "p95MS" : 4250.547791685676,
+    "p99MS" : 7418.601166660665
+  },
+  "frames" : {
+    "durationS" : 2.0778167500102427,
+    "frames" : 89,
+    "maxMS" : 71.4157083129976,
+    "missedFrames" : 250,
+    "missedPercent" : 72.92410009974158,
+    "nominalIntervalMS" : 6.060916666666667,
+    "over16_7" : 88,
+    "over33" : 1,
+    "p50MS" : 22.640791663434356,
+    "p95MS" : 29.1154166625347,
+    "p99MS" : 71.4157083129976
+  },
+  "pixelShiftAfterRoundTripPT" : 0,
+  "stalls" : {
+    "maxMS" : 25.63320833723992,
+    "p99MS" : 25.63320833723992,
+    "pings" : 13,
+    "stallsOver100MS" : 0,
+    "stallsOver250MS" : 0,
+    "stallsOver50MS" : 0
+  },
+  "stayedAtBottomWhileFollowing" : true,
+  "widths" : {
+    "container1400" : 1368,
+    "container900" : 868,
+    "textView1400" : 1400,
+    "textView900" : 900
+  }
+}
