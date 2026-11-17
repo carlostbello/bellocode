@@ -39,6 +39,8 @@ let packageDependencies: [Package.Dependency] = [
     // G5 spike: terminal emulator (MIT). Exact pin; 1.99.x is the pre-2.0 line. See docs/spikes/G5-terminal.md.
     .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.99.3"),
     .package(url: "https://github.com/groue/GRDB.swift", exact: "7.12.0"),
+    // M1-F: GFM Markdown (cmark-gfm) for the transcript. Apache 2.0. See docs/features/transcript.md.
+    .package(url: "https://github.com/swiftlang/swift-markdown", exact: "0.9.0"),
 ]
 
 // MARK: - Targets
@@ -65,7 +67,11 @@ let targets: [Target] =
         testDependencies: ["MockOpenCode"]
     )
     + library("DesignSystem", dependencies: ["BelloCore"])
-    + library("TranscriptKit", dependencies: uiKitDependencies)
+    + library(
+        "TranscriptKit",
+        dependencies: uiKitDependencies + ["Engine", .product(name: "Markdown", package: "swift-markdown")],
+        testDependencies: ["Engine", "MockOpenCode", "OpenCodeKit"]
+    )
     + library("ComposerKit", dependencies: uiKitDependencies + ["Engine"])
     + library("DiffKit", dependencies: uiKitDependencies)
     + library("TerminalKit", dependencies: uiKitDependencies + [.product(name: "SwiftTerm", package: "SwiftTerm")])
@@ -102,9 +108,11 @@ let targets: [Target] =
         ),
     ]
 
-// SPIKE G1-B (docs/spikes/G1-B-rows.md): row-based transcript prototype and its measurement harness.
-let transcriptSpikeB: Target = .executableTarget(
-    name: "TranscriptSpikeB", dependencies: ["TranscriptKit"], swiftSettings: swiftSettings
+// M1-F transcript scenarios, measurements and snapshots against MockOpenCode (docs/features/transcript.md).
+let transcriptDemo: Target = .executableTarget(
+    name: "TranscriptDemo",
+    dependencies: ["TranscriptKit", "Engine", "BelloCore", "DesignSystem", "MockOpenCode", "OpenCodeKit"],
+    swiftSettings: swiftSettings
 )
 
 let package = Package(
@@ -114,6 +122,6 @@ let package = Package(
         .executable(name: "BelloCode", targets: ["BelloCodeApp"]),
     ],
     dependencies: packageDependencies,
-    targets: targets + [transcriptSpikeB],
+    targets: targets + [transcriptDemo],
     swiftLanguageModes: [.v6]
 )
