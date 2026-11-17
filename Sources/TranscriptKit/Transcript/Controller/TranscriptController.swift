@@ -456,7 +456,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         let anchor = captureAnchor()
         let appendedUser = !inserted.isEmpty && inserted.upperBound == newRows.count && inserted.contains { newRows[$0].role == .user }
         rows = newRows
-        rowIndex = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         let estimates = inserted.map { estimate(rows[$0], index: $0) }
         heights.replaceSubrange(removed, with: estimates)
         heightKeys.replaceSubrange(removed, with: Array(repeating: nil, count: inserted.count))

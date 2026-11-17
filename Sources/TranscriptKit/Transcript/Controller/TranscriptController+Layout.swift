@@ -79,7 +79,7 @@ extension TranscriptController {
         let signpost = transcriptSignposter.beginInterval("finishOpen")
         defer { transcriptSignposter.endInterval("finishOpen", signpost) }
         rows = result.rows
-        rowIndex = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+        rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         segmentCache = result.segments
         heights = result.heights
         heightKeys = Array(repeating: nil, count: rows.count)

@@ -69,6 +69,12 @@ public enum RowBuilder {
             }
         }
         flush()
+        // Identity must be unique; a duplicated server ID (a corrupt page) keeps its first row rather than crashing.
+        var seen = Set<RowID>()
+        if rows.contains(where: { !seen.insert($0.id).inserted }) {
+            seen.removeAll()
+            rows = rows.filter { seen.insert($0.id).inserted }
+        }
         if isRunning, !(rows.last?.isLive ?? false) {
             let turn = lastTurn ?? MessageID("start")
             rows.append(
