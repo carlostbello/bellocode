@@ -47,6 +47,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private(set) var changes: ChangesSurfaces?
     /// The window's built-in browser ("Browser" tab).
     private(set) var browser: BrowserSurfaces?
+    /// The window's Agents panel ("Agents" tab, M3-A; MainWindowController+Agents.swift).
+    private(set) var agents: AgentsSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -101,6 +103,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             self?.applyPendingReveal()
             self?.changes?.display(context)
             self?.browser?.display(context)
+            self?.agents?.display(context)
+            context?.onShowAgents = { [weak self] in self?.showAgentsPanel() }
         }
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
@@ -111,6 +115,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         browser = surfaces.browser
         browser?.bind(engine: workspace.engine, shell: self)
         terminals?.browser = browser
+        agents = surfaces.agents
+        agents?.bind(engine: workspace.engine, shell: self)
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -223,6 +229,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 
     func commandContext(target: CommandTarget? = nil) -> CommandContext {
+        var context = baseCommandContext(target: target)
+        context.agents = agentsCommandState()
+        return context
+    }
+
+    private func baseCommandContext(target: CommandTarget?) -> CommandContext {
         let target = target ?? currentTarget
         let root = workspace.engine.root
         let pinned = target.flatMap(workspace.projectDirectory(for:)).flatMap { workspace.projectItem(directory: $0)?.isPinned } ?? false
@@ -430,6 +442,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .openPullRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .chooseWorkspace, .chooseBranch, .removeWorktree:
             performChanges(command)
+        case .showAgents, .nextAgent, .previousAgent, .openAgent, .followUpAgent, .stopAgentTree, .openParentThread:
+            performAgents(command)
         }
     }
 

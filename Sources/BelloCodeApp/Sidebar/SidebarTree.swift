@@ -108,6 +108,13 @@ enum SidebarTree {
         var grouping: SidebarGrouping = .byProject
         /// A filter is active: empty projects are hidden and an empty result says so.
         var isFiltering = false
+        /// Rows nested under a thread's row (docs/features/orchestration.md): its sub-agent and delegated children,
+        /// oldest first, then the threads it created with `create_threads` (its fan-out group). Collapsible; nesting
+        /// never reorders the top-level list.
+        var lineage: [SessionID: [SessionID]] = [:]
+        /// Created threads shown under their creator instead of at the top level, when the creator is listed in the
+        /// same section (thread → creator).
+        var nestedUnder: [SessionID: SessionID] = [:]
     }
 
     static func build(_ input: Input) -> [SidebarNode] {
@@ -120,8 +127,16 @@ enum SidebarTree {
         var seenProjects = Set<String>()
         let projects = input.projects.filter { seenProjects.insert($0.directory).inserted }
         var seenThreads = Set<SessionID>()
+        func threadNode(_ id: SessionID, depth: Int) -> SidebarNode {
+            guard depth < 8, let children = input.lineage[id], !children.isEmpty else { return SidebarNode(id: .thread(id)) }
+            let nested = children.filter { seenThreads.insert($0).inserted }.map { threadNode($0, depth: depth + 1) }
+            return SidebarNode(id: .thread(id), children: nested)
+        }
         func threads(_ ids: [SessionID]) -> [SidebarNode] {
-            ids.filter { seenThreads.insert($0).inserted }.map { SidebarNode(id: .thread($0)) }
+            let listed = Set(ids)
+            let topLevel = ids.filter { id in !(input.nestedUnder[id].map(listed.contains) ?? false) }
+            let kept = topLevel.filter { seenThreads.insert($0).inserted }
+            return kept.map { threadNode($0, depth: 0) }
         }
         switch input.grouping {
         case .byProject:

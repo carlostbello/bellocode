@@ -121,6 +121,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.windows = windows
         windows.restore()
+        // The `bellocode_app_open_thread` agent tool (docs/features/orchestration.md): the key window shows the thread
+        // (Back returns); it never opens a new window.
+        runtime.engine.orchestration?.revealThread = { [weak windows] id in
+            guard let windows else { return false }
+            let key = NSApp.keyWindow?.windowController as? MainWindowController
+            guard let controller = key ?? windows.controllers[MainWindows.primaryID] else { return false }
+            controller.workspace.select(.thread(id))
+            return true
+        }
     }
 
     /// Starts notifications (inside the app bundle, never for mock data) and the optional menu-bar item.

@@ -36,6 +36,8 @@ struct ShellSurfaces {
     var changes: ChangesSurfaces? = nil
     /// The built-in browser behind the "Browser" tab (BrowserKit, Content/BrowserSurface.swift); nil in tests.
     var browser: BrowserSurfaces? = nil
+    /// The Agents panel behind the "Agents" tab (OrchestrationUI, Content/AgentsSurface.swift); nil in tests.
+    var agents: AgentsSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -46,6 +48,8 @@ struct ShellSurfaces {
         let changes = ChangesSurfaces(services: services)
         // BrowserKit (Content/BrowserSurface.swift): the "Browser" tab follows the displayed thread.
         let browser = BrowserSurfaces(services: services)
+        // OrchestrationUI (Content/AgentsSurface.swift): the "Agents" tab follows the displayed thread.
+        let agents = AgentsSurfaces()
         return ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
@@ -57,8 +61,11 @@ struct ShellSurfaces {
                 },
                 RightPanelTab(id: "browser", title: "Browser", symbolName: "globe") { browser.makePanelController() },
                 RightPanelTab(id: "terminal", title: "Terminal", symbolName: "terminal") { terminals.makePanelController() },
+                RightPanelTab(id: "agents", title: "Agents", symbolName: "point.3.connected.trianglepath.dotted") {
+                    agents.makePanelController()
+                },
             ],
-            terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser)
+            terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents)
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {
@@ -131,6 +138,8 @@ final class ThreadSurfaceContext {
     @ObservationIgnored var openThread: ((SessionID) -> ThreadModel)?
     /// Shows another thread (a sub-agent's) in the window: the shell changes the selection.
     @ObservationIgnored var onOpenThread: ((SessionID) -> Void)?
+    /// Shows the Agents panel (the header's lineage strip).
+    @ObservationIgnored var onShowAgents: (() -> Void)?
 
     init(engine: Engine, directory: String, projectName: String, thread: ThreadModel?, newThreadDraft: String = "") {
         self.engine = engine

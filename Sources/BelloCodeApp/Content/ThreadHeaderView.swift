@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import DesignSystem
 import Engine
+import OrchestrationUI
 
 /// The thread header: title (editable in place: click, type, Return; Escape cancels), then
 /// "project › directory · status" so the user always sees where an agent acts (AGENTS.md UX rule 6).
@@ -18,6 +19,10 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     /// "⎇ feature/x · Worktree · 3 changed ↑1" (M2-C), refreshed with the repository's status.
     private let gitLabel = NSTextField(labelWithString: "")
     private let gitDot = NSTextField(labelWithString: "·")
+    /// The lineage strip (M3-A): "Agents · 2 running · 1 needs you" (shows the Agents panel) or "Child of “…”" (opens
+    /// the parent). Hidden without lineage.
+    private let agentsButton = NSButton(title: "", target: nil, action: nil)
+    private var agentsIsChild = false
     private var loop: ObservationLoop?
     private var editingOriginal: String?
 
@@ -55,7 +60,16 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         gitDot.textColor = DS.Palette.tertiaryText
         gitDot.font = typography.caption
         gitLabel.setContentCompressionResistancePriority(.init(240), for: .horizontal)
-        let contextLine = NSStackView(views: [monogram, projectLabel, separator, pathLabel, dot, statusImage, statusLabel, gitDot, gitLabel])
+        agentsButton.isBordered = false
+        agentsButton.font = typography.caption
+        agentsButton.contentTintColor = DS.Palette.accent
+        agentsButton.target = self
+        agentsButton.action = #selector(agentsStripClicked)
+        agentsButton.setContentCompressionResistancePriority(.init(230), for: .horizontal)
+        agentsButton.isHidden = true
+        let contextLine = NSStackView(views: [
+            monogram, projectLabel, separator, pathLabel, dot, statusImage, statusLabel, gitDot, gitLabel, agentsButton,
+        ])
         contextLine.spacing = DS.Spacing.xs
         contextLine.setCustomSpacing(DS.Spacing.s, after: monogram)
         let stack = NSStackView(views: [titleField, contextLine])
@@ -95,7 +109,17 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
             statusImage.image = glyph.image(pointSize: 10)
             statusImage.isHidden = false
             statusLabel.stringValue = thread.phase == .deleted ? "Deleted on the server" : glyph.label
+            // A thread whose own run ended while its children work is waiting, not done (M3-A).
+            if let orchestration = context.engine.orchestration, thread.phase != .deleted,
+                let waiting = OrchestrationText.waitingStatus(orchestration, thread.sessionID)
+            {
+                statusLabel.stringValue = waiting
+                statusImage.image = NSImage(systemSymbolName: ChildTaskStatus.waitingOnChildren.symbolName, accessibilityDescription: waiting)?
+                    .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [DS.Palette.running])))
+            }
+            renderAgentsStrip(thread.sessionID)
         } else {
+            agentsButton.isHidden = true
             titleField.isEditable = false
             titleField.stringValue = "New Thread"
             statusImage.isHidden = true
@@ -110,6 +134,27 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         setAccessibilityRole(.group)
         setAccessibilityLabel(
             "\(titleField.stringValue), \(context.projectName), \(pathLabel.stringValue), \(statusLabel.stringValue), \(gitLabel.stringValue)")
+    }
+
+    private func renderAgentsStrip(_ id: SessionID) {
+        guard let orchestration = context.engine.orchestration, let strip = OrchestrationText.strip(orchestration, id) else {
+            agentsButton.isHidden = true
+            return
+        }
+        agentsIsChild = strip.isChild
+        agentsButton.title = "· " + strip.text
+        agentsButton.toolTip = strip.isChild ? "Go to the parent thread (⌃⌘U)" : "Show the Agents panel (⌃⌘A)"
+        agentsButton.setAccessibilityLabel(strip.isChild ? "\(strip.text). Go to parent thread" : "\(strip.text). Show Agents")
+        agentsButton.isHidden = false
+    }
+
+    @objc private func agentsStripClicked() {
+        guard let id = context.thread?.sessionID else { return }
+        if agentsIsChild, let parent = context.engine.orchestration?.node(id)?.node.parentID {
+            context.onOpenThread?(parent)
+        } else {
+            context.onShowAgents?()
+        }
     }
 
     /// "⎇ main · Local checkout · 3 changed ↑2" (words, not colour; empty outside a repository).

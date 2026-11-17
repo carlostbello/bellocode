@@ -93,6 +93,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showChanges, nextChange, previousChange, nextChangedFile, previousChangedFile, addReviewComment, openInEditor
     case revertHunk, revertFile, revertTurn, commitChanges, pushBranch, openPullRequest
     case toggleDiffLayout, toggleDiffWhitespace, toggleDiffWrap, chooseWorkspace, chooseBranch, removeWorktree
+    // M3-A: Agents panel (Content/AgentsSurface.swift, MainWindowController+Agents.swift).
+    case showAgents, nextAgent, previousAgent, openAgent, followUpAgent, stopAgentTree, openParentThread
 
     @MainActor var selector: Selector {
         switch self {
@@ -174,6 +176,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .newWindow: #selector(AppDelegate.newMainWindow(_:))
         // A focused diff answers the navigation and comment selectors itself (DiffKit's DiffContentView).
         case .showChanges: #selector(MainWindowController.showChanges(_:))
+        case .showAgents: #selector(MainWindowController.showAgents(_:))
+        case .nextAgent: #selector(MainWindowController.selectNextAgent(_:))
+        case .previousAgent: #selector(MainWindowController.selectPreviousAgent(_:))
+        case .openAgent: #selector(MainWindowController.openSelectedAgent(_:))
+        case .followUpAgent: #selector(MainWindowController.followUpSelectedAgent(_:))
+        case .stopAgentTree: #selector(MainWindowController.stopSelectedAgentTree(_:))
+        case .openParentThread: #selector(MainWindowController.openParentThread(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -275,6 +284,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .reopenClosedThread: "Reopen Closed Thread"
         case .newWindow: "New Window"
         case .showChanges: "Show Changes"
+        case .showAgents: "Show Agents"
+        case .nextAgent: "Select Next Agent"
+        case .previousAgent: "Select Previous Agent"
+        case .openAgent: "Open Selected Agent"
+        case .followUpAgent: "Follow Up Selected Agent…"
+        case .stopAgentTree: "Stop Selected Agent and Its Tasks"
+        case .openParentThread: "Go to Parent Thread"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -375,6 +391,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .newWindow: ("n", [.command, .shift])
         // ⌃⌘ arrows: free in text views, terminals and the transcript (which uses ⌥⌘↑/↓).
         case .showChanges: ("d", [.command, .shift])
+        case .showAgents: ("a", [.command, .control])
+        case .nextAgent: (down, [.command, .control, .option])
+        case .previousAgent: (up, [.command, .control, .option])
+        case .openAgent: ("o", [.command, .control])
+        case .followUpAgent: ("", [])
+        case .stopAgentTree: (".", [.command, .control])
+        case .openParentThread: ("u", [.command, .control])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -500,6 +523,8 @@ struct CommandContext: Equatable, Sendable {
     var projectCanMoveDown = false
     /// The Changes tab's state (M2-C).
     var changes = ChangesCommandState()
+    /// The Agents panel's state (M3-A).
+    var agents = AgentsCommandState()
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -544,6 +569,12 @@ struct CommandContext: Equatable, Sendable {
         case .goForward: return canGoForward
         case .reopenClosedThread: return canReopenClosedThread
         case .showChanges, .toggleDiffLayout, .toggleDiffWhitespace, .toggleDiffWrap: return changes.available
+        case .showAgents: return agents.available
+        case .nextAgent, .previousAgent: return agents.available
+        case .openAgent: return agents.selectionIsOther
+        case .followUpAgent: return agents.selectionIsChild
+        case .stopAgentTree: return agents.canStopSelection
+        case .openParentThread: return agents.hasParent
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible
