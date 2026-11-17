@@ -69,11 +69,19 @@ public final class PullRequestService {
     @ObservationIgnored private var lastFetch: [String: Date] = [:]
     @ObservationIgnored private var branchChecked: [SessionID: Date] = [:]
     @ObservationIgnored private var seenOutputParts: Set<String> = []
-    @ObservationIgnored private var inFlight: Set<String> = []
+    @ObservationIgnored private var fetches: [String: Task<PullRequestSnapshot?, Never>] = [:]
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "pull-requests")
 
-    public init(store: ProjectionStore, clock: any WallClock, provider: any GitHubAccessProvider, baseInterval: TimeInterval = 120, maxBackoff: TimeInterval = 1800) {
+    /// Off in tests that drive `pollDue()` themselves.
+    @ObservationIgnored private let autoPoll: Bool
+    @ObservationIgnored private var polling: Set<String> = []
+
+    public init(
+        store: ProjectionStore, clock: any WallClock, provider: any GitHubAccessProvider, baseInterval: TimeInterval = 120,
+        maxBackoff: TimeInterval = 1800, autoPoll: Bool = true
+    ) {
+        self.autoPoll = autoPoll
         self.store = store
         self.clock = clock
         self.provider = provider
@@ -93,6 +101,8 @@ public final class PullRequestService {
     public func shutdown() {
         loop?.cancel()
         loop = nil
+        for task in fetches.values { task.cancel() }
+        fetches.removeAll()
     }
 
     /// Session changes (metadata): links follow the server's copy.
@@ -148,7 +158,14 @@ public final class PullRequestService {
             return list
         }
         apply(updated, for: id)
-        for ref in refs { Task { await self.refresh(ref) } }
+        for ref in refs where fetches[ref.url] == nil {
+            let task = Task { [weak self] () -> PullRequestSnapshot? in await self?.fetch(ref) }
+            fetches[ref.url] = task
+            Task { [weak self] in
+                _ = await task.value
+                if self?.fetches[ref.url] == task { self?.fetches[ref.url] = nil }
+            }
+        }
         return updated
     }
 
@@ -211,12 +228,21 @@ public final class PullRequestService {
         await autoLinkBranch(id)
     }
 
-    /// Fetches one PR now.
+    /// Fetches one PR now (joins a fetch already in flight for it).
     @discardableResult
     public func refresh(_ ref: PullRequestRef) async -> PullRequestSnapshot? {
-        guard !inFlight.contains(ref.url) else { return snapshots[ref.url] }
-        inFlight.insert(ref.url)
-        defer { inFlight.remove(ref.url) }
+        if let running = fetches[ref.url] { return await running.value }
+        let task = Task { [weak self] () -> PullRequestSnapshot? in
+            guard let self else { return nil }
+            return await self.fetch(ref)
+        }
+        fetches[ref.url] = task
+        let result = await task.value
+        if fetches[ref.url] == task { fetches[ref.url] = nil }
+        return result
+    }
+
+    private func fetch(_ ref: PullRequestRef) async -> PullRequestSnapshot? {
         guard let transport = await resolveTransport() else {
             problems[ref.url] = access?.label ?? "GitHub is unavailable."
             return nil
@@ -275,7 +301,7 @@ public final class PullRequestService {
 
     private func restartLoop() {
         loop?.cancel()
-        guard !nextPoll.isEmpty else { return }
+        guard autoPoll, !nextPoll.isEmpty else { return }
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -289,12 +315,14 @@ public final class PullRequestService {
     /// Polls every watch that is due now (the loop, and tests).
     public func pollDue() async {
         let now = clock.now()
-        for (key, date) in nextPoll where date <= now {
+        for (key, date) in nextPoll where date <= now && !polling.contains(key) {
             guard let record = watches[key], record.stoppedReason == nil else {
                 nextPoll[key] = nil
                 continue
             }
+            polling.insert(key)
             await poll(key, record)
+            polling.remove(key)
         }
     }
 
@@ -370,6 +398,11 @@ public final class PullRequestService {
                 }
             }
         }
+    }
+
+    /// Waits for fetches in flight (tests).
+    func waitForFetches() async {
+        for task in Array(fetches.values) { _ = await task.value }
     }
 
     /// When a watch polls next (tests, the PR section's "Next check").

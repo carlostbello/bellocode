@@ -28,6 +28,10 @@ struct ServerState: Sendable {
     /// Parents stopped with their children: their children's cancelled reports are recorded without waking them (the
     /// plugin cuts that restart on the real server). Cleared by the parent's next prompt.
     var cascadeStopped: Set<String> = []
+    /// Every synthetic text admitted (child reports and BelloCode wakes), for tests (orchestration extras).
+    var syntheticLog: [String] = []
+    /// `PUT /session/{id}/environment` variables, by session (in memory only, as on the real server).
+    var environments: [String: [String: String]] = [:]
 
     init(scenario: Scenario) {
         defaultDirectory = scenario.defaultDirectory
@@ -89,6 +93,7 @@ extension MockOpenCodeServer {
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
         if let response = routeWorkspace(method, parts, request) { return .response(response) }
         if let response = routeVCS(method, parts, request) { return .response(response) }
+        if let response = routeExtras(method, parts, request) { return .response(response) }
         let response: HTTPResponse
         switch method {
         case "GET":
