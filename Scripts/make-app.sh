@@ -44,6 +44,12 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Helpers" "$CONTENTS/Resources/opencode-plu
 
 cp "$BIN_DIR/BelloCode" "$CONTENTS/MacOS/BelloCode"
 cp "$OPENCODE_BIN" "$CONTENTS/Helpers/opencode"
+# The "bellocode" opencode server plugin (TypeScript, loaded by local path; no build step, no dependencies). Only the
+# runtime sources are copied: tests and the package manifest stay in the repository.
+[[ -f "$ROOT/Plugin/server.ts" ]] || die "missing Plugin/server.ts"
+cp "$ROOT/Plugin/server.ts" "$CONTENTS/Resources/opencode-plugin/server.ts"
+mkdir -p "$CONTENTS/Resources/opencode-plugin/src"
+cp "$ROOT/Plugin/src/"*.ts "$CONTENTS/Resources/opencode-plugin/src/"
 if [[ -x "$RG_BIN" ]]; then
   cp "$RG_BIN" "$CONTENTS/Helpers/rg"
 else

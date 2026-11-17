@@ -73,7 +73,14 @@ final class AppRuntime {
             executableURL: helpers.appending(path: "opencode"),
             dataRoot: dataRoot ?? applicationSupport().appending(path: "opencode", directoryHint: .isDirectory),
             helpersDirectory: helpers,
-            expectedVersion: bundle.object(forInfoDictionaryKey: "BelloCodeOpenCodeVersion") as? String)
+            expectedVersion: bundle.object(forInfoDictionaryKey: "BelloCodeOpenCodeVersion") as? String,
+            pluginDirectory: bundledPluginDirectory(bundle: bundle))
+    }
+
+    /// `Contents/Resources/opencode-plugin` (the "bellocode" server plugin, docs/features/orchestration.md), if bundled.
+    nonisolated static func bundledPluginDirectory(bundle: Bundle = .main) -> URL? {
+        let url = bundle.bundleURL.appending(path: "Contents/Resources/opencode-plugin", directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: url.appending(path: "server.ts").path) ? url : nil
     }
 
     nonisolated static func applicationSupport() -> URL {
