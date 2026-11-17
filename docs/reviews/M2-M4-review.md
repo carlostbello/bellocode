@@ -58,3 +58,24 @@ Reviewed `develop` on 2026-11-16. Static review only: no build, tests, app, live
 - Check real-site sign-in, private browsing, prompts, uploads/downloads, popups, hostile pages, browser sharing and agent takeover; verify OS permission and notification delivery in a signed app.
 - Exercise revert, Undo, worktree cleanup, cross-window deletion and quit against disposable repositories containing concurrent edits, ignored files and active sessions. Check navigation and relaunch restoration with network gaps and real server restarts.
 - Follow up with deterministic tests and instrumented real-server/browser checks; this review did not run existing tests or independently verify feature-note benchmark numbers.
+
+## Disposition
+
+Work package M2-E (review fixes, round two), branch `t3/review-round-two-fixes`. Each finding was checked against the
+code first and reproduced with a deterministic test where feasible; the tests stay as regression tests. No database
+migration was added.
+
+| Finding | Disposition |
+| --- | --- |
+| **M1** revert vs concurrent edits | **Fixed** (2fb81f9). Reproduced: six `RevertAtomicityTests` inject a write, atomic save, create or edit between the preflight check and the replacement through a `WorkingCopy` test seam; five failed before the fix. Each file is now replaced by a compare-and-swap (`renamex_np` `RENAME_SWAP`/`RENAME_EXCL`, then a comparison of the bytes swapped out; a mismatch swaps back and fails with `changedOnDisk`, file untouched). Rollback and Undo use the same check (exact bytes and permissions, or refuse). Residual limit, documented: a writer still holding the old file open and writing in the microseconds between swap and comparison cannot be serialized without its cooperation. |
+| **M2** worktree removal and ignored files | **Fixed** (e64ab56). Reproduced: an ignored `.env` and `build/` made `git status` report clean. `WorktreeService.contents` counts uncommitted, untracked and ignored files; such a worktree needs confirmation (`filesAtRisk`, naming up to five paths) and its files are moved to the Trash before `git worktree remove`; Undo re-checks out and moves them back (staged changes return unstaged; an emptied Trash is reported). Tests use an injected holding folder, never the real Trash. |
+| **M3** tail commits scan history | Assigned to the transcript package. |
+| **M4** find parses and lays out on main | Assigned to the transcript package. |
+| **M5** deferred deletes vs windows and quit | **Fixed** (b6731c5). Confirmed by reading: `hiddenThreads`/`pendingDeletes` were per window and quit did not await deletes. `PendingThreadDeletions` (one per engine) hides rows in every window, moves windows off the thread, offers Undo in every window (any restores everywhere), sends each delete once, commits when the last window closes, and quit awaits results before stopping the engine (quit alert for failures no window can show). Tests: two fake windows, a blocked send during quit, exactly-once sends, plus a two-window shell test against MockOpenCode. |
+| **M6** diff VoiceOver | **Fixed** (122d8d0). Every row is a virtual accessibility element (ranged children API, bounded on-demand cache, computed frames, focus scrolls into view) with actions for Revert Hunk, Show 20 More / Show All Lines, Add Comment and file toggle; results are announced once. Verified through the accessibility API in process only; VoiceOver itself (VO navigation using the ranged API, rotor, speech) was not run. |
+| **M7** transcript auxiliary caches | Assigned to the transcript package. |
+| **M8** download retrieval | **Fixed** (78e541e). Identity (device, inode, size, mtime) is recorded at completion; `files.get` reads off-main on an `O_NOFOLLOW` descriptor, re-checks before and after a 5 MiB-capped cancellable read, and refuses changed files (`file_changed`). Tests: replacement, growth, symbolic link, oversize, removal, cancellation. |
+| **M9** download admission | **Fixed** (78e541e). 3 running, 7 queued (destination withheld until a slot frees), the rest refused; Queued and Refused shown in the shelf; ended entries trimmed on completion. Test: a burst of 30, promotion and queued cancellation. |
+| **m1** KVO progress actor assumption | **Fixed** (78e541e). Values are read on the posting thread and applied in a `MainActor` task from a nonisolated handler. Test posts progress from a background thread. |
+| **m2** transcript text navigation | Assigned to the transcript package. |
+| **m3** timing-based tests | **Fixed** for the named sleeps: `TerminalSurfaceTests` paste test waits on OSC 133 state and bracketed-paste mode (f4a185b); `NavigationWindowTests` deferred-delete 300 ms sleep replaced by a deterministic sent-count check (b6731c5). Other sleeps in the suites (for example the 300 ms "does not notify again" check in `NavigationWindowTests`) were not named and are left as follow-ups. |
