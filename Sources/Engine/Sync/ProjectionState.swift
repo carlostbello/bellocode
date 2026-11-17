@@ -21,10 +21,24 @@ struct ProjectionState: Sendable {
     var settledOrphans: [SessionID: Timestamp] = [:]
     /// The assistant message currently streaming in each session.
     var openMessage: [SessionID: MessageID] = [:]
+    /// Queue edits the user made that the server has not confirmed by event yet. An older view of the inbox (a late
+    /// `session.inbox.enqueued`, or an inbox read before the edit reached the server) must not undo them.
+    private(set) var queueEdits: [MessageID: QueueEdit] = [:]
+    private var queueEditOrder: [MessageID] = []
+    /// Unconfirmed edits kept at most (oldest forgotten first: the server's event or the next resync then decides).
+    static let queueEditLimit = 256
 
     init(messageCapacity: Int = 2048) {
         messages = MessageCache(capacity: messageCapacity)
     }
+}
+
+/// A queue edit made locally and not yet confirmed by the server's events.
+enum QueueEdit: Sendable, Equatable {
+    /// The user withdrew the item (`DELETE …/inbox/{id}`).
+    case withdrawn
+    /// The user changed how it is delivered (`PATCH …/inbox/{id}`).
+    case delivery(PromptDelivery)
 }
 
 /// A bounded LRU of messages. Messages with live changes not yet written (streamed text) are reported on eviction so
@@ -263,6 +277,19 @@ extension ProjectionState {
         queue[prompt.id] = prompt
         reduction.changes.append(.queued(prompt))
         reduction.writes.queue.append(prompt)
+    }
+
+    /// Records a local queue edit until the server confirms it (`confirmQueueEdit`) or it is rolled back.
+    mutating func recordQueueEdit(_ id: MessageID, _ edit: QueueEdit) {
+        if queueEdits.updateValue(edit, forKey: id) == nil { queueEditOrder.append(id) }
+        while queueEditOrder.count > Self.queueEditLimit {
+            queueEdits[queueEditOrder.removeFirst()] = nil
+        }
+    }
+
+    mutating func confirmQueueEdit(_ id: MessageID) {
+        guard queueEdits.removeValue(forKey: id) != nil else { return }
+        queueEditOrder.removeAll { $0 == id }
     }
 
     mutating func removeQueued(_ id: MessageID, into reduction: inout Reduction) {

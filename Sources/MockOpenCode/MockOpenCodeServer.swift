@@ -36,6 +36,12 @@ public struct HTTPFault: Sendable {
         /// Serve the real route (its effects happen), then close the connection without sending the response: a lost
         /// answer to a request the server applied.
         case dropResponse
+        /// Serve the real route (its effects and events happen), then hold the answer until
+        /// `MockOpenCodeServer.releaseResponses(gate:)`: forces "the event arrives before the HTTP answer".
+        case holdResponse(gate: String)
+        /// Hold the request before routing until `releaseResponses(gate:)`, then handle it as if it arrived then
+        /// (faults injected meanwhile apply): forces "this request reaches the server after what the test did".
+        case holdRequest(gate: String)
     }
 
     public var method: String?
@@ -116,6 +122,11 @@ public actor MockOpenCodeServer {
     private var pieceDelay: Duration?
     private var httpFaults: [HTTPFault] = []
     private var dropAfterFrames: Int?
+    /// Event types whose frames are held back (tests force "the HTTP answer arrives before the event").
+    private var heldEventTypes: Set<String> = []
+    private var heldEvents: [(type: String, frame: Data)] = []
+    /// Answers held at a gate, waiting for `releaseResponses(gate:)`.
+    private var heldResponses: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Turn runners waiting for subscribers to drain (virtual clock only; see ``sleep(milliseconds:)``).
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private let drainThreshold = 256
@@ -190,6 +201,7 @@ public actor MockOpenCodeServer {
         closeNetwork()
         for handle in turns.values { handle.task.cancel() }
         for id in Array(waiters.keys) { resumeWaiter(id, with: .interrupted) }
+        for gate in Array(heldResponses.keys) { releaseResponses(gate: gate) }
     }
 
     /// Simulates a server restart: every connection drops and the server comes back on a new port with the same
@@ -304,6 +316,32 @@ public actor MockOpenCodeServer {
     public func duplicateNextEvent() { duplicateNext = true }
 
     public func injectHTTPFault(_ fault: HTTPFault) { httpFaults.append(fault) }
+
+    /// From now on, events of these types are held back (in order) instead of being sent; other events flow. The
+    /// event log still records them when published.
+    public func holdEvents(types: Set<String>) { heldEventTypes = types }
+
+    /// Sends the first `count` held events (all if nil) to the subscribers connected now, in published order. Holding
+    /// stays on for later events until `holdEvents(types: [])`.
+    public func releaseHeldEvents(count: Int? = nil) {
+        let taken = min(count ?? heldEvents.count, heldEvents.count)
+        let release = heldEvents.prefix(taken)
+        heldEvents.removeFirst(taken)
+        for event in release {
+            for id in Array(subscribers.keys) where subscribers[id]?.accepts(event.type) == true { enqueue(event.frame, to: id) }
+        }
+    }
+
+    /// Events held back and not yet released.
+    public var heldEventCount: Int { heldEvents.count }
+
+    /// Requests or answers waiting at `gate`.
+    public func heldResponseCount(gate: String) -> Int { heldResponses[gate]?.count ?? 0 }
+
+    /// Sends every answer waiting at `gate`.
+    public func releaseResponses(gate: String) {
+        for waiter in heldResponses.removeValue(forKey: gate) ?? [] { waiter.resume() }
+    }
     public func clearHTTPFaults() { httpFaults.removeAll() }
 
     // MARK: Observation
@@ -383,6 +421,10 @@ public actor MockOpenCodeServer {
         if eventLog.count >= eventLogLimit { eventLog.removeFirst(eventLogLimit / 10) }
         eventLog.append(event)
         let frame = Data(("data: " + event.serialized + "\n\n").utf8)
+        if heldEventTypes.contains(type) {
+            heldEvents.append((type, frame))
+            return
+        }
         let copies = duplicateNext ? 2 : 1
         duplicateNext = false
         for id in Array(subscribers.keys) {
@@ -500,6 +542,7 @@ public actor MockOpenCodeServer {
         defer { signposter.endInterval("request", interval) }
         var delay: Duration?
         var dropResponse = false
+        var holdGate: String?
         if let index = httpFaults.firstIndex(where: { $0.matches(request) }) {
             let fault = httpFaults[index]
             if let count = fault.count {
@@ -514,6 +557,11 @@ public actor MockOpenCodeServer {
                 delay = duration
             case .dropResponse:
                 dropResponse = true
+            case let .holdResponse(gate):
+                holdGate = gate
+            case let .holdRequest(gate):
+                await withCheckedContinuation { heldResponses[gate, default: []].append($0) }
+                return await plan(for: request, connectionID: connectionID)
             }
         }
         if let delay { try? await Task.sleep(for: delay) }
@@ -521,6 +569,7 @@ public actor MockOpenCodeServer {
         if options.clock == .virtual { virtualNow += 1 }
         if let unauthenticated = authenticate(request) { return .response(unauthenticated) }
         let plan = await route(request, connectionID: connectionID)
+        if let holdGate { await withCheckedContinuation { heldResponses[holdGate, default: []].append($0) } }
         return dropResponse ? .reset : plan
     }
 

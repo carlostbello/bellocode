@@ -53,4 +53,17 @@ struct ConfigurationTests {
         #expect(s1.rawValue.hasPrefix("ses_"))
         #expect(s2 < s1, "newer sessions sort first, as opencode's do")
     }
+
+    /// The clock estimate behind optimistic IDs can move back (a server time correction); IDs keep minting order, which
+    /// breaks ties between equal timestamps (seen: a later follow-up got a smaller ID and sorted first).
+    @Test func optimisticIDsNeverGoBackwards() {
+        var factory = IdentifierFactory()
+        let a = factory.messageID(now: Timestamp(milliseconds: 1_794_000_000_062))
+        let b = factory.messageID(now: Timestamp(milliseconds: 1_794_000_000_058))
+        #expect(a < b)
+        var ids: [MessageID] = []
+        for _ in 0..<5_000 { ids.append(factory.messageID(now: Timestamp(milliseconds: 1_794_000_000_000))) }
+        #expect(ids == ids.sorted(), "a full counter borrows the next millisecond instead of wrapping")
+        #expect(Set(ids).count == ids.count)
+    }
 }
