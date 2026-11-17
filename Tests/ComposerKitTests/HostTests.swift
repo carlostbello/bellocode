@@ -194,6 +194,8 @@ private func settle() async {
 final class FakeThread: ComposerThreadSource {
     let sessionID = SessionID("ses_1")
     var draft = ""
+    var loaded = true
+    var isDraftLoaded: Bool { loaded }
     var isRunning = false
     var isStopping = false
     var composerErrorMessage: String?

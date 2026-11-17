@@ -10,6 +10,8 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     var sessionID: SessionID { get }
     /// The persisted plain-text draft.
     var draft: String { get set }
+    /// `draft` holds the stored value (it is read asynchronously when the thread opens).
+    var isDraftLoaded: Bool { get }
     var isRunning: Bool { get }
     var isStopping: Bool { get }
     var composerErrorMessage: String? { get }
@@ -20,6 +22,10 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     func runCommand(_ name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?) async -> Bool
     func stop() async
     func clearError()
+}
+
+extension ComposerThreadSource {
+    public var isDraftLoaded: Bool { true }
 }
 
 extension ThreadModel: ComposerThreadSource {
@@ -79,6 +85,7 @@ public final class ThreadModelComposerHost: ComposerHost {
     }
 
     public var draftKey: String { source.sessionID.rawValue }
+    public var isDraftLoaded: Bool { source.isDraftLoaded }
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
@@ -210,6 +217,7 @@ private final class ObservationTracker {
         withObservationTracking {
             _ = source.isRunning
             _ = source.isStopping
+            _ = source.isDraftLoaded
             _ = source.composerErrorMessage
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in

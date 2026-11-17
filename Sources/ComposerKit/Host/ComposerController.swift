@@ -40,6 +40,10 @@ public final class ComposerController {
     private var saveTask: Task<Void, Never>?
     private var historyStash: ComposerDraft?
     private var applyingHistory = false
+    /// The host's stored draft has not been read yet; nothing is saved over it until it has.
+    public private(set) var awaitingDraft = false
+    /// The user edited while `awaitingDraft`; the stored draft is merged in front of the edit when it arrives.
+    private var editedWhileAwaiting = false
 
     public init() {}
 
@@ -60,9 +64,35 @@ public final class ComposerController {
         sendError = nil
         host = newHost
         history = PromptHistory(entries: newHost?.recentPrompts() ?? [])
-        applyDraft(newHost?.loadDraft().validated() ?? .empty)
-        observation = newHost?.observe { [weak self] in self?.onStateChange() }
+        awaitingDraft = !(newHost?.isDraftLoaded ?? true)
+        editedWhileAwaiting = false
+        applyDraft(awaitingDraft ? .empty : newHost?.loadDraft().validated() ?? .empty)
+        observation = newHost?.observe { [weak self] in self?.hostDidChange() }
         onStateChange()
+    }
+
+    private func hostDidChange() {
+        reconcileLoadedDraft()
+        onStateChange()
+    }
+
+    /// The host's stored draft arrived: show it, or put it in front of what was typed meanwhile and save the result.
+    private func reconcileLoadedDraft() {
+        guard awaitingDraft, let host, host.isDraftLoaded else { return }
+        awaitingDraft = false
+        let loaded = host.loadDraft().validated()
+        guard editedWhileAwaiting else {
+            applyDraft(loaded)
+            return
+        }
+        editedWhileAwaiting = false
+        saveTask?.cancel()
+        saveTask = nil
+        let current = currentDraft()
+        let merged = current.text == loaded.text && current.attachments.isEmpty
+            ? loaded : ComposerDraft.merging(failed: loaded, current: current)
+        applyDraft(merged)
+        host.saveDraft(merged)
     }
 
     /// The text or attachments changed by the user.
@@ -72,6 +102,10 @@ public final class ComposerController {
             historyStash = nil
         }
         guard let host else { return }
+        if awaitingDraft {
+            editedWhileAwaiting = true
+            return
+        }
         let delay = draftSaveDelay
         saveTask?.cancel()
         saveTask = Task { [weak self, weak host] in
@@ -84,6 +118,13 @@ public final class ComposerController {
 
     /// Saves now (thread switch, window close, send).
     public func flushDraft() {
+        if awaitingDraft {
+            // Leaving before the stored draft arrived: hand over only real edits (the host merges them with the
+            // stored draft); never the empty placeholder.
+            if editedWhileAwaiting { host?.saveDraft(currentDraft()) }
+            editedWhileAwaiting = false
+            return
+        }
         guard saveTask != nil else { return }
         saveTask?.cancel()
         saveTask = nil

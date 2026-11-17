@@ -54,8 +54,11 @@ public final class ComposerObservation {
 public protocol ComposerHost: AnyObject {
     /// Identity of the thread, for keeping per-thread state apart.
     var draftKey: String { get }
-    /// The saved draft. Called when the composer shows this host.
+    /// The saved draft. Called when the composer shows this host, and again when `isDraftLoaded` becomes true.
     func loadDraft() -> ComposerDraft
+    /// The saved draft has been read. While false, `loadDraft()` is a placeholder: the composer saves nothing over it
+    /// and reconciles (merging anything typed meanwhile) once it turns true. Report the change through `observe`.
+    var isDraftLoaded: Bool { get }
     /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown.
     func saveDraft(_ draft: ComposerDraft)
     /// Send, queue or steer. Return only when the server admitted the prompt or the attempt failed.
@@ -74,11 +77,12 @@ public protocol ComposerHost: AnyObject {
     func clearError()
     /// Earlier prompts in this thread, oldest first, for Up/Down recall.
     func recentPrompts() -> [String]
-    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage` or capabilities change.
+    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage`, `isDraftLoaded` or capabilities change.
     func observe(_ onChange: @escaping @MainActor () -> Void) -> ComposerObservation
 }
 
 extension ComposerHost {
+    public var isDraftLoaded: Bool { true }
     public var supportsSteer: Bool { true }
     public var supportsAttachments: Bool { true }
     public var defaultFollowUp: ComposerDelivery { .queue }

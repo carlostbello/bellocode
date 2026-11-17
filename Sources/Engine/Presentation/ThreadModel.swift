@@ -78,13 +78,24 @@ public final class ThreadModel: Identifiable {
     public private(set) var uiState: ThreadUIState
 
     /// The unsent composer text. Persisted (debounced) and restored on relaunch.
+    ///
+    /// Empty until `isDraftLoaded`: the stored draft is read with the thread's cached window. An edit made before then
+    /// is not persisted on its own; it is merged with the stored draft (`mergeDrafts`) when that arrives, or when the
+    /// thread closes first, so neither text is lost.
     public var draft: String {
         didSet {
             guard draft != oldValue else { return }
+            guard isDraftLoaded else {
+                draftEditedBeforeLoad = true
+                return
+            }
             scheduleDraftSave()
         }
     }
+    /// The stored draft has been read into `draft`. Editors should show `draft` only after this (or reconcile then).
+    public private(set) var isDraftLoaded = false
 
+    @ObservationIgnored private var draftEditedBeforeLoad = false
     @ObservationIgnored private var models: [MessageID: MessageModel] = [:]
     @ObservationIgnored private var keys: [MessageID: MessageSortKey] = [:]
     @ObservationIgnored private let core: EngineCore
@@ -317,10 +328,7 @@ public final class ThreadModel: Identifiable {
         pendingRequests = snapshot.pending
         queue = snapshot.queue
         uiState = snapshot.ui
-        if phase == .opening {
-            draft = snapshot.ui.draft
-            tasks.remove("draft")
-        }
+        if !isDraftLoaded { hydrateDraft(stored: snapshot.ui.draft) }
         if phase != .deleted { phase = .ready }
     }
 
@@ -432,7 +440,32 @@ public final class ThreadModel: Identifiable {
         let text = draft
         let id = sessionID
         let core = self.core
-        engine?.track(Task { await core.updateThreadUI(id) { $0.draft = text } })
+        if isDraftLoaded {
+            engine?.track(Task { await core.updateThreadUI(id) { $0.draft = text } })
+        } else if draftEditedBeforeLoad {
+            // Closed before the stored draft was read: merge with it where it lives instead of replacing it.
+            engine?.track(Task { await core.updateThreadUI(id) { $0.draft = ThreadModel.mergeDrafts(stored: $0.draft, local: text) } })
+        }
+        // Otherwise nothing was read or typed: writing the empty placeholder would erase the stored draft.
+    }
+
+    /// Installs the stored draft, merged with anything set before it arrived.
+    private func hydrateDraft(stored: String) {
+        let local = draft
+        let merged = draftEditedBeforeLoad ? Self.mergeDrafts(stored: stored, local: local) : stored
+        draftEditedBeforeLoad = false
+        isDraftLoaded = true
+        if merged != draft { draft = merged }
+        if merged == stored { tasks.remove("draft") } else { scheduleDraftSave() }
+    }
+
+    /// Joins a stored draft with text entered before it was read: the stored text first, then a blank line and the
+    /// newer text. Identical or extending text is not duplicated.
+    nonisolated static func mergeDrafts(stored: String, local: String) -> String {
+        if stored.isEmpty { return local }
+        if local.isEmpty || local == stored { return stored }
+        if local.hasPrefix(stored) { return local }
+        return stored + "\n\n" + local
     }
 
     /// For tests and diagnostics: the number of message models held.
