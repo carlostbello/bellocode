@@ -165,7 +165,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var findQuery = ""
     public internal(set) var findMatches: [FindMatch] = []
     public internal(set) var findCurrent: Int?
+    /// Search text per row: proportional to the transcript's text (one string per block), built when find is first
+    /// used, dropped under memory pressure and on unbind.
     var findIndex: [RowID: FindIndexEntry] = [:]
+    var findIndexTask: Task<Void, Never>?
     var findTask: Task<Void, Never>?
     var findRefreshScheduled = false
     var findMatchesByRow: [RowID: [(block: Int, range: Range<Int>, index: Int)]] = [:]
@@ -184,6 +187,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var measureDebounce: Task<Void, Never>?
     public internal(set) var measureAllComplete = false
     var eventMonitor: Any?
+    var memoryPressureSource: (any DispatchSourceMemoryPressure)?
+    /// Cached `NSWorkspace.isVoiceOverEnabled` (asking costs up to milliseconds; configure needs it per row).
+    var isVoiceOverRunning = NSWorkspace.shared.isVoiceOverEnabled
+    var voiceOverObservation: NSKeyValueObservation?
     var observers: [any NSObjectProtocol] = []
     public var onMeasureAllFinished: (() -> Void)?
     var lastHeaderHeight: CGFloat = TranscriptMetrics.topPadding
@@ -223,6 +230,11 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         theme = TranscriptTheme.resolve(appearance: NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)!, baseSize: baseFontSize, revision: 0)
         super.init()
         configureViews()
+        startMemoryPressureMonitoring()
+        voiceOverObservation = NSWorkspace.shared.observe(\.isVoiceOverEnabled) { [weak self] workspace, _ in
+            let enabled = workspace.isVoiceOverEnabled
+            Task { @MainActor [weak self] in self?.isVoiceOverRunning = enabled }
+        }
     }
 
     /// Binds a source (a thread). Replaces any previous one; content appears from the source at once (cached state).
@@ -245,6 +257,10 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         copiedTask?.cancel()
         autoscrollTimer?.invalidate()
         autoscrollTimer = nil
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
+        voiceOverObservation?.invalidate()
+        voiceOverObservation = nil
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         eventMonitor = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
@@ -263,6 +279,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         openTask?.cancel()
         measureTask?.cancel()
         findTask?.cancel()
+        findIndexTask?.cancel()
+        findIndexTask = nil
         loadOlderTask?.cancel()
         for task in layoutTasks.values { task.cancel() }
         layoutTasks.removeAll()

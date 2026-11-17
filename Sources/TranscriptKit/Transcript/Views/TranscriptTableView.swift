@@ -332,7 +332,7 @@ final class TranscriptCellView: NSView {
     /// the row's whole visible text (a 100 KB code block for the largest row) and the custom actions allocate objects
     /// per hotspot. Configure only announces that the element changed, and only to a running client.
     func updateAccessibility() {
-        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        guard controller?.isVoiceOverRunning == true else { return }
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
 
@@ -383,10 +383,24 @@ final class TranscriptCanvasView: NSView {
         layer?.contentsFormat = .RGBA8Uint
     }
 
+    /// A plain CALayer (AppKit draws into it through the view as the layer's delegate): NSViewBackingLayer resets
+    /// `contentsFormat` to the window's depth, which on this display is 64-bit.
     override func makeBackingLayer() -> CALayer {
-        let layer = super.makeBackingLayer()
+        let layer = CALayer()
         layer.contentsFormat = .RGBA8Uint
         return layer
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        layer?.contentsScale = window?.backingScaleFactor ?? 2
+        needsDisplay = true
+    }
+
+    /// Format of the backing layer (harness check).
+    var backingFormat: String {
+        guard let layer else { return "no layer" }
+        return "\(type(of: layer)) \(layer.contentsFormat.rawValue) contents: \(layer.contents != nil) delegate: \(layer.delegate === self)"
     }
 
     @available(*, unavailable)

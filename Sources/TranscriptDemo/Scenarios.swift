@@ -601,6 +601,9 @@ extension ScenarioRunner {
         var copiedCharacters: Int
         var copySurvivesScrolling: Bool
         var findProseMs: Double
+        /// Main-thread CPU time of the first query (indexing runs off the main actor) and the longest frame meanwhile.
+        var findProseMainThreadMs: Double?
+        var findProseMaxFrameMs: Double?
         var findProseRowsAway: Int
         var findCollapsedMs: Double
         var findCollapsedRowsAway: Int
@@ -643,23 +646,34 @@ extension ScenarioRunner {
         controller.clearSelection()
 
         // Find: prose ~3,000 rows away; then text inside a collapsed tool output ~2,500 rows away.
+        var lastFindMainMs = 0.0
+        var lastFindMaxFrameMs = 0.0
         func find(_ query: String) async -> Double {
             let start = CACurrentMediaTime()
+            let cpu = ProcessStats.threadCPUMilliseconds()
+            recorder.start()
             controller.showFind()
             controller.setFindQuery(query, debounce: false)
             while controller.findMatches.isEmpty, CACurrentMediaTime() - start < 10 { await sleep(0.005) }
-            log("find “\(query.prefix(40))”: \(controller.findMatches.count) matches")
+            lastFindMainMs = ProcessStats.threadCPUMilliseconds() - cpu
+            lastFindMaxFrameMs = (recorder.stop().max() ?? 0) * 1000
+            let elapsed = (CACurrentMediaTime() - start) * 1000
+            log("find “\(query.prefix(40))”: \(controller.findMatches.count) matches, \(Int(elapsed)) ms, main thread \(Int(lastFindMainMs)) ms")
             await controller.settle()
-            return (CACurrentMediaTime() - start) * 1000
+            return elapsed
         }
         let here = controller.tableView.row(at: NSPoint(x: 1, y: controller.scrollView.contentView.bounds.minY)) - 1
         var proseMs = -1.0
+        var proseMain = -1.0
+        var proseFrame = -1.0
         var proseAway = 0
         if let target = (min(controller.rows.count - 1, here + 3_000)...).lazy.first(where: { if case .markdown = controller.rows[$0].content { true } else { false } }),
             let text = RenderBlocks.blocks(for: controller.rows[target]).first?.plainText
         {
             let words = text.split(separator: " ").prefix(6).joined(separator: " ")
             proseMs = await find(words)
+            proseMain = lastFindMainMs
+            proseFrame = lastFindMaxFrameMs
             proseAway = abs(target - here)
             controller.closeFind()
         }
@@ -685,7 +699,7 @@ extension ScenarioRunner {
             S7Report(
                 header: header("S7"), autoscrollFrames: FrameStats(intervals: autoscroll, nominal: nominal), selectedRows: rows,
                 copyMs: round2(copyMs), copiedCharacters: copied.count, copySurvivesScrolling: again == copied, findProseMs: round2(proseMs),
-                findProseRowsAway: proseAway, findCollapsedMs: round2(collapsedMs), findCollapsedRowsAway: collapsedAway,
+                findProseMainThreadMs: round2(proseMain), findProseMaxFrameMs: round2(proseFrame), findProseRowsAway: proseAway, findCollapsedMs: round2(collapsedMs), findCollapsedRowsAway: collapsedAway,
                 collapsedRevealedAndExpanded: revealed),
             name: "S7")
     }
@@ -697,9 +711,19 @@ extension ScenarioRunner {
         var afterScenarios: Memory
         var cycles: [Memory]
         var afterClose: Memory
+        /// Run alone: the process with the whole history loaded and no transcript ever mounted (mock server, Engine,
+        /// thread). The transcript's own share is afterClose − floor.
+        var floor: Memory?
+        var display: DisplayInfo.Info?
     }
 
     func runS8() async {
+        var floor: Memory?
+        if controller == nil {
+            _ = await loadAll()
+            await sleep(1)
+            floor = Memory.now()
+        }
         let after = Memory.now()
         var cycles: [Memory] = []
         for cycle in 0..<20 {
@@ -714,7 +738,11 @@ extension ScenarioRunner {
         }
         unmount()
         await sleep(1)
-        Report.write(S8Report(header: header("S8"), afterScenarios: after, cycles: cycles, afterClose: Memory.now()), name: "S8")
+        Report.write(
+            S8Report(
+                header: header("S8"), afterScenarios: after, cycles: cycles, afterClose: Memory.now(), floor: floor,
+                display: DisplayInfo.current(window: window)),
+            name: "S8")
     }
 }
 

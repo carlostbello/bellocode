@@ -25,6 +25,8 @@ public struct TranscriptCacheReport: Sendable, Codable, Equatable {
     /// Estimated bytes of canvas backing stores of the available cell views (width × height × scale² × 4).
     public var canvasBackingBytes = 0
     public var segmentCacheEntries = 0
+    /// Class and contents format of a canvas backing layer (expected: CALayer, RGBA8).
+    public var canvasLayerFormat = ""
     public var rows = 0
 }
 
@@ -44,9 +46,7 @@ extension TranscriptController {
             report.highlightCacheCost = stats.cost
         }
         report.findIndexEntries = findIndex.count
-        report.findIndexUTF16 = findIndex.values.reduce(0) { total, entry in
-            total + entry.blocks.reduce(0) { $0 + $1.utf16.count } + entry.folded.reduce(0) { $0 + ($1?.utf16.count ?? 0) }
-        }
+        report.findIndexUTF16 = findIndex.values.reduce(0) { $0 + $1.utf16Count }
         report.imageCount = images.count
         report.imageBytes = imageBytes
         let scale = tableView.window?.backingScaleFactor ?? 2
@@ -59,6 +59,7 @@ extension TranscriptController {
             return total + Int(size.width * scale) * Int(size.height * scale) * 4
         }
         report.segmentCacheEntries = segmentCache.count
+        report.canvasLayerFormat = cells.first?.view.canvas.backingFormat ?? ""
         report.rows = rows.count
         return report
     }
@@ -92,5 +93,30 @@ extension TranscriptController {
         case .findIndex:
             findIndex.removeAll()
         }
+    }
+}
+
+extension TranscriptController {
+    /// Watches system memory pressure for as long as the controller is open (cancelled in `close()`).
+    func startMemoryPressureMonitoring() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            let critical = source?.data.contains(.critical) ?? false
+            MainActor.assumeIsolated { self?.handleMemoryPressure(critical: critical) }
+        }
+        source.activate()
+        memoryPressureSource = source
+    }
+
+    /// Drops everything that is rebuilt on demand, keeping what is on screen: layouts of displayed rows, their images
+    /// and streaming tails. Critical pressure also drops the find index (rebuilt off-main on the next query).
+    public func handleMemoryPressure(critical: Bool) {
+        purge(.layouts)
+        purge(.images)
+        purge(.parse)
+        purge(.highlight)
+        graveyard.removeAll()
+        if critical { purge(.findIndex) }
+        TranscriptProfiler.shared.count(critical ? "memoryPressureCritical" : "memoryPressureWarning")
     }
 }

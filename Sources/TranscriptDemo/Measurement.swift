@@ -158,6 +158,20 @@ final class Watchdog: Sendable {
 }
 
 enum ProcessStats {
+    /// CPU time (user + system) of the calling thread, in milliseconds. Call on the main thread for main-thread time.
+    static func threadCPUMilliseconds() -> Double {
+        var info = thread_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let port = mach_thread_self()
+        defer { mach_port_deallocate(mach_task_self_, port) }
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { thread_info(port, thread_flavor_t(THREAD_BASIC_INFO), $0, &count) }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Double(info.user_time.seconds) * 1000 + Double(info.user_time.microseconds) / 1000
+            + Double(info.system_time.seconds) * 1000 + Double(info.system_time.microseconds) / 1000
+    }
+
     /// (resident MB, physical footprint MB)
     static func memory() -> (resident: Double, footprint: Double) {
         var info = task_vm_info_data_t()

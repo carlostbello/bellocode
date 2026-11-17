@@ -193,7 +193,7 @@ extension ScenarioRunner {
     /// sampling, then live memory attributed by purging each cache. Report: build/transcript-bench/P.json.
     func runProfile() async {
         let fraction = arguments.firstIndex(of: "--fraction").flatMap { Double(arguments[$0 + 1]) } ?? 1
-        if thread?.hasOlder == true { _ = await loadAll() }
+        _ = await loadAll()
         await sleep(1)
         let floor = Memory.now()
         mount()

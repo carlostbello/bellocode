@@ -13,24 +13,35 @@ public struct FindMatch: Hashable, Sendable {
     }
 }
 
-/// The searchable text of one row: every block's full text, including collapsed ones (find reveals them).
+/// The searchable text of one row: every block's full text, including collapsed ones (find reveals them). One string
+/// per block: the case- and diacritic-folded text when folding kept every UTF-16 offset (searched literally, fast),
+/// else the original (searched with folding options). Keeping both doubled the index.
 public struct FindIndexEntry: Sendable {
     public var rowID: RowID
     public var version: Int
-    public var blocks: [String]
-    /// Case- and diacritic-folded text per block when folding kept every UTF-16 offset (nil: search the original
-    /// with folding options, which is much slower).
-    public var folded: [String?]
+    public var texts: [String]
+    /// Per block: `texts[i]` is folded.
+    public var folded: [Bool]
 
     public init(rowID: RowID, version: Int, blocks: [String]) {
         self.rowID = rowID
         self.version = version
-        self.blocks = blocks
-        folded = blocks.map { text in
+        var texts: [String] = []
+        var folded: [Bool] = []
+        texts.reserveCapacity(blocks.count)
+        folded.reserveCapacity(blocks.count)
+        for text in blocks {
             let fold = FindSearch.fold(text)
-            return fold.utf16.count == text.utf16.count ? fold : nil
+            let keeps = fold.utf16.count == text.utf16.count
+            texts.append(keeps ? fold : text)
+            folded.append(keeps)
         }
+        self.texts = texts
+        self.folded = folded
     }
+
+    /// UTF-16 units held (cache report).
+    public var utf16Count: Int { texts.reduce(0) { $0 + $1.utf16.count } }
 }
 
 public enum FindSearch {
@@ -55,12 +66,11 @@ public enum FindSearch {
         let slow: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
         for (index, entry) in entries.enumerated() {
             if index & 0xFF == 0, Task.isCancelled { return result }
-            for (block, original) in entry.blocks.enumerated() {
+            for (block, text) in entry.texts.enumerated() {
                 // Folded text is searched literally (fast); offsets equal the original's.
-                let folded = block < entry.folded.count ? entry.folded[block] : nil
-                let text = folded ?? original
-                let options: NSString.CompareOptions = folded == nil ? slow : .literal
-                let query = folded == nil ? query : foldedQuery
+                let folded = block < entry.folded.count && entry.folded[block]
+                let options: NSString.CompareOptions = folded ? .literal : slow
+                let query = folded ? foldedQuery : query
                 let ns = text as NSString
                 var from = 0
                 while from < ns.length {

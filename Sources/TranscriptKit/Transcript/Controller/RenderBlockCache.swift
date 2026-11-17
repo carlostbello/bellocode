@@ -43,6 +43,15 @@ public final class RenderBlockCache: Sendable {
         return blocks
     }
 
+    /// The cached blocks of `row`, or nil, without touching recency or storing (bulk readers such as the find index
+    /// must not evict what layout needs).
+    public func cachedBlocks(for row: TranscriptRow) -> [RenderBlock]? {
+        state.withLock { state in
+            guard let entry = state.entries[row.id], entry.version == row.version else { return nil }
+            return entry.blocks
+        }
+    }
+
     /// Stores blocks computed elsewhere (the streaming tail's reconciled parse).
     public func store(_ blocks: [RenderBlock], for row: TranscriptRow) {
         let cost = Self.cost(row)
