@@ -1,38 +1,75 @@
 import AppKit
+import DesignSystem
 
-/// The composer's look, injected by the shell (normally built from DesignSystem tokens). Defaults are system-semantic
-/// colours and fonts, so the composer is correct in light, dark and increased contrast without any tokens.
+/// The composer's look. Behaviour fields (`minimumLines`, `maximumHeightFraction`, `placeholder`, completion sizing) are
+/// the host's to set. Every colour, font and metric is taken from DesignSystem when the composer draws
+/// (`resolvedWithDesignTokens()`, visual-language.md §6 "Composer"), so a host that still passes older values gets the
+/// spec anyway; the visual fields stay for source compatibility and default to the same tokens.
 public struct ComposerStyle {
-    public var font: NSFont = .systemFont(ofSize: NSFont.systemFontSize)
-    public var textColor: NSColor = .textColor
-    public var placeholderColor: NSColor = .placeholderTextColor
-    public var secondaryTextColor: NSColor = .secondaryLabelColor
-    public var cardBackgroundColor: NSColor = .textBackgroundColor
-    public var borderColor: NSColor = .separatorColor
-    public var focusBorderColor: NSColor = .keyboardFocusIndicatorColor
-    public var accentColor: NSColor = .controlAccentColor
-    public var tokenTextColor: NSColor = .linkColor
-    public var tokenBackgroundColor: NSColor = .controlAccentColor.withAlphaComponent(0.13)
-    public var chipBackgroundColor: NSColor = .quaternarySystemFill
-    public var errorColor: NSColor = .systemRed
-    public var popoverBackgroundColor: NSColor = .controlBackgroundColor
-    public var selectionRowColor: NSColor = .selectedContentBackgroundColor
+    public var font: NSFont = .systemFont(ofSize: 14)
+    public var textColor: NSColor = DS.Color.text
+    public var placeholderColor: NSColor = DS.Color.placeholder
+    public var secondaryTextColor: NSColor = DS.Color.text3
+    public var cardBackgroundColor: NSColor = DS.Color.raised
+    public var borderColor: NSColor = DS.Color.border
+    public var focusBorderColor: NSColor = DS.Color.borderStrong
+    public var accentColor: NSColor = DS.Color.accent
+    public var tokenTextColor: NSColor = DS.Color.infoText
+    public var tokenBackgroundColor: NSColor = DS.Color.infoSurface
+    public var chipBackgroundColor: NSColor = DS.Color.fillHover
+    public var errorColor: NSColor = DS.Color.dangerText
+    public var popoverBackgroundColor: NSColor = DS.Color.raised
+    public var selectionRowColor: NSColor = DS.Color.highlight
 
-    public var cornerRadius: CGFloat = 10
-    /// Padding inside the card around the text and controls.
-    public var contentInsets = NSEdgeInsets(top: 8, left: 10, bottom: 6, right: 6)
+    /// `r.xl`.
+    public var cornerRadius: CGFloat = DS.Radius.xl
+    /// Prompt inset 12 / 14 / 4; the controls bar sits 8 from the sides and bottom.
+    public var contentInsets = NSEdgeInsets(top: 12, left: 14, bottom: 8, right: 14)
     /// Height of the text area when empty, in lines (1 docked, 3 for the "hero" composer).
     public var minimumLines = 1
     /// Cap on the text area height as a fraction of the window's content height; it scrolls beyond that.
     public var maximumHeightFraction: CGFloat = 0.4
-    public var chipHeight: CGFloat = 26
-    public var controlHeight: CGFloat = 24
-    public var completionRowHeight: CGFloat = 24
+    public var chipHeight: CGFloat = DS.Size.control
+    /// Composer controls are 26 high.
+    public var controlHeight: CGFloat = DS.Size.composerControl
+    public var completionRowHeight: CGFloat = DS.Size.menuRow
     public var completionWidth: CGFloat = 380
     public var completionMaxVisibleRows = 8
     public var placeholder = "Ask anything. @ to mention files, / for commands"
+    /// Prompt line height (`composer` 14 / 21 at the default text size).
+    public var lineHeight: CGFloat = 21
+    /// Inset of the controls bar from the card's sides and bottom.
+    public var controlsInset: CGFloat = DS.Space.s8
 
     public init() {}
+
+    /// This style with every visual field taken from DesignSystem at the app's current text size; behaviour fields
+    /// are kept.
+    @MainActor public func resolvedWithDesignTokens() -> ComposerStyle {
+        var style = self
+        style.font = DS.TextRole.composer.font
+        style.lineHeight = DS.TextRole.composer.lineHeight
+        style.textColor = DS.Color.text
+        style.placeholderColor = DS.Color.placeholder
+        style.secondaryTextColor = DS.Color.text3
+        style.cardBackgroundColor = DS.Color.raised
+        style.borderColor = DS.Color.border
+        style.focusBorderColor = DS.Color.borderStrong
+        style.accentColor = DS.Color.accent
+        style.tokenTextColor = DS.Color.infoText
+        style.tokenBackgroundColor = DS.Color.infoSurface
+        style.chipBackgroundColor = DS.Color.fillHover
+        style.errorColor = DS.Color.dangerText
+        style.popoverBackgroundColor = DS.Color.raised
+        style.selectionRowColor = DS.Color.highlight
+        style.cornerRadius = DS.Radius.xl
+        style.contentInsets = NSEdgeInsets(top: 12, left: 14, bottom: 8, right: 14)
+        style.chipHeight = DS.Size.control
+        style.controlHeight = DS.Size.composerControl
+        style.completionRowHeight = DS.Size.menuRow
+        style.controlsInset = DS.Space.s8
+        return style
+    }
 
     /// Stronger borders when the user asked for increased contrast.
     var increasedContrast: Bool { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }

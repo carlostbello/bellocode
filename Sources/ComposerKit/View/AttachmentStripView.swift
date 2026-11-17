@@ -1,4 +1,5 @@
 import AppKit
+import DesignSystem
 import ImageIO
 import Quartz
 import UniformTypeIdentifiers
@@ -207,16 +208,16 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
         icon.image = Self.icon(for: attachment)
         icon.imageScaling = .scaleProportionallyUpOrDown
         nameLabel.stringValue = attachment.name
-        nameLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        nameLabel.font = DS.TextRole.labelEmph.font
         nameLabel.textColor = style.textColor
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sizeLabel.stringValue = attachment.formattedSize
-        sizeLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize - 1)
+        sizeLabel.font = DS.TextRole.meta.font
         sizeLabel.textColor = style.secondaryTextColor
-        removeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: nil)
-        removeButton.symbolConfiguration = .init(pointSize: 11, weight: .regular)
-        removeButton.contentTintColor = .tertiaryLabelColor
+        removeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        removeButton.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        removeButton.contentTintColor = DS.Color.text3
         removeButton.isBordered = false
         removeButton.imagePosition = .imageOnly
         removeButton.setAccessibilityLabel("Remove \(attachment.name)")
@@ -285,12 +286,9 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        style.chipBackgroundColor.setFill()
-        path.fill()
-        (style.increasedContrast ? NSColor.labelColor.withAlphaComponent(0.5) : style.borderColor).setStroke()
-        path.lineWidth = style.borderWidth
-        path.stroke()
+        // `fillHover` chip with a `border` hairline inside, `r.md` (DesignSystem; text plus icon, never colour alone).
+        DSDraw.fill(rect, radius: DS.Radius.md, color: DS.Color.fillHover)
+        DSDraw.ring(rect, radius: DS.Radius.md, color: style.increasedContrast ? DS.Color.borderStrong : DS.Color.border)
     }
 
     // MARK: Keyboard and Quick Look
@@ -298,7 +296,7 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { NSApp.isFullKeyboardAccessEnabled }
     override var focusRingMaskBounds: NSRect { bounds }
-    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill() }
+    override func drawFocusRingMask() { DS.Radius.path(bounds, radius: DS.Radius.md).fill() }
 
     override func keyDown(with event: NSEvent) {
         switch event.charactersIgnoringModifiers {

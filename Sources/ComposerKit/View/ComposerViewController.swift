@@ -1,6 +1,7 @@
 import AppKit
 import os
 import UniformTypeIdentifiers
+import DesignSystem
 
 /// The composer: attachment chips, an auto-growing `NSTextView`, an inline error line and a controls bar with host
 /// slots, in a rounded card, plus a context-line slot below it.
@@ -13,7 +14,9 @@ import UniformTypeIdentifiers
 @MainActor
 public final class ComposerViewController: NSViewController, NSMenuItemValidation {
     public let controller = ComposerController()
-    public var style: ComposerStyle { didSet { applyStyle() } }
+    public var style: ComposerStyle { didSet { look = style.resolvedWithDesignTokens(); applyStyle() } }
+    /// What the composer draws with: `style` with DesignSystem's colours, fonts and metrics.
+    private var look: ComposerStyle
     public var configuration: ComposerConfiguration { didSet { applyConfiguration() } }
 
     /// The thread being edited. Setting it saves the previous thread's draft and shows the new one's (with selection).
@@ -53,8 +56,9 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     private var errorView: ComposerErrorView!
     private let controlsBar = NSStackView()
     private let sendButton = ComposerSendButton()
-    private let stopButton = NSButton()
-    private let followUpMenuButton = NSButton()
+    private let stopButton = ComposerSendButton()
+    private let followUpMenuButton = DSButton(icon: "chevron.down", accessibilityTitle: "Follow-up options", size: .small)
+    private let attachButton = DSButton(icon: "paperclip", accessibilityTitle: "Attach files", size: .small)
     private let statusLabel = NSTextField(labelWithString: "")
     private var heightConstraint: NSLayoutConstraint!
     private var completionPanel: CompletionPanel?
@@ -77,6 +81,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     public init(style: ComposerStyle = ComposerStyle(), configuration: ComposerConfiguration = ComposerConfiguration()) {
         self.style = style
+        look = style.resolvedWithDesignTokens()
         self.configuration = configuration
         attachments = AttachmentList(limits: configuration.attachmentLimits)
         completion = CompletionSession(providers: configuration.completionProviders, debounce: configuration.completionDebounce)
@@ -96,8 +101,8 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     // MARK: - View
 
     public override func loadView() {
-        card = ComposerCardView(style: style)
-        errorView = ComposerErrorView(style: style)
+        card = ComposerCardView(style: look)
+        errorView = ComposerErrorView(style: look)
         textView = makeTextView()
 
         scrollView.documentView = textView
@@ -111,7 +116,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minimumTextHeight)
         heightConstraint.isActive = true
 
-        strip.style = style
+        strip.style = look
         strip.onRemove = { [weak self] id in self?.removeAttachment(id: id) }
         strip.isHidden = true
         errorView.isHidden = true
@@ -119,31 +124,34 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
         buildControlsBar()
 
+        // Prompt, chips and errors inset 14 from the sides; the controls bar 8 (visual-language.md §6 "Composer").
         cardStack.orientation = .vertical
-        cardStack.alignment = .leading
+        cardStack.alignment = .centerX
         cardStack.spacing = 6
-        cardStack.edgeInsets = style.contentInsets
+        cardStack.edgeInsets = NSEdgeInsets(
+            top: look.contentInsets.top, left: look.controlsInset, bottom: look.controlsInset, right: look.controlsInset)
         cardStack.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(cardStack)
+        card.contentView.addSubview(cardStack)
         card.translatesAutoresizingMaskIntoConstraints = false
         for item in [strip, scrollView, errorView!, controlsBar] as [NSView] {
             item.translatesAutoresizingMaskIntoConstraints = false
             cardStack.addArrangedSubview(item)
-            let horizontalInset = style.contentInsets.left + style.contentInsets.right
+            let horizontalInset = item === controlsBar ? 2 * look.controlsInset : look.contentInsets.left + look.contentInsets.right
             item.widthAnchor.constraint(equalTo: cardStack.widthAnchor, constant: -horizontalInset).isActive = true
         }
-        cardStack.setCustomSpacing(2, after: scrollView)
+        cardStack.setCustomSpacing(10, after: scrollView)
+        cardStack.setCustomSpacing(8, after: errorView)
 
         rootStack.orientation = .vertical
         rootStack.alignment = .leading
-        rootStack.spacing = 5
+        rootStack.spacing = 6
         rootStack.addArrangedSubview(card)
         card.widthAnchor.constraint(equalTo: rootStack.widthAnchor).isActive = true
         NSLayoutConstraint.activate([
-            cardStack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            cardStack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            cardStack.topAnchor.constraint(equalTo: card.topAnchor),
-            cardStack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            cardStack.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
+            cardStack.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
+            cardStack.topAnchor.constraint(equalTo: card.contentView.topAnchor),
+            cardStack.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
         ])
         view = rootStack
         installContextLine()
@@ -201,12 +209,12 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     }
 
     private func applyTextStyle(to textView: ComposerTextView) {
-        textView.font = style.font
-        textView.textColor = style.textColor
-        textView.insertionPointColor = style.textColor
+        textView.font = look.font
+        textView.textColor = look.textColor
+        textView.insertionPointColor = look.textColor
         textView.typingAttributes = baseAttributes
-        textView.placeholder = style.placeholder
-        textView.placeholderColor = style.placeholderColor
+        textView.placeholder = look.placeholder
+        textView.placeholderColor = look.placeholderColor
     }
 
     private func buildControlsBar() {
@@ -216,31 +224,39 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
             stack.alignment = .centerY
             stack.setHuggingPriority(.defaultHigh, for: .horizontal)
         }
-        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        statusLabel.textColor = style.secondaryTextColor
+        statusLabel.font = DS.TextRole.meta.font
+        statusLabel.textColor = look.secondaryTextColor
         statusLabel.isHidden = true
 
-        stopButton.image = NSImage(systemSymbolName: "stop.circle", accessibilityDescription: nil)
-        stopButton.symbolConfiguration = .init(pointSize: 15, weight: .regular)
-        stopButton.isBordered = false
-        stopButton.contentTintColor = .secondaryLabelColor
+        // Attach: a ghost icon button (paperclip), first in the bar.
+        attachButton.target = self
+        attachButton.action = #selector(attachFiles(_:))
+        attachButton.toolTip = "Attach files"
+        attachButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            attachButton.widthAnchor.constraint(equalToConstant: look.controlHeight),
+            attachButton.heightAnchor.constraint(equalToConstant: look.controlHeight),
+        ])
+
+        // Stop: an outline capsule with the red square, shown beside a non-empty draft while the agent runs (an empty
+        // draft makes the primary button itself the Stop button).
+        stopButton.appearanceState = .stop
         stopButton.setAccessibilityLabel("Stop the agent")
         stopButton.toolTip = "Stop the agent"
         stopButton.target = self
         stopButton.action = #selector(stopAgent(_:))
         stopButton.isHidden = true
 
-        followUpMenuButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
-        followUpMenuButton.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
-        followUpMenuButton.isBordered = false
-        followUpMenuButton.contentTintColor = .secondaryLabelColor
         followUpMenuButton.setAccessibilityLabel("Follow-up options")
         followUpMenuButton.toolTip = "Queue, steer or stop"
         followUpMenuButton.target = self
         followUpMenuButton.action = #selector(showFollowUpMenu(_:))
         followUpMenuButton.isHidden = true
+        followUpMenuButton.translatesAutoresizingMaskIntoConstraints = false
+        followUpMenuButton.widthAnchor.constraint(equalToConstant: 20).isActive = true
+        followUpMenuButton.heightAnchor.constraint(equalToConstant: look.controlHeight).isActive = true
 
-        sendButton.style = style
+        sendButton.style = look
         sendButton.target = self
         sendButton.action = #selector(primaryButtonPressed(_:))
 
@@ -250,19 +266,25 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         controlsBar.orientation = .horizontal
         controlsBar.alignment = .centerY
         controlsBar.spacing = 6
-        for item in [leadingControls, spacer, trailingControls, statusLabel, stopButton, followUpMenuButton, sendButton] as [NSView] {
+        for item in [attachButton, leadingControls, spacer, trailingControls, statusLabel, stopButton, followUpMenuButton, sendButton] as [NSView] {
             controlsBar.addArrangedSubview(item)
         }
-        controlsBar.setCustomSpacing(2, after: followUpMenuButton)
-        controlsBar.heightAnchor.constraint(equalToConstant: style.controlHeight).isActive = true
+        controlsBar.setCustomSpacing(2, after: attachButton)
+        controlsBar.setCustomSpacing(8, after: stopButton)
+        controlsBar.setCustomSpacing(4, after: followUpMenuButton)
+        controlsBar.heightAnchor.constraint(equalToConstant: DS.Size.send).isActive = true
     }
 
     private func installContextLine() {
         guard isViewLoaded, let line = contextLineView else { return }
         line.translatesAutoresizingMaskIntoConstraints = false
         rootStack.addArrangedSubview(line)
-        line.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: style.contentInsets.left).isActive = true
-        line.trailingAnchor.constraint(lessThanOrEqualTo: rootStack.trailingAnchor).isActive = true
+        line.leadingAnchor.constraint(equalTo: rootStack.leadingAnchor, constant: look.contentInsets.left).isActive = true
+        line.trailingAnchor.constraint(lessThanOrEqualTo: rootStack.trailingAnchor, constant: -look.contentInsets.right).isActive = true
+        // Views without an intrinsic width (`ComposerContextStrip`) span the card; labels keep hugging their text.
+        let span = line.trailingAnchor.constraint(equalTo: rootStack.trailingAnchor, constant: -look.contentInsets.right)
+        span.priority = .init(200)
+        span.isActive = true
     }
 
     private func observeEnvironment() {
@@ -300,11 +322,20 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         completion.close()
     }
 
+    /// Fixed prompt line height (`composer` 14 / 21) so mention tokens and emoji never change the line pitch.
+    private static func paragraphStyle(lineHeight: CGFloat) -> NSParagraphStyle {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = lineHeight
+        paragraph.maximumLineHeight = lineHeight
+        return paragraph
+    }
+
     private func applyStyle() {
         guard isViewLoaded else { return }
-        card.style = style
-        strip.style = style
-        sendButton.style = style
+        look = style.resolvedWithDesignTokens()
+        card.style = look
+        strip.style = look
+        sendButton.style = look
         applyTextStyle(to: textView)
         let storage = textView.textStorage
         let whole = NSRange(location: 0, length: storage?.length ?? 0)
@@ -333,11 +364,11 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     // MARK: - Attributes
 
     private var baseAttributes: [NSAttributedString.Key: Any] {
-        [.font: style.font, .foregroundColor: style.textColor]
+        [.font: look.font, .foregroundColor: look.textColor, .paragraphStyle: Self.paragraphStyle(lineHeight: look.lineHeight)]
     }
 
     private func tokenDecoration(_ token: ComposerToken) -> [NSAttributedString.Key: Any] {
-        [.foregroundColor: style.tokenTextColor, .composerTokenBackground: style.tokenBackgroundColor]
+        [.foregroundColor: look.tokenTextColor, .composerTokenBackground: look.tokenBackgroundColor]
     }
 
     private var storage: NSTextStorage { textView.textStorage ?? NSTextStorage() }
@@ -465,6 +496,24 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     @objc public func stopAgent(_ sender: Any?) { controller.stop() }
     @objc public func focusComposer(_ sender: Any?) { focus() }
 
+    /// Chooses files to attach (the paperclip; menus can target `attachFiles:` through the responder chain).
+    @objc public func attachFiles(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Attach"
+        let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK else { return }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let rejected = self.add(attachments: panel.urls.map(ComposerAttachment.file(at:)), actionName: "Attach Files")
+                if rejected.isEmpty { self.focus() }
+            }
+        }
+        if let window = view.window { panel.beginSheetModal(for: window, completionHandler: finish) } else { panel.begin(completionHandler: finish) }
+    }
+
     /// Sends with the default action, or the alternate one (the opposite follow-up while running).
     public func send(alternate: Bool) {
         guard !textView.hasMarkedText() else { return }
@@ -510,7 +559,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         focus()
     }
 
-    @objc private func showFollowUpMenu(_ sender: NSButton) {
+    @objc private func showFollowUpMenu(_ sender: NSView) {
         let menu = NSMenu()
         let key = configuration.sendKey
         let primary = controller.delivery(alternate: false)
@@ -612,10 +661,10 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     // MARK: - Height
 
-    private var lineHeight: CGFloat { ceil(style.font.ascender - style.font.descender + style.font.leading) }
+    private var lineHeight: CGFloat { look.lineHeight }
 
     private var minimumTextHeight: CGFloat {
-        CGFloat(max(1, style.minimumLines)) * lineHeight + textView.textContainerInset.height * 2
+        CGFloat(max(1, look.minimumLines)) * lineHeight + textView.textContainerInset.height * 2
     }
 
     private func scheduleHeightUpdate() {
@@ -638,7 +687,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         let inset = textView.textContainerInset.height * 2
         let minimum = minimumTextHeight
         let available = view.window?.contentView?.bounds.height ?? 600
-        let maximum = max(minimum, floor(available * style.maximumHeightFraction))
+        let maximum = max(minimum, floor(available * look.maximumHeightFraction))
         let target = min(max(ceil(used) + inset, minimum), maximum)
         guard abs(heightConstraint.constant - target) > 0.5 else { return }
         heightConstraint.constant = target
@@ -650,7 +699,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     /// Current height of the text area (tests and scenarios).
     public var textAreaHeight: CGFloat { heightConstraint.constant }
     public var textAreaMaximumHeight: CGFloat {
-        max(minimumTextHeight, floor((view.window?.contentView?.bounds.height ?? 600) * style.maximumHeightFraction))
+        max(minimumTextHeight, floor((view.window?.contentView?.bounds.height ?? 600) * look.maximumHeightFraction))
     }
 
     // MARK: - Spell checking
@@ -727,7 +776,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
             lastAnnouncedCompletion = nil
             return
         }
-        let list = completionList ?? CompletionListView(style: style)
+        let list = completionList ?? CompletionListView(style: look)
         list.onAccept = { [weak self] index in
             guard let self else { return }
             self.completion.select(index: index)
@@ -743,7 +792,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         list.show(completion.items, selected: completion.selectedIndex, message: message)
         let panel = completionPanel ?? makeCompletionPanel(list)
         let caret = textView.firstRect(forCharacterRange: NSRange(location: query.range.location, length: 0), actualRange: nil)
-        let size = NSSize(width: style.completionWidth, height: list.preferredHeight)
+        let size = NSSize(width: look.completionWidth, height: list.preferredHeight)
         // Above the card (never over the text being typed), aligned with the trigger character.
         let cardTop = window.convertToScreen(card.convert(card.bounds, to: nil)).maxY
         var origin = NSPoint(x: caret.minX - 10, y: max(caret.maxY, cardTop) + 4)
@@ -764,7 +813,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     private func makeCompletionPanel(_ list: CompletionListView) -> CompletionPanel {
         let panel = CompletionPanel(
-            contentRect: NSRect(x: 0, y: 0, width: style.completionWidth, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: look.completionWidth, height: 100),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true
         )
         panel.isOpaque = false

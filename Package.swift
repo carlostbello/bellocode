@@ -124,7 +124,7 @@ let targets: [Target] =
             dependencies: ["DiffKit", "Engine", "BelloCore", "DesignSystem", "TranscriptKit", "OpenCodeKit", "MockOpenCode"],
             swiftSettings: swiftSettings),
         // M1-C development harness: scripted composer scenarios and snapshots. See docs/features/composer.md.
-        .executableTarget(name: "ComposerDemo", dependencies: ["ComposerKit"], swiftSettings: swiftSettings),
+        .executableTarget(name: "ComposerDemo", dependencies: ["ComposerKit", "DesignSystem"], swiftSettings: swiftSettings),
         // AgentUI demo and snapshot harness: `swift run AgentUIDemo --all` (docs/features/agent-ui.md).
         .executableTarget(
             name: "AgentUIDemo", dependencies: ["AgentUI", "Engine", "BelloCore", "OpenCodeKit", "MockOpenCode"],

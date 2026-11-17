@@ -1,5 +1,6 @@
 import AppKit
 import ComposerKit
+import DesignSystem
 import Foundation
 
 /// Scripted scenarios. Each starts with a fresh composer and records failures on the harness.
@@ -288,7 +289,7 @@ struct Scenarios {
         rich.setString(" bold", forType: .string)
         _ = h.textView.readSelection(from: rich, type: .string); await h.tick()
         let font = h.textView.textStorage!.attribute(.font, at: h.text.utf16.count - 1, effectiveRange: nil) as? NSFont
-        h.expectEqual(font?.pointSize, NSFont.systemFontSize, "rich paste arrives as plain text")
+        h.expectEqual(font?.pointSize, DS.TextRole.composer.font.pointSize, "rich paste arrives as plain text")
 
         let files = h.newPasteboard()
         let fileURL = h.projectRoot.appending(path: "README.md")
@@ -474,7 +475,7 @@ struct Scenarios {
         h.textView.deleteBackward(nil); await h.tick()
         if let id = h.composer.attachments.items.first?.id { h.composer.removeAttachment(id: id) }
         h.expect(h.allViews().compactMap { $0.accessibilityLabel() }.contains("Stop the agent"), "stop labelled")
-        h.expect(h.allViews().contains { ($0 as? NSButton)?.accessibilityLabel() == "Follow-up options" }, "follow-up menu reachable")
+        h.expect(h.allViews().contains { ($0 as? NSControl)?.accessibilityLabel() == "Follow-up options" }, "follow-up menu reachable")
     }
 
     func latency() async {
