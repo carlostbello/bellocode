@@ -43,7 +43,12 @@ public struct MarkdownStream: Sendable {
         if !source.utf8.starts(with: stablePrefix.utf8) { self = MarkdownStream() }
         let display = finished ? source : Self.displayPrefix(source, from: stableEnd)
         displayed = display
-        if incremental, MarkdownParser.hasReferenceDefinitions(Substring(display)) { incremental = false }
+        // Only the unstable region is new; earlier text was checked when it arrived.
+        if incremental {
+            let utf8 = display.utf8
+            let from = utf8.index(utf8.startIndex, offsetBy: min(stableEnd, utf8.count))
+            if MarkdownParser.hasReferenceDefinitions(Substring(display[from...])) { incremental = false }
+        }
         guard incremental else {
             stable = []
             stableEnd = 0

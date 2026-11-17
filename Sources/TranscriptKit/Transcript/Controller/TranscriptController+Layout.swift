@@ -241,6 +241,7 @@ extension TranscriptController {
         }
         defer { if inflight.count < maxInflightPrefetch / 2 { updatePrefetch(force: true) } }
         guard let index = rowIndex[id], currentKey(row: index) == layout.key else { return }  // stale: drop
+        followLiveOutput(row: index, layout: layout)
         store(layout)
         acceptHeight(layout, row: index)
         if pendingHeights[id] == nil, let view = cellView(index) { configure(view, index: index) }
@@ -344,7 +345,7 @@ extension TranscriptController {
         updateContentWidth()
         updateSpacer()
         guard abs(contentWidth - old) >= 1, !rows.isEmpty else {
-            for (_, view) in availableCells() { view.needsLayout = true; view.invalidate() }
+            for (_, view) in availableCells() { view.updateCanvas() }
             return
         }
         generation += 1

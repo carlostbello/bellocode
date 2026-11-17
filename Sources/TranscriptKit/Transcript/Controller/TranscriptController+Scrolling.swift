@@ -261,11 +261,18 @@ extension TranscriptController {
         if distanceFromBottom <= 2 { setFollowing(true) } else { schedulePill() }
     }
 
+    /// Tells the delegate once scrolling has been quiet for 400 ms. One task per scroll burst (not per frame).
     func scheduleAnchorNotification() {
-        anchorTask?.cancel()
+        lastAnchorChange = CACurrentMediaTime()
+        guard anchorTask == nil else { return }
         anchorTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
+            while let self, !Task.isCancelled {
+                let wait = 0.4 - (CACurrentMediaTime() - self.lastAnchorChange)
+                if wait <= 0 { break }
+                try? await Task.sleep(for: .milliseconds(Int(wait * 1000) + 1))
+            }
             guard let self, !Task.isCancelled else { return }
+            self.anchorTask = nil
             self.delegate?.transcriptAnchorDidChange(self)
         }
     }

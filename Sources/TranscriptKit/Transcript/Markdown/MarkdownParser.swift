@@ -28,17 +28,37 @@ public enum MarkdownParser {
     /// Whether `source` defines link references (`[name]: url`), which can change earlier blocks: incremental
     /// re-parsing is then disabled.
     public static func hasReferenceDefinitions(_ source: Substring) -> Bool {
-        var index = source.startIndex
-        while let open = source[index...].firstIndex(of: "[") {
-            let lineStart = source[..<open].lastIndex(of: "\n").map { source.index(after: $0) } ?? source.startIndex
-            let leading = source[lineStart..<open]
-            if leading.count <= 3, leading.allSatisfy({ $0 == " " }),
-                let close = source[open...].firstIndex(of: "]"), source.index(after: close) < source.endIndex,
-                source[source.index(after: close)] == ":", !source[open..<close].contains("\n")
-            {
-                return true
+        // Line by line: a definition starts a line with up to three spaces, then `[label]:`.
+        var lineStart = true
+        var spaces = 0
+        var inLabel = false
+        var afterLabel = false
+        for byte in source.utf8 {
+            if byte == 10 {
+                lineStart = true
+                spaces = 0
+                inLabel = false
+                afterLabel = false
+                continue
             }
-            index = source.index(after: open)
+            if afterLabel {
+                if byte == 58 { return true }  // :
+                lineStart = false
+                afterLabel = false
+                continue
+            }
+            if inLabel {
+                if byte == 93 { inLabel = false; afterLabel = true }  // ]
+                continue
+            }
+            guard lineStart else { continue }
+            if byte == 32, spaces < 3 {
+                spaces += 1
+            } else if byte == 91 {  // [
+                inLabel = true
+            } else {
+                lineStart = false
+            }
         }
         return false
     }

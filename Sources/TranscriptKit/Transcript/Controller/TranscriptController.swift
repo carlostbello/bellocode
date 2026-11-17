@@ -109,6 +109,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var hasNewOutput = false
     var pillTask: Task<Void, Never>?
     var anchorTask: Task<Void, Never>?
+    var lastAnchorChange: CFTimeInterval = 0
     /// A new turn's user row is held near the top until the reply fills the viewport.
     var turnAnchor: RowID?
     var spacerHeight: CGFloat = TranscriptMetrics.bottomPadding

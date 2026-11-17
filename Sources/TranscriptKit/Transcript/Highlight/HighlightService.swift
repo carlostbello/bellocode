@@ -63,7 +63,7 @@ public final class TokenizerHighlighter: HighlightService {
     /// Cache bound: total cached code length (UTF-16 units). Overflow evicts the least recently used entries.
     private let costLimit: Int
 
-    public init(costLimit: Int = 8_000_000) { self.costLimit = costLimit }
+    public init(costLimit: Int = 2_000_000) { self.costLimit = costLimit }
 
     public func supports(_ language: String?) -> Bool { Languages.spec(for: language) != nil }
 

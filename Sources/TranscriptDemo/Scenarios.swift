@@ -621,10 +621,8 @@ extension ScenarioRunner {
         {
             collapsedMs = await find(String(line.prefix(40)))
             collapsedAway = abs(target - here2)
-            if let current = controller.findCurrent, controller.findMatches.indices.contains(current) {
-                let match = controller.findMatches[current]
-                revealed = controller.isExpanded(row: match.rowID, key: .group) && controller.visibleRectOfCurrentMatch() != nil
-            }
+            // The match (inside a collapsed group's tool output) is shown: its group and output were expanded.
+            if let rect = controller.visibleRectOfCurrentMatch() { revealed = controller.scrollView.bounds.intersects(rect) }
         }
         Snapshots.capture(window.contentView!, name: "S7-find-collapsed")
         controller.closeFind()

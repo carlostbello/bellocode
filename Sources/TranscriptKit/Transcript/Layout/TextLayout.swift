@@ -28,6 +28,14 @@ final class MonoLines {
     private let baseColor: CGColor
     private var cache: [Int: CTLine] = [:]
     private var cacheOrder: [Int] = []
+    /// CTLines kept per block; the layout cache counts this many per monospaced fragment as its cost.
+    static let cacheLimit = 120
+
+    /// Releases realised lines (the layout left the screen; they are recreated on demand).
+    func purge() {
+        cache.removeAll(keepingCapacity: false)
+        cacheOrder.removeAll(keepingCapacity: false)
+    }
 
     init(text: String, runs: [TokenRun], fonts: TranscriptFonts, color: CGColor? = nil) {
         let ns = text as NSString
@@ -115,9 +123,10 @@ final class MonoLines {
         let line = CTLineCreateWithAttributedString(attributed)
         cache[index] = line
         cacheOrder.append(index)
-        if cacheOrder.count > 600 {  // bounded: drop the oldest half
-            for old in cacheOrder.prefix(300) { cache[old] = nil }
-            cacheOrder.removeFirst(300)
+        if cacheOrder.count > Self.cacheLimit {  // bounded (a viewport shows ~60 lines): drop the oldest half
+            let drop = Self.cacheLimit / 2
+            for old in cacheOrder.prefix(drop) { cache[old] = nil }
+            cacheOrder.removeFirst(drop)
         }
         return line
     }

@@ -261,31 +261,46 @@ final class TranscriptCellView: NSView {
 
     func invalidate(_ rect: CGRect? = nil) {
         guard let rect else { canvas.needsDisplay = true; return }
-        let local = rect.offsetBy(dx: -canvas.frame.minX, dy: -canvas.frame.minY)
+        let local = CGRect(x: 0, y: rect.minY - canvas.frame.minY, width: canvas.bounds.width, height: rect.height)
         canvas.setNeedsDisplay(local.intersection(canvas.bounds))
+    }
+
+    /// Space left and right of the text column the canvas also covers (hover timestamps, selection gap fill).
+    static let gutter: CGFloat = 96
+
+    /// The canvas spans the text column plus gutters, so a width change that only re-centres the column moves the
+    /// canvas (its layer contents move with it) instead of redrawing the row.
+    func columnFrame() -> (x: CGFloat, width: CGFloat) {
+        let contentWidth = layout?.width ?? bounds.width
+        let columnX = TranscriptGeometry.columnX(forTableWidth: bounds.width, contentWidth: contentWidth)
+        return (columnX - Self.gutter, contentWidth + 2 * Self.gutter)
     }
 
     /// Keeps the canvas covering the visible part (plus margin) of tall rows, with hysteresis.
     func updateCanvas(force: Bool = false) {
         let bounds = self.bounds
+        let column = columnFrame()
         let target: CGRect
         if bounds.height <= Self.tallRowThreshold {
-            target = bounds
+            target = CGRect(x: column.x, y: 0, width: column.width, height: bounds.height)
         } else {
             let visible = visibleRect
-            if !force, !canvas.frame.isEmpty, !visible.isEmpty,
-                canvas.frame.insetBy(dx: 0, dy: -1).contains(visible.insetBy(dx: 1, dy: -200).intersection(bounds))
+            if !force, !canvas.frame.isEmpty, !visible.isEmpty, canvas.frame.minX == column.x, canvas.frame.width == column.width,
+                canvas.frame.minY <= max(0, visible.minY - 200) + 1, canvas.frame.maxY >= min(bounds.height, visible.maxY + 200) - 1
             {
                 return
             }
             let margin: CGFloat = 900
             let center = visible.isEmpty ? CGRect(x: 0, y: 0, width: bounds.width, height: 1) : visible
-            target = CGRect(x: 0, y: center.minY - margin, width: bounds.width, height: center.height + 2 * margin)
-                .intersection(bounds).integral
+            let top = max(0, floor(center.minY - margin))
+            let bottom = min(bounds.height, ceil(center.maxY + margin))
+            target = CGRect(x: column.x, y: top, width: column.width, height: max(1, bottom - top))
         }
-        if canvas.frame != target {
+        if canvas.frame.size != target.size || canvas.frame.minY != target.minY {
             canvas.frame = target
             canvas.needsDisplay = true
+        } else if canvas.frame.origin != target.origin {
+            canvas.setFrameOrigin(target.origin)  // horizontal re-centring: no redraw
         }
     }
 
@@ -327,12 +342,12 @@ final class TranscriptCanvasView: NSView {
         guard let owner, let layout = owner.layout, let context = NSGraphicsContext.current?.cgContext else { return }
         let signpost = transcriptSignposter.beginInterval("draw")
         defer { transcriptSignposter.endInterval("draw", signpost) }
-        let origin = frame.origin
-        context.translateBy(x: -origin.x, y: -origin.y)
-        let width = owner.bounds.width
-        let columnX = TranscriptGeometry.columnX(forTableWidth: width, contentWidth: layout.width)
-        context.translateBy(x: columnX, y: 0)
-        let dirty = dirtyRect.offsetBy(dx: origin.x - columnX, dy: origin.y)
+        // Canvas coordinates: x = 0 is `gutter` points left of the text column; y follows the row.
+        let originY = frame.origin.y
+        let gutter = TranscriptCellView.gutter
+        context.translateBy(x: gutter, y: -originY)
+        let columnX = TranscriptGeometry.columnX(forTableWidth: owner.bounds.width, contentWidth: layout.width)
+        let dirty = dirtyRect.offsetBy(dx: -gutter, dy: originY)
         let controller = owner.controller
         layout.draw(in: context, dirty: dirty, state: owner.drawState) { controller?.image($0) }
         if owner.isHovered, let row = owner.row { drawTimestamp(row, layout: layout, context: context, columnX: columnX) }

@@ -18,11 +18,18 @@ public struct FindIndexEntry: Sendable {
     public var rowID: RowID
     public var version: Int
     public var blocks: [String]
+    /// Case- and diacritic-folded text per block when folding kept every UTF-16 offset (nil: search the original
+    /// with folding options, which is much slower).
+    public var folded: [String?]
 
     public init(rowID: RowID, version: Int, blocks: [String]) {
         self.rowID = rowID
         self.version = version
         self.blocks = blocks
+        folded = blocks.map { text in
+            let fold = FindSearch.fold(text)
+            return fold.utf16.count == text.utf16.count ? fold : nil
+        }
     }
 }
 
@@ -37,13 +44,23 @@ public enum FindSearch {
         matches(entries, query: query)
     }
 
+    static func fold(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
     public static func matches(_ entries: [FindIndexEntry], query: String) -> [FindMatch] {
         guard !query.isEmpty else { return [] }
         var result: [FindMatch] = []
-        let options: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        let foldedQuery = fold(query)
+        let slow: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
         for (index, entry) in entries.enumerated() {
             if index & 0xFF == 0, Task.isCancelled { return result }
-            for (block, text) in entry.blocks.enumerated() {
+            for (block, original) in entry.blocks.enumerated() {
+                // Folded text is searched literally (fast); offsets equal the original's.
+                let folded = block < entry.folded.count ? entry.folded[block] : nil
+                let text = folded ?? original
+                let options: NSString.CompareOptions = folded == nil ? slow : .literal
+                let query = folded == nil ? query : foldedQuery
                 let ns = text as NSString
                 var from = 0
                 while from < ns.length {

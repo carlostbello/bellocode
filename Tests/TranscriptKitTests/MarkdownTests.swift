@@ -100,6 +100,13 @@ enum Corpus {
         #expect(text.runs.contains { $0.traits == .strike })
     }
 
+    @Test func detectsReferenceDefinitionsOnly() {
+        #expect(MarkdownParser.hasReferenceDefinitions("text\n[d]: https://e.com\n"))
+        #expect(MarkdownParser.hasReferenceDefinitions("   [a b]: /x"))
+        #expect(!MarkdownParser.hasReferenceDefinitions("See [a link](https://e.com) and [x] here.\n- [ ] task\n"))
+        #expect(!MarkdownParser.hasReferenceDefinitions("    [indented]: code"))
+    }
+
     @Test func sourceRangesCoverTopLevelBlocks() {
         let source = "# A\n\npara\n\n- x\n- y\n"
         let top = MarkdownParser.parse(source)
