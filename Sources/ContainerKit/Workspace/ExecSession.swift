@@ -8,16 +8,20 @@ public enum ExecWrapper {
     /// Non-interactive commands. The command runs in the exec's own session (Docker makes the exec process a session
     /// and group leader), with stdin from /dev/null. A watcher holds the exec's real stdin: when BelloCode closes it
     /// (cancel, timeout) or the connection drops (the forwarding helper was killed), the watcher sends SIGTERM to the
-    /// whole process group, then SIGKILL two seconds later, so a cancelled command leaves nothing behind.
+    /// whole process group, then SIGKILL two seconds later, so a cancelled command leaves nothing behind. Like opencode's
+    /// own spawner, what a finished command left running in its group (`cmd &`) is stopped when it exits. The watcher's
+    /// output goes to /dev/null: Docker keeps an exec's stream open while anything holds its stdout.
     public static func nonInteractive(_ argv: [String]) -> [String] {
         let script = """
         exec 3<&0 </dev/null
-        ( trap '' TERM INT HUP; while IFS= read -r _ <&3; do :; done; kill -TERM -$$ 2>/dev/null; sleep 2; kill -KILL -$$ 2>/dev/null ) &
+        ( trap '' TERM INT HUP; while IFS= read -r _ <&3; do :; done; kill -TERM -$$ 2>/dev/null; sleep 2; kill -KILL -$$ 2>/dev/null ) >/dev/null 2>&1 &
         w=$!
         "$@" &
         c=$!
         wait $c; s=$?
         kill -KILL $w 2>/dev/null
+        trap '' TERM
+        kill -TERM -$$ 2>/dev/null
         exit $s
         """
         return ["/bin/sh", "-c", script, "bellocode-exec"] + argv
