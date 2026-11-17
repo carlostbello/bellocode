@@ -84,16 +84,19 @@ final class AppRuntime {
         // the host.
         configuration.containerExecution = ContainerExecution(
             helperURL: helpers.appending(path: "bellocode-exec"),
-            execConfigURL: root.appending(path: "bellocode-exec.json"))
+            execConfigURL: root.appending(path: "bellocode-exec.json"),
+            gitShimDirectory: root.appending(path: "git-shim", directoryHint: .isDirectory))
         return configuration
     }
 
     /// The engine's side of containerised execution for a bundled server configuration.
     nonisolated static func containerConfiguration(for server: ServerConfiguration, socketOverride: String? = nil) -> ContainerConfiguration? {
         guard let execution = server.containerExecution else { return nil }
-        return ContainerConfiguration(
+        var configuration = ContainerConfiguration(
             helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
             runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
+        configuration.gitShim = execution.gitShimDirectory?.appending(path: "git")
+        return configuration
     }
 
     /// `Contents/Resources/opencode-plugin` (the "bellocode" server plugin, docs/features/orchestration.md), if bundled.

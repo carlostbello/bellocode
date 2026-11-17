@@ -22,6 +22,8 @@ public struct ContainerConfiguration: Sendable {
     public var pollWhileUp: Duration = .seconds(30)
     /// How often idle containers are looked for.
     public var idleCheckInterval: Duration = .seconds(60)
+    /// The `git` shim first on the server's PATH (opencode's host git, confined by `HostGit`); probed by the self-check.
+    public var gitShim: URL?
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {

@@ -178,7 +178,7 @@ public final class Engine {
             }
             environments.isolationContext = IsolationCheck.Context(
                 client: { [core] in try await core.currentClient() }, helperPath: containers.helperURL.path,
-                terminalEnvironment: terminals.launch.environment)
+                terminalEnvironment: terminals.launch.environment, gitShim: containers.gitShim?.path)
             let git = self.git
             environments.worktreeParent = { directory in git.cachedPreferences(projectDirectory: directory).parentDirectory(projectDirectory: directory) }
         }

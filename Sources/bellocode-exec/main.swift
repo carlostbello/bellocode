@@ -18,6 +18,12 @@ import Foundation
 
 let helperVersion = "bellocode-exec 1.0"
 
+// Invoked as `git` (the shim first on the server's PATH): opencode's own host git runs confined (HostGit), never
+// unconfined and never in the container (its snapshots live outside the mounts).
+if (CommandLine.arguments.first.map { ($0 as NSString).lastPathComponent }) == "git" {
+    HostGit.shimMain(arguments: Array(CommandLine.arguments.dropFirst()), environment: ProcessInfo.processInfo.environment)
+}
+
 func fail(_ code: Int32, _ message: String) -> Never {
     FileHandle.standardError.write(Data("BelloCode: \(message) The command was not run.\n".utf8))
     exit(code)

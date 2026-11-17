@@ -26,7 +26,7 @@ final class PanelFixture {
         environment["GIT_CONFIG_NOSYSTEM"] = "1"
         for key in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] { environment[key] = "Demo" }
         for key in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] { environment[key] = "demo@example.invalid" }
-        let runner = GitRunner(environment: environment)
+        let runner = GitRunner(environment: environment, writableRoots: [FileManager.default.temporaryDirectory.path], allowsLocalRemotes: true)
         func git(_ arguments: String...) async throws { _ = try await runner.run(arguments, in: repo.path) }
         func write(_ path: String, _ text: String) throws {
             let url = repo.appending(path: path)

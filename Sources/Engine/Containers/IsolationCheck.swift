@@ -14,6 +14,8 @@ public struct IsolationReport: Sendable, Equatable {
         case off(String)
         /// Could not be checked (no project with an image, server offline, timeout).
         case skipped(String)
+        /// Ran on the Mac by design, inside a boundary that was exercised and held (host git's sandbox).
+        case confined(String)
         case failed(String)
 
         public var isProblem: Bool {
@@ -29,13 +31,14 @@ public struct IsolationReport: Sendable, Equatable {
             case .host: "HOST"
             case .off: "Off"
             case .skipped: "Skipped"
+            case .confined: "Confined"
             case .failed: "Failed"
             }
         }
 
         public var detail: String {
             switch self {
-            case .container(let text), .host(let text), .off(let text), .skipped(let text), .failed(let text): text
+            case .container(let text), .host(let text), .off(let text), .skipped(let text), .confined(let text), .failed(let text): text
             }
         }
     }
@@ -84,11 +87,16 @@ public enum IsolationCheck {
         public var client: @Sendable () async throws -> OpenCodeClient
         public var helperPath: String
         public var terminalEnvironment: [String: String]
+        /// opencode's `git` shim (nil: only BelloCode's own host git is probed).
+        public var gitShim: String?
 
-        public init(client: @escaping @Sendable () async throws -> OpenCodeClient, helperPath: String, terminalEnvironment: [String: String]) {
+        public init(
+            client: @escaping @Sendable () async throws -> OpenCodeClient, helperPath: String, terminalEnvironment: [String: String], gitShim: String? = nil
+        ) {
             self.client = client
             self.helperPath = helperPath
             self.terminalEnvironment = terminalEnvironment
+            self.gitShim = gitShim
         }
     }
 
@@ -167,13 +175,15 @@ public enum IsolationCheck {
     /// Runs the check against `directory` (a project whose container can run). `full` adds the session-based paths.
     @MainActor
     static func run(service: EnvironmentService, context: Context, directory: String?, full: Bool) async -> IsolationReport {
-        var checks: [IsolationReport.Check] = []
+        // Host git (BelloCode's and opencode's): a scratch repository whose configuration names a program at every git
+        // extension point; none may run. Needs neither the server nor a container.
+        var checks: [IsolationReport.Check] = [.init("Host git", await HostGitProbe.run(shim: context.gitShim))]
         let client: OpenCodeClient
         do {
             client = try await context.client()
         } catch {
-            return IsolationReport(date: Date(), directory: directory, full: full,
-                                   checks: [.init("Server", .skipped("opencode is not running: \(error)"))])
+            checks.append(.init("Server", .skipped("opencode is not running: \(error)")))
+            return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
         }
 
         // Configuration (no project needed).

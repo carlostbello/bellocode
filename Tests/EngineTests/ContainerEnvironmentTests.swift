@@ -258,10 +258,13 @@ struct ContainerInterceptionTests {
         #expect(content.contains(#""formatter":false"#) || content.contains(#""formatter" : false"#))
     }
 
-    @Test func hostGitNeverRunsHooks() {
-        let environment = GitRunner().environment
-        #expect(environment["GIT_CONFIG_KEY_0"] == "core.hooksPath")
-        #expect(environment["GIT_CONFIG_VALUE_0"] == "/dev/null")
+    @Test func hostGitNeverRunsHooks() throws {
+        let runner = GitRunner()
+        let invocation = try #require(runner.invocation(["status"], in: NSTemporaryDirectory(), writableRoots: [], trusted: .init()))
+        #expect(invocation.executable == HostGit.sandboxExecutable)
+        let environment = invocation.environment
+        let pairs = (0..<(Int(environment["GIT_CONFIG_COUNT"] ?? "0") ?? 0)).map { (environment["GIT_CONFIG_KEY_\($0)"], environment["GIT_CONFIG_VALUE_\($0)"]) }
+        #expect(pairs.contains { $0.0 == "core.hooksPath" && $0.1 == "/dev/null" })
     }
 
     @Test func configurationScanFlagsEveryHostPath() {

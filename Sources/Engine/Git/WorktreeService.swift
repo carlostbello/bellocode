@@ -183,7 +183,7 @@ public struct WorktreeService: Sendable {
 
     public func create(_ request: WorktreeCreation) async throws -> CreatedWorktree {
         let start = ContinuousClock.now
-        let project = GitRepository(directory: request.projectDirectory, runner: runner)
+        let project = GitRepository(directory: request.projectDirectory, runner: runner, writableRoots: [request.parentDirectory])
         let directory = Self.folder(for: request.branch, in: request.parentDirectory)
         if FileManager.default.fileExists(atPath: directory) { throw WorktreeError.directoryExists(directory) }
         if !request.useExistingBranch, try await project.resolves("refs/heads/\(request.branch)") {
@@ -320,7 +320,9 @@ public struct WorktreeService: Sendable {
         }
         let head = entry.head ?? ""
         do {
-            _ = try await project.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
+            // The worktree's folder lies outside the project: name it as a place git may write (delete) in.
+            let remover = GitRepository(directory: projectDirectory, runner: runner, writableRoots: [entry.path])
+            _ = try await remover.git(["worktree", "remove"] + (force ? ["--force"] : []) + [entry.path], timeout: .seconds(120))
         } catch {
             if let held { try? putBack(held, into: entry.path) }
             throw error
@@ -373,7 +375,8 @@ public struct WorktreeService: Sendable {
     /// bytes come back exactly; what was staged in the index comes back as unstaged changes. Throws
     /// `heldContentsMissing` (after restoring the checkout) when those files were deleted from the Trash.
     public func restore(_ removed: RemovedWorktree) async throws {
-        let project = GitRepository(directory: removed.projectDirectory, runner: runner)
+        let project = GitRepository(
+            directory: removed.projectDirectory, runner: runner, writableRoots: [(removed.directory as NSString).deletingLastPathComponent])
         if removed.branchDeleted, let branch = removed.branch {
             _ = try await project.git(["branch", branch, removed.head])
         }
