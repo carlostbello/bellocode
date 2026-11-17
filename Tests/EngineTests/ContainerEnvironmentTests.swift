@@ -76,6 +76,22 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
             return (0, s.output, Data())
         }
     }
+    struct SecretCall: Sendable {
+        var command: String
+        var name: String
+        var secret: Data
+        var policy: SecretCommandPolicy
+    }
+    let secretCalls = Mutex<[SecretCall]>([])
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        secretCalls.withLock { $0.append(SecretCall(command: command, name: name, secret: secret, policy: policy)) }
+        var output = BoundedOutput(limit: 1 << 20)
+        output.append(state.withLock { $0.output }, toStderr: false)
+        return WorkspaceManager.SecretCommandResult(exitCode: 0, output: output)
+    }
     func logs(container: String, tail: Int) async throws -> Data { Data() }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
@@ -177,7 +193,7 @@ struct ContainerEnvironmentTests {
         #expect(workspace.blocked == nil)
     }
 
-    @Test func secretGoesOnlyIntoOneExecAndIsRedacted() async throws {
+    @Test func secretGoesOnlyToOneOneShotCommandAndIsRedacted() async throws {
         runtime.state.withLock { $0.images = ["img:1"]; $0.output = Data("token=s3cr3t-value\n".utf8) }
         let service = try await makeService()
         defer { service.stop() }
@@ -190,8 +206,11 @@ struct ContainerEnvironmentTests {
         #expect(result.output.contains("<secret>"))
         _ = try await service.runSetup("make setup", in: project, projectDirectory: project)
         let execs = runtime.state.withLock { $0.execs }
-        #expect(execs.filter { $0.environment.values.contains("s3cr3t-value") }.count == 1)
-        #expect(execs.last?.environment["API_TOKEN"] == nil)
+        #expect(execs.allSatisfy { !$0.environment.values.contains("s3cr3t-value") }, "never in a shared-container exec")
+        let calls = runtime.secretCalls.withLock { $0 }
+        #expect(calls.count == 1)
+        #expect(calls.first.map { String(decoding: $0.secret, as: UTF8.self) } == "s3cr3t-value")
+        #expect(calls.first?.policy == SecretCommandPolicy(), "no network, read-only project by default")
         // Never in the container's configuration or the helper's file.
         await service.writeConfigNow()
         let file = try String(contentsOf: root.appending(path: "exec.json"), encoding: .utf8)

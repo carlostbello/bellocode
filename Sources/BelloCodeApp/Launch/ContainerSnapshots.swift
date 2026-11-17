@@ -177,6 +177,12 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
         // The isolation probes read their markers here: answer as the container would.
         (0, Data("container Linux\n".utf8), Data())
     }
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        WorkspaceManager.SecretCommandResult(exitCode: 0, output: BoundedOutput(limit: 1024))
+    }
     func logs(container: String, tail: Int) async throws -> Data { Data("VITE v6.0.3  ready in 412 ms\n".utf8) }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {

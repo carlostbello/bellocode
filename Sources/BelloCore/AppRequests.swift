@@ -64,6 +64,8 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case schedule
         /// An HTML visual wants to load from network hosts.
         case network
+        /// A saved secret goes to one exact command (label, project, variable, command, network and write access shown).
+        case secretCommand
     }
 
     public var action: Action

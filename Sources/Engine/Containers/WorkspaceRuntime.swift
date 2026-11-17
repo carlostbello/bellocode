@@ -26,6 +26,11 @@ public protocol WorkspaceRuntime: Sendable {
     /// only (secrets); output is bounded.
     func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
              timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data)
+    /// Runs a command that receives a secret in a one-shot sibling container (`WorkspaceManager.runSecretCommand`).
+    func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult
     /// The last `tail` lines of the container's own output (bounded), for display only.
     func logs(container: String, tail: Int) async throws -> Data
     func events() -> AsyncStream<EngineMonitorEvent>
@@ -76,6 +81,13 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
                     timeout: Duration) async throws -> (exitCode: Int, stdout: Data, stderr: Data) {
         try await ExecSession.run(client: client, container: container, argv: argv, workingDir: workingDir, environment: environment,
                                   user: user, wrap: true, limit: 256 * 1024, timeout: timeout)
+    }
+    public func runSecretCommand(
+        _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
+        timeout: Duration
+    ) async throws -> WorkspaceManager.SecretCommandResult {
+        try await manager.runSecretCommand(
+            spec, shell: shell, command: command, workingDir: workingDir, name: name, secret: secret, policy: policy, timeout: timeout)
     }
     public func logs(container: String, tail: Int) async throws -> Data {
         var data = Data()

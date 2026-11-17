@@ -148,6 +148,8 @@ public final class SecretService {
         do {
             try vault.delete(account: account)
             try await store.deleteSecretLabel(account: account)
+            // Commands approved "always" for this secret lose their approval with it.
+            try await store.deleteGrants(.secretCommand, scopePrefix: account + "\n")
             references = references.filter { $0.value.account != account }
             labels.removeAll { $0.account == account }
             lastError = nil

@@ -1,4 +1,6 @@
 import BelloCore
+import ContainerKit
+import CryptoKit
 import Foundation
 import Observation
 import OpenCodeKit
@@ -50,9 +52,16 @@ public final class ExtrasHub {
     @ObservationIgnored private let containerSecrets = ContainerSecretReferences()
     @ObservationIgnored private let secretVault: any SecretVault
     @ObservationIgnored private let wallClock: any WallClock
+    @ObservationIgnored private let store: ProjectionStore
+    /// Secret commands waiting for the person's approval (card), by card subject. In memory only: after a relaunch the
+    /// card cannot run anything and asks the agent to request again. At most 16.
+    @ObservationIgnored var pendingSecretCommands: [String: PendingSecretCommand] = [:]
+    /// "Always for this command" approvals (`app_grant` kind secretCommand, scope `<account>\n<digest>`).
+    @ObservationIgnored var secretCommandGrants: Set<String> = []
 
     init(core: EngineCore, store: ProjectionStore, engine: Engine, configuration: EngineConfiguration) {
         self.core = core
+        self.store = store
         self.engine = engine
         schedules = SchedulerService(store: store, clock: configuration.wallClock)
         mergeRequests = MergeRequestService(
@@ -72,6 +81,7 @@ public final class ExtrasHub {
         started = true
         await secrets.load()
         await visuals.load()
+        secretCommandGrants = (try? await store.grants(.secretCommand)) ?? []
         let lineage = store.observe(.lineage)
         tasks.set(
             "lineage",
@@ -479,6 +489,19 @@ public final class ExtrasHub {
                 await visuals.approveNetwork(approval.subjectID, hosts: hosts, always: always)
             case (.network, _):
                 break
+            case (.secretCommand, .approve(let always)):
+                await core.resolveAppRequest(id)
+                try await approveSecretCommand(approval, always: always)
+                return
+            case (.secretCommand, _):
+                await core.resolveAppRequest(id)
+                if let pending = pendingSecretCommands.removeValue(forKey: approval.subjectID) {
+                    try await core.postSynthetic(
+                        pending.sessionID,
+                        text: "[BelloCode secret] The user did not allow “\(pending.label)” to be given to that command. It did not run. Do not retry the same command; explain what you need instead.",
+                        metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("command_declined")])]))
+                }
+                return
             }
         }
         await core.resolveAppRequest(id)
@@ -504,7 +527,7 @@ public final class ExtrasHub {
         if let environments, environments.isEnabled {
             // Containerised project: a pipe on the Mac is unreachable from the container, whatever delivery was asked.
             let reference = containerSecrets.issue(account: account, label: prompt.label, for: request.sessionID, now: wallClock.now())
-            text = "[BelloCode secret] The user saved “\(prompt.label)”. secretRef: \(reference) (one use, this thread, 1 hour). Commands run in this project's container: pass it to bellocode_app_secret_exec with the variable name and the one command that needs it. Never print the value."
+            text = "[BelloCode secret] The user saved “\(prompt.label)”. secretRef: \(reference) (one use, this thread, 1 hour). Commands run in this project's container: pass it to bellocode_app_secret_exec with the variable name and the one command that needs it; the user approves that exact command before it receives the value. Never print the value."
             try await core.postSynthetic(
                 request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
             log.info("secret delivered by container reference (value not logged)")
@@ -524,8 +547,32 @@ public final class ExtrasHub {
     }
 }
 
+/// A command an agent asked to run with a saved secret, waiting for the person's approval.
+struct PendingSecretCommand: Sendable {
+    var account: String
+    var label: String
+    var sessionID: SessionID
+    var directory: String
+    var projectDirectory: String
+    var name: String
+    var command: String
+    var policy: SecretCommandPolicy
+    var digest: String
+}
+
 extension ExtrasHub {
-    /// `secret_exec`: one command in the caller's project container with the secret in its environment only.
+    /// The approval binding: secret (Keychain account), project, variable, the exact command and its policy.
+    static func secretCommandDigest(account: String, projectDirectory: String, name: String, command: String, policy: SecretCommandPolicy) -> String {
+        let parts = [account, projectDirectory, name, command, policy.network ? "network" : "offline", policy.writesProject ? "writes" : "read-only"]
+        return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
+    }
+
+    /// `secret_exec` (C3 in docs/reviews/M3-M6-review.md). The agent names the command, so the agent controls what
+    /// happens to the value; redaction of the output cannot stop a command that encodes, splits, stores or sends it. So
+    /// the person approves the exact command first (card: secret label, project, variable, the command verbatim,
+    /// network and write access), unless they approved exactly this before ("Always for This Command"). The command
+    /// runs in a one-shot sibling container: no network and a read-only project unless the agent asked and the card
+    /// said so. The thread is woken with the (redacted, bounded) output.
     func secretExec(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
         guard let environments, environments.isEnabled else {
             throw ExtrasError("This project's commands do not run in a container; use bellocode_app_secret_file.")
@@ -533,15 +580,75 @@ extension ExtrasHub {
         guard let reference = arguments["secretRef"]?.stringValue, let command = arguments["command"]?.stringValue,
               !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let rawName = arguments["name"]?.stringValue
         else { throw ExtrasError("Give secretRef, name and command.") }
+        guard command.utf8.count <= 4_000 else { throw ExtrasError("The command is too long to show for approval (4000 bytes at most).") }
         let name = try SecretVariableName.validate(rawName)
+        let policy = SecretCommandPolicy(network: arguments["network"]?.boolValue ?? false, writesProject: arguments["writesProject"]?.boolValue ?? false)
         let entry = try containerSecrets.redeem(reference, by: caller.sessionID, now: wallClock.now())
-        guard let value = try secretVault.read(account: entry.account), !value.isEmpty else {
-            throw ExtrasError("“\(entry.label)” is no longer saved. Ask again with request_secret.")
+        let digest = Self.secretCommandDigest(account: entry.account, projectDirectory: caller.projectDirectory, name: name, command: command, policy: policy)
+        let pending = PendingSecretCommand(
+            account: entry.account, label: entry.label, sessionID: caller.sessionID, directory: caller.directory,
+            projectDirectory: caller.projectDirectory, name: name, command: command, policy: policy, digest: digest)
+        if secretCommandGrants.contains(entry.account + "\n" + digest) {
+            let text = try await runSecretCommand(pending)
+            return ClientMCPResult(text: text)
         }
-        await secrets.touch(account: entry.account)
-        let result = try await environments.runWithSecret(directory: caller.directory, command: command, name: name, secret: value)
-        log.info("secret used in one container command (value not logged)")
-        return ClientMCPResult(text: "Ran in the project's container with \(name) set (exit \(result.exitCode)). Output (the value, if printed, is shown as <secret>):\n\(result.output)")
+        if pendingSecretCommands.count >= 16, let oldest = pendingSecretCommands.keys.sorted().first { pendingSecretCommands[oldest] = nil }
+        let id = AppRequest.makeID("scmd")
+        pendingSecretCommands[id] = pending
+        let access = [policy.network ? "network ON" : "no network", policy.writesProject ? "can write the project" : "project read-only"]
+        let request = AppRequest(
+            id: AppRequest.makeID("sec"), sessionID: caller.sessionID,
+            kind: .approval(
+                AppApproval(
+                    action: .secretCommand, title: "Give “\(entry.label)” to a command",
+                    detail: "Secret: “\(entry.label)” as $\(name)\nRuns in: \(caller.directory) (one-shot container: \(access.joined(separator: ", ")))\nCommand:\n\(command)",
+                    scope: caller.projectDirectory, subjectID: id, allowsAlways: true, digest: digest)),
+            received: .now)
+        await core.putAppRequest(request)
+        return ClientMCPResult(
+            text: "Asked the user to approve this exact command for “\(entry.label)” (a card shows it). If they allow it, it runs and you are woken with its output; if not, you are told. End your turn now.")
+    }
+
+    private func approveSecretCommand(_ approval: AppApproval, always: Bool) async throws {
+        guard let pending = pendingSecretCommands.removeValue(forKey: approval.subjectID), approval.digest == pending.digest else {
+            throw ExtrasError("This request is no longer pending (BelloCode was restarted, or it was answered). Nothing ran; the agent can ask again.")
+        }
+        if always {
+            let scope = pending.account + "\n" + pending.digest
+            try await store.setGrant(.secretCommand, scope: scope, granted: true)
+            secretCommandGrants.insert(scope)
+        }
+        let text: String
+        do {
+            text = try await runSecretCommand(pending)
+        } catch {
+            text = "[BelloCode secret] The approved command for “\(pending.label)” could not run: \(ExtrasError.message(error))"
+        }
+        try await core.postSynthetic(
+            pending.sessionID, text: text.hasPrefix("[BelloCode secret]") ? text : "[BelloCode secret] " + text,
+            metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("command_ran")])]))
+    }
+
+    /// Runs an approved secret command and describes the result (never the value: verbatim occurrences are replaced,
+    /// which is a display courtesy, not a guarantee; the approval is the guarantee).
+    private func runSecretCommand(_ pending: PendingSecretCommand) async throws -> String {
+        guard let environments else { throw ExtrasError("Container execution is off.") }
+        guard let value = try secretVault.read(account: pending.account), !value.isEmpty else {
+            throw ExtrasError("“\(pending.label)” is no longer saved. Ask again with request_secret.")
+        }
+        await secrets.touch(account: pending.account)
+        let result = try await environments.runWithSecret(
+            directory: pending.directory, command: pending.command, name: pending.name, secret: value, policy: pending.policy)
+        log.info("secret used in one approved container command (value not logged)")
+        let truncated = result.truncated ? " Output was longer than the limit: the middle is omitted (marked)." : ""
+        return "Ran the approved command with $\(pending.name) set to “\(pending.label)” (exit \(result.exitCode)).\(truncated) Output:\n\(result.output)"
+    }
+}
+
+/// Hex SHA-256 of a string.
+enum SHA256Hex {
+    static func of(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

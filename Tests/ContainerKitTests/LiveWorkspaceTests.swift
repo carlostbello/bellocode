@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ContainerKit
@@ -179,6 +180,39 @@ struct LiveWorkspaceTests {
         #expect(!String(decoding: inspect, as: UTF8.self).contains(sentinel), "not in the container's configuration")
         let logs = try await client.call("GET", "/containers/\(id)/logs", query: [("stdout", "1"), ("stderr", "1")])
         #expect(!String(decoding: logs, as: UTF8.self).contains(sentinel))
+        }
+    }
+
+    /// C3: a secret command runs in a one-shot container: value on stdin (never in any configuration), no network, the
+    /// project read-only, no shared home; the container is gone afterwards.
+    @Test func secretCommandRunsInAOneShotOfflineReadOnlyContainer() async throws {
+        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await withProject { root, spec in
+        _ = try await manager.ensureRunning(spec)
+        let sentinel = "BCSENTINEL-\(UUID().uuidString)"
+        let script = """
+            test "$API_TOKEN" = '\(sentinel)' && echo has-it
+            (echo x > \(root)/leak.txt) 2>/dev/null && echo wrote || echo read-only
+            node -e "require('http').get('http://1.1.1.1',()=>{console.log('net')}).on('error',()=>console.log('offline'))"
+            echo "home=$HOME"
+            """
+        let result = try await manager.runSecretCommand(
+            spec, shell: "/bin/sh", command: script, workingDir: root, name: "API_TOKEN", secret: Data(sentinel.utf8), policy: SecretCommandPolicy())
+        let output = result.output.stdout.text
+        #expect(result.exitCode == 0)
+        #expect(output.contains("has-it"), "\(output) \(result.output.stderr.text)")
+        #expect(output.contains("read-only"))
+        #expect(output.contains("offline"))
+        #expect(output.contains("home=/tmp"))
+        #expect(!FileManager.default.fileExists(atPath: root + "/leak.txt"))
+        // No secret-command container is left behind.
+        let left = try await client.listContainers(labels: ["\(WorkspaceSpec.labelSecretCommand)=1"], all: true)
+        #expect(left.isEmpty)
+        // With network and write access granted, both work.
+        let open = try await manager.runSecretCommand(
+            spec, shell: "/bin/sh", command: "(echo x > \(root)/ok.txt) && echo wrote", workingDir: root, name: "API_TOKEN", secret: Data(sentinel.utf8),
+            policy: SecretCommandPolicy(network: true, writesProject: true))
+        #expect(open.output.stdout.text.contains("wrote"))
         }
     }
 }
