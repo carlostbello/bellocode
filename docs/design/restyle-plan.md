@@ -18,8 +18,7 @@ is what the PNG shows. Run the AGENTS.md UX checklist (03 §E) per step.
   SwiftUI mirrors: `DSButtonStyle`, `DSMenuRowStyle`, `DSToggleStyle`, `Color.ds`, `Font.ds`.
 - Rework `CountBadge`, `UndoToastView`, `EmptyStateView`, `ToolbarButton`; replace `MonogramView` with
   `ProjectIcon` (folder glyph or favicon).
-- Package (smallest change outside DesignSystem): add `DesignSystem` to `AgentUI`'s dependencies.
-- Evidence: new gallery snapshot of every control × state × appearance.
+- Package (smallest outside change): add `DesignSystem` to `AgentUI`. Evidence: a control × state × appearance gallery.
 
 ## 1. Shell and sidebar (`BelloCodeApp/Shell`, `Sidebar`, `Content/ThreadHeaderView`)
 Transparent title bar, one-line 52 pt header (title, crumbs, outline actions, panel toggles); `DSTabBar` replaces
@@ -56,8 +55,7 @@ Evidence: `diff-app-changes-dark-1280x800`, `diff-panel-uncommitted-light`, `dif
 
 ## 6. Terminal (`TerminalKit/Terminal/TerminalTheme`, `TerminalTabStrip`, `TerminalFindBar`, pane/surface)
 Token ANSI palette, cursor and selection; SF Mono 12; 32 pt ghost tab strip; DS find bar; outline Restart.
-Evidence: `terminal-drawer-one-dark`, `terminal-drawer-split-dark`, `terminal-drawer-find-light`,
-`terminal-drawer-exited-light`.
+Evidence: `terminal-drawer-one-dark`, `-split-dark`, `-find-light`, `-exited-light`.
 
 ## 7. Browser (`BrowserKit/Browser/UI/*`)
 One 36 pt toolbar (icon buttons, URL `DSTextField`), ghost tabs, agent banner as a tinted info row (ghost Stop,
@@ -72,14 +70,10 @@ Evidence: `nav-palette-files-dark-1280x800`, `nav-search-light-1280x800`, `nav-u
 
 ## 9. Orchestration (`OrchestrationUI/AgentsPanelView`, child cards in the transcript)
 Summary pills, tree rows with guide lines, glyph + word status, agent-tag pills, hover actions, report boxes.
-Evidence: `orch-agents-tree-dark`, `orch-agents-tree-light`, `orch-waiting-reports-dark`, `orch-child-view-light`,
-`orch-transcript-cards-light`.
+Evidence: `orch-agents-tree-dark`/`-light`, `orch-waiting-reports-dark`, `orch-child-view-light`, `orch-transcript-cards-light`.
 
-## 10. Settings and onboarding (last, light touch)
-Keep the native Settings window and form; DS controls only inside our panes; sentence-case labels; first-run and
-empty states on `EmptyStateView`. Evidence: `nav-settings-notifications-dark`, plus a first-run scenario (add one).
-
-## 11. Clean-up
-Delete the deprecated aliases and `AppStyle` re-mapping. Grep outside DesignSystem must find no `bezelStyle`,
+## 10. Settings, onboarding, clean-up
+Settings: keep the native window and form; DS controls inside our panes only; first-run and empty states on
+`EmptyStateView` (evidence `nav-settings-notifications-dark` + a first-run scenario to add). Then delete the deprecated aliases and `AppStyle` re-mapping. Grep outside DesignSystem must find no `bezelStyle`,
 `NSSegmentedControl`, `NSPopUpButton`, `.borderedProminent`, `.bordered`, or accent/`selectedContentBackgroundColor`
 row fills. Switch snapshot fixtures to realistic thread titles. Add T3 Code's MIT notice to the acknowledgements.
