@@ -31,7 +31,9 @@ ID for an explicit retry) leaves the composer clear and shows the message: resto
 `isDraftLoaded` (default true): while false the composer shows nothing, saves nothing over the stored draft, and
 when it turns true shows the stored draft or, if the user typed meanwhile, the stored draft followed by the new text. `ThreadModelComposerHost(threadModel)` adapts an Engine
 `ThreadModel` (via `ComposerThreadSource`); tokens, attachments and selection live in a bounded in-memory
-`ComposerDraftCache` and are used while the persisted text still matches. It reports `supportsAttachments = false`.
+`ComposerDraftCache` and are used while the persisted text still matches (entries are scoped to the thread source
+that stored them, so another engine's thread with the same session ID cannot replace them; a reopened model gets the
+newest matching entry for its session). It reports `supportsAttachments = false`.
 
 ## What the prompt API needs for attachments (Contracts/opencode-2.3.0/openapi.json)
 

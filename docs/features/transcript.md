@@ -7,8 +7,9 @@ transcript-level selection model). Code: `Sources/TranscriptKit/Transcript/`; ha
 - **Data flow.** `TranscriptController` binds a `TranscriptSource` (`ThreadModel` conforms; `StaticTranscriptSource`
   for tests and demos). Observation tracks the list and the newest 256 messages individually (older finished ones are
   re-validated when the list changes). A change marks messages dirty; `sync` rebuilds only the last turn's rows while a
-  reply streams (grouping never crosses a user message), diffs rows by ID (common prefix/suffix) and inserts/removes
-  table rows with anchoring. First content is built off-main (rows, estimates, exact layouts of the bottom three
+  reply streams (grouping never crosses a user message), finds them from the end, replaces that range in place, diffs it
+  by ID (common prefix/suffix) and re-indexes only rows after the first difference, so a streaming commit costs the same
+  at 1,000 or 10,000 messages (M2-F); then inserts/removes table rows with anchoring. First content is built off-main (rows, estimates, exact layouts of the bottom three
   viewports), then measured in the background (utility QoS, half the cores, batches via `AsyncStream`).
 - **Rows** (`RowBuilder`): one per user message, assistant part (text, reasoning, file, sub-agent, todo list), run of
   consecutive tool calls of a turn (a *work group*, possibly spanning several step messages; named after its first
@@ -77,6 +78,25 @@ after the traversal (malloc 589).
 **locked** (display awake via `caffeinate -d -i -u`): frames are display-link delivery, not on-screen compositing.
 Retina (2×) backing stores are 4× larger than measured here.
 
+**Streaming commit cost against history (M2-F, review M3).** `--scenario stream-cost --large N --rate 150
+--stream-seconds 12` records every sync while a tail streams (release, same machine, screen locked, load 2–8 from other
+agents; reports in `docs/spikes/transcript-perf/stream-cost/`). Main-thread CPU per tail commit p50 / p95, rows touched:
+
+| Messages (rows) | Before (fbc15e2) | After |
+|---|---|---|
+| 1,000 (1,367) | 0.94 / 1.37 ms, 7,832 rows | 0.22 / 0.27 ms, 7 rows |
+| 5,000 (6,787) | 3.59 / 5.15 ms, 38,932 rows | 0.47 / 0.85 ms, 7 rows |
+| 10,000 (13,581) | 5.52 / 6.31 ms, 77,902 rows | 0.44 / 1.05 ms, 7 rows |
+
+What remains per commit scales with the streaming reply, not the history (its image-source check scans the reply text).
+
+**S2/S3 after M2-F** (`docs/spikes/transcript-perf/m2-f/`, release, screen locked, load 25 → 7 during the runs from other
+agents; no control run). S3: 6.1/6.1/6.1/6.1 ms, 0 >16.7, delta→visible p50/p95 38/80 ms, Engine→applied 0.9/1.2 ms
+(M2-B after: 49/85, 4.9/7.5). S2 3× down / up: >33 ms 397 / 328 of which 3 / 2 CPU-bound (M2-B: 445 / 609, 2 / 2),
+main-thread CPU p99 13.8 / 13.7 ms (13.7 / 13.8); realistic 60 s: 18 frames >33 ms, none CPU-bound, CPU p99 8.5 ms
+(M2-B: 0, 9.7 ms; the off-CPU frames match the higher load at the start); peak footprint 330 MB (401), 230 MB after
+(221); synchronous layouts 109 (175); geometry error 0 pt. No regression attributable to the change.
+
 **Commands.** `swift build -c release --product TranscriptDemo`, then `caffeinate -u -t 2; caffeinate -d -i -u
 .build/release/TranscriptDemo --scenario S2` (≈17 min; `S1`…`S8`, `all`; `--stream-seconds 20` for S3/S4). Diagnosis:
 `--scenario P [--fraction 0.4] [--sample] [--hold N] [--pause-above MB]` (3× downward traversal with per-frame phase
@@ -126,13 +146,18 @@ Engine's message cache (part of the 150 MB floor; unchanged and out of scope: it
 | Highlight (`TokenizerHighlighter`) | 2 M UTF-16 units of code | ~0.8 M units, ~2.5 MB | LRU down to ¾ | dropped |
 | Decoded images | 32 MB, ≤1,600 px | 32 MB | LRU by last draw, displayed kept | dropped except displayed |
 | Find index | one string per block (≈ the thread's text); built on first find | 0 (S2 does not search) | per row version | dropped on critical |
+| Image metadata (M2-F) | sizes: 2,048 sources, LRU (decoded kept); rows per source: loads in flight only; failures: 256 per binding | — | LRU; cleared on unbind (in flight, failures) | — |
+| Accessibility text (M2-F) | one per live cell (the row's visible text and line starts), built when a client asks | 0 without a client | row or layout change | — |
 | Row and cell views, canvases | AppKit reuse; canvases in 128 pt steps, tall rows viewport + 1,800 pt | 17 + 17 views, ~10 MB of canvases at 1× | — | — |
 
 Memory pressure: a `DispatchSource` memory-pressure source owned by the controller (cancelled in `close()`).
 Regression guards in `swift test` (no display needed; `CacheBudgetTests.swift`): parse, highlight, image and layout
 budgets; a 1,500-row headless traversal asserting cache costs within budget and bounded row views (it fails with the
 old row views: +1,495); memory pressure; first find query < 50 ms of main-thread CPU; Use Selection for Find with a
-focused text view.
+focused text view. M2-F adds: `StreamingCostTests` (rows touched per streaming commit equal at 62 and 902 rows, no copy
+of the row storage, equality with a full rebuild), `FindRevealTests` (revealing an uncached 200 KB row parses and lays
+out nothing on the main actor; a pending reveal is dropped on a thread switch), `ImageMetadataTests` (bounded metadata
+across 30 image threads, retry of a failed load on revisit), `AccessibilityTextTests`.
 
 ## docs/research/03 section E (by the agent; no human at the screen)
 Purpose/context: pass (prompts, replies, tool lines name verb, target, status and time; sub-agent cards name agent
@@ -142,8 +167,10 @@ interrupted, offline (content kept): pass by test or snapshot. Speed: toggle and
 for 10,000 messages. Keyboard: every command has a menu item (Edit, Find, View); arrows/Page/Home/End scroll,
 Shift+arrows (Option for words, Command for ends) extend, Escape closes find then clears selection, Tab leaves;
 driven programmatically only. Accessibility: rows are static-text elements with label (who/what, time), value (the
-visible text) and custom actions (copy, expand/collapse, open link, open sub-agent); a finished reply is announced
-once; status is glyph + word, never colour only; increased contrast and text size re-resolve the theme; no
+visible text), the text interface (character count, string and bounds for a range, line for an index and range for a
+line from the layout's lines, range for a point, visible range, selected text and a settable selected range that is the
+transcript selection) and custom actions (copy, expand/collapse, open link, open sub-agent); a finished reply is
+announced once (tested); status is glyph + word, never colour only; increased contrast and text size re-resolve the theme; no
 animation (Reduce Motion has nothing to remove). VoiceOver itself: unverified. Streaming and control: following only
 at the bottom, 0 pt drift while reading (S4), pill debounced, selection kept while text arrives: pass. Persistence:
 the scroll anchor is saved per thread and restored (tested round trip). Windows: narrow widths (column re-wraps,
@@ -153,7 +180,9 @@ S6), light/dark. Artifacts: sub-agent card opens the child thread; diff review i
 - Reasoning duration is measured live (BelloCore parts carry no timestamps); history shows "Thought" without one.
 - Tree-sitter, Mermaid, math, GitHub alerts, `<details>`, footnotes and image zoom are not rendered (text fallback).
 - Copy puts plain text and Markdown on the pasteboard, not RTF; no drag-out of a selection.
-- Accessibility exposes text per row, not character ranges (no VoiceOver text navigation inside a row yet).
+- The accessibility text interface was exercised by calling its methods in process; what AppKit's accessibility server
+  exposes to VoiceOver and VoiceOver's reading by line/word/character were not checked (needs VoiceOver at the screen).
+  Rows off screen have no element: reaching them relies on the table scrolling, as before.
 - Tool calls fetch no detail lazily: inputs/outputs come with the message. Tool-call visibility settings (hide
   successful, zen) are not offered yet.
 - Frame targets at 3× speed are met for frames our own work makes slow (2 down / 2 up over 33 ms); the total count
@@ -172,5 +201,6 @@ S6), light/dark. Artifacts: sub-agent card opens the child thread; diff review i
 
 ## Needs a human at the screen
 Real trackpad momentum and rubber-banding (all scrolling here is programmatic), on-screen frame pacing with the display
-unlocked (frames are display-link delivery), VoiceOver reading order and actions, IME (the view is read-only, but
+unlocked (frames are display-link delivery), VoiceOver reading order and actions, reading and selecting by
+line/word/character inside a reply, IME (the view is read-only, but
 Look Up/force click and Services), hover timestamps and link tooltips, the look of the pill and find bar over vibrancy.

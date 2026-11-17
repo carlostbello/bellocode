@@ -31,30 +31,50 @@ extension ThreadModel: TranscriptSource {
     public func transcriptLoadOlder() async { await loadOlder() }
 }
 
-/// An in-memory source for tests, demos and previews.
+/// An in-memory source for tests, demos and previews. Observation is per message, as with `ThreadModel`: changing one
+/// message notifies the readers of that message (and of the ID list only when the list changes).
 @MainActor
 @Observable
 public final class StaticTranscriptSource: TranscriptSource {
-    public var messages: [Message] {
-        didSet { index = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { $1 }) }
+    @ObservationIgnored public var messages: [Message] {
+        didSet { messagesChanged() }
     }
     public var older: [[Message]] = []
     public var isRunning = false
     public var isReady = true
     public private(set) var isLoadingOlder = false
-    @ObservationIgnored private var index: [MessageID: Message] = [:]
+    /// The ID list; reassigned only when it changes (it keeps its storage otherwise).
+    private var ids: [MessageID] = []
+    @ObservationIgnored private var boxes: [MessageID: MessageBox] = [:]
+
+    @MainActor @Observable final class MessageBox {
+        var message: Message
+        init(_ message: Message) { self.message = message }
+    }
 
     public init(messages: [Message] = [], older: [[Message]] = []) {
         self.messages = messages
         self.older = older
-        index = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        messagesChanged()
     }
 
-    public var transcriptMessageIDs: [MessageID] { messages.map(\.id) }
-    public func transcriptMessage(_ id: MessageID) -> Message? {
-        _ = messages  // register observation on the list (messages are values here)
-        return index[id]
+    private func messagesChanged() {
+        // A duplicate ID: the last message wins.
+        for message in messages {
+            if let box = boxes[message.id] {
+                if box.message != message { box.message = message }
+            } else {
+                boxes[message.id] = MessageBox(message)
+            }
+        }
+        let newIDs = messages.map(\.id)
+        let live = Set(newIDs)
+        for id in boxes.keys where !live.contains(id) { boxes[id] = nil }
+        if newIDs != ids { ids = newIDs }
     }
+
+    public var transcriptMessageIDs: [MessageID] { ids }
+    public func transcriptMessage(_ id: MessageID) -> Message? { boxes[id]?.message }
     public var transcriptHasOlder: Bool { !older.isEmpty }
     public var transcriptIsLoadingOlder: Bool { isLoadingOlder }
     public var transcriptIsReady: Bool { isReady }

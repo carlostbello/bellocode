@@ -16,6 +16,8 @@ extension TranscriptController {
     }
 
     public func closeFind() {
+        revealTask?.cancel()
+        revealTask = nil
         findTask?.cancel()
         findTask = nil
         findRefreshScheduled = false
@@ -117,28 +119,93 @@ extension TranscriptController {
     }
 
     /// Expands a collapsed block if the match is inside it, lays the row out exactly, centres the match and selects it.
+    ///
+    /// A row that is not parsed or laid out yet (a large reply far from the viewport) is parsed and laid out off the
+    /// main actor; the reveal completes when both arrive, if the row's version and the binding are unchanged and no
+    /// newer reveal started (review M4). `isSettled` is false meanwhile.
     public func reveal(_ match: FindMatch) {
+        revealTask?.cancel()
+        revealTask = nil
         guard let index = rowIndex[match.rowID] else { return }
-        let rowBlocks = blocks(row: index)
-        guard match.block < rowBlocks.count else { return }
+        let row = rows[index]
+        if tails[row.id] != nil || blockCache.cachedBlocks(for: row) != nil {
+            revealExpanding(match, blocks: blocks(row: index))
+            return
+        }
+        let generation = observationGeneration
+        let cache = blockCache
+        revealTask = Task { [weak self] in
+            let blocks = await Self.parseOffMain(row, cache: cache)
+            guard let self, !Task.isCancelled, self.observationGeneration == generation,
+                let index = self.rowIndex[match.rowID], self.rows[index].version == row.version
+            else { return }
+            self.revealTask = nil
+            self.revealExpanding(match, blocks: blocks)
+        }
+    }
+
+    @concurrent
+    static func parseOffMain(_ row: TranscriptRow, cache: RenderBlockCache) async -> [RenderBlock] {
+        cache.blocks(for: row)
+    }
+
+    /// Opens what hides the match, then reveals it with the row's current layout (computed off-main if missing).
+    private func revealExpanding(_ match: FindMatch, blocks rowBlocks: [RenderBlock]) {
+        guard let index = rowIndex[match.rowID], match.block < rowBlocks.count else { return }
+        let content = rows[index].content
+        var keys: [ExpansionKey] = []
         if case .expanded(let key) = rowBlocks[match.block].visibility,
-            !RenderBlocks.isExpanded(key, content: rows[index].content, ui: ui[match.rowID] ?? RowUIState())
+            !RenderBlocks.isExpanded(key, content: content, ui: ui[match.rowID] ?? RowUIState())
         {
-            toggle(row: match.rowID, key: key)
+            keys.append(key)
         }
         // A summary hides successful tool lines: open the group too when the match is in one of them.
-        if case .work(let group) = rows[index].content, group.isCollapsible, match.block > 0,
-            !RenderBlocks.isExpanded(.group, content: rows[index].content, ui: ui[match.rowID] ?? RowUIState())
+        if case .work(let group) = content, group.isCollapsible, match.block > 0, !keys.contains(.group),
+            !RenderBlocks.isExpanded(.group, content: content, ui: ui[match.rowID] ?? RowUIState())
         {
-            if case .expanded(.group) = rowBlocks[match.block].visibility { toggle(row: match.rowID, key: .group) }
-            if case .toolDetail = rowBlocks[match.block].kind { toggle(row: match.rowID, key: .group) }
+            if case .expanded(.group) = rowBlocks[match.block].visibility { keys.append(.group) }
+            if case .toolDetail = rowBlocks[match.block].kind { keys.append(.group) }
         }
-        let layout = layouts[match.rowID].flatMap { $0.key == currentKey(row: index) ? $0 : nil } ?? {
-            let layout = LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
-            store(layout)
-            acceptHeight(layout, row: index)
-            return layout
-        }()
+        if !keys.isEmpty {
+            var state = ui[match.rowID] ?? RowUIState()
+            for key in keys { state.overrides[key] = true }
+            state.version += 1
+            ui[match.rowID] = state
+            if tails[match.rowID] != nil { relayoutTails() }
+        }
+        let expanded = !keys.isEmpty
+        let id = match.rowID
+        if let layout = layouts[id], layout.key == currentKey(row: index) {
+            finishReveal(match, layout: layout, expanded: expanded)
+        } else if let tail = tails[id] {
+            // A streaming row draws its composed tail; lay it out now only if it has none yet (rare).
+            let layout = tail.composed ?? {
+                metrics.findSyncLayouts += 1
+                return LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+            }()
+            finishReveal(match, layout: layout, expanded: expanded)
+        } else {
+            let input = layoutInput(row: index)
+            let generation = observationGeneration
+            revealTask = Task { [weak self] in
+                let layout = await LayoutEngine.layout(input)
+                guard let self, !Task.isCancelled, self.observationGeneration == generation,
+                    let index = self.rowIndex[id], self.currentKey(row: index) == layout.key
+                else { return }
+                self.revealTask = nil
+                self.store(layout)
+                self.acceptHeight(layout, row: index)
+                self.finishReveal(match, layout: layout, expanded: expanded)
+            }
+        }
+    }
+
+    private func finishReveal(_ match: FindMatch, layout: RowLayout, expanded: Bool) {
+        guard let index = rowIndex[match.rowID] else { return }
+        if expanded, let view = cellView(index) {
+            configure(view, index: index)
+            NSAccessibility.post(element: view, notification: .layoutChanged)
+        }
         flushHeights()
         turnAnchor = nil
         setFollowing(false)
@@ -294,14 +361,23 @@ extension TranscriptController {
     func requestImages(in layout: RowLayout, row id: RowID) {
         for block in layout.blocks where !block.isHidden {
             for image in block.images {
-                imageRows[image.source, default: []].insert(id)
-                guard images[image.source] == nil, !imageRequests.contains(image.source) else { continue }
-                imageRequests.insert(image.source)
                 let source = image.source
+                guard images[source] == nil else { continue }
+                if imageTasks[source] != nil {
+                    imageRows[source, default: []].insert(id)
+                    continue
+                }
+                if let failure = imageFailures[source],
+                    failure.attempts >= Self.imageMaxAttempts || CACurrentMediaTime() < failure.retryAt
+                {
+                    continue
+                }
+                imageRows[source] = [id]
                 let loader = imageLoader
+                let generation = observationGeneration
                 imageTasks[source] = Task { [weak self] in
                     let loaded = await loader.load(source)
-                    guard !Task.isCancelled, let self else { return }
+                    guard !Task.isCancelled, let self, self.observationGeneration == generation else { return }
                     self.imageTasks[source] = nil
                     self.imageArrived(source, loaded)
                 }
@@ -310,15 +386,28 @@ extension TranscriptController {
     }
 
     func imageArrived(_ source: String, _ loaded: LoadedImage?) {
-        guard let loaded else { return }  // stays a placeholder (unreachable, unsupported or too large)
+        let waiting = imageRows.removeValue(forKey: source) ?? []
+        guard let loaded else {
+            // Stays a placeholder (unreachable, unsupported or too large); retried later with backoff.
+            let attempts = (imageFailures[source]?.attempts ?? 0) + 1
+            imageFailures[source] = (attempts, CACurrentMediaTime() + Self.imageRetryDelay * Double(1 << (attempts - 1)))
+            if imageFailures.count > Self.imageFailureLimit {
+                let oldest = imageFailures.min { $0.value.retryAt < $1.value.retryAt }!.key
+                imageFailures[oldest] = nil
+            }
+            return
+        }
+        imageFailures[source] = nil
         tick += 1
         images[source] = loaded.image
         imageTick[source] = tick
         imageBytes += loaded.image.bytesPerRow * loaded.image.height
         evictImages()
-        let knew = imageSizes[source] != nil
+        let knew = imageSizes[source] == loaded.pixelSize
         imageSizes[source] = loaded.pixelSize
-        for id in imageRows[source] ?? [] {
+        imageSizeTick[source] = tick
+        if imageSizes.count > imageSizeLimit { evictImageSizes() }
+        for id in waiting {
             guard let index = rowIndex[id] else { continue }
             if knew {
                 if let view = cellView(index) { view.invalidate() }
@@ -327,6 +416,17 @@ extension TranscriptController {
                 ui[id, default: RowUIState()].version += 1
                 requestLayout(row: index, priority: true)
             }
+        }
+    }
+
+    /// Drops the least recently loaded quarter of the remembered sizes, keeping those of decoded images. Rows laid
+    /// out with a dropped size keep their layout; a later load restores it.
+    func evictImageSizes() {
+        let target = imageSizeLimit * 3 / 4
+        for (source, _) in imageSizeTick.sorted(by: { $0.value < $1.value }) where images[source] == nil {
+            guard imageSizes.count > target else { break }
+            imageSizes[source] = nil
+            imageSizeTick[source] = nil
         }
     }
 
@@ -351,7 +451,6 @@ extension TranscriptController {
     func dropImage(_ source: String) {
         if let image = images.removeValue(forKey: source) { imageBytes -= image.bytesPerRow * image.height }
         imageTick[source] = nil
-        imageRequests.remove(source)
     }
 
     /// Harness: whether an image source has loaded.
@@ -360,6 +459,7 @@ extension TranscriptController {
     // MARK: Accessibility
 
     func announce(_ text: String) {
+        announcementCount += 1
         let trimmed = text.count > 600 ? String(text.prefix(600)) + "…" : text
         NSAccessibility.post(
             element: tableView, notification: .announcementRequested,
@@ -394,13 +494,6 @@ extension TranscriptController {
         case .working: return "Agent working"
         case .unknown(let type): return "Unsupported content \(type)"
         }
-    }
-
-    /// The text VoiceOver reads for a row: its visible blocks.
-    func accessibilityValue(_ index: Int) -> String {
-        let rowBlocks = blocks(row: index)
-        let visible = visibility(row: index, blocks: rowBlocks)
-        return zip(rowBlocks, visible).filter(\.1).map(\.0.plainText).joined(separator: "\n")
     }
 
     func accessibilityActions(_ index: Int, layout: RowLayout?) -> [NSAccessibilityCustomAction] {

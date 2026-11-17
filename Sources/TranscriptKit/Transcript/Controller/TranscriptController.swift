@@ -131,10 +131,20 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     /// it lives, so this bound roughly halves what images add to the footprint. The G1-B fixture's 640×360 images
     /// at 96 MB (FIFO) were the largest single item of the peak footprint.
     public var imageByteLimit = 32 << 20
+    /// Pixel sizes of images seen (layout reserves their space before they decode again), LRU-bounded by
+    /// `imageSizeLimit`; kept across thread switches.
     var imageSizes: [String: CGSize] = [:]
-    var imageRequests: Set<String> = []
+    var imageSizeTick: [String: UInt64] = [:]
+    public var imageSizeLimit = 2_048
+    /// Loads in flight; `imageRows` names the rows waiting for each (entries leave when the load ends).
     var imageTasks: [String: Task<Void, Never>] = [:]
     var imageRows: [String: Set<RowID>] = [:]
+    /// Failed loads of the bound thread: retried with backoff (`imageRetryDelay` doubling, `imageMaxAttempts`), and
+    /// again when the thread is bound anew. Bounded by `imageFailureLimit`.
+    var imageFailures: [String: (attempts: Int, retryAt: CFTimeInterval)] = [:]
+    static let imageFailureLimit = 256
+    static let imageMaxAttempts = 3
+    static let imageRetryDelay: CFTimeInterval = 5
     var imageSourceCache: [RowID: (version: Int, sources: [String])] = [:]
 
     // Inner scrolling (code, tables, tool output) and per-block state.
@@ -169,6 +179,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     /// used, dropped under memory pressure and on unbind.
     var findIndex: [RowID: FindIndexEntry] = [:]
     var findIndexTask: Task<Void, Never>?
+    /// A reveal waiting for an off-main parse or layout (see `reveal`).
+    var revealTask: Task<Void, Never>?
     var findTask: Task<Void, Never>?
     var findRefreshScheduled = false
     var findMatchesByRow: [RowID: [(block: Int, range: Range<Int>, index: Int)]] = [:]
@@ -180,6 +192,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var announced: Set<MessageID> = []
     var announcedOrder: [MessageID] = []
     var streamingSeen: Set<MessageID> = []
+    /// Replies announced (tests: a finished reply is announced once).
+    var announcementCount = 0
 
     // Measure-all and tasks.
     var openTask: Task<Void, Never>?
@@ -209,9 +223,33 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         public var maxSyncMilliseconds = 0.0
         public var openMilliseconds = 0.0
         public var placeholderRows = 0
+        /// Rows parsed on the main actor because copy, selection, accessibility or find needed blocks that were not
+        /// cached (review M4: find must not add any).
+        public var mainThreadParses = 0
+        /// Rows laid out synchronously to reveal a find match (review M4).
+        public var findSyncLayouts = 0
     }
 
     public internal(set) var metrics = Metrics()
+    /// One sync's main-actor cost (harness: streaming cost against history length).
+    public struct SyncSample: Sendable {
+        /// Wall time of the sync, milliseconds.
+        public var milliseconds: Double
+        /// Main-thread CPU time of the sync, microseconds.
+        public var cpuMicroseconds: Double
+        /// Rows (or message IDs) the sync scanned, copied, compared or re-indexed: the deterministic measure of how
+        /// much history a commit touches (regression guard for M3).
+        public var rowWork: Int
+        /// Rows in the transcript after the sync.
+        public var rows: Int
+        /// Whether only the last turn was rebuilt.
+        public var tailOnly: Bool
+    }
+    /// Called after each sync that applied rows.
+    public var onSync: ((SyncSample) -> Void)?
+    /// Row work of the sync in progress (see `SyncSample.rowWork`).
+    var rowWork = 0
+    public internal(set) var lastSync: SyncSample?
     /// Called after each applied tail commit (harness: delta→visible latency).
     public var onTailCommit: ((RowID) -> Void)?
 
@@ -281,12 +319,16 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         findTask?.cancel()
         findIndexTask?.cancel()
         findIndexTask = nil
+        revealTask?.cancel()
+        revealTask = nil
         loadOlderTask?.cancel()
         for task in layoutTasks.values { task.cancel() }
         layoutTasks.removeAll()
         inflight.removeAll()
         for task in imageTasks.values { task.cancel() }
         imageTasks.removeAll()
+        imageRows.removeAll()
+        imageFailures.removeAll()
         for tail in tails.values { tail.task?.cancel() }
         tails.removeAll()
         source = nil
@@ -364,6 +406,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         let signpost = transcriptSignposter.beginInterval("sync")
         defer { transcriptSignposter.endInterval("sync", signpost) }
         let start = CACurrentMediaTime()
+        let cpuStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        rowWork = 0
         if listDirty {
             listDirty = false
             trackList()
@@ -403,31 +447,56 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         let tailOnly = !listChanged && dirty.allSatisfy { tailIDs.contains($0) }
         let lastTurn: MessageID? = ids.indices.contains(lastTurnStart)
             ? source.transcriptMessage(ids[lastTurnStart]).flatMap { if case .user = $0.kind { $0.id } else { nil } } : nil
+        // While a reply streams only the last turn's rows are rebuilt, diffed and re-indexed: the rows before it are
+        // neither scanned nor copied, so a commit costs the same at 100 or 10,000 messages (review finding M3).
+        let replaceFrom: Int
         let newRows: [TranscriptRow]
-        if tailOnly, let firstTailRow = rows.firstIndex(where: { tailIDs.contains($0.messageID) }) {
-            let segments = segments(for: Array(ids[lastTurnStart...]), dirty: dirty, source: source)
-            newRows = Array(rows[..<firstTailRow]) + RowBuilder.rows(from: segments, isRunning: running, lastTurn: lastTurn)
+        if tailOnly, let firstTailRow = firstRow(ofTurnAt: lastTurnStart, tailIDs: tailIDs) {
+            let segments = segments(for: Array(ids[lastTurnStart...]), dirty: dirty, source: source, position: lastTurnStart)
+            replaceFrom = firstTailRow
+            newRows = RowBuilder.rows(from: segments, isRunning: running, lastTurn: lastTurn)
         } else {
-            let segments = segments(for: ids, dirty: dirty, source: source)
+            rowWork += ids.count
+            let segments = segments(for: ids, dirty: dirty, source: source, position: 0)
+            replaceFrom = 0
             newRows = RowBuilder.rows(from: segments, isRunning: running, lastTurn: lastTurn)
         }
         knownIDs = ids
         lastRunning = running
         for id in ids.suffix(Self.trackedTail) { track(id) }
         noteStreamingTransitions(dirty, source: source)
-        apply(newRows)
+        apply(newRows, from: replaceFrom)
         updateEmptyState()
         metrics.syncs += 1
-        metrics.maxSyncMilliseconds = max(metrics.maxSyncMilliseconds, (CACurrentMediaTime() - start) * 1000)
+        let milliseconds = (CACurrentMediaTime() - start) * 1000
+        metrics.maxSyncMilliseconds = max(metrics.maxSyncMilliseconds, milliseconds)
+        let sample = SyncSample(
+            milliseconds: milliseconds, cpuMicroseconds: Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuStart) / 1000,
+            rowWork: rowWork, rows: rows.count, tailOnly: tailOnly)
+        lastSync = sample
+        onSync?(sample)
     }
 
-    /// Segments of `ids` in order, recomputing those that are dirty, uncached or in a different turn.
-    func segments(for ids: [MessageID], dirty: Set<MessageID>, source: any TranscriptSource) -> [RowBuilder.Segment] {
+    /// The first row of the turn that starts at message `lastTurnStart` (the rows of `tailIDs` form a suffix of
+    /// `rows`: grouping never crosses a user message). Scans back from the end, so it costs the turn's rows only.
+    func firstRow(ofTurnAt lastTurnStart: Int, tailIDs: Set<MessageID>) -> Int? {
+        // No user message: every row is the "turn" (the working row then names a synthetic message).
+        if lastTurnStart == 0 { return rows.isEmpty ? nil : 0 }
+        var first = rows.count
+        while first > 0, tailIDs.contains(rows[first - 1].messageID) { first -= 1 }
+        rowWork += rows.count - first + 1
+        return first < rows.count ? first : nil
+    }
+
+    /// Segments of `ids` in order, recomputing those that are dirty, uncached or in a different turn. `position` is
+    /// the index of `ids.first` in the source's message list.
+    func segments(for ids: [MessageID], dirty: Set<MessageID>, source: any TranscriptSource, position: Int) -> [RowBuilder.Segment] {
         var turn: MessageID?
-        // The turn of the first message: the last user message before it.
-        if let first = ids.first, let position = knownIDs.firstIndex(of: first) ?? source.transcriptMessageIDs.firstIndex(of: first) {
+        // The turn of the first message: the last user message before it (none needed when it is one).
+        if let first = ids.first, position > 0, let message = source.transcriptMessage(first), !Self.isUser(message) {
             let all = source.transcriptMessageIDs
             for id in all[..<min(position, all.count)].reversed() {
+                rowWork += 1
                 if let message = source.transcriptMessage(id), case .user = message.kind { turn = id; break }
             }
         }
@@ -448,6 +517,11 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         return result
     }
 
+    static func isUser(_ message: Message) -> Bool {
+        if case .user = message.kind { return true }
+        return false
+    }
+
     /// Times reasoning the transcript sees streaming (BelloCore parts carry no timestamps).
     func noteReasoning(_ message: Message) {
         for part in message.parts {
@@ -463,37 +537,54 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
 
     // MARK: Applying rows
 
-    /// Replaces the rows, updating only what changed in the table, and keeps the viewport anchored.
-    func apply(_ newRows: [TranscriptRow]) {
-        let old = rows
-        var prefix = 0
-        while prefix < old.count, prefix < newRows.count, old[prefix].id == newRows[prefix].id { prefix += 1 }
+    /// Replaces the rows from `start` on with `newTail`, updating only what changed in the table, and keeps the
+    /// viewport anchored. Rows before `start` are not compared, copied or re-indexed.
+    func apply(_ newTail: [TranscriptRow], from start: Int = 0) {
+        let start = min(start, rows.count)
+        // A copy of the replaced rows only: a slice of `rows` would keep its buffer shared and make the in-place
+        // replacement below copy the whole history.
+        let old = Array(rows[start...])
+        let oldCount = rows.count
+        let newCount = start + newTail.count
+        // Indices are absolute; `old` and `newTail` are offset by `start`.
+        var prefix = start
+        while prefix < oldCount, prefix < newCount, old[prefix - start].id == newTail[prefix - start].id { prefix += 1 }
         var suffix = 0
-        while suffix < old.count - prefix, suffix < newRows.count - prefix,
-            old[old.count - 1 - suffix].id == newRows[newRows.count - 1 - suffix].id
+        while suffix < oldCount - prefix, suffix < newCount - prefix,
+            old[oldCount - 1 - suffix - start].id == newTail[newCount - 1 - suffix - start].id
         {
             suffix += 1
         }
-        let removed = prefix..<(old.count - suffix)
-        let inserted = prefix..<(newRows.count - suffix)
+        let removed = prefix..<(oldCount - suffix)
+        let inserted = prefix..<(newCount - suffix)
         var changed: [Int] = []
-        for index in 0..<prefix where old[index] != newRows[index] { changed.append(index) }
+        for index in start..<prefix where old[index - start] != newTail[index - start] { changed.append(index) }
         for offset in 0..<suffix {
-            let oldIndex = old.count - 1 - offset
-            let newIndex = newRows.count - 1 - offset
-            if old[oldIndex] != newRows[newIndex] { changed.append(newIndex) }
+            let oldIndex = oldCount - 1 - offset
+            let newIndex = newCount - 1 - offset
+            if old[oldIndex - start] != newTail[newIndex - start] { changed.append(newIndex) }
         }
+        rowWork += (oldCount - start) + newTail.count
         guard !removed.isEmpty || !inserted.isEmpty || !changed.isEmpty else { return }
 
         let wasFollowing = following
         let anchor = captureAnchor()
-        let appendedUser = !inserted.isEmpty && inserted.upperBound == newRows.count && inserted.contains { newRows[$0].role == .user }
-        rows = newRows
-        rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let appendedUser = !inserted.isEmpty && inserted.upperBound == newCount && inserted.contains { newTail[$0 - start].role == .user }
+        let removedRows = old[(removed.lowerBound - start)..<(removed.upperBound - start)]
+        // Rows after the first difference move or change: re-index them (the first occurrence of an ID wins).
+        let reindexFrom = removed.isEmpty && inserted.isEmpty ? oldCount : prefix
+        for index in reindexFrom..<oldCount where rowIndex[old[index - start].id] == index { rowIndex[old[index - start].id] = nil }
+        if start == 0, prefix == 0 {
+            rows = newTail
+        } else {
+            rows.replaceSubrange(start..., with: newTail)
+        }
+        for index in reindexFrom..<rows.count where rowIndex[rows[index].id] == nil { rowIndex[rows[index].id] = index }
+        rowWork += 2 * (rows.count - min(reindexFrom, rows.count))
         let estimates = inserted.map { estimate(rows[$0], index: $0) }
         heights.replaceSubrange(removed, with: estimates)
         heightKeys.replaceSubrange(removed, with: Array(repeating: nil, count: inserted.count))
-        for row in old[removed] where rowIndex[row.id] == nil { forget(row.id) }
+        for row in removedRows where rowIndex[row.id] == nil { forget(row.id) }
         DS.Motion.withoutAnimation {
             withoutAnimation {
                 tableView.beginUpdates()
