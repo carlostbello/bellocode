@@ -171,6 +171,19 @@ enum ProjectionSchema {
                 );
                 """)
         }
+        // M6-A containerised execution (docs/features/containers.md): each project's Environment setting (image,
+        // variables, limits, mounts, network) and what BelloCode last knew about its workspace container (image ID,
+        // mount identity, tool inventory). App-owned, kept by `rebuild()`. Registry passwords are never here: they are
+        // in the Keychain (`app.bellocode.registry`).
+        migrator.registerMigration("v6-container-environments") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_environment (
+                    directory TEXT PRIMARY KEY NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                """)
+        }
         return migrator
     }
 

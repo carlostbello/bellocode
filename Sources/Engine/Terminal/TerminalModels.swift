@@ -142,6 +142,23 @@ public struct TerminalLaunch: Sendable, Hashable {
         return TerminalLaunch(command: shell, args: ["-l"], environment: env)
     }
 
+    /// A terminal in the project's workspace container: `bellocode-exec` with no arguments starts an interactive login
+    /// shell in the container at the terminal's directory (docs/features/containers.md). Only terminal identity and
+    /// language pass through; the Mac's PATH, HOME and SSH agent do not.
+    public static func container(helper: URL, execConfig: URL, processEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> TerminalLaunch {
+        var env: [String: String] = [
+            "TERM": "xterm-256color", "COLORTERM": "truecolor", "TERM_PROGRAM": "BelloCode",
+            "LANG": processEnvironment["LANG"] ?? "C.UTF-8",
+            "BELLOCODE_EXEC_CONFIG": execConfig.path, "SHELL": helper.path, "PATH": "/usr/bin:/bin",
+            "HOME": NSHomeDirectory(),
+        ]
+        if let value = processEnvironment["LC_ALL"] { env["LC_ALL"] = value }
+        return TerminalLaunch(command: helper.path, args: [], environment: env)
+    }
+
+    /// Whether this launch runs in a container (the terminal shows it).
+    public var isContainer: Bool { (command as NSString).lastPathComponent == "bellocode-exec" }
+
     static func loginShell(_ environment: [String: String]) -> String {
         if let entry = getpwuid(getuid()), let pointer = entry.pointee.pw_shell {
             let path = String(validatingCString: pointer) ?? ""

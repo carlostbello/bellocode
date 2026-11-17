@@ -121,6 +121,9 @@ public struct WorktreeService: Sendable {
     /// Moves a folder somewhere recoverable and returns its new location. Defaults to the Trash; tests use a holding
     /// folder of their own.
     let recycle: @Sendable (URL) throws -> URL
+    /// Runs setup scripts somewhere other than the host: the engine routes them into the project's container
+    /// (docs/features/containers.md). Nil only without container execution (mock mode, tests).
+    public var setupRunner: (@Sendable (_ script: String, _ worktree: String, _ project: String) async throws -> WorktreeSetupResult)?
 
     public init(runner: GitRunner = GitRunner()) {
         self.init(runner: runner, recycle: WorktreeService.moveToTrash)
@@ -270,8 +273,10 @@ public struct WorktreeService: Sendable {
         return count
     }
 
-    /// Runs a setup script with `zsh -lc` in the worktree (10 minutes at most).
+    /// Runs a setup script in the project's container (`setupRunner`), or, without container execution, with `zsh -lc`
+    /// in the worktree (10 minutes at most).
     public func runSetup(_ script: String, in directory: String, projectDirectory: String) async throws -> WorktreeSetupResult {
+        if let setupRunner { return try await setupRunner(script, directory, projectDirectory) }
         let start = ContinuousClock.now
         let output = try await runner.runProgram(
             URL(filePath: "/bin/zsh"), ["-lc", script], in: directory,

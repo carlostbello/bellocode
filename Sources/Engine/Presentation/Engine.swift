@@ -127,6 +127,9 @@ public final class Engine {
     public private(set) var orchestration: OrchestrationService!
     /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
     public private(set) var extras: ExtrasHub!
+    /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
+    /// (docs/features/containers.md).
+    public let environments: EnvironmentService
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -164,9 +167,24 @@ public final class Engine {
         browser = BrowserBridgeService(
             store: store, client: { [core] in try await core.currentClient() },
             subscribe: { [core] in await core.subscribeBrowserControl() })
+        environments = EnvironmentService(configuration: configuration.containers, store: store)
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
+        if let containers = configuration.containers {
+            // Terminals open in the project's container (bellocode-exec as the PTY command; never a host shell).
+            terminals.launch = TerminalLaunch.container(helper: containers.helperURL, execConfig: containers.execConfigURL)
+            let environments = self.environments
+            git.worktrees.setupRunner = { script, worktree, project in
+                try await environments.runSetup(script, in: worktree, projectDirectory: project)
+            }
+            environments.isolationContext = IsolationCheck.Context(
+                client: { [core] in try await core.currentClient() }, helperPath: containers.helperURL.path,
+                terminalEnvironment: terminals.launch.environment)
+            let git = self.git
+            environments.worktreeParent = { directory in git.cachedPreferences(projectDirectory: directory).parentDirectory(projectDirectory: directory) }
+        }
         orchestration = OrchestrationService(core: core, store: store, engine: self)
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
+        if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
         git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
     }
@@ -212,6 +230,9 @@ public final class Engine {
         started = true
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
+        // The helper's configuration exists before the server (and its shell) starts.
+        await environments.start()
+        await environments.writeConfigNow()
         orchestration.start()
         await extras.start(store: store)
         await modelPreferences.load()
@@ -224,6 +245,7 @@ public final class Engine {
         await modelPreferences.flush()
         await frecency.flush()
         await terminals.shutdown()
+        environments.stop()
         git.shutdown()
         await browser.shutdown()
         await orchestration.shutdown()
@@ -354,6 +376,7 @@ public final class Engine {
         let signpost = EngineSignposts.publish.beginInterval("launchSnapshot")
         defer { EngineSignposts.publish.endInterval("launchSnapshot", signpost) }
         root.setProjects(snapshot.projects, registry: snapshot.registry)
+        environments.projectsChanged(root.projects, removed: root.hiddenProjects)
         root.setAttention(snapshot.attention)
         root.organisation = snapshot.organisation
         root.organisationRules = snapshot.organisationRules
@@ -421,6 +444,7 @@ public final class Engine {
             || !change.removedRegistry.isEmpty
         {
             root.apply(projectsChange: change)
+            environments.projectsChanged(root.projects, removed: root.hiddenProjects)
             for item in root.projects {
                 if let id = item.projectID, root.projectModels[id] == nil {
                     root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
@@ -441,6 +465,7 @@ public final class Engine {
                     let snapshot = await core.snapshot()
                     guard let self else { return }
                     self.root.setProjects(snapshot.projects, registry: snapshot.registry)
+                    self.environments.projectsChanged(self.root.projects, removed: self.root.hiddenProjects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }

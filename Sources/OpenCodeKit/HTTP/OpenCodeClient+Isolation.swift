@@ -87,3 +87,21 @@ extension OpenCodeClient {
         return try await send("config.get", request, as: [JSONValue].self)
     }
 }
+
+extension OpenCodeClient {
+    /// `POST /api/pty` (pty.create, the older sessionless PTY API): with no `command`, opencode starts `$SHELL`.
+    /// Returns the PTY's ID.
+    public func createLegacyPTY(directory: String, command: String? = nil, args: [String], title: String) async throws -> String {
+        struct Body: Encodable, Sendable { var command: String?; var args: [String]; var cwd: String; var title: String }
+        struct PTY: Decodable, Sendable { var id: String }
+        let request = try makeRequest(.post, ["api", "pty"], directory: directory,
+                                      body: Body(command: command, args: args, cwd: directory, title: title))
+        return try await send("pty.create", request, as: Located<PTY>.self).data.id
+    }
+
+    /// `DELETE /api/pty/{id}` (pty.remove).
+    public func deleteLegacyPTY(_ id: String, directory: String) async throws {
+        let request = try makeRequest(.delete, ["api", "pty", id], directory: directory)
+        try await sendIgnoringBody("pty.remove", request)
+    }
+}

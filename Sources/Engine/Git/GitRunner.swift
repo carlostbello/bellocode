@@ -95,6 +95,11 @@ public struct GitRunner: Sendable {
         environment["GIT_PAGER"] = "cat"
         environment["GIT_EDITOR"] = "true"
         environment["LC_ALL"] = "C"
+        // Repository hooks (husky, pre-commit…) would run project code on the Mac: host git never runs them
+        // (docs/features/containers.md). Commits that need hooks run git inside the project's container.
+        environment["GIT_CONFIG_COUNT"] = "1"
+        environment["GIT_CONFIG_KEY_0"] = "core.hooksPath"
+        environment["GIT_CONFIG_VALUE_0"] = "/dev/null"
         return environment
     }
 

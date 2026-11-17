@@ -44,6 +44,12 @@ public final class ExtrasHub {
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "extras")
     @ObservationIgnored private var started = false
+    /// Container execution (docs/features/containers.md): when set, secrets are delivered to commands in the project's
+    /// container (`secret_exec`) instead of through a pipe on the Mac.
+    @ObservationIgnored weak var environments: EnvironmentService?
+    @ObservationIgnored private let containerSecrets = ContainerSecretReferences()
+    @ObservationIgnored private let secretVault: any SecretVault
+    @ObservationIgnored private let wallClock: any WallClock
 
     init(core: EngineCore, store: ProjectionStore, engine: Engine, configuration: EngineConfiguration) {
         self.core = core
@@ -53,6 +59,8 @@ public final class ExtrasHub {
             store: store, clock: configuration.wallClock, transport: configuration.forgeTransport, tokens: configuration.forgeTokens,
             baseInterval: configuration.mergeRequestPoll.seconds, maxBackoff: configuration.mergeRequestMaxBackoff.seconds)
         secrets = SecretService(vault: configuration.secretVault, store: store, clock: configuration.wallClock)
+        secretVault = configuration.secretVault
+        wallClock = configuration.wallClock
         visuals = VisualService(store: store, directory: configuration.visualsDirectory)
         schedules.runner = self
         mergeRequests.host = self
@@ -140,9 +148,13 @@ public final class ExtrasHub {
             case ExtrasTools.requestSecret: return try await requestSecret(arguments, caller)
             case ExtrasTools.secretFile:
                 guard let reference = arguments["secretRef"]?.stringValue else { throw ExtrasError("Give secretRef.") }
+                if ContainerSecretReferences.isContainerReference(reference) {
+                    throw ExtrasError("Commands in this project run in a container, where a file on the Mac cannot be read. Use bellocode_app_secret_exec with this secretRef.")
+                }
                 let (path, label) = try secrets.redeem(reference, by: caller.sessionID)
                 return ClientMCPResult(
                     text: "Path for “\(label)”: \(path)\nIt yields the value once, to the first process that reads it, then disappears (10 minutes at most). Use it in one command (--token-file \(path) or \"$(cat \(path))\"). Never print, echo or log it.")
+            case ExtrasTools.secretExec: return try await secretExec(arguments, caller)
             case ExtrasTools.htmlPreview:
                 let html = try visuals.document(html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory)
                 let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
@@ -430,6 +442,15 @@ public final class ExtrasHub {
             return
         }
         let text: String
+        if let environments, environments.isEnabled {
+            // Containerised project: a pipe on the Mac is unreachable from the container, whatever delivery was asked.
+            let reference = containerSecrets.issue(account: account, label: prompt.label, for: request.sessionID, now: wallClock.now())
+            text = "[BelloCode secret] The user saved “\(prompt.label)”. secretRef: \(reference) (one use, this thread, 1 hour). Commands run in this project's container: pass it to bellocode_app_secret_exec with the variable name and the one command that needs it. Never print the value."
+            try await core.postSynthetic(
+                request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
+            log.info("secret delivered by container reference (value not logged)")
+            return
+        }
         switch prompt.delivery {
         case .reference:
             let reference = secrets.issueReference(account: account, label: prompt.label, for: request.sessionID)
@@ -441,6 +462,27 @@ public final class ExtrasHub {
         try await core.postSynthetic(
             request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
         log.info("secret delivered by reference or one-read path (value not logged)")
+    }
+}
+
+extension ExtrasHub {
+    /// `secret_exec`: one command in the caller's project container with the secret in its environment only.
+    func secretExec(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
+        guard let environments, environments.isEnabled else {
+            throw ExtrasError("This project's commands do not run in a container; use bellocode_app_secret_file.")
+        }
+        guard let reference = arguments["secretRef"]?.stringValue, let command = arguments["command"]?.stringValue,
+              !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let rawName = arguments["name"]?.stringValue
+        else { throw ExtrasError("Give secretRef, name and command.") }
+        let name = try SecretVariableName.validate(rawName)
+        let entry = try containerSecrets.redeem(reference, by: caller.sessionID, now: wallClock.now())
+        guard let value = try secretVault.read(account: entry.account), !value.isEmpty else {
+            throw ExtrasError("“\(entry.label)” is no longer saved. Ask again with request_secret.")
+        }
+        await secrets.touch(account: entry.account)
+        let result = try await environments.runWithSecret(directory: caller.directory, command: command, name: name, secret: value)
+        log.info("secret used in one container command (value not logged)")
+        return ClientMCPResult(text: "Ran in the project's container with \(name) set (exit \(result.exitCode)). Output (the value, if printed, is shown as <secret>):\n\(result.output)")
     }
 }
 
