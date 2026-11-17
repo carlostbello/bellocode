@@ -90,6 +90,26 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         return workspaces.filter { $0.contains(path) }.max { $0.matchLength(path) < $1.matchLength(path) }
     }
 
+    /// The workspace for a working directory and that directory as it is mounted in the container. The process's
+    /// current directory is a resolved path (`/private/var/…`, `/private/tmp/…`) while roots are kept as the user
+    /// opened them (`/var/…`): when the plain lookup fails, each root's resolved form is matched and the directory is
+    /// translated back to the mounted spelling.
+    public func resolve(directory: String) -> (workspace: Workspace, directory: String)? {
+        let path = (directory as NSString).standardizingPath
+        if let workspace = workspace(for: path) { return (workspace, path) }
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        var best: (workspace: Workspace, directory: String, length: Int)?
+        for workspace in workspaces {
+            for root in workspace.roots {
+                let real = (root as NSString).resolvingSymlinksInPath
+                guard resolved == real || resolved.hasPrefix(real.hasSuffix("/") ? real : real + "/") else { continue }
+                let translated = root + resolved.dropFirst(real.count)
+                if real.count > (best?.length ?? -1) { best = (workspace, translated, real.count) }
+            }
+        }
+        return best.map { ($0.workspace, $0.directory) }
+    }
+
     /// Writes the file atomically with mode 0600 (no partial file is ever read by a running helper).
     public func write(to url: URL) throws {
         let encoder = JSONEncoder()

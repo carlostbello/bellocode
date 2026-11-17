@@ -24,8 +24,8 @@ public struct ContainerExecution: Sendable, Hashable {
     public static let verifyCommandMarker = "/tmp/bellocode-verify-command"
 
     /// A POSIX probe that prints `container <kernel>` inside a BelloCode workspace container and `host <kernel>`
-    /// anywhere else.
-    public static let probe = #"if [ -n "$BELLOCODE_WORKSPACE" ] || [ -f /.dockerenv ]; then printf 'container '; else printf 'host '; fi; uname -s"#
+    /// anywhere else. Grouped, so one redirect captures both parts.
+    public static let probe = #"{ if [ -n "$BELLOCODE_WORKSPACE" ] || [ -f /.dockerenv ]; then printf 'container '; else printf 'host '; fi; uname -s; }"#
 
     /// Environment the server gets on top of the defaults.
     public var environment: [String: String] {

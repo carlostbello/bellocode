@@ -47,10 +47,10 @@ guard let configPath = environment["BELLOCODE_EXEC_CONFIG"], let configData = Fi
       let config = try? JSONDecoder().decode(ExecHelperConfig.self, from: configData) else {
     fail(126, "commands run only in a project's container, and this one is not configured (BELLOCODE_EXEC_CONFIG). Nothing runs on this Mac instead.")
 }
-let cwd = FileManager.default.currentDirectoryPath
+let hostDirectory = FileManager.default.currentDirectoryPath
 if let blocked = config.runtimeBlocked { fail(125, blocked.message) }
-guard let workspace = config.workspace(for: cwd) else {
-    fail(126, "\(cwd) is not inside a project with a container environment, so there is nowhere to run this. Open the folder as a BelloCode project, or run the command from the project folder.")
+guard let (workspace, cwd) = config.resolve(directory: hostDirectory) else {
+    fail(126, "\(hostDirectory) is not inside a project with a container environment, so there is nowhere to run this. Open the folder as a BelloCode project, or run the command from the project folder.")
 }
 if let blocked = workspace.blocked { fail(125, blocked.message) }
 

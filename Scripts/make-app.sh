@@ -35,8 +35,10 @@ CONTENTS="$APP/Contents"
 cd "$ROOT"
 say "swift build -c $CONFIG"
 swift build -c "$CONFIG" --product BelloCode
+swift build -c "$CONFIG" --product bellocode-exec
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 [[ -x "$BIN_DIR/BelloCode" ]] || die "swift build produced no executable at $BIN_DIR/BelloCode"
+[[ -x "$BIN_DIR/bellocode-exec" ]] || die "swift build produced no executable at $BIN_DIR/bellocode-exec"
 
 say "assembling ${APP#"$ROOT"/}"
 rm -rf "$APP"
@@ -44,6 +46,8 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Helpers" "$CONTENTS/Resources/opencode-plu
 
 cp "$BIN_DIR/BelloCode" "$CONTENTS/MacOS/BelloCode"
 cp "$OPENCODE_BIN" "$CONTENTS/Helpers/opencode"
+# Containerised execution (docs/features/containers.md): opencode's shell and PTY command. Required.
+cp "$BIN_DIR/bellocode-exec" "$CONTENTS/Helpers/bellocode-exec"
 # The "bellocode" opencode server plugin (TypeScript, loaded by local path; no build step, no dependencies). Only the
 # runtime sources are copied: tests and the package manifest stay in the repository.
 [[ -f "$ROOT/Plugin/server.ts" ]] || die "missing Plugin/server.ts"
@@ -137,6 +141,7 @@ TIMESTAMP="--timestamp"
 [[ "$IDENTITY" == "-" ]] && TIMESTAMP="--timestamp=none"
 sign() { codesign --force "$TIMESTAMP" --options runtime --sign "$IDENTITY" "$@"; }
 sign --identifier "$BUNDLE_ID.opencode" --entitlements "$ENTITLEMENTS/opencode.entitlements" "$CONTENTS/Helpers/opencode"
+sign --identifier "$BUNDLE_ID.exec" "$CONTENTS/Helpers/bellocode-exec"
 if [[ -f "$CONTENTS/Helpers/rg" ]]; then sign --identifier "$BUNDLE_ID.rg" "$CONTENTS/Helpers/rg"; fi
 sign --entitlements "$ENTITLEMENTS/BelloCode.entitlements" "$APP"
 

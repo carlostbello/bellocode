@@ -238,6 +238,19 @@ public final class Engine {
         await modelPreferences.load()
         await frecency.load()
         await core.start()
+        if environments.isEnabled {
+            // The isolation self-check at engine start (configuration and runtime paths, no scratch thread): once the
+            // server is live. Its report is shown in Settings and the runtime status item.
+            tasks.set("isolation-check", Task { [weak self] in
+                for _ in 0..<240 {
+                    guard let self, !Task.isCancelled else { return }
+                    if self.root.connection == .live { break }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                guard let self, !Task.isCancelled, self.root.connection == .live else { return }
+                await self.environments.verifyIsolation()
+            })
+        }
     }
 
     /// Closes open threads, writes pending state, stops the event stream and (if supervised) the server.

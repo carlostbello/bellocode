@@ -520,6 +520,12 @@ public final class EnvironmentService {
         })
     }
 
+    /// Removes the project's container and waits for it (tests, `make smoke`).
+    public func removeContainerNow(_ directory: String, volumes: Bool) async {
+        removeContainer(directory, volumes: volumes)
+        await tasks.take("remove-\(environment(for: directory).projectKey)")?.value
+    }
+
     /// BelloCode-managed containers (Containers view), with their project when known.
     public func managedContainers() async -> [ManagedContainer] {
         guard isEnabled, runtime?.isReady == true else { return [] }

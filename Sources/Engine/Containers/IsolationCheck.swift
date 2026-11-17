@@ -179,8 +179,15 @@ public enum IsolationCheck {
         let entries = (try? await client.configEntries(directory: directory)) ?? []
         let projects = (try? await client.projects()) ?? []
         var guardInstalled: Bool?
-        if let directory, let output = try? await client.pluginRPC(OrchestrationContract.rpcID, "info", input: .object([:]), directory: directory) {
-            guardInstalled = output["container"]?["guard"]?.boolValue ?? false
+        if let directory {
+            // The plugin loads per location: the first call for a new project may arrive before it registered.
+            for attempt in 0..<12 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(250)) }
+                if let output = try? await client.pluginRPC(OrchestrationContract.rpcID, "info", input: .object([:]), directory: directory) {
+                    guardInstalled = output["container"]?["guard"]?.boolValue ?? false
+                    break
+                }
+            }
         }
         checks += configurationChecks(entries, projects: projects, helperPath: context.helperPath, guardInstalled: guardInstalled)
 
@@ -210,7 +217,14 @@ public enum IsolationCheck {
             if current.shell != context.helperPath {
                 checks.append(.init("Shell tool (/api/shell)", .host("the job ran with \(current.shell), not bellocode-exec")))
             } else {
-                checks.append(.init("Shell tool (/api/shell)", await outcome(of: "shell", runtime: runtime, container: container, user: spec.user, path: "shell job")))
+                var result = await outcome(of: "shell", runtime: runtime, container: container, user: spec.user, path: "shell job")
+                if case .failed(let text) = result {
+                    // Only the helper's own message (never the command's output) explains the failure.
+                    let output = (try? await client.shellJobOutput(job.id, directory: directory))?.output ?? ""
+                    let helper = output.split(separator: "\n").first { $0.hasPrefix("BelloCode:") }.map(String.init)
+                    result = .failed(text + " (exit \(current.exit.map { String(Int($0)) } ?? "none")\(helper.map { "; \($0)" } ?? ""))")
+                }
+                checks.append(.init("Shell tool (/api/shell)", result))
             }
         } catch {
             checks.append(.init("Shell tool (/api/shell)", .failed("could not start a shell job: \(error)")))
@@ -279,6 +293,10 @@ public enum IsolationCheck {
             }
             try? await client.deleteSchedule(schedule.id, directory: directory)
             checks.append(.init("Schedule condition", result))
+        } catch where "\(error)".contains("Scheduled tasks are disabled") {
+            // opencode's own schedules are off in BelloCode's server configuration (BelloCode schedules its tasks
+            // itself), so no condition can run anywhere; when enabled they use the same configured shell.
+            checks.append(.init("Schedule condition", .off("opencode schedules are disabled in this configuration")))
         } catch {
             checks.append(.init("Schedule condition", .failed("could not create a schedule: \(error)")))
         }
