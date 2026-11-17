@@ -1,7 +1,6 @@
 # Navigation: sidebar organisation, palette, search, notifications (M2-D)
 
-Status: done 2026-11-16 against MockOpenCode (and the bundled 2.3.0 for `make smoke`). Nothing checked by a person at
-the screen yet.
+Status: done 2026-11-16 against MockOpenCode (bundled 2.3.0 for `make smoke`). Not yet checked by a person.
 
 ## Sections and wake rules (`Engine/Organisation/ThreadSections.swift`, pure, injected clock)
 - Every top-level, unarchived thread is in one section: **Pinned** (wins over everything) → **Snoozed** (until its
@@ -44,11 +43,9 @@ messages) replace earlier ones only when they arrive, filtered locally meanwhile
 opens; ⌘↩ opens in the background (thread/project/hit: a new window behind; file: without switching apps; action:
 runs and stays open); Escape returns focus where it was.
 
-## Search
-`Engine.searchMessages` (FTS5, private-use highlight markers) grouped by top-level thread (sub-agent hits under their
-parent), ≤3 hits each with "N matches", project and date. Opening a hit selects its thread, then
-`TranscriptController.restore(anchor:)` brings the message to the top and the transcript's find highlights the
-term (existing public API; no TranscriptKit change).
+Search: `Engine.searchMessages` (FTS5) grouped by top-level thread, ≤3 hits with "N matches", project and date; a hit
+opens its thread, `TranscriptController.restore(anchor:)` brings the message up and find highlights the term (existing
+public API; no TranscriptKit change).
 
 ## Shortcut decisions
 ⌘K is shared, focus-aware: Command Palette is disabled while a terminal has focus, so ⌘K reaches Clear Terminal there
@@ -78,27 +75,21 @@ the M1 state key; others are listed and reopen after relaunch only when the syst
 off (closed ones are forgotten). The first window always restores its thread, drafts, panes, sidebar expansion and
 scroll, per-thread right panel and transcript anchor (UX rule 9). Back/forward history: 50 entries per window.
 
-## Measured (debug build, this Mac; `NavigationPerformanceTests`, 2,000 threads, 4,018 sidebar rows)
-Palette open p50 35.8 ms (max 37-50 ms) incl. building sources for 2,000 threads; keystroke-to-results p50 2.9 ms,
-p95 5.9 ms. Sidebar: one thread changing section 18.8 ms p50 (2.8 ms reading state); full rebuild after clearing a
-filter 100 ms p50; scroll step p50 3.1 ms, p95 4.8 ms.
+## Measured (debug build, this Mac; `NavigationPerformanceTests`: 2,000 threads, 4,018 sidebar rows)
+Palette open p50 35.8 ms (max 50) incl. sources for 2,000 threads; keystroke-to-results p50 2.9 ms, p95 5.9 ms.
+Sidebar: one thread changing section p50 18.8 ms; full rebuild after a filter 100 ms; scroll step p95 4.8 ms.
 
 ## Verification
-`swift test` (all suites pass): Engine `OrganisationTests` (sections, wake and auto-settle with an injected clock,
-presets, persistence across relaunch, engine timer wake, migration v3→v4, frecency, fuzzy, search mapping, policy);
-app `NavigationLogicTests` (tree and diff, drops and sort keys, palette ranking, ⌘K resolution, restoration encoding,
-window restore vs. the system setting) and `NavigationWindowTests` (real sidebar, palette, search reveal, deferred
-delete against the mock server, history, grouping, filter, per-thread panels, notifier with a recording delivery and
-Allow Once through the engine). `make app`, `make smoke` pass. Snapshots: `.build/debug/BelloCode --snapshot nav`
-(48 images); eight in `docs/snapshots/nav-*.png`.
+`swift test` passes: Engine `OrganisationTests` (sections, wakes and auto-settle on an injected clock, presets,
+relaunch, timer wake, migration v3→v4, frecency, fuzzy, search mapping, policy); `NavigationLogicTests` (tree diff,
+drops, ranking, ⌘K resolution, restoration, window restore) and `NavigationWindowTests` (real sidebar, palette, search
+reveal, deferred delete, history, filter, panels, notifier with Allow Once) on the mock. `make app`, `make smoke` pass.
+Snapshots: `.build/debug/BelloCode --snapshot nav` (48 images); eight in `docs/snapshots/nav-*.png`.
 
 ## Section E checklist
-Purpose/context: pass (project, thread, section in rows, badges, toasts). States: empty, filtering-no-match,
-offline file search ("Files are unavailable…"), searching, failure toasts: pass. Speed: pass (above). Keyboard: pass
-in tests (menus, shortcuts, palette arrows/Return/⌘↩/Escape, sidebar ⇧-arrows, filter Escape/↓); drag has menu
-equivalents. Accessibility: labels on rows, section headers, badges, palette rows and announcements; VoiceOver not
-run. Parallelism: 2,000 threads, several blockers, Needs You and counts: pass. Approvals: safe inline rules: pass.
-Persistence: pass in tests. Windows: two windows in tests; separate displays not checked. Evidence: this note.
+Pass: purpose/context, states (empty, no match, offline files, searching, failure toasts), speed, keyboard (menus,
+palette keys, ⇧-arrows; drag has menu equivalents), parallelism (2,000 threads), approvals (safe inline), persistence,
+two windows. Not run: VoiceOver (labels and announcements exist), separate displays, localisation.
 
 ## Known gaps / needs a human at the screen
 Real drag and drop (gap animation, badge position, project reorder); notification delivery, actions and grouping in a
