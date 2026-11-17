@@ -168,9 +168,9 @@ extension MockOpenCodeServer {
         switch name {
         case "attach":
             guard input["version"]?.intValue == browser.expectedVersion else {
+                // The real server's answer (opencode 2.3.0): schema validation of the RPC input.
                 return .response(.error(
-                    400, tag: "InvalidRequestError",
-                    message: "Expected \(browser.expectedVersion), got \(input["version"]?.serialized ?? "nothing") at [\"version\"]"))
+                    400, tag: "RpcError", message: "Expected \(browser.expectedVersion)\n  at [\"version\"]", extra: [("type", "rpc.invalid_input")]))
             }
             guard state.sessions[sessionID] != nil else { return .response(Self.unavailable("Session not found.")) }
             if let previous = browser.attachments[sessionID] {

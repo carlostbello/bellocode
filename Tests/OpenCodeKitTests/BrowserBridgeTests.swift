@@ -65,14 +65,17 @@ struct BrowserContractTests {
     }
 
     @Test func rpcErrorsMapToAttachmentEnds() {
-        #expect(BrowserAttachment.end(for: .transport("x")) == .unavailable(message: "The server is not reachable.", retryable: true))
-        if case .incompatible = BrowserAttachment.end(for: .rejected(status: 400, tag: "InvalidRequestError", message: "Expected 4, got 5")) {} else {
+        #expect(BrowserAttachment.endReason(for: .transport("x")) == .unavailable(message: "The server is not reachable.", retryable: true))
+        if case .incompatible = BrowserAttachment.endReason(for: .rejected(status: 400, tag: "InvalidRequestError", message: "Expected 4, got 5")) {} else {
             Issue.record("a schema rejection is a version mismatch")
         }
-        if case .unavailable(_, false) = BrowserAttachment.end(for: .rpc(type: "unavailable", message: "Session not found.")) {} else {
+        if case .unavailable(_, false) = BrowserAttachment.endReason(for: .rpc(type: "unavailable", message: "Session not found.")) {} else {
             Issue.record("a plugin refusal is not retried")
         }
-        #expect(BrowserAttachment.end(for: .cancelled) == .closed)
+        #expect(BrowserAttachment.endReason(for: .cancelled) == .closed)
+        // The real 2.3.0 answer to another contract version (seen in BrowserDemo --e2e).
+        let real = BrowserAttachment.endReason(for: .rpc(type: "rpc.invalid_input", message: "Expected 4\n  at [\"version\"]"))
+        if case .incompatible(let version, _) = real { #expect(version == 4) } else { Issue.record("expected incompatible, got \(real)") }
     }
 }
 

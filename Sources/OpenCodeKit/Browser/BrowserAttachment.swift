@@ -113,7 +113,7 @@ public actor BrowserAttachment {
                 let output = try await client().browserRPC("attach", input, directory: self?.directory ?? "", longLived: true)
                 outcome = output.stringValue == "replaced" ? .replaced : .closed
             } catch let error as BrowserRPCError {
-                outcome = Self.end(for: error)
+                outcome = Self.endReason(for: error)
             } catch {
                 outcome = .unavailable(message: "The server is not reachable.", retryable: true)
             }
@@ -129,10 +129,15 @@ public actor BrowserAttachment {
         await publishAndWait()
     }
 
-    static func end(for error: BrowserRPCError) -> BrowserAttachmentEnd {
+    public static func endReason(for error: BrowserRPCError) -> BrowserAttachmentEnd {
         switch error {
         case .cancelled: return .closed
         case .transport: return .unavailable(message: "The server is not reachable.", retryable: true)
+        case .rpc(let type, let message) where type == "rpc.invalid_input":
+            // opencode 2.3.0 validates `attach` input against the plugin's schema, which pins `version`: a contract
+            // bump answers `RpcError {type: "rpc.invalid_input", message: "Expected 4 at [\"version\"]"}`.
+            let pinned = message.contains("version") ? message.split(separator: "\n").first.flatMap { $0.split(separator: " ").last }.flatMap { Int($0) } : nil
+            return .incompatible(serverVersion: pinned, message: "The server's browser plugin expects contract version \(pinned.map(String.init) ?? "another version"); this BelloCode speaks \(BrowserContract.version).")
         case .rpc(_, let message): return .unavailable(message: message.isEmpty ? "The server refused the browser attachment." : message, retryable: false)
         case .rejected(let status, let tag, let message):
             // The plugin's schema pins `version`; any mismatch fails input validation before the plugin runs.
