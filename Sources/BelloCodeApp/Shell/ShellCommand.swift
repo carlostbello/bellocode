@@ -97,6 +97,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showAgents, nextAgent, previousAgent, openAgent, followUpAgent, stopAgentTree, openParentThread
     // M3-B: orchestration extras (Content/MergeRequestSurface.swift; Settings ▸ Scheduled Tasks).
     case showMergeRequests, showScheduledTasks
+    // M6-A: containerised execution (Settings ▸ Containers / Environment, docs/features/containers.md).
+    case showContainers, showEnvironment, verifyIsolation
 
     @MainActor var selector: Selector {
         switch self {
@@ -188,6 +190,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showMergeRequests: #selector(MainWindowController.showMergeRequests(_:))
         // Answered by the app delegate (works with no window open).
         case .showScheduledTasks: #selector(AppDelegate.showScheduledTasks(_:))
+        case .showContainers: #selector(AppDelegate.showContainers(_:))
+        case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
+        case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -298,6 +303,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openParentThread: "Go to Parent Thread"
         case .showMergeRequests: "Show Merge Requests"
         case .showScheduledTasks: "Scheduled Tasks…"
+        case .showContainers: "Containers…"
+        case .showEnvironment: "Project Environment…"
+        case .verifyIsolation: "Verify Container Isolation"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -407,6 +415,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openParentThread: ("u", [.command, .control])
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
+        case .showContainers, .showEnvironment, .verifyIsolation: ("", [])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -586,6 +595,7 @@ struct CommandContext: Equatable, Sendable {
         case .openParentThread: return agents.hasParent
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
+        case .showContainers, .showEnvironment, .verifyIsolation: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible

@@ -76,27 +76,29 @@ public enum OrchestrationContract {
     }
 
     /// The `OPENCODE_CONFIG_CONTENT` JSON that loads the plugin from `directory`. `subagent_depth` is aligned with the
-    /// plugin's depth limit so native `subagent` calls and `delegate_task` nest equally deep.
-    public static func serverConfig(pluginDirectory: URL, limits: Limits = .standard) -> String {
-        let config: JSONValue = .object([
-            "plugins": .array([
-                .object([
-                    "package": .string(pluginDirectory.path),
-                    "options": .object([
-                        "limits": .object([
-                            "maxDepth": .number(Double(limits.maxDepth)),
-                            "maxActiveChildren": .number(Double(limits.maxActiveChildren)),
-                            "maxCreate": .number(Double(limits.maxCreate)),
-                            "maxWaitSeconds": .number(Double(limits.maxWaitSeconds)),
-                            "readMaxMessages": .number(Double(limits.readMaxMessages)),
-                            "readMaxChars": .number(Double(limits.readMaxChars)),
-                        ])
-                    ]),
-                ])
-            ]),
-            "experimental": .object(["subagent_depth": .number(Double(limits.maxDepth))]),
-        ])
-        let data = (try? JSONEncoder().encode(config)) ?? Data("{}".utf8)
+    /// plugin's depth limit so native `subagent` calls and `delegate_task` nest equally deep. With `container`, it also
+    /// sets the shell to `bellocode-exec`, turns formatters and LSP off, defines the self-check's command and passes the
+    /// plugin its container guard options.
+    public static func serverConfig(pluginDirectory: URL?, limits: Limits = .standard, container: ContainerExecution? = nil) -> String {
+        var options: [String: JSONValue] = [
+            "limits": .object([
+                "maxDepth": .number(Double(limits.maxDepth)),
+                "maxActiveChildren": .number(Double(limits.maxActiveChildren)),
+                "maxCreate": .number(Double(limits.maxCreate)),
+                "maxWaitSeconds": .number(Double(limits.maxWaitSeconds)),
+                "readMaxMessages": .number(Double(limits.readMaxMessages)),
+                "readMaxChars": .number(Double(limits.readMaxChars)),
+            ])
+        ]
+        if let container { options["container"] = container.pluginOptions }
+        var config: [String: JSONValue] = [
+            "experimental": .object(["subagent_depth": .number(Double(limits.maxDepth))])
+        ]
+        if let pluginDirectory {
+            config["plugins"] = .array([.object(["package": .string(pluginDirectory.path), "options": .object(options)])])
+        }
+        if let container { config.merge(container.configAdditions) { _, new in new } }
+        let data = (try? JSONEncoder().encode(JSONValue.object(config))) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 }

@@ -107,6 +107,11 @@ public final class GitService {
 
     // MARK: Preferences
 
+    /// The preferences if already loaded, else the defaults (synchronous; for the worktree folder mounted in containers).
+    public func cachedPreferences(projectDirectory: String) -> WorkspacePreferences {
+        preferenceCache[projectDirectory] ?? WorkspacePreferences()
+    }
+
     public func preferences(projectDirectory: String) async -> WorkspacePreferences {
         if let cached = preferenceCache[projectDirectory] { return cached }
         let loaded = (try? await store?.preference("workspace.\(projectDirectory)", as: WorkspacePreferences.self)) ?? nil

@@ -1,0 +1,343 @@
+import BelloCore
+import ContainerKit
+import Foundation
+import OpenCodeKit
+
+/// The result of "Verify isolation": every path that can run a command, and where it ran.
+public struct IsolationReport: Sendable, Equatable {
+    public enum Outcome: Sendable, Equatable {
+        /// Ran in the project's container (the probe printed `container Linux`).
+        case container(String)
+        /// Ran on the Mac: an escape. The detail says which path.
+        case host(String)
+        /// Correctly refused (blocked state, or a path that is configured off).
+        case off(String)
+        /// Could not be checked (no project with an image, server offline, timeout).
+        case skipped(String)
+        case failed(String)
+
+        public var isProblem: Bool {
+            switch self {
+            case .host, .failed: true
+            default: false
+            }
+        }
+
+        public var word: String {
+            switch self {
+            case .container: "Container"
+            case .host: "HOST"
+            case .off: "Off"
+            case .skipped: "Skipped"
+            case .failed: "Failed"
+            }
+        }
+
+        public var detail: String {
+            switch self {
+            case .container(let text), .host(let text), .off(let text), .skipped(let text), .failed(let text): text
+            }
+        }
+    }
+
+    public struct Check: Sendable, Equatable, Identifiable {
+        public var name: String
+        public var outcome: Outcome
+        public var id: String { name }
+        public init(_ name: String, _ outcome: Outcome) {
+            self.name = name
+            self.outcome = outcome
+        }
+    }
+
+    public var date: Date
+    public var directory: String?
+    /// Whether the session-based paths (command template, schedule condition, BelloCode's terminal) were run.
+    public var full: Bool
+    public var checks: [Check]
+
+    /// Paths that executed on the Mac.
+    public var hostPaths: [Check] { checks.filter { if case .host = $0.outcome { true } else { false } } }
+    public var problems: [Check] { checks.filter(\.outcome.isProblem) }
+    /// No path ran on the host and nothing failed (skipped checks are listed but do not fail the report).
+    public var passed: Bool { problems.isEmpty }
+    public var ranInContainer: Int { checks.filter { if case .container = $0.outcome { true } else { false } }.count }
+
+    public var summary: String {
+        if !hostPaths.isEmpty { return "\(hostPaths.count) path\(hostPaths.count == 1 ? "" : "s") ran on this Mac: \(hostPaths.map(\.name).joined(separator: ", "))" }
+        if !problems.isEmpty { return "\(problems.count) check\(problems.count == 1 ? "" : "s") failed" }
+        return "Isolated: \(ranInContainer) of \(checks.count) checks ran in the container\(full ? "" : " (quick check)")"
+    }
+}
+
+/// Proves, with the real server configuration, that commands land in the project's container
+/// (docs/features/containers.md). Each runtime path runs the same probe (`ContainerExecution.probe`) and writes its
+/// answer to a marker under `/tmp`: read inside the container it proves the path ran there; found on the Mac it
+/// proves an escape. Nothing is written into a project folder and no prompt is ever sent.
+///
+/// Quick (engine start, invisible): the configuration (shell, formatter, LSP, local MCP servers, worktree start
+/// commands, the plugin guard), a shell job (`/api/shell`, the agent shell tool's path) and a PTY started with
+/// `$SHELL` (`/api/pty`). Full (on demand, `make smoke`): also a command template (`!`…``), a schedule condition and
+/// BelloCode's own terminal (a persistent PTY), which need a scratch thread that is deleted afterwards.
+public enum IsolationCheck {
+    public struct Context: Sendable {
+        public var client: @Sendable () async throws -> OpenCodeClient
+        public var helperPath: String
+        public var terminalEnvironment: [String: String]
+
+        public init(client: @escaping @Sendable () async throws -> OpenCodeClient, helperPath: String, terminalEnvironment: [String: String]) {
+            self.client = client
+            self.helperPath = helperPath
+            self.terminalEnvironment = terminalEnvironment
+        }
+    }
+
+    static func marker(_ name: String) -> String { "/tmp/bellocode-verify-\(name)" }
+
+    static func probeCommand(_ name: String) -> String { "\(ContainerExecution.probe) > \(marker(name))" }
+
+    /// Reads a marker inside the container and on the Mac, then removes both.
+    static func outcome(of name: String, runtime: any WorkspaceRuntime, container: String, user: String, path: String) async -> IsolationReport.Outcome {
+        let hostMarker = "/private" + marker(name)
+        defer { try? FileManager.default.removeItem(atPath: hostMarker) }
+        if let text = try? String(contentsOfFile: hostMarker, encoding: .utf8), !text.isEmpty {
+            return .host("\(path) ran on this Mac (\(text.trimmingCharacters(in: .whitespacesAndNewlines)))")
+        }
+        let result = try? await runtime.run(container: container, argv: ["/bin/sh", "-c", "cat \(marker(name)) 2>/dev/null; rm -f \(marker(name))"],
+                                            workingDir: nil, environment: [:], user: user, timeout: .seconds(10))
+        let text = result.map { String(decoding: $0.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        if text.hasPrefix("container") { return .container("\(path): \(text)") }
+        if text.hasPrefix("host") { return .host("\(path) reported \(text)") }
+        return .failed("\(path) left no answer (it did not run, or ran somewhere unexpected)")
+    }
+
+    static func clear(_ names: [String], runtime: any WorkspaceRuntime, container: String, user: String) async {
+        for name in names { try? FileManager.default.removeItem(atPath: "/private" + marker(name)) }
+        _ = try? await runtime.run(container: container, argv: ["/bin/sh", "-c", "rm -f " + names.map(marker).joined(separator: " ")],
+                                   workingDir: nil, environment: [:], user: user, timeout: .seconds(10))
+    }
+
+    /// Scans the loaded configuration for anything that would run on the host.
+    static func configurationChecks(_ entries: [JSONValue], projects: [OpenCodeKit.Project], helperPath: String, guardInstalled: Bool?) -> [IsolationReport.Check] {
+        var checks: [IsolationReport.Check] = []
+        var shells: [String] = []
+        var formatterOn = false, lspOn = false
+        var localMCP: [String] = []
+        func scan(_ value: JSONValue) {
+            if let shell = value["shell"]?.stringValue { shells.append(shell) }
+            if let formatter = value["formatter"] {
+                if case .bool(true) = formatter { formatterOn = true }
+                if case .object(let entries) = formatter, !entries.isEmpty {
+                    formatterOn = formatterOn || entries.values.contains { $0["disabled"]?.boolValue != true }
+                }
+            }
+            if let lsp = value["lsp"] {
+                if case .bool(true) = lsp { lspOn = true }
+                if case .object(let entries) = lsp, entries.values.contains(where: { $0["disabled"]?.boolValue != true }) { lspOn = true }
+            }
+            if case .object(let servers)? = value["mcp"]?["servers"] {
+                for (name, server) in servers where server["type"]?.stringValue == "local" && server["enabled"]?.boolValue != false {
+                    localMCP.append(name)
+                }
+            }
+        }
+        for entry in entries {
+            if let info = entry["info"] { scan(info) } else { scan(entry) }
+        }
+        let foreign = shells.filter { $0 != helperPath }
+        checks.append(.init("Configured shell", foreign.isEmpty && shells.contains(helperPath)
+            ? .container("every shell setting is bellocode-exec")
+            : .host(foreign.first.map { "a configuration sets the shell to \($0): commands could run on this Mac" }
+                ?? "no configuration sets the shell to bellocode-exec: commands could run on this Mac")))
+        checks.append(.init("Formatters", formatterOn ? .host("formatters are on: they run project tooling on this Mac") : .off("off")))
+        checks.append(.init("Language servers", lspOn ? .host("language servers are configured: they would run on this Mac") : .off("off")))
+        checks.append(.init("Local MCP servers", localMCP.isEmpty ? .off("none configured")
+            : .host("local MCP servers run on this Mac: \(localMCP.sorted().joined(separator: ", "))")))
+        let starts = projects.filter { !($0.commands?.start ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+        checks.append(.init("Worktree start commands", starts.isEmpty ? .off("none set (setup scripts run in the container)")
+            : .host("opencode would run a worktree start command on this Mac for \(starts.map(\.canonical).joined(separator: ", "))")))
+        switch guardInstalled {
+        case true?: checks.append(.init("Plugin guard", .container("shell.create.before forces bellocode-exec")))
+        case false?: checks.append(.init("Plugin guard", .failed("the bundled plugin did not install its shell guard")))
+        case nil: checks.append(.init("Plugin guard", .skipped("the bundled plugin did not answer")))
+        }
+        return checks
+    }
+
+    /// Runs the check against `directory` (a project whose container can run). `full` adds the session-based paths.
+    @MainActor
+    static func run(service: EnvironmentService, context: Context, directory: String?, full: Bool) async -> IsolationReport {
+        var checks: [IsolationReport.Check] = []
+        let client: OpenCodeClient
+        do {
+            client = try await context.client()
+        } catch {
+            return IsolationReport(date: Date(), directory: directory, full: full,
+                                   checks: [.init("Server", .skipped("opencode is not running: \(error)"))])
+        }
+
+        // Configuration (no project needed).
+        let entries = (try? await client.configEntries(directory: directory)) ?? []
+        let projects = (try? await client.projects()) ?? []
+        var guardInstalled: Bool?
+        if let directory {
+            // The plugin loads per location: the first call for a new project may arrive before it registered.
+            for attempt in 0..<12 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(250)) }
+                if let output = try? await client.pluginRPC(OrchestrationContract.rpcID, "info", input: .object([:]), directory: directory) {
+                    guardInstalled = output["container"]?["guard"]?.boolValue ?? false
+                    break
+                }
+            }
+        }
+        checks += configurationChecks(entries, projects: projects, helperPath: context.helperPath, guardInstalled: guardInstalled)
+
+        guard let directory else {
+            checks.append(.init("Runtime paths", .skipped("no project with a container image to run the probes in")))
+            return IsolationReport(date: Date(), directory: nil, full: full, checks: checks)
+        }
+        let container: String, spec: WorkspaceSpec
+        do {
+            (container, spec, _) = try await service.readyContainer(directory)
+        } catch {
+            checks.append(.init("Runtime paths", .off("commands are refused in this project now: \(EnvironmentService.describe(error))")))
+            return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
+        }
+        let runtime = service.activeRuntime
+        let names = ["shell", "pty", "command", "schedule", "terminal"]
+        await clear(names, runtime: runtime, container: container, user: spec.user)
+
+        // 1. Shell job: the agent shell tool, /api/shell and /session/{id}/shell share this path.
+        do {
+            let job = try await client.createShellJob(command: probeCommand("shell"), cwd: directory, timeout: 20_000)
+            var current = job
+            for _ in 0..<100 where !current.isFinished {
+                try await Task.sleep(for: .milliseconds(100))
+                current = try await client.shellJob(job.id, directory: directory)
+            }
+            if current.shell != context.helperPath {
+                checks.append(.init("Shell tool (/api/shell)", .host("the job ran with \(current.shell), not bellocode-exec")))
+            } else {
+                var result = await outcome(of: "shell", runtime: runtime, container: container, user: spec.user, path: "shell job")
+                if case .failed(let text) = result {
+                    // Only the helper's own message (never the command's output) explains the failure.
+                    let output = (try? await client.shellJobOutput(job.id, directory: directory))?.output ?? ""
+                    let helper = output.split(separator: "\n").first { $0.hasPrefix("BelloCode:") }.map(String.init)
+                    result = .failed(text + " (exit \(current.exit.map { String(Int($0)) } ?? "none")\(helper.map { "; \($0)" } ?? ""))")
+                }
+                checks.append(.init("Shell tool (/api/shell)", result))
+            }
+        } catch {
+            checks.append(.init("Shell tool (/api/shell)", .failed("could not start a shell job: \(error)")))
+        }
+
+        // 2. A PTY with opencode's default command ($SHELL).
+        do {
+            let pty = try await client.createLegacyPTY(directory: directory, args: ["-c", probeCommand("pty") + "; sleep 5"], title: "BelloCode isolation check")
+            var result = IsolationReport.Outcome.failed("no answer")
+            for _ in 0..<40 {
+                try await Task.sleep(for: .milliseconds(150))
+                result = await outcome(of: "pty", runtime: runtime, container: container, user: spec.user, path: "PTY ($SHELL)")
+                if case .failed = result { continue }
+                break
+            }
+            try? await client.deleteLegacyPTY(pty, directory: directory)
+            checks.append(.init("PTY ($SHELL)", result))
+        } catch {
+            checks.append(.init("PTY ($SHELL)", .failed("could not start a PTY: \(error)")))
+        }
+
+        if full { checks += await sessionChecks(client: client, context: context, directory: directory, runtime: runtime, container: container, user: spec.user) }
+        return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
+    }
+
+    /// Command template, schedule condition and BelloCode's terminal, in a scratch thread deleted afterwards.
+    static func sessionChecks(client: OpenCodeClient, context: Context, directory: String, runtime: any WorkspaceRuntime,
+                              container: String, user: String) async -> [IsolationReport.Check] {
+        var checks: [IsolationReport.Check] = []
+        let session: SessionInfo
+        do {
+            session = try await client.createSession(SessionCreateRequest(
+                directory: directory, title: "BelloCode isolation check", metadata: .object(["bellocode": .object(["kind": .string("isolation-check")])]),
+                permissions: [PermissionRule(action: "shell", resource: "*", effect: .allow),
+                              PermissionRule(action: "external_directory", resource: "*", effect: .allow)]))
+        } catch {
+            return [.init("Command template, schedule, terminal", .skipped("could not create a scratch thread: \(error)"))]
+        }
+
+        // 3. Command template: `!`…`` is expanded with the configured shell before any prompt; the command's model does
+        // not exist, so nothing is sent to a provider.
+        do {
+            try await client.runCommand(sessionID: session.id, CommandRequest(name: ContainerExecution.verifyCommandName, text: ""))
+        } catch {
+            // Expected: the prompt after the expansion fails on the missing model.
+        }
+        var command = IsolationReport.Outcome.failed("no answer")
+        for _ in 0..<30 {
+            command = await outcome(of: "command", runtime: runtime, container: container, user: user, path: "command template")
+            if case .failed = command { try? await Task.sleep(for: .milliseconds(200)); continue }
+            break
+        }
+        checks.append(.init("Command template (!`…`)", command))
+        try? await client.interrupt(sessionID: session.id)
+
+        // 4. Schedule condition: due in a second, never wakes the thread.
+        do {
+            let schedule = try await client.createProbeSchedule(sessionID: session.id, directory: directory, run: probeCommand("schedule"), after: 1)
+            var result = IsolationReport.Outcome.failed("the condition did not run within 20 s")
+            for _ in 0..<80 {
+                try await Task.sleep(for: .milliseconds(250))
+                let answer = await outcome(of: "schedule", runtime: runtime, container: container, user: user, path: "schedule condition")
+                if case .failed = answer { continue }
+                result = answer
+                break
+            }
+            try? await client.deleteSchedule(schedule.id, directory: directory)
+            checks.append(.init("Schedule condition", result))
+        } catch where "\(error)".contains("Scheduled tasks are disabled") {
+            // opencode's own schedules are off in BelloCode's server configuration (BelloCode schedules its tasks
+            // itself), so no condition can run anywhere; when enabled they use the same configured shell.
+            checks.append(.init("Schedule condition", .off("opencode schedules are disabled in this configuration")))
+        } catch {
+            checks.append(.init("Schedule condition", .failed("could not create a schedule: \(error)")))
+        }
+
+        // 5. BelloCode's terminal: a persistent PTY with the helper as its command (TerminalLaunch).
+        do {
+            let pty = try await client.createTerminal(sessionID: session.id, PTYCreateRequest(
+                command: context.helperPath, args: ["-c", probeCommand("terminal") + "; sleep 5"], cwd: directory,
+                title: "BelloCode isolation check", env: context.terminalEnvironment))
+            var result = IsolationReport.Outcome.failed("no answer")
+            for _ in 0..<40 {
+                try await Task.sleep(for: .milliseconds(150))
+                result = await outcome(of: "terminal", runtime: runtime, container: container, user: user, path: "terminal")
+                if case .failed = result { continue }
+                break
+            }
+            try? await client.deleteTerminal(pty.id)
+            checks.append(.init("Terminal (persistent PTY)", result))
+        } catch {
+            checks.append(.init("Terminal (persistent PTY)", .failed("could not open a terminal: \(error)")))
+        }
+        try? await client.deleteSession(session.id)
+        return checks
+    }
+}
+
+extension EnvironmentService {
+    /// "Verify isolation": runs the self-check in `directory` (default: the most recently used project with an image).
+    /// `full` adds the session-based paths (a scratch thread appears briefly).
+    @discardableResult
+    public func verifyIsolation(directory: String? = nil, full: Bool = false) async -> IsolationReport? {
+        guard isEnabled, let context = isolationContext else { return nil }
+        isVerifyingIsolation = true
+        defer { isVerifyingIsolation = false }
+        let target = directory.map { environment(for: $0).directory } ?? environments
+            .filter { $0.image != nil && !$0.phase.isBlocking }
+            .max { ($0.record.lastUsed ?? .distantPast) < ($1.record.lastUsed ?? .distantPast) }?.directory
+        let report = await IsolationCheck.run(service: self, context: context, directory: target, full: full)
+        isolation = report
+        if !report.hostPaths.isEmpty { Self.log.error("isolation check: a path ran on the host") }
+        return report
+    }
+}

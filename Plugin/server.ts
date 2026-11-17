@@ -10,6 +10,8 @@
 // instruction entries. The plugin keeps only short-lived, in-memory bookkeeping (cascades in progress, event dedupe).
 
 import * as L from "./src/logic.ts"
+import * as C from "./src/container.ts"
+import { readFileSync } from "fs"
 
 type Ctx = any
 type ToolContext = {
@@ -73,6 +75,26 @@ export default {
   id: "bellocode",
   setup: async (ctx: Ctx) => {
     const limits = L.limitsFrom(ctx.options)
+
+    // MARK: Container guard (docs/features/containers.md)
+    // opencode's shell is already BelloCode's helper (config `shell` and $SHELL); this hook forces it for every shell
+    // job (agent tool, /api/shell, terminals through the Shell service), whatever a session or plugin asked for.
+    const container = C.containerOptions(ctx.options)
+    let guardInstalled = false
+    if (container) {
+      await ctx.shell.hook("create.before", (event: any) => {
+        event.shell = container.helper
+      })
+      guardInstalled = true
+    }
+    const readExecConfig = (): C.ExecConfig | undefined => {
+      if (!container) return undefined
+      try {
+        return JSON.parse(readFileSync(container.config, "utf8")) as C.ExecConfig
+      } catch {
+        return undefined
+      }
+    }
 
     // MARK: Session helpers
 
@@ -186,6 +208,13 @@ export default {
       const depth = L.depthOf([session, ...(await ancestors(session))])
       const value = L.guidance({ depth, limits, delegated: Boolean(session.parentID) })
       await ctx.session.instructions.entry.put({ sessionID: session.id, key: GUIDANCE_KEY, value }).catch(() => undefined)
+      if (container) {
+        // Where commands run: rewritten at each run so it reflects the image and any blocked state.
+        const text = C.containerGuidance(readExecConfig(), session.location?.directory)
+        await ctx.session.instructions.entry
+          .put({ sessionID: session.id, key: C.CONTAINER_GUIDANCE_KEY, value: text })
+          .catch(() => undefined)
+      }
     }
 
     // MARK: Tools
@@ -614,6 +643,7 @@ export default {
           tools: list<any>(await ctx.tool.list())
             .map((tool) => tool.id ?? tool.name)
             .filter((name: string) => tools.some((item) => item.name === name)),
+          container: container ? { guard: guardInstalled, helper: container.helper } : null,
           appTools: list<any>(await ctx.tool.list())
             .filter(L.isAppTool)
             .map((tool) => ({ id: tool.id ?? tool.name, codemode: tool.options?.codemode !== false })),
@@ -653,8 +683,9 @@ export default {
           await putGuidance(await get(sessionID))
           return
         case "session.execution.started": {
-          // Sessions created before the plugin (or while it reloaded) get their guidance at their next run.
-          if (!guided.has(sessionID)) await putGuidance(await get(sessionID)).catch(() => undefined)
+          // Sessions created before the plugin (or while it reloaded) get their guidance at their next run; with
+          // containers, every run refreshes it (image, tools, blocked state).
+          if (!guided.has(sessionID) || container) await putGuidance(await get(sessionID)).catch(() => undefined)
           // A child's cancelled report wakes its parent; inside a cascade window that restart is cut at once.
           const until = cascading.get(sessionID)
           if (until && until > Date.now()) await ctx.session.interrupt({ sessionID }).catch(() => undefined)

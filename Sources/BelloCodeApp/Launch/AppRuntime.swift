@@ -51,6 +51,7 @@ final class AppRuntime {
 
     static func make(options: LaunchOptions, bundle: Bundle = .main) async throws -> AppRuntime {
         if let scenario = options.mock {
+            if case .snapshot("containers") = options.mode { return try await makeMock(scenario, containers: true) }
             return try await makeMock(scenario)
         }
         if let source = ServerSource.fromEnvironment(), case .fixed(let connection) = source {
@@ -60,7 +61,8 @@ final class AppRuntime {
                 autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
         }
         let server = bundledServerConfiguration(bundle: bundle)
-        let configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
+        var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
+        configuration.containers = containerConfiguration(for: server)
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
@@ -69,12 +71,29 @@ final class AppRuntime {
     /// The bundled server: `Contents/Helpers/opencode`, helpers first on PATH, isolated data under Application Support.
     nonisolated static func bundledServerConfiguration(bundle: Bundle = .main, dataRoot: URL? = nil) -> ServerConfiguration {
         let helpers = bundle.bundleURL.appending(path: "Contents/Helpers", directoryHint: .isDirectory)
-        return ServerConfiguration(
+        let root = dataRoot ?? applicationSupport().appending(path: "opencode", directoryHint: .isDirectory)
+        var configuration = ServerConfiguration(
             executableURL: helpers.appending(path: "opencode"),
-            dataRoot: dataRoot ?? applicationSupport().appending(path: "opencode", directoryHint: .isDirectory),
+            dataRoot: root,
             helpersDirectory: helpers,
             expectedVersion: bundle.object(forInfoDictionaryKey: "BelloCodeOpenCodeVersion") as? String,
             pluginDirectory: bundledPluginDirectory(bundle: bundle))
+        // Containerised execution (docs/features/containers.md): every command the agent or the user runs goes through
+        // bellocode-exec into the project's container. Always on for the bundled server; a bundle without the helper
+        // is broken, and the helper path is still configured so commands fail with a message instead of running on
+        // the host.
+        configuration.containerExecution = ContainerExecution(
+            helperURL: helpers.appending(path: "bellocode-exec"),
+            execConfigURL: root.appending(path: "bellocode-exec.json"))
+        return configuration
+    }
+
+    /// The engine's side of containerised execution for a bundled server configuration.
+    nonisolated static func containerConfiguration(for server: ServerConfiguration, socketOverride: String? = nil) -> ContainerConfiguration? {
+        guard let execution = server.containerExecution else { return nil }
+        return ContainerConfiguration(
+            helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
+            runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
     }
 
     /// `Contents/Resources/opencode-plugin` (the "bellocode" server plugin, docs/features/orchestration.md), if bundled.
@@ -94,7 +113,7 @@ final class AppRuntime {
         return url
     }
 
-    private static func makeMock(_ scenario: LaunchOptions.MockScenario) async throws -> AppRuntime {
+    private static func makeMock(_ scenario: LaunchOptions.MockScenario, containers: Bool = false) async throws -> AppRuntime {
         let data: Scenario = switch scenario {
         case .demo: .demo()
         case .large: .large(sessionCount: 500, largeSessionMessages: 2_000)
@@ -113,6 +132,15 @@ final class AppRuntime {
         configuration.forgeTokens = MockGitLab.tokens()
         configuration.mergeRequestPoll = .seconds(2)
         configuration.visualsDirectory = directory.appending(path: "visuals", directoryHint: .isDirectory)
+        if containers {
+            // `--snapshot containers`: container execution on a scripted runtime (never Rancher Desktop).
+            let fake = SnapshotWorkspaceRuntime()
+            SnapshotWorkspaceRuntime.current = fake
+            configuration.containers = ContainerConfiguration(
+                helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
+                execConfigURL: directory.appending(path: "bellocode-exec.json"), opencodeDataDirectory: nil, runtime: fake,
+                registryVault: InMemorySecretVault())
+        }
         let suite = "com.bellocode.app.mock"
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .mock(scenario),

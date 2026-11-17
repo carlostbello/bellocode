@@ -18,13 +18,15 @@ public enum ExtrasTools {
     public static let unwatchMergeRequest = "unwatch_merge_request"
     public static let requestSecret = "request_secret"
     public static let secretFile = "secret_file"
+    /// Containerised projects: runs one command in the project's container with the secret in its environment.
+    public static let secretExec = "secret_exec"
     public static let htmlPreview = "html_preview"
     public static let htmlRender = "html_render"
 
     public static let all = [
         scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkMergeRequests,
         unlinkMergeRequests, listThreadMergeRequests, watchMergeRequest, unwatchMergeRequest, requestSecret, secretFile,
-        htmlPreview, htmlRender,
+        secretExec, htmlPreview, htmlRender,
     ]
 
     static func string(_ description: String) -> JSONValue { .object(["type": .string("string"), "description": .string(description)]) }
@@ -103,6 +105,16 @@ public enum ExtrasTools {
             description:
                 "Exchange a secretRef (once) for a path that yields the secret to the first process that reads it, then disappears (10 minutes at most). Use it in one command, e.g. --token-file PATH or \"$(cat PATH)\". Never print it.",
             inputSchema: object(["secretRef": string("From the request_secret wake message.")], required: ["secretRef"])),
+        ClientMCPTool(
+            name: secretExec,
+            description:
+                "Run one command in this project's container with a secret in an environment variable (the value lives only in that command's environment; output is redacted). Exchange a container secretRef (bcsecretc_…) here; never print the value.",
+            inputSchema: object(
+                [
+                    "secretRef": string("From the request_secret wake message."),
+                    "name": string("Environment variable to hold the value, e.g. NPM_TOKEN."),
+                    "command": string("Shell command run in the project's folder in the container, e.g. npm publish."),
+                ], required: ["secretRef", "name", "command"])),
         ClientMCPTool(
             name: htmlPreview,
             description:

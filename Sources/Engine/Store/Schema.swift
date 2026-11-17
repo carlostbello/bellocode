@@ -6,7 +6,7 @@ import GRDB
 /// Tables holding a cache of opencode state (rebuildable from the server): `project`, `session`, `message`, `part`,
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
 /// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
-/// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`.
+/// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`, `app_environment`.
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
@@ -168,6 +168,19 @@ enum ProjectionSchema {
                     label TEXT NOT NULL UNIQUE,
                     created REAL NOT NULL,
                     last_used REAL
+                );
+                """)
+        }
+        // M6-A containerised execution (docs/features/containers.md): each project's Environment setting (image,
+        // variables, limits, mounts, network) and what BelloCode last knew about its workspace container (image ID,
+        // mount identity, tool inventory). App-owned, kept by `rebuild()`. Registry passwords are never here: they are
+        // in the Keychain (`app.bellocode.registry`).
+        migrator.registerMigration("v6-container-environments") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_environment (
+                    directory TEXT PRIMARY KEY NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
                 );
                 """)
         }

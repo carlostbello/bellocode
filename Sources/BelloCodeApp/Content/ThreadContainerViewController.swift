@@ -20,6 +20,8 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var composer: NSViewController?
     private(set) var requestStack: NSViewController?
     private(set) var statusBanner: StatusUnknownBanner?
+    /// Commands cannot run in this project's container (M6-A, docs/features/containers.md).
+    private(set) var environmentBanner: EnvironmentBannerHost?
     private(set) var queuedPrompts: QueuedPromptsView?
     private(set) var unconfirmedSends: UnconfirmedSendsView?
     private var surfaceControllers: [NSViewController] = []
@@ -123,6 +125,7 @@ final class ThreadContainerViewController: NSViewController {
         composer = nil
         requestStack = nil
         statusBanner = nil
+        environmentBanner = nil
         queuedPrompts = nil
         unconfirmedSends = nil
     }
@@ -165,13 +168,16 @@ final class ThreadContainerViewController: NSViewController {
             let unconfirmed = UnconfirmedSendsView(thread: thread)
             unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             unconfirmedSends = unconfirmed
-            let column = NSStackView(views: [unknown, unconfirmed, queued])
+            let directory = context.directory
+            let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })
+            environmentBanner = environment
+            let column = NSStackView(views: [environment, unknown, unconfirmed, queued])
             column.orientation = .vertical
             column.alignment = .leading
             column.spacing = 0
             column.detachesHiddenViews = true
             column.translatesAutoresizingMaskIntoConstraints = false
-            for view in [unknown, unconfirmed, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
+            for view in [environment, unknown, unconfirmed, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
             banner = column
         } else {
             banner = NSView()

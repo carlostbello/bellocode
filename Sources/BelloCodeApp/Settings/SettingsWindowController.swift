@@ -60,6 +60,36 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     controller.sizingOptions = [.preferredContentSize]
                     return controller
                 })
+            // M6-A containerised execution (docs/features/containers.md).
+            panes.append(
+                SettingsPane(id: "containers", title: "Containers", symbolName: "shippingbox") {
+                    let view = ContainersSettingsView(model: ContainersSettingsModel(engine: engine), service: engine.environments) { container in
+                        let alert = NSAlert()
+                        alert.messageText = "Remove the container \(container.name)?"
+                        alert.informativeText = "Processes in it stop. Project files are on this Mac and are not touched; the container is created again on next use."
+                        alert.addButton(withTitle: "Remove")
+                        alert.addButton(withTitle: "Cancel")
+                        alert.buttons.first?.hasDestructiveAction = true
+                        return alert.runModal() == .alertFirstButtonReturn
+                    }
+                    let controller = NSHostingController(rootView: view)
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
+            panes.append(
+                SettingsPane(id: "environment", title: "Environment", symbolName: "cube.transparent") {
+                    let model = EnvironmentSettingsModel(engine: engine, directory: EnvironmentSettingsModel.preferredDirectory)
+                    model.openTerminal = { _ in EnvironmentSettingsModel.openTerminalInFrontWindow() }
+                    model.openBrowser = { url in
+                        // The built-in browser of the front window's thread; the default browser without one.
+                        let front = NSApp.orderedWindows.compactMap { $0.windowController as? MainWindowController }.first
+                        if front?.browser?.open(url) != true { NSWorkspace.shared.open(url) }
+                    }
+                    EnvironmentSettingsModel.last = model
+                    let controller = NSHostingController(rootView: EnvironmentSettingsView(model: model))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
             if let extras = engine.extras {
                 // M3-B (docs/features/orchestration-extras.md).
                 panes.append(

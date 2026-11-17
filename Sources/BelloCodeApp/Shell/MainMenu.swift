@@ -264,6 +264,9 @@ enum MainMenu {
         menu.addItem(title: "Zoom", action: #selector(NSWindow.performZoom(_:)), key: "")
         menu.addItem(.separator())
         menu.add(.showScheduledTasks)
+        menu.add(.showContainers)
+        menu.add(.showEnvironment)
+        menu.add(.verifyIsolation)
         menu.addItem(.separator())
         menu.addItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), key: "")
         return menu

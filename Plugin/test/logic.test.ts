@@ -128,3 +128,39 @@ describe("text", () => {
     expect(L.extrasGuidance.join("\n").length).toBeLessThan(1000)
   })
 })
+
+import * as C from "../src/container.ts"
+
+describe("container guidance", () => {
+  const config: C.ExecConfig = {
+    workspaces: [
+      { roots: ["/Users/me/app", "/Users/me/.bellocode/worktrees/app"], container: "bellocode-ws-1", image: "registry.corp/dev:1",
+        inventory: { os: "Debian GNU/Linux 12", arch: "aarch64", tools: ["bash", "node"] } },
+      { roots: ["/Users/me/app/vendor/lib"], container: "bellocode-ws-2" },
+    ],
+  }
+
+  test("options are validated", () => {
+    expect(C.containerOptions({ container: { helper: "/x/bellocode-exec", config: "/c.json" } })).toEqual({ helper: "/x/bellocode-exec", config: "/c.json" })
+    expect(C.containerOptions({ container: { helper: "relative", config: "/c" } })).toBeUndefined()
+    expect(C.containerOptions({})).toBeUndefined()
+  })
+
+  test("longest root wins", () => {
+    expect(C.workspaceFor(config, "/Users/me/app/src")?.container).toBe("bellocode-ws-1")
+    expect(C.workspaceFor(config, "/Users/me/app/vendor/lib/x")?.container).toBe("bellocode-ws-2")
+    expect(C.workspaceFor(config, "/Users/me/application")).toBeUndefined()
+  })
+
+  test("guidance names the image, tools and the rules", () => {
+    const text = C.containerGuidance(config, "/Users/me/app")
+    expect(text).toContain("never on the user's Mac")
+    expect(text).toContain("registry.corp/dev:1")
+    expect(text).toContain("bash, node")
+    expect(text).toContain("no ports are published")
+    expect(C.containerGuidance(config, "/tmp")).toContain("not inside a project")
+    expect(C.containerGuidance({ ...config, runtimeBlocked: { message: "Rancher Desktop is not running." } }, "/Users/me/app")).toContain(
+      "Right now commands cannot run: Rancher Desktop is not running.",
+    )
+  })
+})

@@ -24,7 +24,18 @@ enum SmokeTest {
     @MainActor
     private static func run() async -> Bool {
         let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-smoke-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: root) }
+        // BELLOCODE_SMOKE_KEEP=1 keeps the temporary folder and the container on failure (diagnosis only).
+        let keep = ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_KEEP"] == "1"
+        defer {
+            if !keep { try? FileManager.default.removeItem(at: root) }
+            // The worktree folder mounted for the temporary container project (removed only while empty, with its
+            // empty parents).
+            var folder = (NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees/container-project")
+            for _ in 0..<3 where ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? ["?"]).isEmpty {
+                try? FileManager.default.removeItem(atPath: folder)
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+        }
         let server = AppRuntime.bundledServerConfiguration(dataRoot: root.appending(path: "opencode"))
         log("bundle \(Bundle.main.bundleURL.path)")
         guard FileManager.default.isExecutableFile(atPath: server.executableURL.path) else {
@@ -32,9 +43,14 @@ enum SmokeTest {
             return false
         }
         let supervisor = ServerSupervisor(configuration: server)
+        // Containerised execution: checked when Rancher Desktop is ready and the test image is present (never pulled
+        // here); otherwise said plainly and the host-only checks run.
+        let container = await containerPlan()
         let engine: Engine
         do {
-            engine = try Engine(configuration: EngineConfiguration(server: .supervised(supervisor), store: .inMemory))
+            var configuration = EngineConfiguration(server: .supervised(supervisor), store: .inMemory)
+            if container != nil { configuration.containers = AppRuntime.containerConfiguration(for: server) }
+            engine = try Engine(configuration: configuration)
         } catch {
             log("FAIL engine: \(error)")
             return false
@@ -65,9 +81,39 @@ enum SmokeTest {
             return false
         }
 
-        guard let shellPID = await terminalRoundTrip(engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root) else {
+        var containerProject: String?
+        if let image = container {
+            let project = root.appending(path: "container-project", directoryHint: .isDirectory).path
+            containerProject = project
+            guard await containerCheck(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: project, image: image) else {
+                if keep { log("kept \(root.path)") } else { await engine.environments.removeContainerNow(project, volumes: true) }
+                await engine.stop()
+                return false
+            }
+        }
+
+        if let containerProject, ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_E2E"] == "1" {
+            let passed = await ContainerEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject, log: log)
+            log(passed ? "container end-to-end passed" : "FAIL container end-to-end")
+            guard passed else {
+                if !keep { await engine.environments.removeContainerNow(containerProject, volumes: true) }
+                await engine.stop()
+                return false
+            }
+        }
+
+        guard let shellPID = await terminalRoundTrip(
+            engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root, containerProject: containerProject)
+        else {
+            if let containerProject { await engine.environments.removeContainerNow(containerProject, volumes: true) }
             await engine.stop()
             return false
+        }
+        if let containerProject {
+            await engine.environments.removeContainerNow(containerProject, volumes: true)
+            let left = (try? await LiveWorkspaceRuntime().managedContainers())?.filter { $0.labels.values.contains(containerProject) } ?? []
+            log(left.isEmpty ? "container removed" : "FAIL container left behind")
+            guard left.isEmpty else { await engine.stop(); return false }
         }
 
         let stopping = clock.now
@@ -115,12 +161,21 @@ enum SmokeTest {
     /// A terminal through the production path (TerminalService, TerminalStream) on the bundled server's PTY daemon.
     /// Returns the shell's pid, or nil on failure.
     @MainActor
-    private static func terminalRoundTrip(engine: Engine, client: OpenCodeClient, root: URL) async -> Int? {
-        let project = root.appending(path: "project", directoryHint: .isDirectory)
+    private static func terminalRoundTrip(engine: Engine, client: OpenCodeClient, root: URL, containerProject: String?) async -> Int? {
+        let project = containerProject.map { URL(filePath: $0, directoryHint: .isDirectory) }
+            ?? root.appending(path: "project", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        engine.terminals.launch = TerminalLaunch(
-            command: "/bin/sh", args: [],
-            environment: ["HOME": root.path, "PATH": "/usr/bin:/bin", "TERM": "xterm-256color", "PS1": "$ "])
+        if containerProject != nil {
+            // The production launch: bellocode-exec opens a login shell in the project's container.
+            guard engine.terminals.launch.isContainer else {
+                log("FAIL terminals do not open in the container (\(engine.terminals.launch.command))")
+                return nil
+            }
+        } else {
+            engine.terminals.launch = TerminalLaunch(
+                command: "/bin/sh", args: [],
+                environment: ["HOME": root.path, "PATH": "/usr/bin:/bin", "TERM": "xterm-256color", "PS1": "$ "])
+        }
         let started = ContinuousClock.now
         do {
             let session = try await client.createSession(SessionCreateRequest(directory: project.path, title: "smoke"))
@@ -143,7 +198,7 @@ enum SmokeTest {
                 log("FAIL terminal exit code not received")
                 return nil
             }
-            log("terminal round trip in \(milliseconds(ContinuousClock.now - started)) ms: output read, exit code 3 kept")
+            log("terminal round trip\(containerProject == nil ? " (host shell)" : " in the container") in \(milliseconds(ContinuousClock.now - started)) ms: output read, exit code 3 kept")
             // A second shell left running, to check it ends with the server.
             guard let survivor = await terminals.create(directory: project.path) else { return nil }
             return try await client.terminal(survivor.id).pid
@@ -151,6 +206,61 @@ enum SmokeTest {
             log("FAIL terminal: \(error)")
             return nil
         }
+    }
+
+    /// The image for the container checks, or nil (with the reason printed) when they are skipped.
+    @MainActor
+    private static func containerPlan() async -> String? {
+        let image = ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_IMAGE"] ?? "node:22-bookworm-slim"
+        let runtime = LiveWorkspaceRuntime()
+        let state = await runtime.detect()
+        guard state.isReady else {
+            log("SKIP container checks: \(state.userMessage)")
+            return nil
+        }
+        guard (try? await runtime.image(image)) != nil else {
+            log("SKIP container checks: image \(image) is not present (set BELLOCODE_SMOKE_IMAGE to a local image)")
+            return nil
+        }
+        return image
+    }
+
+    /// The isolation self-check with the real configuration (shell job, PTY, command template, schedule condition,
+    /// terminal) in a temporary project's container.
+    @MainActor
+    private static func containerCheck(engine: Engine, client: OpenCodeClient, project: String, image: String) async -> Bool {
+        try? FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        let started = ContinuousClock.now
+        do {
+            _ = try await client.createSession(SessionCreateRequest(directory: project, title: "smoke container"))
+        } catch {
+            log("FAIL container project: \(error)")
+            return false
+        }
+        var settings = ProjectEnvironmentSettings()
+        settings.image = image
+        await engine.environments.update(project, settings: settings)
+        let environment = engine.environments.environment(for: project)
+        let ready = await waitUntil(timeout: .seconds(60)) {
+            engine.environments.activate(project)
+            return environment.phase == .ready
+        }
+        guard ready else {
+            log("FAIL project container not ready: \(environment.phase.label) \(environment.phase.blocked?.message ?? "")")
+            return false
+        }
+        log("project container ready in \(milliseconds(ContinuousClock.now - started)) ms (\(image))")
+        guard let report = await engine.environments.verifyIsolation(directory: project, full: true) else {
+            log("FAIL isolation check did not run")
+            return false
+        }
+        for check in report.checks { log("  isolation: \(check.name): \(check.outcome.word) - \(check.outcome.detail)") }
+        log("isolation: \(report.summary)")
+        guard report.passed, report.ranInContainer >= 4 else {
+            log("FAIL isolation check")
+            return false
+        }
+        return true
     }
 
     private static func milliseconds(_ duration: Duration) -> Int {

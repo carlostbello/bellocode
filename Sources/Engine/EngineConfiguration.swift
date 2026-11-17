@@ -66,6 +66,9 @@ public struct EngineConfiguration: Sendable {
     public var visualsDirectory: URL?
     /// Off in tests that do not exercise scheduling; the app always starts it.
     public var startsExtras = true
+    /// Containerised execution (docs/features/containers.md). The app sets it for the bundled server; nil in mock
+    /// mode and tests (the Environment UI then says container execution is off).
+    public var containers: ContainerConfiguration?
 
     public init(server: ServerSource, store: ProjectionStore.Location) {
         self.server = server

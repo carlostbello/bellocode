@@ -219,6 +219,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Window ▸ Scheduled Tasks… (M3-B): Settings on its Scheduled Tasks pane; works with no window open.
     @objc func showScheduledTasks(_ sender: Any?) { openSettings(pane: "schedules") }
 
+    /// Window ▸ Containers… / Project Environment… / Verify Container Isolation (M6-A, docs/features/containers.md).
+    @objc func showContainers(_ sender: Any?) { openSettings(pane: "containers") }
+
+    @objc func showEnvironment(_ sender: Any?) {
+        if let directory = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first?.currentProjectDirectory {
+            EnvironmentSettingsModel.preferredDirectory = directory
+            EnvironmentSettingsModel.last?.select(directory)
+        }
+        openSettings(pane: "environment")
+    }
+
+    @objc func verifyIsolation(_ sender: Any?) {
+        openSettings(pane: "containers")
+        guard let engine = runtime?.engine else { return }
+        Task { await engine.environments.verifyIsolation(full: true) }
+    }
+
     @objc func connectProvider(_ sender: Any?) { openConnect(nil) }
 
     @objc func showWelcome(_ sender: Any?) { showOnboarding() }

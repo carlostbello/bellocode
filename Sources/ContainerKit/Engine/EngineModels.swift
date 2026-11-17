@@ -195,9 +195,26 @@ public struct ContainerSummary: Decodable, Sendable, Equatable {
     public var state: String
     public var status: String?
     public var labels: [String: String]
+    /// Creation time, seconds since 1970.
+    public var created: Int64?
+
+    public init(id: String, names: [String], image: String, state: String, status: String? = nil, labels: [String: String],
+                created: Int64? = nil) {
+        self.id = id
+        self.names = names
+        self.image = image
+        self.state = state
+        self.status = status
+        self.labels = labels
+        self.created = created
+    }
+
+    public var name: String { (names.first ?? id).trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+    public var isRunning: Bool { state == "running" }
 
     enum CodingKeys: String, CodingKey {
         case id = "Id", names = "Names", image = "Image", state = "State", status = "Status", labels = "Labels"
+        case created = "Created"
     }
 }
 
@@ -208,6 +225,10 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
     public var state: State
     public var config: Config
     public var ports: [String: [PortBinding]?]?
+    /// Execs created in this container that the daemon still knows (running or recently ended).
+    public var execIDs: [String]?
+    /// The host configuration as created (mounts, limits, network): what `inspect` reveals to anyone with the socket.
+    public var hostConfig: HostConfig?
 
     public struct State: Decodable, Sendable, Equatable {
         public var status: String
@@ -219,11 +240,13 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
     public struct Config: Decodable, Sendable, Equatable {
         public var labels: [String: String]?
         public var image: String?
-        enum CodingKeys: String, CodingKey { case labels = "Labels", image = "Image" }
+        /// The container's own environment (never secrets: those travel per exec).
+        public var env: [String]?
+        enum CodingKeys: String, CodingKey { case labels = "Labels", image = "Image", env = "Env" }
     }
     enum CodingKeys: String, CodingKey {
         case id = "Id", name = "Name", image = "Image", state = "State", config = "Config"
-        case networkSettings = "NetworkSettings"
+        case networkSettings = "NetworkSettings", execIDs = "ExecIDs", hostConfig = "HostConfig"
     }
     enum NetworkKeys: String, CodingKey { case ports = "Ports" }
 
@@ -234,6 +257,8 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
         image = try c.decode(String.self, forKey: .image)
         state = try c.decode(State.self, forKey: .state)
         config = try c.decode(Config.self, forKey: .config)
+        execIDs = try? c.decodeIfPresent([String].self, forKey: .execIDs)
+        hostConfig = try? c.decodeIfPresent(HostConfig.self, forKey: .hostConfig)
         if let network = try? c.nestedContainer(keyedBy: NetworkKeys.self, forKey: .networkSettings) {
             ports = try? network.decodeIfPresent([String: [PortBinding]?].self, forKey: .ports)
         }
@@ -302,6 +327,6 @@ struct WaitResponse: Decodable {
     enum CodingKeys: String, CodingKey { case statusCode = "StatusCode" }
 }
 
-struct EngineErrorBody: Decodable {
+struct ContainerErrorBody: Decodable {
     var message: String
 }
