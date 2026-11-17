@@ -73,7 +73,14 @@ final class AppRuntime {
             executableURL: helpers.appending(path: "opencode"),
             dataRoot: dataRoot ?? applicationSupport().appending(path: "opencode", directoryHint: .isDirectory),
             helpersDirectory: helpers,
-            expectedVersion: bundle.object(forInfoDictionaryKey: "BelloCodeOpenCodeVersion") as? String)
+            expectedVersion: bundle.object(forInfoDictionaryKey: "BelloCodeOpenCodeVersion") as? String,
+            pluginDirectory: bundledPluginDirectory(bundle: bundle))
+    }
+
+    /// `Contents/Resources/opencode-plugin` (the "bellocode" server plugin, docs/features/orchestration.md), if bundled.
+    nonisolated static func bundledPluginDirectory(bundle: Bundle = .main) -> URL? {
+        let url = bundle.bundleURL.appending(path: "Contents/Resources/opencode-plugin", directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: url.appending(path: "server.ts").path) ? url : nil
     }
 
     nonisolated static func applicationSupport() -> URL {
@@ -138,6 +145,17 @@ final class AppRuntime {
     func issueMockBrowserCommand(_ sessionID: SessionID, _ action: OpenCodeKit.JSONValue) async -> MockBrowserOutcome? {
         guard let mockServer, let data = try? action.encodedData(), let value = try? MockOpenCode.JSONValue.parse(data) else { return nil }
         return await mockServer.issueBrowserCommand(sessionID: sessionID.rawValue, action: value)
+    }
+
+    /// Mock mode: children report to their parent and wake it, as opencode does (orchestration snapshots).
+    func setMockChildReports(_ enabled: Bool) async {
+        await mockServer?.setChildReports(enabled)
+    }
+
+    /// Mock mode: what the plugin's `create_threads` does (top-level threads with `metadata.bellocode`, one group).
+    func mockCreateThreads(by creator: SessionID, titles: [String]) async -> [SessionID] {
+        guard let mockServer else { return [] }
+        return await mockServer.simulateCreateThreads(by: creator.rawValue, titles: titles).map { SessionID($0) }
     }
 
     /// Takes the mock server off the network (snapshots of the offline state). No effect outside mock mode.

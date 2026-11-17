@@ -60,6 +60,11 @@ enum SmokeTest {
         }
         log("GET /api/info without credentials -> 401 (as expected)")
 
+        guard await pluginCheck(client: OpenCodeClient(endpoint: endpoint), root: root) else {
+            await engine.stop()
+            return false
+        }
+
         guard let shellPID = await terminalRoundTrip(engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root) else {
             await engine.stop()
             return false
@@ -81,6 +86,30 @@ enum SmokeTest {
         guard shellGone else { return false }
         log("PASS")
         return true
+    }
+
+    /// The bundled "bellocode" plugin (docs/features/orchestration.md): loaded from `Contents/Resources/opencode-plugin`,
+    /// compatible contract, every orchestration tool registered for a location.
+    @MainActor
+    private static func pluginCheck(client: OpenCodeClient, root: URL) async -> Bool {
+        guard let directory = AppRuntime.bundledPluginDirectory() else {
+            log("FAIL no Contents/Resources/opencode-plugin/server.ts in the bundle")
+            return false
+        }
+        let project = root.appending(path: "plugin-project", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        do {
+            let info = try await client.orchestrationInfo(directory: project.path, attempts: 12)
+            guard info.isCompatible, info.missingTools.isEmpty else {
+                log("FAIL bellocode plugin contract \(info.contract) (expected \(OrchestrationContract.version)); missing tools: \(info.missingTools)")
+                return false
+            }
+            log("bellocode plugin loaded from \(directory.lastPathComponent): contract \(info.contract), \(info.tools.count) tools")
+            return true
+        } catch {
+            log("FAIL bellocode plugin not reachable: \(error)")
+            return false
+        }
     }
 
     /// A terminal through the production path (TerminalService, TerminalStream) on the bundled server's PTY daemon.

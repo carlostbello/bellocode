@@ -181,6 +181,15 @@ enum MainMenu {
         menu.add(.deleteThread)
         menu.addItem(.separator())
         menu.add(.nextNeedsAttention)
+        menu.addItem(.separator())
+        // M3-A: the Agents panel (docs/features/orchestration.md).
+        let agents = NSMenu(title: "Agents")
+        for command in [ShellCommand.showAgents, .nextAgent, .previousAgent, .openAgent, .followUpAgent, .stopAgentTree] {
+            agents.add(command)
+        }
+        agents.addItem(.separator())
+        agents.add(.openParentThread)
+        menu.addItem(submenu: agents, title: "Agents")
         return menu
     }
 

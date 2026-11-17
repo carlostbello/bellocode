@@ -264,12 +264,20 @@ public struct TodoListContent: Sendable, Equatable {
 
 public enum SubagentStatus: Sendable, Equatable {
     case running, done, failed, unknown
+    /// The child's own run ended while its children still work (live state, docs/features/orchestration.md).
+    case waitingOnChildren
+    /// The child needs an approval or an answer.
+    case needsYou
+    case stopped
     public var label: String {
         switch self {
         case .running: "Running"
         case .done: "Done"
         case .failed: "Failed"
         case .unknown: "Unknown"
+        case .waitingOnChildren: "Waiting on children"
+        case .needsYou: "Needs you"
+        case .stopped: "Stopped"
         }
     }
 }

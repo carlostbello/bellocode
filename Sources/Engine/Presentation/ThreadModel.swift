@@ -10,11 +10,20 @@ import Observation
 @Observable
 public final class MessageModel: Identifiable {
     public let id: MessageID
+    /// The message as shown: the server's copy with sub-agent cards decorated with their child's live state.
     public private(set) var message: Message
+    /// The server's copy (revision order is decided on it).
+    private var server: Message
+    /// Increases each time the decoration changes, so `revision` changes with it and caches keyed by it refresh.
+    private var overlayBump = 0
+    private let childStatus: ((SessionID) -> ChildTaskStatus?)?
 
-    init(_ message: Message) {
+    init(_ message: Message, childStatus: ((SessionID) -> ChildTaskStatus?)? = nil) {
         id = message.id
+        server = message
         self.message = message
+        self.childStatus = childStatus
+        if childStatus != nil { self.message = decorated() }
     }
 
     /// Cache parsed Markdown and layout by `(id, revision)` and the rendering parameters.
@@ -23,9 +32,42 @@ public final class MessageModel: Identifiable {
     /// Applies a newer copy; returns whether anything changed.
     @discardableResult
     func update(_ newer: Message, force: Bool = false) -> Bool {
-        guard force ? newer != message : newer.revision > message.revision else { return false }
-        message = newer
+        guard force ? newer != server : newer.revision > server.revision else { return false }
+        server = newer
+        message = decorated()
         return true
+    }
+
+    /// The child IDs of this message's sub-agent cards.
+    var childIDs: [SessionID] {
+        server.parts.compactMap { if case .subagent(let reference) = $0.content { reference.childSessionID } else { nil } }
+    }
+
+    /// Re-reads the children's live state; returns whether the shown message changed.
+    @discardableResult
+    func refreshOverlay() -> Bool {
+        let next = decorated()
+        guard next.parts != message.parts else { return false }
+        overlayBump += 1
+        message = next
+        message.revision = server.revision + overlayBump
+        return true
+    }
+
+    private func decorated() -> Message {
+        guard let childStatus, server.parts.contains(where: { if case .subagent = $0.content { true } else { false } }) else {
+            var copy = server
+            copy.revision = server.revision + overlayBump
+            return copy
+        }
+        var copy = server
+        copy.revision = server.revision + overlayBump
+        for index in copy.parts.indices {
+            guard case .subagent(var reference) = copy.parts[index].content, let child = reference.childSessionID else { continue }
+            reference.liveStatus = childStatus(child)
+            copy.parts[index].content = .subagent(reference)
+        }
+        return copy
     }
 }
 
@@ -294,7 +336,7 @@ public final class ThreadModel: Identifiable {
             guard generation == loadGeneration, !Task.isCancelled else { return }
             var older: [MessageID] = []
             for message in page.messages where models[message.id] == nil && message.sortKey < key {
-                models[message.id] = MessageModel(message)
+                models[message.id] = makeModel(message)
                 keys[message.id] = message.sortKey
                 older.append(message.id)
             }
@@ -343,7 +385,7 @@ public final class ThreadModel: Identifiable {
                 existing.update(message, force: true)
                 newModels[message.id] = existing
             } else {
-                newModels[message.id] = MessageModel(message)
+                newModels[message.id] = makeModel(message)
             }
             newKeys[message.id] = message.sortKey
         }
@@ -432,13 +474,23 @@ public final class ThreadModel: Identifiable {
             } else {
                 // Only messages inside the loaded window; older ones arrive through `loadOlder()`.
                 if hasOlder, let first = ids.first, let firstKey = keys[first], message.sortKey < firstKey { continue }
-                models[message.id] = MessageModel(message)
+                models[message.id] = makeModel(message)
                 keys[message.id] = message.sortKey
                 insert(message.id, key: message.sortKey, into: &ids)
                 listChanged = true
             }
         }
         if listChanged { messageIDs = ids }
+    }
+
+    private func makeModel(_ message: Message) -> MessageModel {
+        guard let engine else { return MessageModel(message) }
+        return MessageModel(message, childStatus: { [weak engine] id in engine?.orchestration.status(of: id) })
+    }
+
+    /// Children whose state changed: re-decorates the sub-agent cards that show them (narrow: only those messages).
+    func refreshChildStatus(_ children: Set<SessionID>) {
+        for model in models.values where model.childIDs.contains(where: children.contains) { model.refreshOverlay() }
     }
 
     private func insert(_ id: MessageID, key: MessageSortKey, into ids: inout [MessageID]) {

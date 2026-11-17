@@ -309,11 +309,69 @@ public struct SubagentReference: Hashable, Sendable, Codable {
     public var childSessionID: SessionID?
     public var agent: String?
     public var description: String?
+    /// The child thread's live state, filled in by the Engine for open threads (the call itself completes as soon as a
+    /// background child starts). nil when unknown; the call status applies then.
+    public var liveStatus: ChildTaskStatus?
 
-    public init(call: ToolCall, childSessionID: SessionID? = nil, agent: String? = nil, description: String? = nil) {
+    public init(
+        call: ToolCall, childSessionID: SessionID? = nil, agent: String? = nil, description: String? = nil,
+        liveStatus: ChildTaskStatus? = nil
+    ) {
         self.call = call
         self.childSessionID = childSessionID
         self.agent = agent
         self.description = description
+        self.liveStatus = liveStatus
     }
+}
+
+/// A child task's state as cards and the Agents panel show it (docs/features/orchestration.md). Always shown with a
+/// text label, never by colour alone.
+public enum ChildTaskStatus: String, Hashable, Sendable, Codable, CaseIterable {
+    case running
+    /// Its own run ended while its children still run.
+    case waitingOnChildren
+    case needsApproval
+    case needsAnswer
+    case failed
+    case stopping
+    case stopped
+    case done
+    case idle
+    case unknown
+
+    public var label: String {
+        switch self {
+        case .running: "Running"
+        case .waitingOnChildren: "Waiting on children"
+        case .needsApproval: "Needs approval"
+        case .needsAnswer: "Needs answer"
+        case .failed: "Failed"
+        case .stopping: "Stopping"
+        case .stopped: "Stopped"
+        case .done: "Done"
+        case .idle: "Idle"
+        case .unknown: "Status unknown"
+        }
+    }
+
+    public var symbolName: String {
+        switch self {
+        case .running: "circle.dotted"
+        case .waitingOnChildren: "hourglass"
+        case .needsApproval: "hand.raised.fill"
+        case .needsAnswer: "questionmark.bubble.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .stopping: "stop.circle"
+        case .stopped: "stop.fill"
+        case .done: "checkmark.circle"
+        case .idle: "circle"
+        case .unknown: "questionmark.circle"
+        }
+    }
+
+    /// Needs the person (approval or answer).
+    public var isBlocked: Bool { self == .needsApproval || self == .needsAnswer }
+    /// Work is still going on here or below.
+    public var isActive: Bool { self == .running || self == .waitingOnChildren || self == .stopping || isBlocked }
 }

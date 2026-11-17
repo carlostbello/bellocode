@@ -30,6 +30,7 @@ struct SnapshotRunner {
 
     func run() async -> Bool {
         if name == "nav" { return await runNavigation() }
+        if name == "orch" { return await runOrchestration() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

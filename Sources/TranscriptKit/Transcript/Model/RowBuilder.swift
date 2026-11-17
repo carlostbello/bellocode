@@ -97,6 +97,10 @@ public enum RowBuilder {
         }
         switch message.kind {
         case .user(let user):
+            // opencode's child report to its parent (`<subagent …>`) is not the person's message: one compact line.
+            if let report = subagentReport(user.text) {
+                return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: report)))]
+            }
             let files = message.parts.compactMap { part -> FileChip? in
                 guard case .file(let file) = part.content else { return nil }
                 return chip(file)
@@ -126,7 +130,9 @@ public enum RowBuilder {
                                     text: text, isStreaming: part.isStreaming,
                                     duration: context.reasoningDurations[part.id]))))
                 case .tool(let call):
-                    if let todo = todoList(call) {
+                    if let card = sendToUserMarkdown(call) {
+                        result.append(row(.part(part.id), .assistant, .markdown(text: card, isStreaming: !call.status.isFinished)))
+                    } else if let todo = todoList(call) {
                         result.append(row(.part(part.id), .assistant, .todo(todo)))
                     } else {
                         result.append(
@@ -256,16 +262,69 @@ public enum RowBuilder {
 
     static func subagentCard(_ reference: SubagentReference) -> SubagentCardContent {
         let call = reference.call
-        let status: SubagentStatus =
+        var status: SubagentStatus =
             switch call.status {
             case .streamingInput, .running: .running
             case .completed: .done
             case .failed: .failed
             case .unknown: .unknown
             }
+        // A background child outlives its call: the Engine's live state of the child wins once the call succeeded.
+        if call.status != .failed, let live = reference.liveStatus {
+            status =
+                switch live {
+                case .running, .stopping: .running
+                case .waitingOnChildren: .waitingOnChildren
+                case .needsApproval, .needsAnswer: .needsYou
+                case .failed: .failed
+                case .stopped: .stopped
+                case .done, .idle: .done
+                case .unknown: .unknown
+                }
+        }
+        // With a live state the call's own duration (the time to start a background child) would mislead: omit it.
         return SubagentCardContent(
             title: reference.description ?? "Sub-agent task", agent: reference.agent, status: status,
-            childSessionID: reference.childSessionID, duration: duration(call))
+            childSessionID: reference.childSessionID, duration: reference.liveStatus == nil ? duration(call) : nil)
+    }
+
+    /// "Child task “Write CHANGELOG entry” finished: Drafted the 2.0 entry…" for opencode's report message
+    /// `<subagent sessionID="…" state="completed|error|cancelled|running" description="…">body</subagent>`; nil otherwise.
+    static func subagentReport(_ text: String) -> String? {
+        guard text.hasPrefix("<subagent "), let close = text.firstIndex(of: ">") else { return nil }
+        let head = String(text[..<close])
+        func attribute(_ name: String) -> String? {
+            guard let start = head.range(of: name + "=\"") else { return nil }
+            let rest = head[start.upperBound...]
+            guard let end = rest.firstIndex(of: "\"") else { return nil }
+            return String(rest[..<end])
+        }
+        let description = attribute("description") ?? "Sub-agent"
+        let verb =
+            switch attribute("state") {
+            case "completed": "finished"
+            case "error": "failed"
+            case "cancelled": "was stopped"
+            case "running": "reported (still working)"
+            default: "reported"
+            }
+        var body = String(text[text.index(after: close)...])
+        if let end = body.range(of: "</subagent>", options: .backwards) { body = String(body[..<end.lowerBound]) }
+        let summary = body.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        let clipped = summary.count > 160 ? String(summary.prefix(159)) + "…" : summary
+        return "↩ “\(description)” \(verb)" + (clipped.isEmpty ? "" : ": " + clipped)
+    }
+
+    /// The bellocode plugin's `send_to_user` (content the person must read mid-turn) as a quoted Markdown card with a
+    /// heading, instead of a tool line. nil for other tools or while the input is still streaming in.
+    static func sendToUserMarkdown(_ call: ToolCall) -> String? {
+        guard call.name == "send_to_user", call.status != .failed, let raw = call.input,
+            let object = try? JSONSerialization.jsonObject(with: Data(raw.text.utf8)) as? [String: Any],
+            let markdown = object["markdown"] as? String, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        let title = (object["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "For you"
+        let quoted = markdown.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
+        return "> **\(title)**\n>\n" + quoted
     }
 
     static func duration(_ call: ToolCall) -> TimeInterval? {

@@ -92,11 +92,13 @@ enum EventReducer {
                 if session.agent == nil { session.agent = p.agent }
                 if session.model == nil { session.model = Mapping.model(p.model) }
                 if session.parentID == nil { session.parentID = p.parentID.map { SessionID($0) } }
+                if session.metadata == nil { session.metadata = Mapping.raw(p.metadata) }
                 state.putSession(session, into: &reduction)
             } else {
                 let session = Session(
                     id: id, projectID: ProjectID(p.projectID), parentID: p.parentID.map { SessionID($0) }, title: p.title,
-                    directory: p.location.directory, agent: p.agent, model: Mapping.model(p.model), created: at, updated: at)
+                    directory: p.location.directory, agent: p.agent, model: Mapping.model(p.model), created: at, updated: at,
+                    metadata: Mapping.raw(p.metadata))
                 state.putSession(session, into: &reduction)
             }
         case .sessionRenamed(let p):

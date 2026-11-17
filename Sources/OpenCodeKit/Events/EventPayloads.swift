@@ -27,6 +27,8 @@ public enum EventPayload {
         public var agent: String?
         public var model: ModelRef?
         public var version: String?
+        /// Client-owned metadata at creation (2.3.0 includes it; the bellocode plugin's `metadata.bellocode`).
+        public var metadata: JSONValue?
     }
 
     /// `session.renamed`.

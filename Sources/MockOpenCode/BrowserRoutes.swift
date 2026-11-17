@@ -143,6 +143,7 @@ extension MockOpenCodeServer {
 
     func routeBrowser(_ method: String, _ parts: [String], _ request: HTTPRequest) -> ResponsePlan? {
         if parts.count == 4, parts[0] == "api", parts[1] == "rpc", method == "POST" {
+            if parts[2] == "bellocode" { return orchestrationRPC(parts[3], directory: request.query.first { $0.name == "location[directory]" }?.value) }
             guard parts[2] == "experimental.browser" else {
                 return .response(.error(400, tag: "RpcError", message: "No RPC is registered for \(parts[2]).", extra: [("type", "unavailable")]))
             }

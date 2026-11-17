@@ -20,6 +20,9 @@ public struct ServerConfiguration: Sendable {
     public var expectedVersion: String?
     /// Added last, overriding the defaults. Never put credentials here.
     public var extraEnvironment: [String: String]
+    /// The bundled "bellocode" plugin directory (`Contents/Resources/opencode-plugin`). When set, the server is started
+    /// with `OPENCODE_CONFIG_CONTENT` listing it (`OrchestrationContract.serverConfig`), so it loads by local path.
+    public var pluginDirectory: URL?
 
     /// Limit for the ready line plus a verified `GET /api/info`.
     public var startTimeout: Duration
@@ -40,6 +43,7 @@ public struct ServerConfiguration: Sendable {
         clientName: String = "bellocode",
         expectedVersion: String? = nil,
         extraEnvironment: [String: String] = [:],
+        pluginDirectory: URL? = nil,
         startTimeout: Duration = .seconds(20),
         stopGracePeriod: Duration = .seconds(3),
         restartBackoff: BackoffPolicy = BackoffPolicy(initial: .milliseconds(200), maximum: .seconds(30)),
@@ -54,6 +58,7 @@ public struct ServerConfiguration: Sendable {
         self.clientName = clientName
         self.expectedVersion = expectedVersion
         self.extraEnvironment = extraEnvironment
+        self.pluginDirectory = pluginDirectory
         self.startTimeout = startTimeout
         self.stopGracePeriod = stopGracePeriod
         self.restartBackoff = restartBackoff
@@ -90,6 +95,9 @@ public struct ServerConfiguration: Sendable {
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
             "OPENCODE_DISABLE_CLAUDE_CODE": "1",
         ]
+        if let pluginDirectory {
+            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(pluginDirectory: pluginDirectory)
+        }
         environment.merge(extraEnvironment) { _, extra in extra }
         environment["OPENCODE_PASSWORD"] = credentials.password
         return environment

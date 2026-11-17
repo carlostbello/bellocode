@@ -677,17 +677,18 @@ public enum LayoutEngine {
         let size = CGSize(width: width, height: fragment.height + 18)
         let statusColor: CGColor =
             switch card.status {
-            case .running: theme.running
+            case .running, .waitingOnChildren: theme.running
             case .done: theme.success
-            case .failed: theme.failure
-            case .unknown: theme.secondary
+            case .failed, .needsYou: theme.failure
+            case .unknown, .stopped: theme.secondary
             }
         let glyph: Glyph =
             switch card.status {
-            case .running: .running
+            case .running, .waitingOnChildren: .running
             case .done: .check
             case .failed: .cross
-            case .unknown: .dot
+            case .needsYou: .warning
+            case .unknown, .stopped: .dot
             }
         var labels = [Label(glyph: glyph, glyphColor: statusColor, point: .zero, glyphRect: CGRect(x: 12, y: 11, width: 14, height: 14))]
         var hotspots: [Hotspot] = []

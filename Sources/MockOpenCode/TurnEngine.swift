@@ -22,6 +22,8 @@ struct InboxItem: Sendable {
     var json: JSONValue
     /// Set by an interrupt without `resume`: the item waits for the next prompt instead of starting a new run.
     var held = false
+    /// A synthetic item (a child's report): its message JSON, delivered as a `synthetic` message.
+    var synthetic: JSONValue? = nil
 }
 
 struct TurnHandle {
@@ -78,6 +80,7 @@ extension MockOpenCodeServer {
     ) -> JSONValue {
         let inboxID = id ?? makeID("msg")
         let created = now()
+        state.cascadeStopped.remove(sessionID)
         var fields: [(String, JSONValue?)] = [("text", .string(text))]
         for key in ["files", "agents", "skills"] { fields.append((key, attachments?[key])) }
         let payload = JSONValue.compact(fields)
@@ -124,6 +127,7 @@ extension MockOpenCodeServer {
     /// Stops the running turn, its blocked requests and its running children. Returns whether anything was running.
     func interrupt(_ sessionID: String, resume: Bool) -> Bool {
         for child in state.sessionOrder where state.sessions[child]?.parentID == sessionID {
+            if turns[child] != nil { state.cascadeStopped.insert(sessionID) }
             _ = interrupt(child, resume: false)
         }
         guard let handle = turns[sessionID] else { return false }
@@ -230,14 +234,74 @@ extension MockOpenCodeServer {
         updated.outcome = outcome
         updated.tokens = updated.tokens + ctx.total
         state.sessions[sessionID] = updated
+        if orchestrationPluginEnabled { writeChildSummary(sessionID, outcome: outcome) }
+        if state.childReports, let settled = state.sessions[sessionID] { reportToParent(child: settled, outcome: outcome) }
     }
 
     private func deliver(_ item: InboxItem, _ ctx: inout TurnContext) {
         publish(
             "session.inbox.delivered", ["sessionID": .string(ctx.sessionID), "inboxID": .string(item.id)],
             location: ctx.directory, durable: ctx.sessionID)
+        if let synthetic = item.synthetic {
+            state.messages[ctx.sessionID, default: []].append(MockMessage(id: item.id, kind: .raw(type: "synthetic", json: synthetic)))
+            return
+        }
         state.messages[ctx.sessionID, default: []].append(
             .user(id: item.id, text: item.text, time: now(), attachments: item.attachments))
+    }
+
+    /// opencode's report of a child round (2.3.0 `SubagentCompletion.deliver`, verified on the real binary): a steer
+    /// synthetic `<subagent sessionID=… state=… description=…>` into the parent's inbox, which wakes the parent.
+    private func reportToParent(child: MockSession, outcome: String) {
+        guard let parentID = child.parentID, state.sessions[parentID] != nil else { return }
+        let stateName = outcome == "succeeded" ? "completed" : outcome == "failed" ? "error" : "cancelled"
+        let body = outcome == "succeeded" ? (lastAssistantText(child.id).isEmpty ? "Subagent completed without a text response." : lastAssistantText(child.id)) : outcome == "failed" ? "Subagent failed" : "Subagent cancelled"
+        let description = child.metadata?["bellocode"]?["description"]?.stringValue ?? child.title ?? "subagent"
+        let text = "<subagent sessionID=\"\(child.id)\" state=\"\(stateName)\" description=\"\(description)\">\n\(body)\n</subagent>"
+        let metadata: JSONValue = [
+            "source": "subagent", "childID": .string(child.id), "agent": .string(child.agent ?? "general"),
+            "state": .string(stateName),
+        ]
+        let inboxID = makeID("msg")
+        let created = now()
+        let payload: JSONValue = ["text": .string(text), "description": .string(description), "metadata": metadata]
+        let json: JSONValue = [
+            "id": .string(inboxID), "sessionID": .string(parentID), "time": ["created": .int(Int(created))],
+            "type": "synthetic", "payload": payload, "delivery": "steer",
+        ]
+        let message: JSONValue = [
+            "id": .string(inboxID), "type": "synthetic", "text": .string(text), "description": .string(description),
+            "metadata": metadata, "time": ["created": .int(Int(created))],
+        ]
+        let cut = outcome == "interrupted" && state.cascadeStopped.contains(parentID)
+        state.inbox[parentID, default: [:]][inboxID] = json
+        var item = InboxItem(
+            id: inboxID, text: text, attachments: nil, delivery: "steer",
+            script: cut ? TurnScript(steps: []) : selectScript(sessionID: parentID, text: ""), json: json, synthetic: message)
+        item.held = cut
+        pendingInbox[parentID, default: []].append(item)
+        publish(
+            "session.inbox.enqueued",
+            [
+                "inboxID": .string(inboxID), "sessionID": .string(parentID),
+                "item": ["type": "synthetic", "payload": payload, "delivery": "steer"],
+            ], location: state.sessions[parentID]?.directory, durable: parentID)
+        if !cut { startRunner(parentID) }
+    }
+
+    /// What the bellocode plugin writes when a child settles: `metadata.bellocode.summary/outcome/settledAt`.
+    private func writeChildSummary(_ sessionID: String, outcome: String) {
+        guard var session = state.sessions[sessionID], session.parentID != nil || session.metadata?["bellocode"] != nil else { return }
+        var root = session.metadata?.objectEntries ?? [:]
+        var bello = root["bellocode"]?.objectEntries ?? [:]
+        bello["summary"] = .string(String(lastAssistantText(sessionID).prefix(280)))
+        bello["outcome"] = .string(outcome)
+        bello["settledAt"] = .int(Int(now()))
+        root["bellocode"] = .object(bello.map { ($0.key, $0.value) }.sorted { $0.0 < $1.0 })
+        let metadata = JSONValue.object(root.map { ($0.key, $0.value) }.sorted { $0.0 < $1.0 })
+        session.metadata = metadata
+        state.sessions[sessionID] = session
+        publish("session.metadata.updated", ["sessionID": .string(sessionID), "metadata": metadata], durable: sessionID)
     }
 
     // MARK: Steps
@@ -473,13 +537,18 @@ extension MockOpenCodeServer {
     }
 
     private func runSubagent(_ step: SubagentStep, _ ctx: inout TurnContext) async throws {
-        let input: JSONValue = [
-            "agent": .string(step.agent), "description": .string(step.description), "prompt": .string(step.prompt),
-        ]
-        _ = try await beginTool(name: "subagent", input: input, pacing: nil, &ctx)
+        let delegated = step.tool == "delegate_task"
+        let input: JSONValue =
+            delegated
+            ? ["agent": .string(step.agent), "description": .string(step.description), "task": .string(step.prompt)]
+            : ["agent": .string(step.agent), "description": .string(step.description), "prompt": .string(step.prompt)]
+        _ = try await beginTool(name: delegated ? "delegate_task" : "subagent", input: input, pacing: nil, &ctx)
         let child = makeSession(
-            parentID: ctx.sessionID, directory: ctx.directory, title: "\(step.description) (@\(step.agent) subagent)",
-            agent: step.agent)
+            parentID: ctx.sessionID, directory: ctx.directory,
+            title: delegated ? step.description : "\(step.description) (@\(step.agent) subagent)", agent: step.agent,
+            metadata: delegated
+                ? ["bellocode": ["kind": "delegated", "by": .string(ctx.sessionID), "description": .string(step.description), "workspace": "shared"]]
+                : nil)
         toolProgress(["sessionID": .string(child.id)], ctx)
         var script = step.script
         script.agent = script.agent ?? step.agent

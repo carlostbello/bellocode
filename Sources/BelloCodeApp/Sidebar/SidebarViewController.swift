@@ -246,7 +246,31 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             let visible = Set(projects.flatMap { $0.sections.values.flatMap { $0 } })
             attention = attention.filter(visible.contains)
         }
-        return SidebarTree.Input(attention: attention, projects: projects, grouping: workspace.grouping, isFiltering: !filter.isEmpty)
+        var input = SidebarTree.Input(attention: attention, projects: projects, grouping: workspace.grouping, isFiltering: !filter.isEmpty)
+        (input.lineage, input.nestedUnder) = Self.lineageInput(workspace.engine.orchestration, hidden: hidden)
+        return input
+    }
+
+    /// Children and fan-out groups to nest (docs/features/orchestration.md). Reads `structureRevision` so the tree
+    /// is rebuilt when a link appears or goes, never when a child only changes state.
+    static func lineageInput(_ orchestration: OrchestrationService?, hidden: Set<SessionID>) -> ([SessionID: [SessionID]], [SessionID: SessionID]) {
+        guard let orchestration else { return ([:], [:]) }
+        _ = orchestration.structureRevision
+        var lineage: [SessionID: [SessionID]] = [:]
+        var nestedUnder: [SessionID: SessionID] = [:]
+        for (parent, children) in orchestration.graph.children {
+            let visible = children.filter { !hidden.contains($0) && orchestration.graph.sessions[$0]?.isArchived == false }
+            if !visible.isEmpty { lineage[parent] = visible }
+        }
+        let created = orchestration.graph.nodes.values.filter {
+            $0.kind == .created && $0.parentID == nil && !hidden.contains($0.id) && orchestration.graph.sessions[$0.id]?.isArchived == false
+        }
+        for node in created.sorted(by: { $0.created < $1.created }) {
+            guard let creator = node.createdBy, orchestration.graph.sessions[creator] != nil, creator != node.id else { continue }
+            nestedUnder[node.id] = creator
+            lineage[creator, default: []].append(node.id)
+        }
+        return (lineage, nestedUnder)
     }
 
     /// Reads engine state (observed) and applies the new tree as an identity diff.
@@ -326,6 +350,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     /// Expands groups, projects and sections unless the user collapsed them (everything while filtering).
+    /// Expands a thread row that has nested children or fan-out threads (snapshots; the person uses the disclosure).
+    func expandThread(_ id: SessionID) {
+        guard let item = items[.thread(id)] else { return }
+        outlineView.expandItem(item)
+    }
+
     private func expandDefaults(_ items: [SidebarItem]) {
         let filtering = !workspace.filterText.isEmpty
         let state = workspace.state
@@ -460,6 +490,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         guard let item = item as? SidebarItem, workspace.filterText.isEmpty else { return nil }
         switch item.id {
         case .thread(let id):
+            // Nested rows (children, fan-out threads) follow their parent; they are not dragged on their own.
+            if case .thread = parentMap[item.id] ?? nil { return nil }
             let writer = NSPasteboardItem()
             writer.setString(id.rawValue, forType: .sidebarThread)
             writer.setString(workspace.session(id)?.displayTitle ?? "", forType: .string)

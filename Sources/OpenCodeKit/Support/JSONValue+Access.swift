@@ -17,6 +17,12 @@ extension JSONValue {
         if case .object(let value) = self { value } else { nil }
     }
 
+    /// The element at `index` of an array, else nil.
+    public subscript(index: Int) -> JSONValue? {
+        guard case .array(let value) = self, value.indices.contains(index) else { return nil }
+        return value[index]
+    }
+
     public var isNull: Bool {
         if case .null = self { true } else { false }
     }

@@ -89,6 +89,8 @@ let targets: [Target] =
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
     + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine"], testDependencies: ["MockOpenCode"])
+    // M3-A: Agents panel, lineage rows, header strip text (docs/features/orchestration.md). Engine owns the task graph.
+    + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
     + [
         // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
         .executableTarget(
@@ -102,7 +104,7 @@ let targets: [Target] =
             name: "BelloCodeApp",
             dependencies: [
                 "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
-                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI",
+                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI",
             ],
             swiftSettings: swiftSettings
         ),
@@ -128,7 +130,9 @@ let targets: [Target] =
         // Window shell logic (sidebar tree, commands, restoration, undo, switch timing). `@testable import BelloCodeApp`.
         .testTarget(
             name: "BelloCodeAppTests",
-            dependencies: ["BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore"],
+            dependencies: [
+                "BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore", "OrchestrationUI",
+            ],
             swiftSettings: testSwiftSettings
         ),
     ]

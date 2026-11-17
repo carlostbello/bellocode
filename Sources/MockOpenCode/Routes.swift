@@ -20,6 +20,14 @@ struct ServerState: Sendable {
     var inbox: [String: [String: JSONValue]] = [:]
     /// `always` replies: session id → "action\u{0}resource".
     var allowed: [String: Set<String>] = [:]
+    /// opencode's child reports: a child going idle posts `<subagent …>` to its parent and wakes it
+    /// (`MockOpenCodeServer.setChildReports`). Off by default so older scripted tests keep their exact message lists.
+    var childReports = false
+    /// The simulated bellocode plugin answers `bellocode.info` (`setOrchestrationPlugin`).
+    var orchestrationPlugin = true
+    /// Parents stopped with their children: their children's cancelled reports are recorded without waking them (the
+    /// plugin cuts that restart on the real server). Cleared by the parent's next prompt.
+    var cascadeStopped: Set<String> = []
 
     init(scenario: Scenario) {
         defaultDirectory = scenario.defaultDirectory
