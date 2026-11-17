@@ -234,6 +234,12 @@ export function renderTranscript(
 }
 
 /** The instruction entry every session gets (`bellocode.orchestration`). Short: the tool descriptions carry details. */
+/** A client-MCP tool of the BelloCode app (namespace `bellocode_app`). */
+export function isAppTool(tool: { id?: string; name?: string; options?: { namespace?: string } }): boolean {
+  if (tool.options?.namespace === "bellocode_app") return true
+  return typeof tool.id === "string" && tool.id.startsWith("bellocode_app_")
+}
+
 /** The app's own tools (`bellocode_app_*`, present while BelloCode runs): one line each, kept short. */
 export const extrasGuidance = [
   "While the BelloCode app runs it also offers bellocode_app_* tools:",

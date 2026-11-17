@@ -113,6 +113,12 @@ describe("text", () => {
     expect(leaf.length).toBeLessThan(2400)
   })
 
+  test("app tools are recognised by namespace or id", () => {
+    expect(L.isAppTool({ id: "bellocode_app_html_render" })).toBe(true)
+    expect(L.isAppTool({ name: "html_render", options: { namespace: "bellocode_app" } })).toBe(true)
+    expect(L.isAppTool({ id: "delegate_task" })).toBe(false)
+  })
+
   test("guidance names the app tools briefly", () => {
     const text = L.guidance({ depth: 0, limits: L.DEFAULT_LIMITS, delegated: false })
     for (const tool of ["schedule_task", "watch_pull_request", "request_secret", "secret_file", "html_render", "html_preview"])
