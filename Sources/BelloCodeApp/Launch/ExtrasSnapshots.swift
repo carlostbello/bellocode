@@ -175,6 +175,10 @@ extension SnapshotRunner {
         settingsWindow.window?.setFrameOrigin(NSPoint(x: 60, y: 60))
         try? await Task.sleep(for: .milliseconds(300))
         if only.isEmpty || only.contains("schedules") { written += await renderWindow(settingsWindow.window, state: "schedules") }
+        settingsWindow.show(pane: "gitlab")
+        if let model = extras.mergeRequests as MergeRequestService? { _ = await model.testConnection(MockGitLab.instance) }
+        try? await Task.sleep(for: .milliseconds(200))
+        if only.isEmpty || only.contains("gitlab") { written += await renderWindow(settingsWindow.window, state: "gitlab") }
         settingsWindow.show(pane: "secrets")
         _ = try? await extras.respond(to: (await extras.pendingAppRequests().first { if case .secret = $0.kind { true } else { false } })?.id ?? "", .saveSecret(SecretValue("mock-not-a-real-token")))
         try? await Task.sleep(for: .milliseconds(200))

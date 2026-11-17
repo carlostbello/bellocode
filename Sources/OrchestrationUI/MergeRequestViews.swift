@@ -251,7 +251,7 @@ struct MergeRequestCard: View {
                         }
                         if pipeline.jobs.count > 12 { Text("\(pipeline.jobs.count - 12) more jobs").font(.caption).foregroundStyle(.secondary) }
                         if let url = pipeline.webURL.flatMap(URL.init(string:)) {
-                            Button("Pipeline #\(pipeline.id)") { model.openURL(url, false) }.buttonStyle(.link).font(.caption)
+                            Button("Pipeline #" + String(pipeline.id)) { model.openURL(url, false) }.buttonStyle(.link).font(.caption)
                         }
                     }
                     .padding(.leading, DS.Spacing.l)
@@ -397,7 +397,7 @@ public struct GitLabSettingsView: View {
                     HStack {
                         Image(systemName: model.service.instancesWithToken.contains(instance.baseURL) ? "key.fill" : "key.slash")
                             .foregroundStyle(.secondary).accessibilityHidden(true)
-                        Text(instance.baseURL).font(.body.monospaced()).textSelection(.enabled)
+                        Text(instance.baseURL).font(.body.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         Spacer()
                         Button("Test") { Task { await model.test(instance) } }.disabled(!model.service.instancesWithToken.contains(instance.baseURL))
                         Button("Replace Token") { Task { await model.replaceToken(instance) } }.disabled(model.token.isEmpty)
