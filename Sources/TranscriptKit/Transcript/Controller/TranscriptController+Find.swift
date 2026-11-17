@@ -16,6 +16,8 @@ extension TranscriptController {
     }
 
     public func closeFind() {
+        revealTask?.cancel()
+        revealTask = nil
         findTask?.cancel()
         findTask = nil
         findRefreshScheduled = false
@@ -117,28 +119,93 @@ extension TranscriptController {
     }
 
     /// Expands a collapsed block if the match is inside it, lays the row out exactly, centres the match and selects it.
+    ///
+    /// A row that is not parsed or laid out yet (a large reply far from the viewport) is parsed and laid out off the
+    /// main actor; the reveal completes when both arrive, if the row's version and the binding are unchanged and no
+    /// newer reveal started (review M4). `isSettled` is false meanwhile.
     public func reveal(_ match: FindMatch) {
+        revealTask?.cancel()
+        revealTask = nil
         guard let index = rowIndex[match.rowID] else { return }
-        let rowBlocks = blocks(row: index)
-        guard match.block < rowBlocks.count else { return }
+        let row = rows[index]
+        if tails[row.id] != nil || blockCache.cachedBlocks(for: row) != nil {
+            revealExpanding(match, blocks: blocks(row: index))
+            return
+        }
+        let generation = observationGeneration
+        let cache = blockCache
+        revealTask = Task { [weak self] in
+            let blocks = await Self.parseOffMain(row, cache: cache)
+            guard let self, !Task.isCancelled, self.observationGeneration == generation,
+                let index = self.rowIndex[match.rowID], self.rows[index].version == row.version
+            else { return }
+            self.revealTask = nil
+            self.revealExpanding(match, blocks: blocks)
+        }
+    }
+
+    @concurrent
+    static func parseOffMain(_ row: TranscriptRow, cache: RenderBlockCache) async -> [RenderBlock] {
+        cache.blocks(for: row)
+    }
+
+    /// Opens what hides the match, then reveals it with the row's current layout (computed off-main if missing).
+    private func revealExpanding(_ match: FindMatch, blocks rowBlocks: [RenderBlock]) {
+        guard let index = rowIndex[match.rowID], match.block < rowBlocks.count else { return }
+        let content = rows[index].content
+        var keys: [ExpansionKey] = []
         if case .expanded(let key) = rowBlocks[match.block].visibility,
-            !RenderBlocks.isExpanded(key, content: rows[index].content, ui: ui[match.rowID] ?? RowUIState())
+            !RenderBlocks.isExpanded(key, content: content, ui: ui[match.rowID] ?? RowUIState())
         {
-            toggle(row: match.rowID, key: key)
+            keys.append(key)
         }
         // A summary hides successful tool lines: open the group too when the match is in one of them.
-        if case .work(let group) = rows[index].content, group.isCollapsible, match.block > 0,
-            !RenderBlocks.isExpanded(.group, content: rows[index].content, ui: ui[match.rowID] ?? RowUIState())
+        if case .work(let group) = content, group.isCollapsible, match.block > 0, !keys.contains(.group),
+            !RenderBlocks.isExpanded(.group, content: content, ui: ui[match.rowID] ?? RowUIState())
         {
-            if case .expanded(.group) = rowBlocks[match.block].visibility { toggle(row: match.rowID, key: .group) }
-            if case .toolDetail = rowBlocks[match.block].kind { toggle(row: match.rowID, key: .group) }
+            if case .expanded(.group) = rowBlocks[match.block].visibility { keys.append(.group) }
+            if case .toolDetail = rowBlocks[match.block].kind { keys.append(.group) }
         }
-        let layout = layouts[match.rowID].flatMap { $0.key == currentKey(row: index) ? $0 : nil } ?? {
-            let layout = LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
-            store(layout)
-            acceptHeight(layout, row: index)
-            return layout
-        }()
+        if !keys.isEmpty {
+            var state = ui[match.rowID] ?? RowUIState()
+            for key in keys { state.overrides[key] = true }
+            state.version += 1
+            ui[match.rowID] = state
+            if tails[match.rowID] != nil { relayoutTails() }
+        }
+        let expanded = !keys.isEmpty
+        let id = match.rowID
+        if let layout = layouts[id], layout.key == currentKey(row: index) {
+            finishReveal(match, layout: layout, expanded: expanded)
+        } else if let tail = tails[id] {
+            // A streaming row draws its composed tail; lay it out now only if it has none yet (rare).
+            let layout = tail.composed ?? {
+                metrics.findSyncLayouts += 1
+                return LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
+            }()
+            finishReveal(match, layout: layout, expanded: expanded)
+        } else {
+            let input = layoutInput(row: index)
+            let generation = observationGeneration
+            revealTask = Task { [weak self] in
+                let layout = await LayoutEngine.layout(input)
+                guard let self, !Task.isCancelled, self.observationGeneration == generation,
+                    let index = self.rowIndex[id], self.currentKey(row: index) == layout.key
+                else { return }
+                self.revealTask = nil
+                self.store(layout)
+                self.acceptHeight(layout, row: index)
+                self.finishReveal(match, layout: layout, expanded: expanded)
+            }
+        }
+    }
+
+    private func finishReveal(_ match: FindMatch, layout: RowLayout, expanded: Bool) {
+        guard let index = rowIndex[match.rowID] else { return }
+        if expanded, let view = cellView(index) {
+            configure(view, index: index)
+            NSAccessibility.post(element: view, notification: .layoutChanged)
+        }
         flushHeights()
         turnAnchor = nil
         setFollowing(false)

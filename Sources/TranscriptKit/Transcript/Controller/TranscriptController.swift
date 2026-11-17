@@ -169,6 +169,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     /// used, dropped under memory pressure and on unbind.
     var findIndex: [RowID: FindIndexEntry] = [:]
     var findIndexTask: Task<Void, Never>?
+    /// A reveal waiting for an off-main parse or layout (see `reveal`).
+    var revealTask: Task<Void, Never>?
     var findTask: Task<Void, Never>?
     var findRefreshScheduled = false
     var findMatchesByRow: [RowID: [(block: Int, range: Range<Int>, index: Int)]] = [:]
@@ -209,6 +211,11 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         public var maxSyncMilliseconds = 0.0
         public var openMilliseconds = 0.0
         public var placeholderRows = 0
+        /// Rows parsed on the main actor because copy, selection, accessibility or find needed blocks that were not
+        /// cached (review M4: find must not add any).
+        public var mainThreadParses = 0
+        /// Rows laid out synchronously to reveal a find match (review M4).
+        public var findSyncLayouts = 0
     }
 
     public internal(set) var metrics = Metrics()
@@ -300,6 +307,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         findTask?.cancel()
         findIndexTask?.cancel()
         findIndexTask = nil
+        revealTask?.cancel()
+        revealTask = nil
         loadOlderTask?.cancel()
         for task in layoutTasks.values { task.cancel() }
         layoutTasks.removeAll()

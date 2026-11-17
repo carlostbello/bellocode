@@ -564,7 +564,7 @@ enum DSColumn {
 extension TranscriptController {
     /// No layout, height flush, open pass or streaming job is pending (harness and tests).
     public var isSettled: Bool {
-        openTask == nil && inflight.isEmpty && pendingHeights.isEmpty && !flushScheduled && !syncScheduled
+        openTask == nil && revealTask == nil && inflight.isEmpty && pendingHeights.isEmpty && !flushScheduled && !syncScheduled
             && tails.values.allSatisfy { !$0.jobInFlight && $0.pendingText == nil }
     }
 

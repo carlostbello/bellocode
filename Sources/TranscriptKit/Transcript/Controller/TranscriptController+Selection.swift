@@ -14,6 +14,7 @@ extension TranscriptController {
     func blocks(row index: Int) -> [RenderBlock] {
         let row = rows[index]
         if let tail = tails[row.id] { return tail.stream.blocks.map { RenderBlock(.markdown($0, tone: .normal)) } }
+        if blockCache.cachedBlocks(for: row) == nil { metrics.mainThreadParses += 1 }
         return blockCache.blocks(for: row)
     }
 
