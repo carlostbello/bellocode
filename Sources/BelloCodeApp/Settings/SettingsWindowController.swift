@@ -1,8 +1,10 @@
 import AgentUI
 import AppKit
+import BelloCore
 import ComposerKit
 import DesignSystem
 import Engine
+import OrchestrationUI
 import SwiftUI
 import TerminalKit
 
@@ -24,7 +26,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         settings: AppSettings, auth: AuthService?, importSource: CredentialImportSource?, engine: Engine? = nil,
-        notifier: AttentionNotifier? = nil
+        notifier: AttentionNotifier? = nil, openThread: ((SessionID) -> Void)? = nil
     ) {
         var panes = [
             SettingsPane(id: "general", title: "General", symbolName: "gearshape") {
@@ -58,6 +60,40 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     controller.sizingOptions = [.preferredContentSize]
                     return controller
                 })
+            if let extras = engine.extras {
+                // M3-B (docs/features/orchestration-extras.md).
+                panes.append(
+                    SettingsPane(id: "schedules", title: "Scheduled Tasks", symbolName: "calendar.badge.clock") {
+                        let model = ScheduledTasksModel(scheduler: extras.schedules)
+                        model.projects = { engine.root.projects.map { ($0.name, $0.directory) } }
+                        model.threads = { directory in
+                            guard let projectID = engine.root.projects.first(where: { $0.directory == directory })?.projectID,
+                                let graph = engine.orchestration?.graph
+                            else { return [] }
+                            return graph.nodes.values.filter { $0.projectID == projectID && $0.parentID == nil }
+                                .sorted { $0.created > $1.created }.prefix(40).map { ($0.title, $0.id) }
+                        }
+                        model.openThread = { id in openThread?(id) }
+                        let controller = NSHostingController(rootView: ScheduledTasksView(model: model))
+                        controller.sizingOptions = [.preferredContentSize]
+                        return controller
+                    })
+                panes.append(
+                    SettingsPane(id: "secrets", title: "Secrets", symbolName: "key") {
+                        let view = SecretsSettingsView(secrets: extras.secrets, visuals: extras.visuals) { label in
+                            let alert = NSAlert()
+                            alert.messageText = "Delete “\(label.label)”?"
+                            alert.informativeText = "The value is removed from your Keychain. Agents holding a reference to it can no longer use it. This cannot be undone."
+                            alert.addButton(withTitle: "Delete")
+                            alert.addButton(withTitle: "Cancel")
+                            alert.buttons.first?.hasDestructiveAction = true
+                            return alert.runModal() == .alertFirstButtonReturn
+                        }
+                        let controller = NSHostingController(rootView: view)
+                        controller.sizingOptions = [.preferredContentSize]
+                        return controller
+                    })
+            }
         }
         if let auth {
             panes.append(

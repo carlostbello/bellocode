@@ -211,6 +211,7 @@ public final class VisualService {
                 try? await store.setGrant(.network, scope: host, granted: true)
                 grantedHosts.insert(host)
             }
+            revision += 1
         } else if var record = record(id) {
             record.approvedHosts = Array(Set(record.approvedHosts).union(hosts)).sorted()
             records[id] = record
@@ -220,7 +221,10 @@ public final class VisualService {
         revision += 1
     }
 
-    public var networkGrants: [String] { grantedHosts.sorted() }
+    public var networkGrants: [String] {
+        _ = revision
+        return grantedHosts.sorted()
+    }
 
     public func revokeNetwork(_ host: String) async {
         try? await store.setGrant(.network, scope: host, granted: false)

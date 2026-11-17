@@ -9,14 +9,20 @@ import TranscriptKit
 @MainActor
 final class TranscriptSurfaceController: NSViewController, FocusableSurface, TranscriptControllerDelegate {
     let context: ThreadSurfaceContext
-    let transcript = TranscriptViewController()
+    let transcript: TranscriptViewController
     private let settings: AppSettings?
     private var settingsLoop: ObservationLoop?
     private var revealTask: Task<Void, Never>?
+    /// Live HTML visuals over their rows (M3-B, VisualSurface.swift).
+    private(set) var visualOverlay: VisualOverlay?
 
     init(context: ThreadSurfaceContext, settings: AppSettings?) {
         self.context = context
         self.settings = settings
+        // HTML visuals load as snapshots through the image loader (docs/features/orchestration-extras.md).
+        let visuals = context.engine.extras?.visuals
+        let loader = VisualImageLoader(snapshot: { [weak visuals] id, dark in await visuals?.snapshot(id, dark: dark) })
+        transcript = TranscriptViewController(controller: TranscriptController(imageLoader: loader))
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -44,6 +50,18 @@ final class TranscriptSurfaceController: NSViewController, FocusableSurface, Tra
     override func viewDidLoad() {
         super.viewDidLoad()
         controller.delegate = self
+        if let visuals = context.engine.extras?.visuals {
+            let overlay = VisualOverlay(controller: controller, visuals: visuals)
+            visualOverlay = overlay
+            let context = self.context
+            controller.openURL = { [weak self, weak overlay] url in
+                let dark = self?.view.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                let handled = VisualActions.handle(
+                    url, visuals: visuals, overlay: overlay, dark: dark, openInBrowser: { context.onOpenInBrowser?($0) ?? false },
+                    window: self?.view.window)
+                if !handled { NSWorkspace.shared.open(url) }
+            }
+        }
         if let settings {
             settingsLoop = ObservationLoop { [weak self] in
                 guard let self else { return }

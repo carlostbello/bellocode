@@ -95,6 +95,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case toggleDiffLayout, toggleDiffWhitespace, toggleDiffWrap, chooseWorkspace, chooseBranch, removeWorktree
     // M3-A: Agents panel (Content/AgentsSurface.swift, MainWindowController+Agents.swift).
     case showAgents, nextAgent, previousAgent, openAgent, followUpAgent, stopAgentTree, openParentThread
+    // M3-B: orchestration extras (Content/PullRequestSurface.swift; Settings ▸ Scheduled Tasks).
+    case showPullRequests, showScheduledTasks
 
     @MainActor var selector: Selector {
         switch self {
@@ -183,6 +185,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: #selector(MainWindowController.followUpSelectedAgent(_:))
         case .stopAgentTree: #selector(MainWindowController.stopSelectedAgentTree(_:))
         case .openParentThread: #selector(MainWindowController.openParentThread(_:))
+        case .showPullRequests: #selector(MainWindowController.showPullRequests(_:))
+        // Answered by the app delegate (works with no window open).
+        case .showScheduledTasks: #selector(AppDelegate.showScheduledTasks(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -291,6 +296,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: "Follow Up Selected Agent…"
         case .stopAgentTree: "Stop Selected Agent and Its Tasks"
         case .openParentThread: "Go to Parent Thread"
+        case .showPullRequests: "Show Pull Requests"
+        case .showScheduledTasks: "Scheduled Tasks…"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -398,6 +405,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .followUpAgent: ("", [])
         case .stopAgentTree: (".", [.command, .control])
         case .openParentThread: ("u", [.command, .control])
+        case .showPullRequests: ("p", [.command, .control])
+        case .showScheduledTasks: ("e", [.command, .control])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -575,6 +584,8 @@ struct CommandContext: Equatable, Sendable {
         case .followUpAgent: return agents.selectionIsChild
         case .stopAgentTree: return agents.canStopSelection
         case .openParentThread: return agents.hasParent
+        case .showPullRequests: return agents.available
+        case .showScheduledTasks: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible

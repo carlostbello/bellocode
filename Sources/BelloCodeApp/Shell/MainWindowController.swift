@@ -49,6 +49,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private(set) var browser: BrowserSurfaces?
     /// The window's Agents panel ("Agents" tab, M3-A; MainWindowController+Agents.swift).
     private(set) var agents: AgentsSurfaces?
+    /// The window's "Pull Requests" tab (M3-B; MainWindowController+PullRequests.swift).
+    private(set) var pullRequests: PullRequestSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -105,6 +107,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             self?.browser?.display(context)
             self?.agents?.display(context)
             context?.onShowAgents = { [weak self] in self?.showAgentsPanel() }
+            self?.attachExtras(context)
         }
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
@@ -117,6 +120,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         terminals?.browser = browser
         agents = surfaces.agents
         agents?.bind(engine: workspace.engine, shell: self)
+        pullRequests = surfaces.pullRequests
+        pullRequests?.showPanel = { [weak self] in self?.showPullRequestsPanel() }
+        pullRequests?.bind(engine: workspace.engine)
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -444,6 +450,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             performChanges(command)
         case .showAgents, .nextAgent, .previousAgent, .openAgent, .followUpAgent, .stopAgentTree, .openParentThread:
             performAgents(command)
+        case .showPullRequests:
+            showPullRequestsPanel()
+        case .showScheduledTasks:
+            (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
         }
     }
 
