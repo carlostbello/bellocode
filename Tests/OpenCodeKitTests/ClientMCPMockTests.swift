@@ -20,7 +20,7 @@ private actor States {
 
 /// The production host and WebSocket dialer against the mock's client-MCP route (the mock plays opencode's MCP
 /// client: initialize, initialized, tools/list, tools/call with `_meta` attribution).
-@Suite("Client MCP host against MockOpenCode")
+@Suite("Client MCP host against MockOpenCode", .timeLimit(.minutes(3)))
 struct ClientMCPMockTests {
     @Test func hostConnectsOnceListsToolsAndServesAttributedCalls() async throws {
         let server = MockOpenCodeServer(scenario: .empty(), options: .testing)

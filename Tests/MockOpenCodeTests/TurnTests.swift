@@ -3,7 +3,7 @@ import Synchronization
 import Testing
 @testable import MockOpenCode
 
-@Suite("Scripted turns")
+@Suite("Scripted turns", .timeLimit(.minutes(3)))
 struct TurnTests {
     /// Starts a server and an event subscriber that has seen `server.connected`.
     func withStream(

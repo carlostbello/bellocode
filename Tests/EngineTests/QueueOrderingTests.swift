@@ -11,7 +11,7 @@ import Testing
 /// the mock's gates (held answers, held events), never with timing. These are the races behind the intermittent
 /// `EngineFlowTests.queueSteerAndStopWhileRunning` failures.
 @MainActor
-@Suite("Queued follow-ups under reordered answers, events and resyncs")
+@Suite("Queued follow-ups under reordered answers, events and resyncs", .timeLimit(.minutes(3)))
 struct QueueOrderingTests {
     static let inboxEvents: Set<String> = ["session.inbox.enqueued", "session.inbox.delivery.changed", "session.inbox.cancelled"]
 

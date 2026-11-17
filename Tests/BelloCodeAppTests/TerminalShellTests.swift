@@ -12,7 +12,7 @@ import Testing
 
 /// The terminal seam in the real main window against MockOpenCode's PTYs: menu commands, the drawer following the
 /// displayed thread with per-thread visibility, and "Send Selection to Composer".
-@MainActor @Suite(.serialized) struct TerminalShellTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct TerminalShellTests {
     @Test func commandsDrawerPerThreadAndSendToComposer() async throws {
         let shell = try await IntegratedShellTests.Shell.start()
         defer { Task { await shell.stop() } }

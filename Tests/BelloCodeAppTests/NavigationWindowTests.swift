@@ -27,7 +27,7 @@ final class RecordingDelivery: NotificationDelivering {
 
 /// The real sidebar, palette, search and notifier, driven through their controllers in-process against MockOpenCode
 /// (no UI scripting: AGENTS.md "Environment").
-@MainActor @Suite(.serialized) struct NavigationWindowTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct NavigationWindowTests {
     typealias Shell = IntegratedShellTests.Shell
 
     func threads(_ shell: Shell, in directory: String? = nil) -> [SessionID] {

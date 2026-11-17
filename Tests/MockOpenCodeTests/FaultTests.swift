@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MockOpenCode
 
-@Suite("Fault injection and concurrency")
+@Suite("Fault injection and concurrency", .timeLimit(.minutes(3)))
 struct FaultTests {
     static let realTime = MockServerOptions(clock: .realTime, heartbeatInterval: nil)
 

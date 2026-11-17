@@ -8,7 +8,7 @@ import Testing
 /// Every live-engine test hosts the app tools; against the mock that used to be a 404 and a background retry loop
 /// (500 ms doubling to 30 s) for the whole test. The mock now serves the route as 2.3.0 does.
 @MainActor
-@Suite("Engine app tools against MockOpenCode")
+@Suite("Engine app tools against MockOpenCode", .timeLimit(.minutes(3)))
 struct ClientMCPEngineTests {
     @Test func engineHostsTheAppToolsOnceWithoutRetrying() async throws {
         let harness = try await MockHarness.start()

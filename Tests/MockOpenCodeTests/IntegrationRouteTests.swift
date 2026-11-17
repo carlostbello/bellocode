@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MockOpenCode
 
-@Suite("Integration, credential and permission-evaluation routes")
+@Suite("Integration, credential and permission-evaluation routes", .timeLimit(.minutes(3)))
 struct IntegrationRouteTests {
     @Test func keyConnectStoresActiveCredentialAndUnlocksModels() async throws {
         let server = MockOpenCodeServer(scenario: .empty(), options: .testing)

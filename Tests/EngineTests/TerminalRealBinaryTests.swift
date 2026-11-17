@@ -11,7 +11,7 @@ import Testing
 /// directories under a fresh temporary directory (never the user's opencode config or data); shells start with
 /// `zsh -f` and a sandbox HOME so no user rc file runs; every process is stopped before the test returns.
 @MainActor
-@Suite("Terminal real binary", .serialized, .enabled(if: EngineRepo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"))
+@Suite("Terminal real binary", .serialized, .enabled(if: EngineRepo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"), .timeLimit(.minutes(10)))
 struct TerminalRealBinaryTests {
     @MainActor
     struct Sandbox {

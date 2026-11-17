@@ -14,7 +14,7 @@ final class OpenedURLs: Sendable {
     func append(_ url: URL) { urls.withLock { $0.append(url) } }
 }
 
-@Suite("AuthService against the mock")
+@Suite("AuthService against the mock", .timeLimit(.minutes(3)))
 @MainActor
 struct AuthServiceTests {
     func makeService(_ harness: MockHarness, opened: OpenedURLs = OpenedURLs(), retries: Int = 5) -> AuthService {

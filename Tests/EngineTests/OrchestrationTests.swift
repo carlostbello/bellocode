@@ -23,7 +23,7 @@ private func attention(_ id: String, _ status: BelloCore.SessionStatus, blocking
         blockingChildID: blockingChild.map { SessionID($0) })
 }
 
-@Suite("Orchestration: task state machine and graph")
+@Suite("Orchestration: task state machine and graph", .timeLimit(.minutes(3)))
 struct TaskGraphTests {
     @Test func ownStatusFromRunStateAndAttention() {
         let running = session("a", busy: 10)
@@ -118,7 +118,7 @@ struct TaskGraphTests {
 }
 
 @MainActor
-@Suite("Orchestration service against the mock", .serialized)
+@Suite("Orchestration service against the mock", .serialized, .timeLimit(.minutes(3)))
 struct OrchestrationServiceTests {
     @MainActor struct Fixture {
         let harness: MockHarness

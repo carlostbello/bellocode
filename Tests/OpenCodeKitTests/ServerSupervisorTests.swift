@@ -93,7 +93,7 @@ struct FakeProbe: ServerInfoProbe {
     }
 }
 
-@Suite("ServerSupervisor state machine")
+@Suite("ServerSupervisor state machine", .timeLimit(.minutes(3)))
 struct ServerSupervisorTests {
     let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-supervisor-tests-\(UUID().uuidString)")
 
@@ -406,7 +406,7 @@ struct ServerSupervisorTests {
     }
 }
 
-@Suite("Supervisor support")
+@Suite("Supervisor support", .timeLimit(.minutes(3)))
 struct SupervisorSupportTests {
     @Test func backoffIsCappedAndJittered() {
         let policy = BackoffPolicy(initial: .milliseconds(100), maximum: .seconds(2), multiplier: 2, jitter: 0.5)

@@ -50,7 +50,7 @@ final class ConnectionCounter: Sendable {
 import Synchronization
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(3)))
 struct HTMLVisualSandboxTests {
     @Test func documentGetsCSPAndThemeFirst() {
         let page = HTMLVisualDocument.compose("<html><head><title>x</title></head><body>hi</body></html>", theme: .dark, allowedHosts: [])

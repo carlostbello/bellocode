@@ -29,7 +29,7 @@ enum ShellRepo {
 /// file on the default model only if it is zero-cost, waits for the reply, then asks for a file edit in "Ask" mode and
 /// approves the permission through the Engine API if the model asks. Two prompts at most. Isolated XDG/HOME in a
 /// temporary directory; the user's opencode config and data are never touched.
-@MainActor @Suite("Shell real server", .serialized, .enabled(if: ShellRepo.enabled, "set BELLOCODE_SHELL_E2E=1"))
+@MainActor @Suite("Shell real server", .serialized, .enabled(if: ShellRepo.enabled, "set BELLOCODE_SHELL_E2E=1"), .timeLimit(.minutes(10)))
 struct RealServerTests {
     @Test func addProjectSendWithAttachmentsApproveAndReply() async throws {
         _ = NSApplication.shared

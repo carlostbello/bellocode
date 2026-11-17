@@ -15,7 +15,8 @@ import Testing
     "Agent UI real binary", .serialized,
     .enabled(
         if: ProcessInfo.processInfo.environment["BELLOCODE_CONTRACT_REAL"] == "1" && EngineRepo.vendoredOpencode != nil,
-        "set BELLOCODE_CONTRACT_REAL=1 and run Scripts/fetch-opencode.sh"))
+        "set BELLOCODE_CONTRACT_REAL=1 and run Scripts/fetch-opencode.sh"),
+    .timeLimit(.minutes(10)))
 @MainActor
 struct AgentRealBinaryTests {
     /// A supervised real server in its own sandbox.

@@ -113,6 +113,7 @@ func spin(_ timeout: Duration = .seconds(3), until condition: () -> Bool) -> Boo
 
 /// The interleavings that hung a reader of the old feeder, which polled `open(O_WRONLY | O_NONBLOCK)` for a reader and
 /// unlinked at the deadline (a reader blocked in `open` then waited forever). Each is forced, not left to timing.
+@Suite(.timeLimit(.minutes(3)))
 @MainActor
 struct SecretPipeRaceTests {
     nonisolated static let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -231,6 +232,7 @@ struct SecretPipeRaceTests {
 }
 
 /// Bookkeeping, isolation between instances, shell readers and launch cleanup.
+@Suite(.timeLimit(.minutes(3)))
 @MainActor
 struct SecretDeliveryTests {
     static func makeService(clock: any WallClock = ManualWallClock(SecretPipeRaceTests.start), root: URL) throws -> SecretService {

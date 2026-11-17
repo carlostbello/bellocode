@@ -8,7 +8,7 @@ import Testing
 
 /// Engine fixes found while integrating the app (M1-E): subfolder projects, sign-in lists refreshed by server events,
 /// and the "Status unknown" turns after a server restart.
-@Suite("Engine integration fixes", .serialized)
+@Suite("Engine integration fixes", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct IntegrationFixesTests {
     @Test func subfolderOfARepositoryListsTheRepositorysThreads() async throws {

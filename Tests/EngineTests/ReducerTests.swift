@@ -6,7 +6,7 @@ import Testing
 
 @testable import Engine
 
-@Suite("Reducers")
+@Suite("Reducers", .timeLimit(.minutes(3)))
 struct ReducerTests {
     private let now = Timestamp(milliseconds: 1)
 
@@ -198,7 +198,7 @@ struct ReducerTests {
     }
 }
 
-@Suite("StreamCoalescer")
+@Suite("StreamCoalescer", .timeLimit(.minutes(3)))
 struct StreamCoalescerTests {
     private let key = StreamKey(sessionID: "ses_1", messageID: "msg_1", kind: .text(ordinal: 0))
 

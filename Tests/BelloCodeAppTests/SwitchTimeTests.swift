@@ -10,7 +10,7 @@ import Testing
 
 /// Drives thread selection across 500 threads through the real content area (header, temporary transcript, request
 /// stack, composer) and measures select → transcript rendered from cache. Budget: 100 ms (AGENTS.md UX rule 1).
-@MainActor @Suite(.serialized) struct SwitchTimeTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct SwitchTimeTests {
     @Test func switchingAcross500ThreadsStaysWithinBudget() async throws {
         _ = NSApplication.shared
         // 625 sessions: every fifth is a sub-agent, so 500 top-level threads across 5 projects.

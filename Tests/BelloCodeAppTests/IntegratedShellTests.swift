@@ -13,7 +13,7 @@ import Testing
 /// The integrated app, scripted end to end in-process against MockOpenCode: the real main window, the real composer
 /// (typed into, sent through the Thread menu's command), a streamed scripted turn, a permission answered through the
 /// request stack's command, a queued follow-up while running, Stop, and switching threads with drafts preserved.
-@MainActor @Suite(.serialized) struct IntegratedShellTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct IntegratedShellTests {
     @MainActor struct Shell {
         let server: MockOpenCodeServer
         let engine: Engine

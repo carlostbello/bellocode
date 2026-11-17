@@ -19,7 +19,7 @@ func makeOfflineEngine(store: ProjectionStore.Location = .inMemory, configure: (
 }
 
 /// Regression tests for docs/reviews/M1-review.md.
-@Suite("M1 review fixes", .serialized)
+@Suite("M1 review fixes", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ReviewFixesTests {
     // MARK: M1: draft hydration
@@ -86,7 +86,7 @@ struct ReviewFixesTests {
 
 // MARK: - M4: ambiguous sends
 
-@Suite("M4 ambiguous sends", .serialized)
+@Suite("M4 ambiguous sends", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct AmbiguousSendTests {
     @MainActor struct Setup {
@@ -217,7 +217,7 @@ struct AmbiguousSendTests {
 
 // MARK: - M2: resync retry while connected
 
-@Suite("M2 resync retry", .serialized)
+@Suite("M2 resync retry", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ResyncRetryTests {
     /// The list endpoints fail through every resync attempt while the event stream stays connected. The engine must
@@ -267,7 +267,7 @@ struct ResyncRetryTests {
 
 // MARK: - M10: server text stays out of public logs
 
-@Suite("M10 log privacy", .serialized)
+@Suite("M10 log privacy", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct LogPrivacyTests {
     static let sentinel = "SENTINEL-sk-live-4f1c9e"
@@ -327,7 +327,7 @@ struct LogPrivacyTests {
 
 // MARK: - M8: stream delta ceiling
 
-@Suite("M8 stream delta ceiling")
+@Suite("M8 stream delta ceiling", .timeLimit(.minutes(3)))
 struct StreamDeltaCeilingTests {
     /// A burst with no time passing (the cadence timer never fires): pending deltas never exceed the ceiling plus one
     /// delta, and the result equals unbounded coalescing (nothing dropped).

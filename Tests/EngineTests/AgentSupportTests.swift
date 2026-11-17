@@ -7,7 +7,7 @@ import Testing
 @testable import Engine
 
 /// Engine support for M1-D: permission-mode rules per agent, child requests in the parent thread, model preferences.
-@Suite("Agent UI support")
+@Suite("Agent UI support", .timeLimit(.minutes(3)))
 @MainActor
 struct AgentSupportTests {
     static let planRules = [

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MockOpenCode
 
-@Suite("Fixture generator")
+@Suite("Fixture generator", .timeLimit(.minutes(3)))
 struct FixtureTests {
     static func digest(_ scenario: Scenario) -> String {
         var out = ""

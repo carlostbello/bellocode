@@ -51,7 +51,7 @@ func userMessages(_ thread: ThreadModel) -> [Message] {
     thread.messageIDs.compactMap { thread.message($0)?.message }.filter { $0.kind.typeName == "user" }
 }
 
-@Suite("Engine flows against MockOpenCode", .serialized)
+@Suite("Engine flows against MockOpenCode", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct EngineFlowTests {
     @Test func scriptedTurnWithPermissionAndQuestion() async throws {

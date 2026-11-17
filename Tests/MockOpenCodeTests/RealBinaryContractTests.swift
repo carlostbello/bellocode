@@ -8,7 +8,7 @@ import Testing
 /// when the test closes its stdin.
 ///
 /// Opt in with `BELLOCODE_CONTRACT_REAL=1 swift test --filter RealBinaryContract` after `Scripts/fetch-opencode.sh`.
-@Suite("Real binary contract", .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTRACT_REAL"] == "1"))
+@Suite("Real binary contract", .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTRACT_REAL"] == "1"), .timeLimit(.minutes(10)))
 struct RealBinaryContractTests {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent()

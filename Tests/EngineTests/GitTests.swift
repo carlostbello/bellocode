@@ -56,7 +56,7 @@ struct TempRepo {
     func remove() { try? FileManager.default.removeItem(at: base) }
 }
 
-@Suite("Git status, patches and hunks")
+@Suite("Git status, patches and hunks", .timeLimit(.minutes(3)))
 struct GitParsingTests {
     @Test func parsesPorcelainV2() {
         let sample = [
@@ -151,7 +151,7 @@ struct GitParsingTests {
     }
 }
 
-@Suite("Git repositories and worktrees (throwaway repos)", .serialized)
+@Suite("Git repositories and worktrees (throwaway repos)", .serialized, .timeLimit(.minutes(3)))
 struct GitRepositoryTests {
     @Test func statusStageCommitAndDiffs() async throws {
         let repo = try await TempRepo.make(files: ["a.txt": "1\n2\n3\n", "b.txt": "b\n"])
@@ -304,7 +304,7 @@ struct GitRepositoryTests {
 }
 
 @MainActor
-@Suite("GitService and repository model", .serialized)
+@Suite("GitService and repository model", .serialized, .timeLimit(.minutes(3)))
 struct GitServiceTests {
     @Test func modelRefreshesOnFileSystemChanges() async throws {
         let repo = try await TempRepo.make()

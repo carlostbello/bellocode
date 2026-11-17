@@ -13,7 +13,7 @@ func signature(_ messages: [Message]) -> [String] {
     }
 }
 
-@Suite("Faults and cold start", .serialized)
+@Suite("Faults and cold start", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct FaultAndColdStartTests {
     static func script(faults: Bool) -> TurnScript {

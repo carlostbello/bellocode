@@ -11,7 +11,7 @@ import Testing
 /// `Vendor/` (run `Scripts/fetch-opencode.sh`). HOME and XDG directories live under a fresh temporary directory; the
 /// server is stopped (and checked gone) before the test returns.
 @MainActor
-@Suite("Git real binary", .serialized, .enabled(if: EngineRepo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"))
+@Suite("Git real binary", .serialized, .enabled(if: EngineRepo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"), .timeLimit(.minutes(10)))
 struct GitRealBinaryTests {
     @Test func vcsWorktreeDiffAndRevertEndpoints() async throws {
         let executable = try #require(EngineRepo.vendoredOpencode)
