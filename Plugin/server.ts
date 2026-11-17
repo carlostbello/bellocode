@@ -3,7 +3,8 @@
 // Loaded by local path from BelloCode's isolated opencode config (`OPENCODE_CONFIG_CONTENT`), so it needs no npm install
 // and no network. It imports nothing from opencode: tool inputs are plain JSON Schema and the context is used through
 // the documented promise API (`@opencode/plugin`, 2.3.0), so a type mismatch shows up as a runtime error in the tool
-// result, never a load failure. Everything here runs in the server process and keeps working while the app is closed.
+// result, never a load failure. Results carry `content` and `metadata` only: 2.3.0 rejects `output` without a declared
+// output schema ("Tool result declared output without an output schema", seen on the real binary). Everything here runs in the server process and keeps working while the app is closed.
 //
 // Durable state lives in opencode itself: child sessions (`parentID`), session metadata (`metadata.bellocode`) and
 // instruction entries. The plugin keeps only short-lived, in-memory bookkeeping (cascades in progress, event dedupe).
@@ -204,7 +205,7 @@ export default {
               variants: (model.variants ?? []).map((variant: any) => variant.id),
             }))
           const output = { agents, models, limits }
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -282,14 +283,12 @@ export default {
               const state = L.taskState(waited.session, await children(child.id))
               const summary = await summaryOf(child.id)
               return {
-                output: { taskID: child.id, state, summary },
                 content: `Task ${child.id} ${state}.\n\n${summary}\n\n(The same result also arrives as a <subagent> report; do not act on it twice.)`,
                 metadata: { sessionID: child.id, status: state, agent: agentID },
               }
             }
           }
           return {
-            output: { taskID: child.id, state: "working" },
             content: [
               `Started task ${child.id} (${agentID}${directory ? `, worktree ${directory}` : ""}).`,
               "You will receive a <subagent> report when it finishes. Do not poll, sleep or duplicate its work.",
@@ -314,7 +313,7 @@ export default {
             summary,
             children: { total: below.length, running: below.filter(L.isRunning).length },
           })
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -388,7 +387,6 @@ export default {
             created.push({ threadID: session.id, title: session.title, started: Boolean(spec.prompt), directory })
           }
           return {
-            output: { group, threads: created },
             content: `Created ${created.length} thread(s):\n${created.map((item) => `- ${item.threadID} ${item.title}`).join("\n")}`,
             metadata: { group, threadIDs: created.map((item) => item.threadID) },
           }
@@ -412,7 +410,7 @@ export default {
           if (!input.includeChildren) sessions = sessions.filter((session) => !session.parentID)
           if (input.running) sessions = sessions.filter(L.isRunning)
           const output = sessions.slice(0, limit).map((session) => describe(session))
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -424,7 +422,7 @@ export default {
           const output = list<Session>(await ctx.session.list({ search: String(input.query), limit })).map((session) =>
             describe(session),
           )
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -442,7 +440,7 @@ export default {
             byProject.set(key, entry)
           }
           const output = [...byProject.values()]
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -508,7 +506,7 @@ export default {
           const state = L.taskState(waited.session, await children(target.id))
           const summary = waited.settled ? await summaryOf(target.id) : ""
           const output = describe(waited.session, { settled: waited.settled, state, summary })
-          return { output, content: JSON.stringify(output, null, 1) }
+          return { content: JSON.stringify(output, null, 1) }
         },
       },
       {
@@ -565,7 +563,7 @@ export default {
                 resources: (request.resources ?? []).slice(0, 5),
               })
           }
-          return { output: pending, content: pending.length ? JSON.stringify(pending, null, 1) : "Nothing is waiting." }
+          return { content: pending.length ? JSON.stringify(pending, null, 1) : "Nothing is waiting." }
         },
       },
       {
