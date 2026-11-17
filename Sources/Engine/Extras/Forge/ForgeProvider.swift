@@ -20,6 +20,10 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
     case rateLimited(retryAfter: TimeInterval?)
     case network(String)
     case unexpected(String)
+    /// The instance uses plain HTTP and the person has not allowed sending its token unencrypted.
+    case insecureInstance(String)
+    /// The server redirected to another scheme, host or port; the token was not sent there.
+    case redirected(from: String, to: String)
 
     public var description: String {
         switch self {
@@ -31,13 +35,17 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
         case .rateLimited(let after): "GitLab's rate limit was reached; BelloCode retries\(after.map { " in \(Int($0)) s" } ?? " later")."
         case .network(let reason): "GitLab could not be reached: \(reason)"
         case .unexpected(let reason): reason
+        case .insecureInstance(let instance):
+            "\(instance) uses plain HTTP, so the token would cross the network unencrypted. Use its https:// address, or allow HTTP for it explicitly in Settings ▸ GitLab."
+        case .redirected(let from, let to):
+            "GitLab at \(from) redirected to \(to); BelloCode does not send the token to another address. Use the address it redirects to as the instance URL if that is intended."
         }
     }
 
     /// The person must act (no retry helps).
     public var needsPerson: Bool {
         switch self {
-        case .noInstance, .noToken, .tokenInvalid, .forbidden: true
+        case .noInstance, .noToken, .tokenInvalid, .forbidden, .insecureInstance, .redirected: true
         default: false
         }
     }
@@ -76,16 +84,39 @@ public protocol ForgeTransport: Sendable {
 }
 
 /// URLSession with an ephemeral configuration: no cookies, no URL cache (ETags are handled by `ForgeCache`), system
-/// trust evaluation.
+/// trust evaluation, no credential store. Redirects (M1 in docs/reviews/M3-M6-review.md) are followed only within the
+/// same origin (scheme, host and effective port); any other redirect is refused before it is followed, so the token
+/// header never travels to another origin or down to HTTP. The refused 3xx surfaces as `ForgeError.redirected`.
 public struct URLSessionForgeTransport: ForgeTransport {
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 20
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
     }()
+
+    /// Same scheme, host and effective port.
+    public static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        func origin(_ url: URL) -> (String, String, Int)? {
+            guard let scheme = url.scheme?.lowercased(), let host = url.host()?.lowercased() else { return nil }
+            let port = url.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : -1)
+            return (scheme, host, port)
+        }
+        guard let left = origin(a), let right = origin(b) else { return false }
+        return left == right
+    }
+
+    final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest
+        ) async -> URLRequest? {
+            guard let from = task.originalRequest?.url, let to = request.url, URLSessionForgeTransport.sameOrigin(from, to) else { return nil }
+            return request
+        }
+    }
 
     public init() {}
 
@@ -95,6 +126,11 @@ public struct URLSessionForgeTransport: ForgeTransport {
         do {
             let (data, response) = try await Self.session.data(for: urlRequest)
             guard let http = response as? HTTPURLResponse else { throw ForgeError.unexpected("No HTTP response.") }
+            if (300..<400).contains(http.statusCode), http.statusCode != 304 {
+                let location = http.value(forHTTPHeaderField: "Location").flatMap { URL(string: $0, relativeTo: request.url)?.absoluteURL }
+                let target = location.map { "\($0.scheme ?? "")://\($0.host() ?? "")\($0.port.map { ":\($0)" } ?? "")" } ?? "another address"
+                throw ForgeError.redirected(from: "\(request.url.scheme ?? "")://\(request.url.host() ?? "")\(request.url.port.map { ":\($0)" } ?? "")", to: target)
+            }
             var headers: [String: String] = [:]
             for (key, value) in http.allHeaderFields { headers[String(describing: key).lowercased()] = String(describing: value) }
             return ForgeResponse(status: http.statusCode, headers: headers, body: data)

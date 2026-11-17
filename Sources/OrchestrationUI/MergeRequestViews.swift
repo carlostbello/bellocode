@@ -341,6 +341,9 @@ public final class GitLabSettingsModel {
     public let service: MergeRequestService
     public var baseURL = ""
     public var token = ""
+    /// The explicit, per-instance choice to send the token over plain HTTP (shown only for an http:// address).
+    public var allowPlainHTTP = false
+    public var isPlainHTTPAddress: Bool { baseURL.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("http://") }
     public private(set) var results: [String: String] = [:]
     public private(set) var message: String?
 
@@ -350,8 +353,9 @@ public final class GitLabSettingsModel {
         let secret = token.isEmpty ? nil : SecretValue(token)
         token = ""
         do {
-            let instance = try await service.saveInstance(baseURL: baseURL, token: secret)
+            let instance = try await service.saveInstance(baseURL: baseURL, token: secret, allowPlainHTTP: isPlainHTTPAddress && allowPlainHTTP)
             baseURL = ""
+            allowPlainHTTP = false
             message = nil
             if secret != nil { await test(instance) }
         } catch {
@@ -408,6 +412,10 @@ public struct GitLabSettingsView: View {
                             .help("Type the new token in the field below, then click Replace Token")
                         Button("Remove…") { if confirmRemove(instance) { Task { await model.remove(instance) } } }
                     }
+                    if instance.isPlainHTTP {
+                        Label("Plain HTTP: the token crosses the network unencrypted (allowed for this instance).", systemImage: "exclamationmark.triangle")
+                            .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.warningText)
+                    }
                     Text(status(instance)).font(.ds(.meta))
                         .foregroundStyle(model.service.instanceProblems[instance.baseURL] != nil ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3)
                 }
@@ -423,6 +431,10 @@ public struct GitLabSettingsView: View {
                     Text("Access token").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2).frame(width: 96, alignment: .trailing)
                     SecureField("", text: Bindable(model).token, prompt: Text("glpat-…")).textFieldStyle(DSTextFieldStyle())
                         .accessibilityLabel("GitLab access token")
+                }
+                if model.isPlainHTTPAddress {
+                    Toggle("Allow unencrypted HTTP for this instance (the token is sent in clear text)", isOn: Bindable(model).allowPlainHTTP)
+                        .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.warningText)
                 }
                 HStack {
                     Spacer()

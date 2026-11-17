@@ -1,9 +1,19 @@
 import Foundation
+import Synchronization
 
 /// GitLab REST API v4 (gitlab.com or self-managed, with or without a path prefix). Reads with the instance's token
 /// (`PRIVATE-TOKEN`), conditional requests (`If-None-Match` → 304 reuses the cached body), pagination through
 /// `X-Next-Page` (bounded), and typed failures (401 token invalid, 403, 404, 429 with `Retry-After`). Runs off the main
 /// actor; JSON is parsed here.
+/// The plain-HTTP instances the person allowed (shared between the service and the provider).
+public final class PlainHTTPAllowList: Sendable {
+    private let entries = Mutex<Set<String>>([])
+    public init() {}
+    public func contains(_ baseURL: String) -> Bool { entries.withLock { $0.contains(baseURL) } }
+    public func set(_ value: Set<String>) { entries.withLock { $0 = value } }
+    public var all: Set<String> { entries.withLock { $0 } }
+}
+
 public struct GitLabProvider: ForgeProvider {
     /// Keychain service of the per-instance tokens (account = the instance's base URL).
     public static let tokenService = "app.bellocode.gitlab-tokens"
@@ -12,10 +22,14 @@ public struct GitLabProvider: ForgeProvider {
     let transport: any ForgeTransport
     let tokens: any SecretVault
     let cache = ForgeCache()
+    /// Plain-HTTP instances the person explicitly allowed (Settings ▸ GitLab). Every other `http://` instance is refused
+    /// before its token is read.
+    let plainHTTPAllowed: PlainHTTPAllowList
 
-    public init(transport: any ForgeTransport, tokens: any SecretVault) {
+    public init(transport: any ForgeTransport, tokens: any SecretVault, plainHTTPAllowed: PlainHTTPAllowList = PlainHTTPAllowList()) {
         self.transport = transport
         self.tokens = tokens
+        self.plainHTTPAllowed = plainHTTPAllowed
     }
 
     // MARK: Reads
@@ -91,6 +105,7 @@ public struct GitLabProvider: ForgeProvider {
 
     private func response(_ path: String, _ instance: GitLabInstance, cached: Bool) async throws -> ForgeResponse {
         guard let url = URL(string: instance.apiBase + "/" + path) else { throw ForgeError.unexpected("Bad GitLab path.") }
+        guard url.scheme == "https" || plainHTTPAllowed.contains(instance.baseURL) else { throw ForgeError.insecureInstance(instance.baseURL) }
         guard let secret = try? tokens.read(account: instance.baseURL), !secret.isEmpty else { throw ForgeError.noToken(instance.baseURL) }
         let key = url.absoluteString
         var headers = ["PRIVATE-TOKEN": String(decoding: secret.utf8, as: UTF8.self), "Accept": "application/json", "User-Agent": "BelloCode"]

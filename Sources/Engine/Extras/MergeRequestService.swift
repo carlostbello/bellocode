@@ -51,6 +51,9 @@ public final class MergeRequestService {
     public static let refreshTTL: TimeInterval = 60
     public static let branchCheckTTL: TimeInterval = 600
     static let instancesKey = "gitlab.instances"
+    /// Plain-HTTP instances the person explicitly allowed (M1): their token may cross the network unencrypted.
+    static let plainHTTPKey = "gitlab.plainHTTPAllowed"
+    @ObservationIgnored public let plainHTTPAllowed = PlainHTTPAllowList()
 
     @ObservationIgnored public weak var host: (any MergeRequestHost)?
     @ObservationIgnored private let store: ProjectionStore
@@ -79,7 +82,7 @@ public final class MergeRequestService {
         self.store = store
         self.clock = clock
         self.tokens = tokens
-        provider = GitLabProvider(transport: transport, tokens: tokens)
+        provider = GitLabProvider(transport: transport, tokens: tokens, plainHTTPAllowed: plainHTTPAllowed)
         self.baseInterval = baseInterval
         self.maxBackoff = maxBackoff
         self.autoPoll = autoPoll
@@ -90,6 +93,8 @@ public final class MergeRequestService {
     public func start() async {
         let saved = (try? await store.preference(Self.instancesKey, as: [String].self)) ?? []
         instances = saved.compactMap(GitLabInstance.init(baseURL:))
+        let allowed = (try? await store.preference(Self.plainHTTPKey, as: [String].self)) ?? []
+        plainHTTPAllowed.set(Set(allowed).intersection(instances.map(\.baseURL)))
         refreshTokenPresence()
         for record in (try? await store.mergeRequestWatches()) ?? [] { watches[Self.key(record.sessionID, record.url)] = record }
         if let host { ingest(await host.allSessions()) }
@@ -133,9 +138,21 @@ public final class MergeRequestService {
     // MARK: Instances and tokens (Settings ▸ GitLab)
 
     /// Adds (or updates the token of) an instance. The token goes straight to the Keychain.
-    public func saveInstance(baseURL: String, token: SecretValue?) async throws -> GitLabInstance {
+    ///
+    /// An `http://` address is refused unless `allowPlainHTTP` (a visible, per-instance choice in Settings): the token
+    /// would cross the network unencrypted.
+    public func saveInstance(baseURL: String, token: SecretValue?, allowPlainHTTP: Bool = false) async throws -> GitLabInstance {
         guard let instance = GitLabInstance(baseURL: baseURL) else {
             throw ExtrasError("Enter the GitLab address, like https://gitlab.example.com (a path such as /gitlab is fine).")
+        }
+        if instance.isPlainHTTP {
+            guard allowPlainHTTP || plainHTTPAllowed.contains(instance.baseURL) else {
+                throw ExtrasError("\(instance.baseURL) is plain HTTP: the token would be sent unencrypted. Use https://, or tick “Allow unencrypted HTTP for this instance”.")
+            }
+            if !plainHTTPAllowed.contains(instance.baseURL) {
+                plainHTTPAllowed.set(plainHTTPAllowed.all.union([instance.baseURL]))
+                try? await store.setPreference(Self.plainHTTPKey, plainHTTPAllowed.all.sorted())
+            }
         }
         if let token, !token.isEmpty {
             try tokens.store(account: instance.baseURL, label: "GitLab token for \(instance.baseURL)", value: token)
@@ -156,6 +173,10 @@ public final class MergeRequestService {
     public func removeInstance(_ instance: GitLabInstance) async {
         try? tokens.delete(account: instance.baseURL)
         instances.removeAll { $0 == instance }
+        if plainHTTPAllowed.contains(instance.baseURL) {
+            plainHTTPAllowed.set(plainHTTPAllowed.all.subtracting([instance.baseURL]))
+            try? await store.setPreference(Self.plainHTTPKey, plainHTTPAllowed.all.sorted())
+        }
         instanceProblems[instance.baseURL] = nil
         try? await store.setPreference(Self.instancesKey, instances.map(\.baseURL))
         refreshTokenPresence()
