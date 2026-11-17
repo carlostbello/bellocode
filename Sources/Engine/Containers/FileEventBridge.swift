@@ -46,7 +46,21 @@ public final class FileEventBridge {
     public init(roots: [String], debounce: Duration = .milliseconds(150), maxBatch: Int = 2_000,
                 sink: @escaping @Sendable ([String]) async throws -> Void) {
         self.roots = roots
-        collector = Collector(debounce: debounce, maxBatch: maxBatch, sink: sink)
+        // FSEvents reports resolved paths (/private/var/…); the container mounts the folders as the project spells them.
+        let aliases = roots.compactMap { root -> (String, String)? in
+            // realpath(3): NSString's resolvingSymlinksInPath strips /private, which is the part that differs.
+            guard let resolved = realpath(root, nil) else { return nil }
+            defer { free(resolved) }
+            let real = String(cString: resolved)
+            return real == root ? nil : (real, root)
+        }
+        collector = Collector(debounce: debounce, maxBatch: maxBatch, aliases: aliases, sink: sink)
+    }
+
+    /// `path` as the container sees it: a resolved prefix is replaced by the root's own spelling.
+    nonisolated static func mounted(_ path: String, aliases: [(real: String, root: String)]) -> String {
+        for (real, root) in aliases where path == real || path.hasPrefix(real + "/") { return root + path.dropFirst(real.count) }
+        return path
     }
 
     isolated deinit { stop() }
@@ -117,7 +131,10 @@ public final class FileEventBridge {
         private let state = Mutex(State())
         private static let signposter = OSSignposter(subsystem: "app.bellocode.engine", category: "file-bridge")
 
-        init(debounce: Duration, maxBatch: Int, sink: @escaping @Sendable ([String]) async throws -> Void) {
+        let aliases: [(real: String, root: String)]
+
+        init(debounce: Duration, maxBatch: Int, aliases: [(String, String)] = [], sink: @escaping @Sendable ([String]) async throws -> Void) {
+            self.aliases = aliases.map { (real: $0.0, root: $0.1) }
             self.debounce = debounce
             self.maxBatch = maxBatch
             self.sink = sink
@@ -140,8 +157,9 @@ public final class FileEventBridge {
         func received(_ events: [(String, FSEventStreamEventFlags)]) {
             let schedule = state.withLock { state -> Bool in
                 guard !state.stopped else { return false }
-                for (path, flags) in events {
+                for (resolved, flags) in events {
                     state.stats.events += 1
+                    let path = FileEventBridge.mounted(resolved, aliases: aliases)
                     guard FileEventBridge.isRelevant(path, flags: flags) else { continue }
                     if state.pending.count < maxBatch * 4 { state.pending.insert(path) } else { state.stats.overflows += 1 }
                     if FileEventBridge.touchesFolder(flags) { state.folders.insert((path as NSString).deletingLastPathComponent) }
@@ -187,7 +205,10 @@ public final class FileEventBridge {
                 return
             }
             let sink = self.sink
-            let task = Task { [weak self] in
+            // Registered as running under the lock before it can finish (a fast batch must not leave a stale handle).
+            state.withLock { state in
+                guard !state.stopped else { return }
+                state.running = Task { [weak self] in
                 let interval = Self.signposter.beginInterval("batch")
                 let start = ContinuousClock.now
                 var failed = false
@@ -206,9 +227,7 @@ public final class FileEventBridge {
                     return true
                 }
                 if again { self.scheduleFlush() }
-            }
-            state.withLock { state in
-                if state.stopped { task.cancel() } else { state.running = task }
+                }
             }
         }
     }

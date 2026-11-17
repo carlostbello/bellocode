@@ -103,6 +103,7 @@ public final class EnvironmentService {
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var forwarders: [String: [Int: PortForwarder]] = [:]
     @ObservationIgnored private var bridges: [String: FileEventBridge] = [:]
+    @ObservationIgnored private var bridgeContainers: [String: String] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var configWrite: Task<Void, Never>?
     @ObservationIgnored private var lastWrittenConfig: ExecHelperConfig?
@@ -352,11 +353,15 @@ public final class EnvironmentService {
                 let status = try await runtimeRef.status(spec)
                 guard self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 model.outdatedReason = status.outdatedReason
+                if let id = status.containerID { model.record.containerID = id }
                 switch status.phase {
                 case .running: model.phase = .ready
                 case .outdated where recreate:
                     self.activate(model.directory)
                     return
+                case .outdated:
+                    // Still running (commands work); replaced on the next activation, with the reason in details.
+                    model.phase = status.containerID == nil ? .idle : .ready
                 default: model.phase = .idle
                 }
                 if model.phase == .ready { self.restartBridge(model) } else { self.bridges.removeValue(forKey: model.directory)?.stop() }
@@ -686,9 +691,17 @@ public final class EnvironmentService {
     // MARK: File-watch bridge
 
     private func restartBridge(_ model: ProjectEnvironment) {
-        bridges.removeValue(forKey: model.directory)?.stop()
         guard model.settings.fileWatchBridge, model.phase == .ready, let id = model.record.containerID,
-              let spec = workspaceSpec(model) else { return }
+              let spec = workspaceSpec(model) else {
+            bridges.removeValue(forKey: model.directory)?.stop()
+            return
+        }
+        // The same folders into the same container: keep the running stream (no gap, counters kept).
+        if let current = bridges[model.directory], current.isRunning, current.roots == spec.workspaceRoots, bridgeContainers[model.directory] == id {
+            return
+        }
+        bridges.removeValue(forKey: model.directory)?.stop()
+        bridgeContainers[model.directory] = id
         let runtimeRef = activeRuntime
         let bridge = FileEventBridge(roots: spec.workspaceRoots) { paths in
             try await runtimeRef.touch(container: id, user: spec.user, paths: paths)

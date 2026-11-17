@@ -48,6 +48,27 @@ enum ContainerEndToEnd {
         check("host edit seen by the container test", second.contains("tests pass") && second.contains("exit=0"),
               "\(Int((ContinuousClock.now - edited).components.attoseconds / 1_000_000_000_000_000 + (ContinuousClock.now - edited).components.seconds * 1000)) ms to green")
 
+        // 2c. File-watch bridge: a watcher in the container (inotify through Node's fs.watch) sees a host edit.
+        let watcher = try? await client.createShellJob(
+            command: "node -e \"const fs = require('fs'); fs.watch('src/add.js', () => { console.log('watch-fired file'); process.exit(0) }); fs.watch('src', () => { console.log('watch-fired folder'); process.exit(0) }); setTimeout(() => { console.log('watch-timeout'); process.exit(3) }, 8000)\"",
+            cwd: project, timeout: 20_000)
+        try? await Task.sleep(for: .milliseconds(700))
+        let touched = ContinuousClock.now
+        try? Data("module.exports = (a, b) => a + b; // edited on the Mac\n".utf8).write(to: add)
+        var watched = ""
+        if let watcher {
+            for _ in 0..<120 {
+                try? await Task.sleep(for: .milliseconds(50))
+                watched = (try? await client.shellJobOutput(watcher.id, directory: project))?.output ?? ""
+                if watched.contains("watch-") { break }
+            }
+        }
+        let watchLatency = Int((ContinuousClock.now - touched).components.seconds * 1000 + (ContinuousClock.now - touched).components.attoseconds / 1_000_000_000_000_000)
+        engine.environments.refreshBridgeStats(project)
+        let stats = engine.environments.environment(for: project).bridgeStats
+        check("container watcher fires on a host edit (file-watch bridge)", watched.contains("watch-fired"),
+              "\(watched.contains("folder") ? "folder watch" : watched.contains("file") ? "file watch" : "no event"), \(watchLatency) ms; bridge \(stats == nil ? "absent (\(engine.environments.environment(for: project).phase.label), \(engine.environments.environment(for: project).outdatedReason ?? "current"))" : "running"), events \(stats?.events ?? 0), batches \(stats?.batches ?? 0), failures \(stats?.failures ?? 0), paths \(stats?.paths ?? 0), last batch \(String(format: "%.1f", stats?.lastBatchMilliseconds ?? 0)) ms")
+
         // 3. Dev server through the loopback forward.
         let server = try? await client.createShellJob(
             command: "node -e \"require('http').createServer((q, r) => r.end('hello-from-container')).listen(5173, '127.0.0.1')\"",
@@ -69,6 +90,10 @@ enum ContainerEndToEnd {
         log("  e2e: stray processes cleaned after the dev server: \(reaped)")
 
         // 4. One prompt on a free model: the agent's shell tool lands in the container.
+        if ProcessInfo.processInfo.environment["BELLOCODE_E2E_SKIP_PROMPT"] == "1" {
+            log("  e2e: SKIP agent prompt (BELLOCODE_E2E_SKIP_PROMPT=1)")
+            return passed
+        }
         let free = (engine.root.catalog.current?.models ?? []).filter(\.isFree)
         guard let model = free.first(where: { $0.modelID.contains("pickle") }) ?? free.first else {
             log("  e2e: SKIP agent prompt: no free model in the catalog")
