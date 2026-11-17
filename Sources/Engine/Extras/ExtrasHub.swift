@@ -64,6 +64,7 @@ public final class ExtrasHub {
         visuals = VisualService(store: store, directory: configuration.visualsDirectory)
         schedules.runner = self
         mergeRequests.host = self
+        schedules.needsApproval = { [weak self] task in await self?.raiseScheduleCard(task, requestedBy: nil) }
     }
 
     func start(store: ProjectionStore) async {
@@ -99,7 +100,14 @@ public final class ExtrasHub {
                 }
             })
         await mergeRequests.start()
-        if engine?.configuration.startsExtras ?? true { await schedules.start() }
+        if engine?.configuration.startsExtras ?? true {
+            await schedules.start()
+            // Every agent task waiting for approval has a card (after a relaunch, a migration or a crash in between).
+            let cards = Set(await scheduleCards().map(\.subjectID))
+            for task in schedules.tasks where task.approval == .pending && task.createdBy != nil && !cards.contains(task.id) {
+                await raiseScheduleCard(task, requestedBy: nil)
+            }
+        }
     }
 
     func stop() {
@@ -185,15 +193,7 @@ public final class ExtrasHub {
         task.approval = approved ? .approved : .pending
         let created = try await schedules.create(task)
         if !approved {
-            let request = AppRequest(
-                id: AppRequest.makeID("sch"), sessionID: caller.sessionID,
-                kind: .approval(
-                    AppApproval(
-                        action: .schedule, title: "Create a scheduled task",
-                        detail: "“\(created.name)”: \(created.summary)\(Self.destinationText(created)).\nPrompt: \(String(created.prompt.prefix(300)))",
-                        scope: caller.projectDirectory, subjectID: created.id)),
-                received: .now)
-            await core.putAppRequest(request)
+            await raiseScheduleCard(created, requestedBy: caller.sessionID)
             return ClientMCPResult(
                 text: "Created “\(created.name)” (\(created.id)), paused until the user approves scheduled tasks for this project (a card is shown). Do not wait for it.")
         }
@@ -225,9 +225,55 @@ public final class ExtrasHub {
         if arguments["permissionMode"] != nil { task.permissionMode = try mode(arguments["permissionMode"]?.stringValue, caller) }
         if let catchUp = arguments["catchUp"]?.boolValue { task.catchUp = catchUp }
         if let enabled = arguments["enabled"]?.boolValue { task.enabled = enabled }
-        try await schedules.update(task)
+        // An agent's change never keeps the approval: a changed definition (or turning it back on) waits for the user.
+        let waits = try await schedules.update(task, consent: false)
         let updated = schedules.task(task.id) ?? task
+        if waits {
+            await raiseScheduleCard(updated, requestedBy: caller.sessionID)
+            return ClientMCPResult(
+                text: "Changed “\(updated.name)”. It does not run until the user approves the change (a card shows the before and after). Do not wait for it.")
+        }
         return ClientMCPResult(text: "Updated “\(updated.name)”: \(updated.summary); \(updated.isActive ? "next \(Self.dateText(updated.nextRun))" : updated.approval == .pending ? "waiting for approval" : "paused").")
+    }
+
+    /// Pending schedule approval cards.
+    private func scheduleCards() async -> [AppApproval] {
+        await core.appRequests().compactMap { request in
+            if case .approval(let approval) = request.kind, approval.action == .schedule { approval } else { nil }
+        }
+    }
+
+    /// Replaces any card for `task` with one for its current definition: the whole definition for a new task, the
+    /// before/after for a change to an approved one. The card carries the definition's digest; approving applies only
+    /// to exactly that content.
+    func raiseScheduleCard(_ task: ScheduledTask, requestedBy: SessionID?) async {
+        for request in await core.appRequests() {
+            if case .approval(let approval) = request.kind, approval.action == .schedule, approval.subjectID == task.id {
+                await core.resolveAppRequest(request.id)
+            }
+        }
+        let current = task.definition
+        let by = (requestedBy ?? task.createdBy).map { " Asked by thread \($0.rawValue)." } ?? ""
+        let title: String
+        var detail: String
+        if let approved = task.approved {
+            let changes = approved.changes(to: current)
+            title = changes.isEmpty ? "Turn a scheduled task back on" : "Change a scheduled task"
+            detail = "“\(task.name)” (\(task.summary)\(Self.destinationText(task))). Approved before; an agent \(changes.isEmpty ? "turned it back on" : "changed it").\(by)"
+            if !changes.isEmpty { detail += "\n" + changes.joined(separator: "\n") }
+            detail += "\nDeny keeps the version you approved."
+        } else {
+            title = "Create a scheduled task"
+            detail = "“\(task.name)”: \(task.summary)\(Self.destinationText(task)); agent \(task.agent ?? "default"), model \(task.model.map { "\($0.providerID)/\($0.modelID)" } ?? "default"), permission mode \(task.permissionMode?.rawValue ?? "default").\(by)\nPrompt: \(String(task.prompt.prefix(300)))"
+        }
+        let request = AppRequest(
+            id: AppRequest.makeID("sch"), sessionID: requestedBy ?? task.createdBy ?? SessionID(""),
+            kind: .approval(
+                AppApproval(
+                    action: .schedule, title: title, detail: detail, scope: task.directory, subjectID: task.id, allowsAlways: task.approved == nil,
+                    digest: current.digest)),
+            received: .now)
+        await core.putAppRequest(request)
     }
 
     private func projectTask(_ arguments: JSONValue, _ caller: ExtrasCaller) throws -> ScheduledTask {
@@ -412,9 +458,22 @@ public final class ExtrasHub {
         case .approval(let approval):
             switch (approval.action, response) {
             case (.schedule, .approve(let always)):
-                try await schedules.approve(approval.subjectID, always: always)
+                do {
+                    try await schedules.approve(approval.subjectID, digest: approval.digest, always: always && approval.allowsAlways)
+                } catch {
+                    // A stale card (the task changed, or was deleted): it can never apply, so it goes; the current
+                    // version has its own card.
+                    await core.resolveAppRequest(id)
+                    if let task = schedules.task(approval.subjectID), task.approval == .pending,
+                       !(await scheduleCards().contains { $0.subjectID == task.id })
+                    {
+                        await raiseScheduleCard(task, requestedBy: nil)
+                    }
+                    throw error
+                }
             case (.schedule, _):
-                try await schedules.delete(approval.subjectID)
+                // Deny: a change goes back to the approved version; a task never approved is deleted.
+                if try await schedules.revertToApproved(approval.subjectID) == nil { try await schedules.delete(approval.subjectID) }
             case (.network, .approve(let always)):
                 let hosts = approval.scope.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 await visuals.approveNetwork(approval.subjectID, hosts: hosts, always: always)

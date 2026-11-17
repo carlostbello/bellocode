@@ -76,14 +76,18 @@ public struct AppApproval: Hashable, Sendable, Codable {
     /// The schedule ID or the tool call part ID the decision applies to.
     public var subjectID: String
     public var allowsAlways: Bool
+    /// The exact content the card shows (a schedule's definition digest). Approving applies only if the subject still
+    /// has this content; a card without one (written by an older version) cannot approve anything.
+    public var digest: String?
 
-    public init(action: Action, title: String, detail: String, scope: String, subjectID: String, allowsAlways: Bool = true) {
+    public init(action: Action, title: String, detail: String, scope: String, subjectID: String, allowsAlways: Bool = true, digest: String? = nil) {
         self.action = action
         self.title = title
         self.detail = detail
         self.scope = scope
         self.subjectID = subjectID
         self.allowsAlways = allowsAlways
+        self.digest = digest
     }
 }
 
