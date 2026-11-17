@@ -26,8 +26,12 @@ struct ChildBubbleTests {
         }, for: session.id.rawValue)
         await thread.send("go")
         try await waitUntil("child request shown in the parent") { thread.pendingRequests.contains { $0.sessionID != session.id } }
-        try await Task.sleep(for: .milliseconds(300))
         let child = try #require(thread.pendingRequests.first?.sessionID)
+        // The attention status is derived after the request arrives; wait for that condition, not a fixed time.
+        try await waitUntil("parent blocked by its child") {
+            thread.status?.status == .awaitingApproval && thread.status?.blockingChildID == child
+        }
+        try await threadBarrier(engine, thread)
         #expect(thread.status?.status == .awaitingApproval)
         #expect(thread.status?.blockingChildID == child)
         await engine.stop()
