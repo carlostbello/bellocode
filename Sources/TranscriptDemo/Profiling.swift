@@ -10,16 +10,19 @@ final class FrameAttribution {
         var frames = 0
         /// Milliseconds per phase, summed over the frames.
         var phaseMs: [String: Double] = [:]
+        /// Main-thread CPU milliseconds per phase (wall minus CPU: preempted or blocked).
+        var phaseCPUMs: [String: Double] = [:]
         /// Interval minus nominal minus attributed time, summed (AppKit/CA work outside our phases, other threads'
         /// contention, scheduling).
         var unattributedMs = 0.0
 
-        mutating func add(_ phases: [Double], interval: Double, nominal: Double) {
+        mutating func add(_ phases: [Double], cpu: [Double], interval: Double, nominal: Double) {
             frames += 1
             var attributed = 0.0
             for phase in TranscriptProfiler.Phase.allCases {
                 let ms = phases[phase.rawValue]
                 phaseMs[phase.name, default: 0] += ms
+                phaseCPUMs[phase.name, default: 0] += cpu[phase.rawValue]
                 attributed += ms
             }
             unattributedMs += max(0, interval * 1000 - nominal * 1000 - attributed)
@@ -28,6 +31,7 @@ final class FrameAttribution {
         func rounded() -> PhaseTotals {
             var copy = self
             copy.phaseMs = phaseMs.mapValues(round2)
+            copy.phaseCPUMs = phaseCPUMs.mapValues(round2)
             copy.unattributedMs = round2(unattributedMs)
             return copy
         }
@@ -61,14 +65,16 @@ final class FrameAttribution {
     /// Called once per display frame with the interval that just ended.
     func frame(interval: Double) {
         let phases = TranscriptProfiler.shared.takeFrame()
+        let cpu = TranscriptProfiler.shared.takeFrameCPU()
         elapsed += interval
-        report.all.add(phases, interval: interval, nominal: nominal)
-        if interval * 1000 > 16.7 { report.over16_7ms.add(phases, interval: interval, nominal: nominal) }
+        report.all.add(phases, cpu: cpu, interval: interval, nominal: nominal)
+        if interval * 1000 > 16.7 { report.over16_7ms.add(phases, cpu: cpu, interval: interval, nominal: nominal) }
         if interval * 1000 > 33.4 {
-            report.over33ms.add(phases, interval: interval, nominal: nominal)
+            report.over33ms.add(phases, cpu: cpu, interval: interval, nominal: nominal)
             var named: [String: Double] = [:]
             for phase in TranscriptProfiler.Phase.allCases where phases[phase.rawValue] > 0.05 {
                 named[phase.name] = round2(phases[phase.rawValue])
+                named[phase.name + "CPU"] = round2(cpu[phase.rawValue])
             }
             report.worst.append(SlowFrame(intervalMs: round2(interval * 1000), phaseMs: named, at: round2(elapsed)))
             report.worst.sort { $0.intervalMs > $1.intervalMs }
@@ -215,7 +221,7 @@ extension ScenarioRunner {
         let pauseAbove = arguments.firstIndex(of: "--pause-above").flatMap { Double(arguments[$0 + 1]) }
         var paused = false
         await perFrame { [self] dt, _ in
-            if first { first = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution.frame(interval: dt) }
+            if first { first = false; _ = TranscriptProfiler.shared.takeFrame(); _ = TranscriptProfiler.shared.takeFrameCPU() } else { attribution.frame(interval: dt) }
             if dt > 0.0334 { let now = CACurrentMediaTime(); sampler2?.keep(from: now - dt, to: now) }
             sampler.frame(controller)
             if let pauseAbove, !paused, ProcessStats.memory().footprint > pauseAbove {
@@ -266,5 +272,45 @@ extension ScenarioRunner {
                 cachesBeforePurge: caches, metrics: metrics),
             name: "P")
         log("P: >33 ms \(FrameStats(intervals: down, nominal: nominal).over33ms), peak \(sampler.report.peakFootprint?.footprintMB ?? 0) MB")
+    }
+}
+
+extension ScenarioRunner {
+    struct ControlReport: Codable {
+        var header: RunHeader
+        var display: DisplayInfo.Info
+        var frames: FrameStats
+        var watchdog: Watchdog.Report
+    }
+
+    /// Control: the same window and display link with a trivial workload (one small layer moved per frame), for
+    /// `--seconds` (default 120). Its slow frames are the environment's (other processes, WindowServer, the lock
+    /// screen), the noise floor for S2 run at the same time. Report: build/transcript-bench/control.json.
+    func runControl() async {
+        let seconds = arguments.firstIndex(of: "--seconds").flatMap { Double(arguments[$0 + 1]) } ?? 120
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 900))
+        view.wantsLayer = true
+        let dot = CALayer()
+        dot.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
+        dot.backgroundColor = NSColor.systemBlue.cgColor
+        view.layer?.addSublayer(dot)
+        window.contentView = view
+        recorder.invalidate()
+        recorder = FrameRecorder(view: view)
+        await sleep(1)
+        watchdog.start()
+        recorder.start()
+        await perFrame { _, elapsed in
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            dot.position = CGPoint(x: 40 + (elapsed * 300).truncatingRemainder(dividingBy: 800), y: 450)
+            CATransaction.commit()
+            return elapsed < seconds
+        }
+        let frames = FrameStats(intervals: recorder.stop(), nominal: nominal)
+        Report.write(
+            ControlReport(header: header("control"), display: DisplayInfo.current(window: window), frames: frames, watchdog: watchdog.stop()),
+            name: "control")
+        log("control: \(frames.frames) frames, >16.7 \(frames.over16_7ms), >33 \(frames.over33ms), max \(Int(frames.maxMs)) ms")
     }
 }

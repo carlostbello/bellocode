@@ -116,7 +116,7 @@ extension ScenarioRunner {
         watchdog.start()
         recorder.start()
         await perFrame { [self] dt, _ in
-            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution?.frame(interval: dt) }
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame(); _ = TranscriptProfiler.shared.takeFrameCPU() } else { attribution?.frame(interval: dt) }
             sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: d)
@@ -131,7 +131,7 @@ extension ScenarioRunner {
         flick = Flick()
         firstFrame = true
         await perFrame { [self] dt, _ in
-            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame() } else { attribution?.frame(interval: dt) }
+            if firstFrame { firstFrame = false; _ = TranscriptProfiler.shared.takeFrame(); _ = TranscriptProfiler.shared.takeFrameCPU() } else { attribution?.frame(interval: dt) }
             sampler.frame(controller)
             let d = flick.step(dt, rng: &rng, scale: scrollSpeed)
             controller.userScroll(by: -d)

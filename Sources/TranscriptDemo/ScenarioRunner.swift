@@ -224,6 +224,7 @@ final class ScenarioRunner {
             case "S8": await runS8()
             case "layout": await runLayoutProfile()
             case "P": await runProfile()
+            case "control": await runControl()
             default: log("unknown scenario \(scenario)")
             }
             if scenario != "S8" { unmount() }

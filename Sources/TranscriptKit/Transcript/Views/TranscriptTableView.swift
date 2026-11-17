@@ -300,13 +300,19 @@ final class TranscriptCellView: NSView {
         return (columnX - Self.gutter, contentWidth + 2 * Self.gutter)
     }
 
+    /// Canvas heights come in 128 pt steps. A reused cell then usually keeps its canvas size, and with it its backing
+    /// store: before, nearly every row drawn while scrolling (2,338 of 2,526) resized its canvas, so Core Animation
+    /// allocated a new surface through the window server for each, and the main thread waited on that IPC under load.
+    /// The part below a short row is transparent and never drawn or hit-tested.
+    static func bucket(_ height: CGFloat) -> CGFloat { max(128, ceil(height / 128) * 128) }
+
     /// Keeps the canvas covering the visible part (plus margin) of tall rows, with hysteresis.
     func updateCanvas(force: Bool = false) {
         let bounds = self.bounds
         let column = columnFrame()
         let target: CGRect
         if bounds.height <= Self.tallRowThreshold {
-            target = CGRect(x: column.x, y: 0, width: column.width, height: bounds.height)
+            target = CGRect(x: column.x, y: 0, width: column.width, height: Self.bucket(bounds.height))
         } else {
             let visible = visibleRect
             if !force, !canvas.frame.isEmpty, !visible.isEmpty, canvas.frame.minX == column.x, canvas.frame.width == column.width,
@@ -318,9 +324,10 @@ final class TranscriptCellView: NSView {
             let center = visible.isEmpty ? CGRect(x: 0, y: 0, width: bounds.width, height: 1) : visible
             let top = max(0, floor(center.minY - margin))
             let bottom = min(bounds.height, ceil(center.maxY + margin))
-            target = CGRect(x: column.x, y: top, width: column.width, height: max(1, bottom - top))
+            target = CGRect(x: column.x, y: top, width: column.width, height: Self.bucket(max(1, bottom - top)))
         }
         if canvas.frame.size != target.size || canvas.frame.minY != target.minY {
+            if canvas.frame.size != target.size { TranscriptProfiler.shared.count("canvasResizes") }
             canvas.frame = target
             canvas.needsDisplay = true
         } else if canvas.frame.origin != target.origin {
@@ -408,7 +415,28 @@ final class TranscriptCanvasView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let owner, let layout = owner.layout, let context = NSGraphicsContext.current?.cgContext else { return }
-        TranscriptProfiler.shared.measure(.draw) { drawNow(dirtyRect, owner: owner, layout: layout, context: context) }
+        let profiler = TranscriptProfiler.shared
+        if profiler.isEnabled {
+            profiler.count("canvasDraws")
+            profiler.count("canvasDrawKPoints", Int(dirtyRect.width * dirtyRect.height / 1000))
+            profiler.count("canvasDraws." + (owner.row.map { TranscriptCanvasView.kindName($0.content) } ?? "none"))
+        }
+        let start = CACurrentMediaTime()
+        profiler.measure(.draw) { drawNow(dirtyRect, owner: owner, layout: layout, context: context) }
+        if profiler.isEnabled, let row = owner.row {
+            profiler.count("drawMicros." + TranscriptCanvasView.kindName(row.content), Int((CACurrentMediaTime() - start) * 1e6))
+        }
+    }
+
+    static func kindName(_ content: RowContent) -> String {
+        switch content {
+        case .user: "user"
+        case .markdown(let text, _): text.contains("```") ? "markdownCode" : text.contains("\n|") ? "markdownTable" : "markdown"
+        case .reasoning: "reasoning"
+        case .work: "work"
+        case .file: "file"
+        default: "other"
+        }
     }
 
     private func drawNow(_ dirtyRect: NSRect, owner: TranscriptCellView, layout: RowLayout, context: CGContext) {

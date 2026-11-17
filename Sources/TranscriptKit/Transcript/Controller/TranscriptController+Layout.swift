@@ -258,6 +258,7 @@ extension TranscriptController {
             metrics.placeholderRows += 1
             return nil
         }
+        TranscriptProfiler.shared.count(inflight[id] != nil ? "syncLayoutWhileInflight" : layoutTick[id] != nil ? "syncLayoutStale" : "syncLayoutNeverRequested")
         let signpost = transcriptSignposter.beginInterval("syncLayout")
         let layout = TranscriptProfiler.shared.measure(.syncLayout) {
             LayoutEngine.layoutNow(layoutInput(row: index), fonts: TranscriptFonts(theme: theme))
