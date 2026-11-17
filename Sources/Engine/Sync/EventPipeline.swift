@@ -11,9 +11,9 @@ struct EventPipeline: Sendable {
     private var seen = RecentIDs(capacity: 8192)
     private(set) var duplicatesDropped = 0
 
-    init(state: ProjectionState = ProjectionState(), cadence: Duration = .milliseconds(33)) {
+    init(state: ProjectionState = ProjectionState(), cadence: Duration = .milliseconds(33), maxPendingBytes: Int = 1 << 20) {
         self.state = state
-        coalescer = StreamCoalescer(cadence: cadence)
+        coalescer = StreamCoalescer(cadence: cadence, maxPendingBytes: maxPendingBytes)
     }
 
     /// Applies one event. `clock` is monotonic time (for the coalescer), `now` wall-clock time for events without a
@@ -25,6 +25,11 @@ struct EventPipeline: Sendable {
         }
         if let (key, delta) = EventReducer.streamDelta(of: envelope.event) {
             coalescer.append(delta, for: key, now: clock)
+            // Hard ceiling: past `maxPendingBytes` everything pending is applied now, however fast deltas arrive and
+            // whether or not the cadence timer has fired. Nothing is dropped.
+            if coalescer.pendingByteCount >= coalescer.maxPendingBytes {
+                return EventReducer.applyDeltas(coalescer.takeAll(), into: &state, now: now)
+            }
             return Reduction()
         }
         var reduction = Reduction()

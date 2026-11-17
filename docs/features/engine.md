@@ -42,16 +42,24 @@ Cache (rebuildable): `project`, `session` (by project, parent), `message` (`seq`
 `part` (by message/idx), `message_fts` (FTS5, rowid = `message.seq`), `pending_request`, `queued_prompt`, `catalog`
 (no secret-bearing fields), `session_sync` (older-page cursor, history complete). App-owned (kept by `rebuild()`):
 `app_project` (directory, order, pinned, archived), `app_thread` (draft, visit watermark, pinned, snoozed, settled,
-scroll anchor). Rows hold the domain value as JSON plus query columns. A newer-schema or unreadable file is deleted
-and recreated at open. Writes are batched transactions; the engine writes behind (100 ms), streamed text is persisted
-when a block ends, on eviction from the 2,048-message memory cache, and at `stop()`.
+scroll anchor), `app_preference`. Rows hold the domain value as JSON plus query columns. Nothing is ever deleted at
+open: a verifiably corrupt (`SQLITE_CORRUPT`/`NOTADB`) or newer-schema file is moved aside with its WAL
+(`projection.sqlite.corrupt-<ms>` / `.newer-<ms>`, newest three kept), a new one is created and
+`EngineRoot.storage == .recovered(...)`; any other failure (lock, I/O, permission, failed migration) throws
+`ProjectionStore.OpenError` with the file untouched (the app offers Try Again). `Engine.make(configuration:)` opens and
+migrates off the main actor. Writes are batched transactions; the engine writes behind (100 ms) with one writer: while
+a write is slow, newer writes coalesce into one pending batch (one entry per row). A failed write keeps app-owned rows
+(retried with `writeRetryBackoff` until they succeed; `storage == .writeFailing`, "Not saving" in the toolbar) and
+retries opencode cache rows three times before dropping them for a resync. Streamed text is persisted when a block
+ends, on eviction from the 2,048-message memory cache, and at `stop()` (which retries a failing write three times).
 
 ## Sync and coalescing rules
 
 - One ordered path: EventHub → `EventPipeline` (drop duplicate event IDs, 8,192 remembered) → `StreamCoalescer` for
   text/reasoning/tool-input deltas → pure `EventReducer` → `ChangeBus` (live) and write-behind.
 - Coalescer: per (message, block); a flush is due 33 ms after the first unpublished delta; a message is flushed at once
-  before any other event for it (block/step end, tool call, turn end, interrupt); over 1 MB pending flushes at once.
+  before any other event for it (block/step end, tool call, turn end, interrupt); reaching 1 MB pending flushes
+  everything inside `ingest`, before the next delta (a hard ceiling, not just "due").
   Nothing is dropped; revision increases once per publish.
 - Reducers are monotonic (create-only-if-empty, forward-only tool states, busy/idle only move forward), so duplicates,
   late events and replay over a newer snapshot change nothing (tested on the recorded stream).

@@ -313,3 +313,31 @@ struct LogPrivacyTests {
         #expect(leaked.isEmpty, "\(leaked.map(\.composedMessage))")
     }
 }
+
+// MARK: - M8: stream delta ceiling
+
+@Suite("M8 stream delta ceiling")
+struct StreamDeltaCeilingTests {
+    /// A burst with no time passing (the cadence timer never fires): pending deltas never exceed the ceiling plus one
+    /// delta, and the result equals unbounded coalescing (nothing dropped).
+    @Test func burstIsFlushedAtTheByteCeiling() throws {
+        let envelopes = try recordedEnvelopes()
+        var bounded = EventPipeline(maxPendingBytes: 16)
+        var reference = EventPipeline(maxPendingBytes: .max)
+        var largestDelta = 0
+        var flushedEarly = 0
+        for envelope in envelopes {
+            if let (_, delta) = EventReducer.streamDelta(of: envelope.event) { largestDelta = max(largestDelta, delta.utf8.count) }
+            let reduction = bounded.ingest(envelope, clock: .zero, now: Timestamp(milliseconds: 0))
+            if EventReducer.streamDelta(of: envelope.event) != nil, !reduction.isEmpty { flushedEarly += 1 }
+            #expect(bounded.coalescer.pendingByteCount < 16 + largestDelta)
+            _ = reference.ingest(envelope, clock: .zero, now: Timestamp(milliseconds: 0))
+        }
+        _ = bounded.flushDeltas(clock: .zero, now: Timestamp(milliseconds: 0), force: true)
+        _ = reference.flushDeltas(clock: .zero, now: Timestamp(milliseconds: 0), force: true)
+        #expect(flushedEarly > 0)
+        for id in reference.state.sessions.keys {
+            #expect(normalized(bounded.state.messages.messages(in: id)) == normalized(reference.state.messages.messages(in: id)))
+        }
+    }
+}
