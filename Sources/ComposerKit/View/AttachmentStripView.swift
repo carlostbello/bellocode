@@ -194,7 +194,7 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
     private let icon = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let sizeLabel = NSTextField(labelWithString: "")
-    private let removeButton = NSButton()
+    private let removeButton = DSButton(icon: "xmark", accessibilityTitle: "Remove", size: .small)
     private var previewURL: URL?
     /// `previewURL` is a file this chip wrote (pasted content), deleted when the preview ends or the chip goes.
     private var ownsPreviewFile = false
@@ -215,11 +215,6 @@ final class AttachmentChipView: NSView, @preconcurrency QLPreviewPanelDataSource
         sizeLabel.stringValue = attachment.formattedSize
         sizeLabel.font = DS.TextRole.meta.font
         sizeLabel.textColor = style.secondaryTextColor
-        removeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
-        removeButton.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
-        removeButton.contentTintColor = DS.Color.text3
-        removeButton.isBordered = false
-        removeButton.imagePosition = .imageOnly
         removeButton.setAccessibilityLabel("Remove \(attachment.name)")
         removeButton.toolTip = "Remove"
         removeButton.target = self

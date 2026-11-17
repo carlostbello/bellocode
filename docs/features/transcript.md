@@ -31,6 +31,20 @@ transcript-level selection model). Code: `Sources/TranscriptKit/Transcript/`; ha
   column width, theme revision, top padding); LRU bounded by count and CTLine cost; parse cache bounded by count and
   bytes. Code and wide tables scroll horizontally inside the row, tool output is capped (220 pt) with its own scroll.
 
+## Appearance (restyle 3, docs/design/visual-language.md §6 "Chat column")
+`TranscriptTheme` resolves every colour from `DS.Color` (text / text2 / text3 / text4, `message`, `codeFill`, `border`,
+`textSelection`, `findMatch`, semantic text tones) and every size from `DS.TextRole`: prose 14/22 (strong is semibold),
+headings 18/16/14 semibold, code 12.5/19, tool rows and summaries `body` 13, tool targets mono 12, metadata `meta` 11.
+User bubble: `message`, r16, padding 10/14, 21 pt lines, ≤ 80 % of the 736 pt column. Code block: `codeFill` r8 (light adds
+a 70 % `border` hairline), 28 pt header with the language in mono `meta text3` and a ghost copy icon (check once copied).
+Tables: no outer border, `borderStrong` under the header, `border` under rows, outer columns flush, tabular digits,
+stretched to the column. Work-group line 24 pt (chevron `text4`, summary `text3`, `· 12s` `text4`); tool row 26 pt (14 pt
+glyph: check `successText`, triangle `dangerText`, drawn spinner; verb `text3`; target `text`; `+n`/`−n`). The spinner
+steps on `DSStepClock`; a cell subscribes only while it shows one and redraws only the spinner bands (static under Reduce
+Motion). Reasoning: `text2` 13/20 beside a 2 pt guide. System events: one centred `meta text3` line. Errors: inline
+triangle + `dangerText` title + message. Cards: fill only in dark, `border` 70 % in light, r10. Jump pill: outline
+`DSButton` on opaque `raised`; find bar: `DSTextField(.search)` and DS icon buttons on the popover glass; `DSScroller`.
+
 ## Public API and mounting
 `TranscriptViewController(controller:)` + `bind(_ source:anchor:)`; `TranscriptController` exposes `scrollAnchor` /
 `restore(anchor:)` (`TranscriptAnchor` = message ID + offset), `jumpToLatest`, `goToTurn(previous:)`,

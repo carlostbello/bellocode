@@ -77,3 +77,18 @@ Settings: keep the native window and form; DS controls inside our panes only; fi
 `EmptyStateView` (evidence `nav-settings-notifications-dark` + a first-run scenario to add). Then delete the deprecated aliases and `AppStyle` re-mapping. Grep outside DesignSystem must find no `bezelStyle`,
 `NSSegmentedControl`, `NSPopUpButton`, `.borderedProminent`, `.bordered`, or accent/`selectedContentBackgroundColor`
 row fills. Switch snapshot fixtures to realistic thread titles. Add T3 Code's MIT notice to the acknowledgements.
+
+## Restyle status: conversation surfaces (restyle 3: TranscriptKit, ComposerKit, AgentUI, OrchestrationUI)
+Done: transcript (step 2), composer (step 3), request cards and pickers (step 4), Agents panel (step 9), plus the
+scheduled-tasks, merge-request and secrets panes. Evidence in `docs/snapshots/`: `transcript-*`, `composer-*`,
+`requests-*`, `models-*`, `modes-*`, `onboarding-*`, `accounts-*`, `orch-*`, `extras-*` (light and dark; solid glass
+fallback; no font smoothing). DesignSystem additions: `DSTextFieldStyle`, SwiftUI hint drop in `DSButtonStyle`, more
+`Color.ds` tokens (gallery row added).
+Differs from the mock: the request card is not yet overlapped by the composer (the shell lays them out; set
+`agentUIAttachedOverlap` and overlap by 16 in `RequestStackSurface`); the shell's context line and `AppStyle` mappings
+are still the shell's (ComposerKit and AgentUI ignore their visual fields; `ComposerContextStrip` is ready to adopt);
+Queue/Steer keep a labelled capsule instead of the plain circle (UX rule 5); the running row has no highlight sweep.
+Left stock on purpose: `NSMenu` context and follow-up menus (native), the sign-in method `Picker` when a provider has more
+than three methods (`.menu` in a DS outline button), `DatePicker`, `Stepper` and the `Form` pickers of the Scheduled
+Tasks settings pane (native Settings window per step 10), SwiftUI `.plain` button style used as a hit target for DS-drawn
+rows and radios.
