@@ -117,6 +117,8 @@ struct EngineFlowTests {
 
             // The live projection and the cache equal the list endpoints.
             await engine.flush()
+            // The thread model applies changes on its own task: wait until it has applied everything flushed.
+            try await threadBarrier(engine, thread)
             let listed = try await harness.listedMessages(session.id)
             let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
             await expect(normalized(shown) == normalized(listed), "normalized(shown) == normalized(listed)")

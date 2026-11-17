@@ -228,7 +228,9 @@ struct ResyncRetryTests {
         await harness.server.injectHTTPFault(.status(500, method: "GET", pathPrefix: "/api/info", count: 6))
         var configuration = EngineConfiguration(server: .fixed(harness.connection), store: .inMemory)
         configuration.eventBackoff = BackoffPolicy(initial: .milliseconds(20), maximum: .milliseconds(200))
-        configuration.resyncRetryBackoff = BackoffPolicy(initial: .milliseconds(10), maximum: .milliseconds(40))
+        // The out-of-date state lasts one retry delay. Polled from the main actor, a 10-40 ms window was missed on a
+        // loaded machine; 600 ms (no shorter than 300 ms with jitter) is observable without making the test slow.
+        configuration.resyncRetryBackoff = BackoffPolicy(initial: .milliseconds(600), maximum: .milliseconds(600))
         let engine = try Engine(configuration: configuration)
         await engine.start()
         try await waitUntil("stale") {

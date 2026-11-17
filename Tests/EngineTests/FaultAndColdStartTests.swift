@@ -109,6 +109,7 @@ struct FaultAndColdStartTests {
         await harness.server.waitUntilAllIdle()
         try await waitUntil("finished") { thread.status?.status == .finishedUnread }
         await engine.flush()
+        try await threadBarrier(engine, thread)
         let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
         #expect(shown.map(\.kind.typeName) == ["user", "assistant"])
         #expect(normalized(shown) == normalized(try await harness.listedMessages(session.id)))

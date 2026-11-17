@@ -167,17 +167,18 @@ struct FaultTests {
 
     @Test func delayedRequestDoesNotBlockOthers() async throws {
         try await withServer(options: Self.realTime) { server, client in
-            await server.injectHTTPFault(HTTPFault(pathPrefix: "/api/agent", action: .delay(.milliseconds(400))))
-            let clock = ContinuousClock()
-            let start = clock.now
+            // The slow request is held at a gate (not a delay): the fast one must be answered while it is still
+            // held, whatever the load.
+            await server.injectHTTPFault(HTTPFault(pathPrefix: "/api/agent", action: .holdResponse(gate: "slow")))
             async let slow = client.request("GET", "/api/agent")
-            try await Task.sleep(for: .milliseconds(50))
+            let deadline = ContinuousClock.now + .seconds(15)
+            while await server.heldResponseCount(gate: "slow") == 0, ContinuousClock.now < deadline { await Task.yield() }
+            #expect(await server.heldResponseCount(gate: "slow") == 1)
             let fast = try await client.request("GET", "/api/info")
-            let fastElapsed = clock.now - start
             #expect(fast.status == 200)
+            #expect(await server.heldResponseCount(gate: "slow") == 1, "answered while the slow request is still held")
+            await server.releaseResponses(gate: "slow")
             #expect(try await slow.status == 200)
-            #expect(clock.now - start >= .milliseconds(400))
-            #expect(fastElapsed < .milliseconds(350))
         }
     }
 
