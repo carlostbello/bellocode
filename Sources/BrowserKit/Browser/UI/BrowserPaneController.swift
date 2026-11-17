@@ -102,6 +102,7 @@ public final class BrowserPaneController: NSViewController {
             stack.topAnchor.constraint(equalTo: root.topAnchor), stack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: root.leadingAnchor), stack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             findBar.heightAnchor.constraint(equalToConstant: 30), footer.heightAnchor.constraint(equalToConstant: 24),
+            banners.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         content.setContentHuggingPriority(.defaultLow, for: .vertical)
         content.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -307,7 +308,11 @@ public final class BrowserPaneController: NSViewController {
         let current = banners.arrangedSubviews
         if current.count != shown.count || zip(current, shown).contains(where: { $0 !== $1 }) {
             for view in current { banners.removeArrangedSubview(view); view.removeFromSuperview() }
-            for bar in shown { banners.addArrangedSubview(bar) }
+            for bar in shown {
+                banners.addArrangedSubview(bar)
+                bar.translatesAutoresizingMaskIntoConstraints = false
+                bar.widthAnchor.constraint(equalTo: banners.widthAnchor, constant: -2 * DS.Spacing.s).isActive = true
+            }
         }
         banners.isHidden = shown.isEmpty
     }

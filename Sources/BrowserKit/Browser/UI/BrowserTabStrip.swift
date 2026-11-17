@@ -212,10 +212,12 @@ final class BrowserTabView: NSView {
     }
 
     private func refreshAppearance() {
-        layer?.backgroundColor = isSelected
-            ? DS.Palette.cardBackground.cgColor : (hovering ? DS.Palette.groupFill.cgColor : NSColor.clear.cgColor)
-        layer?.borderWidth = isSelected ? 1 : 0
-        layer?.borderColor = DS.Palette.cardBorder.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = isSelected
+                ? DS.Palette.cardBackground.cgColor : (hovering ? DS.Palette.groupFill.cgColor : NSColor.clear.cgColor)
+            layer?.borderWidth = isSelected ? 1 : 0
+            layer?.borderColor = DS.Palette.cardBorder.cgColor
+        }
         close.isHidden = !(isSelected || hovering)
     }
 

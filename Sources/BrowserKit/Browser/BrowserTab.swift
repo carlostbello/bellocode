@@ -110,7 +110,9 @@ public final class BrowserTab: NSObject {
     /// The agent touched this tab recently (the tab strip marks it).
     public internal(set) var lastAgentAction: Date?
     /// Where the agent last clicked, in web view coordinates (the cursor overlay).
-    public internal(set) var agentCursor: CGPoint?
+    public internal(set) var agentCursor: CGPoint? { didSet { agentCursorAt = agentCursor == nil ? nil : Date() } }
+    /// When the cursor was placed: it shows for a few seconds after a pointer action only.
+    public private(set) var agentCursorAt: Date?
 
     // MARK: Prompts waiting for the person (or the agent, for dialogs)
 
@@ -591,6 +593,7 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
         console.removeAll()
         consoleDropped = 0
         favicon = nil
+        agentCursor = nil
         dropSnapshot()
         changed(.page)
     }

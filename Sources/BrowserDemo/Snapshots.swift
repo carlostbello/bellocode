@@ -20,9 +20,11 @@ struct Snapshots {
         var written: [URL] = []
         func shoot(_ state: String, appearances: [NSAppearance.Name] = [.aqua, .darkAqua], prepare: (() async -> Void)? = nil) async {
             for name in appearances {
+                print("snapshot: \(state) \(name.rawValue)")
                 NSApp.appearance = NSAppearance(named: name)
                 harness.window.appearance = NSAppearance(named: name)
                 await prepare?()
+                print("snapshot:   prepared")
                 await harness.idle(250)
                 let mode = name == .darkAqua ? "dark" : "light"
                 if let url = await harness.write("browser-\(state)-\(mode)", to: directory) { written.append(url) }
@@ -58,10 +60,10 @@ struct Snapshots {
         await shoot("inspect") {
             set.startPicking()
             try? await Task.sleep(for: .milliseconds(150))
-            if let tab = set.tab(tabID), let webView = tab.webView,
-               let point = try? await tab.agent("point", ["ref": .string(ref(await refs(), "button", "Create account") ?? "e1")]),
-               let x = point["cx"]?.numberValue, let y = point["cy"]?.numberValue {
-                try? NativeInput.move(webView, css: CGPoint(x: x, y: y))
+            // WebKit drops synthesized mouse moves while the window is not key (the shell never activates the app), so
+            // the hover is dispatched by script; with a person at the screen the real pointer drives it.
+            if let tab = set.tab(tabID) {
+                _ = try? await tab.agent("hoverScript", ["ref": .string(ref(await refs(), "button", "Create account") ?? "e1")])
             }
         }
         // The note bar after a pick.
@@ -101,6 +103,8 @@ struct Snapshots {
             for _ in 0..<40 where !harness.workspace.downloads.items.contains(where: { $0.state == .finished }) { try? await Task.sleep(for: .milliseconds(50)) }
         }
         await harness.call("navigate", ["url": .string(origin + "/dialogs.html")], tabID: tabID)
+        await harness.idle(300)
+        _ = await harness.renderPNG()
         if let confirm = ref(await refs(), "button", "Show confirm") { await harness.call("click", ["ref": .string(confirm)], tabID: tabID) }
         await shoot("dialog-downloads")
         set.tab(tabID)?.answerDialog(accept: false)

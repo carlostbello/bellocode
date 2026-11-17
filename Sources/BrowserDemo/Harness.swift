@@ -16,6 +16,8 @@ final class Harness {
     let pane: BrowserPaneController
     let downloads: URL
     private(set) var set: BrowserTabSet
+    /// The last snapshot of each web view: used when WebKit cannot paint (a JavaScript dialog blocks the page).
+    private var cachedImages: [ObjectIdentifier: NSImage] = [:]
 
     init(workspace: BrowserWorkspace, set: BrowserTabSet, context: BrowserPaneContext, downloads: URL, size: NSSize = NSSize(width: 1100, height: 820)) {
         self.workspace = workspace
@@ -77,7 +79,11 @@ final class Harness {
         for webView in webViews {
             let configuration = WKSnapshotConfiguration()
             configuration.afterScreenUpdates = true
-            guard let image = try? await webView.takeSnapshot(configuration: configuration) else { continue }
+            configuration.afterScreenUpdates = false
+            let key = ObjectIdentifier(webView)
+            let image = await snapshot(webView, configuration) ?? cachedImages[key]
+            guard let image else { continue }
+            cachedImages[key] = image
             layers.append((image, webView.convert(webView.bounds, to: frameView)))
         }
         for overlay in overlays {
@@ -103,6 +109,19 @@ final class Harness {
         return bitmap.representation(using: .png, properties: [:])
     }
 
+    /// `takeSnapshot` with a 2 s limit (it never answers while a dialog blocks the page).
+    private func snapshot(_ webView: WKWebView, _ configuration: WKSnapshotConfiguration) async -> NSImage? {
+        let box = SnapshotBox()
+        return await withCheckedContinuation { continuation in
+            box.continuation = continuation
+            webView.takeSnapshot(with: configuration) { image, _ in MainActor.assumeIsolated { box.finish(image) } }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                box.finish(nil)
+            }
+        }
+    }
+
     func write(_ name: String, to directory: URL) async -> URL? {
         guard let data = await renderPNG() else { return nil }
         let url = directory.appending(path: "\(name).png")
@@ -112,6 +131,15 @@ final class Harness {
         } catch {
             return nil
         }
+    }
+}
+
+@MainActor
+private final class SnapshotBox {
+    var continuation: CheckedContinuation<NSImage?, Never>?
+    func finish(_ image: NSImage?) {
+        continuation?.resume(returning: image)
+        continuation = nil
     }
 }
 

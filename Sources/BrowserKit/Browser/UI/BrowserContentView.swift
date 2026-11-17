@@ -48,7 +48,10 @@ final class BrowserContentView: NSView {
 
     private func refreshBackground() {
         let viewportMode = tab?.viewport != nil
-        layer?.backgroundColor = (viewportMode ? DS.Palette.groupFill : DS.Palette.contentBackground).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (viewportMode ? DS.Palette.groupFill : DS.Palette.contentBackground).cgColor
+            viewportHost.layer?.borderColor = DS.Palette.separator.cgColor
+        }
     }
 
     /// The size pages lay out at in fill mode (parked web views use it too).
@@ -121,7 +124,6 @@ final class BrowserContentView: NSView {
             sizeLabel.stringValue = "\(preset.name) · \(preset.width) × \(preset.height) · \(preset.scale.formatted())× device (page sees the display's)\(percent < 100 ? " · \(percent)%" : "")"
             sizeLabel.frame = NSRect(x: 0, y: 4, width: area.width, height: 16)
             viewportHost.layer?.borderWidth = 1
-            viewportHost.layer?.borderColor = DS.Palette.separator.cgColor
             viewportHost.layer?.cornerRadius = 0
         } else {
             viewportHost.frame = area
@@ -152,17 +154,17 @@ final class BrowserContentView: NSView {
         } else {
             highlight.isHidden = true
         }
-        if let point = tab.agentCursor, let last = tab.lastAgentAction, Date().timeIntervalSince(last) < 4 || tab.agentActivity != nil {
+        if let point = tab.agentCursor, let placed = tab.agentCursorAt, Date().timeIntervalSince(placed) < 3 {
             let location = convert(point, from: webView)
             cursor.place(at: location)
             cursor.isHidden = false
             cursorHide?.cancel()
             cursorHide = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(3))
                 guard !Task.isCancelled else { return }
                 self?.cursor.isHidden = true
             }
-        } else if tab.agentActivity == nil {
+        } else {
             cursor.isHidden = true
         }
     }

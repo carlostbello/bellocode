@@ -44,6 +44,7 @@ final class BrowserBanner: NSView {
         stack.spacing = DS.Spacing.s
         stack.edgeInsets = NSEdgeInsets(top: DS.Spacing.xs, left: DS.Spacing.m, bottom: DS.Spacing.xs, right: DS.Spacing.xs)
         stack.detachesHiddenViews = true
+        stack.distribution = .fill
         for view in [icon, label, fields, buttons] as [NSView] { stack.addArrangedSubview(view) }
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -65,17 +66,10 @@ final class BrowserBanner: NSView {
     ) {
         let rebuild = identifier_ != id || textFields.count != fieldSpecs.count || buttons.arrangedSubviews.count != actions.count
         identifier_ = id
-        let tint: NSColor = switch tone {
-        case .accent: DS.Palette.accent
-        case .attention: DS.Palette.attention
-        case .neutral: DS.Palette.secondaryText
-        case .failure: DS.Palette.failure
-        }
+        self.tone = tone
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         icon.contentTintColor = tint
-        layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = tint.withAlphaComponent(0.35).cgColor
+        refreshColors()
         label.stringValue = message
         label.toolTip = message
         setAccessibilityLabel(message)
@@ -108,6 +102,30 @@ final class BrowserBanner: NSView {
             button.hasDestructiveAction = action.isDestructive
             buttons.addArrangedSubview(button)
         }
+    }
+
+    private var tone: Tone = .neutral
+
+    private var tint: NSColor {
+        switch tone {
+        case .accent: DS.Palette.accent
+        case .attention: DS.Palette.attention
+        case .neutral: DS.Palette.secondaryText
+        case .failure: DS.Palette.failure
+        }
+    }
+
+    private func refreshColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
+            layer?.borderWidth = 1
+            layer?.borderColor = tint.withAlphaComponent(0.35).cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshColors()
     }
 
     @objc private func pressed(_ sender: NSButton) {
@@ -241,7 +259,6 @@ private final class DownloadChip: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = DS.Radius.small
-        layer?.backgroundColor = DS.Palette.groupFill.cgColor
         let icon = NSImageView(image: NSWorkspace.shared.icon(for: .data))
         if let destination = item.destination { icon.image = NSWorkspace.shared.icon(forFile: destination.path) }
         icon.imageScaling = .scaleProportionallyDown
@@ -291,6 +308,12 @@ private final class DownloadChip: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func updateLayer() {
+        layer?.backgroundColor = DS.Palette.groupFill.cgColor
+    }
+
+    override var wantsUpdateLayer: Bool { true }
 
     @objc private func cancel() { downloads?.cancel(item) }
     @objc private func reveal() { downloads?.reveal(item) }
