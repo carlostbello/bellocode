@@ -71,6 +71,9 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.addItem(title: "Cut", action: #selector(NSText.cut(_:)), key: "x")
         menu.addItem(title: "Copy", action: #selector(NSText.copy(_:)), key: "c")
+        menu.add(.copyMessage)
+        menu.add(.copyAsMarkdown)
+        menu.add(.copyCode)
         menu.addItem(title: "Paste", action: #selector(NSText.paste(_:)), key: "v")
         menu.addItem(
             title: "Paste and Match Style", action: #selector(NSTextView.pasteAsPlainText(_:)), key: "v",
@@ -80,11 +83,12 @@ enum MainMenu {
         menu.addItem(title: "Delete", action: #selector(NSText.delete(_:)), key: "")
         menu.addItem(title: "Select All", action: #selector(NSText.selectAll(_:)), key: "a")
         menu.addItem(.separator())
+        // Find acts on the transcript (docs/research/03, section D: ⌘F finds in the focused session).
         let find = NSMenu(title: "Find")
-        find.addItem(findItem("Find…", key: "f", action: .showFindInterface))
-        find.addItem(findItem("Find Next", key: "g", action: .nextMatch))
-        find.addItem(findItem("Find Previous", key: "g", modifiers: [.command, .shift], action: .previousMatch))
-        find.addItem(findItem("Use Selection for Find", key: "e", action: .setSearchString))
+        find.add(.findInThread)
+        find.add(.findNext)
+        find.add(.findPrevious)
+        find.add(.useSelectionForFind)
         menu.addItem(submenu: find, title: "Find")
         // AppKit appends AutoFill, Writing Tools, Start Dictation and Emoji & Symbols to a menu titled "Edit".
         return menu
@@ -104,6 +108,11 @@ enum MainMenu {
             title: "Show Inspector", action: #selector(NSSplitViewController.toggleInspector(_:)), key: "i",
             modifiers: [.command, .option])
         menu.add(.toggleTerminal)
+        menu.addItem(.separator())
+        menu.add(.jumpToLatest)
+        menu.add(.previousTurn)
+        menu.add(.nextTurn)
+        menu.add(.lastFailure)
         menu.addItem(.separator())
         menu.add(.focusComposer)
         menu.add(.focusNextRegion)
@@ -174,15 +183,6 @@ enum MainMenu {
         menu.addItem(title: "\(appName) Help", action: #selector(NSApplication.showHelp(_:)), key: "?")
         menu.add(.showWelcome)
         return menu
-    }
-
-    private static func findItem(
-        _ title: String, key: String, modifiers: NSEvent.ModifierFlags = .command, action: NSTextFinder.Action
-    ) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(NSResponder.performTextFinderAction(_:)), keyEquivalent: key)
-        item.keyEquivalentModifierMask = modifiers
-        item.tag = action.rawValue
-        return item
     }
 }
 

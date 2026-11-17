@@ -116,6 +116,29 @@ import Testing
         #expect(streamed, "the rest of the turn streamed in after approval")
         #expect(thread.isRunning)
 
+        // The streamed turn through the real transcript: rows by server ID, the tail text, the edit as a tool line,
+        // and the view still following the bottom.
+        let transcript = try #require(shell.controller.container.transcriptSurface?.controller)
+        let shown = await waitUntil(timeout: .seconds(10)) {
+            transcript.rows.contains { row in
+                if case .markdown(let text, _) = row.content { return text.contains("Edited the README.") }
+                return false
+            }
+        }
+        #expect(shown, "the streamed tail is a transcript row")
+        await transcript.settle()
+        let userRows = transcript.rows.filter { $0.role == .user }
+        #expect(userRows.contains { if case .user(let user) = $0.content { user.text == "Please greet the world in the README." } else { false } })
+        #expect(transcript.rows.contains { row in
+            if case .work(let group) = row.content { return group.items.contains { $0.name == "edit" && $0.target == "README.md" } }
+            return false
+        }, "the approved edit is a tool line")
+        #expect(Set(transcript.rows.map(\.id)).count == transcript.rows.count, "row identity is unique")
+        #expect(transcript.following && abs(transcript.distanceFromBottom) < 1, "following the tail")
+        transcript.selectAll()
+        #expect(transcript.selectedText().contains("Edited the README."), "streamed text is selectable and copies")
+        transcript.clearSelection()
+
         // A follow-up while running is queued (labelled, not claimed delivered until the server answers).
         driver.type("Then add a changelog entry.")
         #expect(composer.primaryAction == .send(.queue))

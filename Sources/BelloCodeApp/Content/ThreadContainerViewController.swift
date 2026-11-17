@@ -187,12 +187,10 @@ final class ThreadContainerViewController: NSViewController {
             separator.topAnchor.constraint(equalTo: header.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            // Full width: the transcript centres its own text column (TranscriptKit), so its scroller sits at the edge.
             transcriptView.topAnchor.constraint(equalTo: separator.bottomAnchor),
-            // Full width by preference only: a transcript's own preferred column width (stronger than a split view's
-            // holding priority) then narrows it, centred, instead of pushing the sidebar divider.
-            transcriptView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            transcriptView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor),
-            transcriptView.widthAnchor.constraint(equalTo: container.widthAnchor).withPriority(Self.columnPreference - 2),
+            transcriptView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            transcriptView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             requests.topAnchor.constraint(equalTo: transcriptView.bottomAnchor, constant: DS.Spacing.s),
             banner.topAnchor.constraint(equalTo: requests.bottomAnchor),
             composerView.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: DS.Spacing.s),
@@ -270,6 +268,9 @@ final class ThreadContainerViewController: NSViewController {
     var transcriptFocusView: NSView? {
         (transcript as? any FocusableSurface)?.preferredFocusView ?? transcript?.view
     }
+
+    /// The mounted transcript (menu commands forward to it when it is not the first responder).
+    var transcriptSurface: TranscriptSurfaceController? { transcript as? TranscriptSurfaceController }
 
     var composerSurface: (any ComposerSurface)? { composer as? any ComposerSurface }
 

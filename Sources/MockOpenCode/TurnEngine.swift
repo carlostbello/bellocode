@@ -293,6 +293,7 @@ extension MockOpenCodeServer {
             ctx.openBlock?.text += chunk
             sessionEvent("session.\(kind).delta", ctx, base + [("delta", .string(chunk))], durable: false)
             let text = ctx.openBlock?.text ?? ""
+            deltaObserver?(messageID, text.utf8.count, Double(DispatchTime.now().uptimeNanoseconds) / 1e9)
             setPart(ctx, messageID, part, kind == "text" ? .text(text) : .reasoning(text: text, created: created, completed: nil))
         }
         endOpenBlock(&ctx)

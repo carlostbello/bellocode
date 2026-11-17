@@ -33,9 +33,10 @@ import Testing
 
         func rendered(_ id: SessionID) -> Bool {
             guard container.displayed == .thread(id), let thread = container.context?.thread, thread.phase == .ready,
-                let transcript = container.transcript as? TemporaryTranscriptViewController
+                let transcript = container.transcript as? TranscriptSurfaceController
             else { return false }
-            return !thread.messageIDs.isEmpty && transcript.renderedMessageCount == thread.messageIDs.count
+            return !thread.messageIDs.isEmpty && transcript.controller.renderedMessageCount == thread.messageIDs.count
+                && !transcript.controller.rows.isEmpty
         }
 
         func pass() async -> [Double] {

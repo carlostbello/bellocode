@@ -1,0 +1,36 @@
+{
+  "cases" : [
+    {
+      "driftPt" : 0,
+      "heightChangePt" : 50,
+      "name" : "expand tool group above",
+      "note" : "row 5 rows above"
+    },
+    {
+      "driftPt" : 0,
+      "heightChangePt" : 512,
+      "name" : "late image above",
+      "note" : "held until below it"
+    },
+    {
+      "driftPt" : 0,
+      "heightChangePt" : 66,
+      "name" : "prepend older page",
+      "note" : "rows added (not points)"
+    }
+  ],
+  "expandDuringScrollErrorPt" : 0,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T02:56:50Z",
+    "memory" : {
+      "footprintMB" : 387,
+      "mallocInUseMB" : 86,
+      "residentMB" : 795.3
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S5",
+    "window" : "900x900"
+  }
+}

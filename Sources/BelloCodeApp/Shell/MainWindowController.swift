@@ -177,7 +177,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             terminalAvailable: terminals?.hasContext ?? false, terminalSelected: terminals?.activeHasTerminal ?? false,
             terminalHasSelectedText: terminals?.activeHasSelection ?? false,
             terminalSplit: terminals?.terminals?.set.splitSecondary != nil,
-            terminalInPanel: terminals?.activePlacement == .panel)
+            terminalInPanel: terminals?.activePlacement == .panel,
+            availableTranscriptCommands: container.transcriptSurface?.availableCommands ?? [])
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -311,6 +312,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             container.composerController?.togglePlan()
         case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
             if let request = command.requestCommand { container.requestStackController?.model?.perform(request) }
+        case .findInThread, .findNext, .findPrevious, .useSelectionForFind, .copyMessage, .copyAsMarkdown, .copyCode, .jumpToLatest,
+            .previousTurn, .nextTurn, .lastFailure:
+            container.transcriptSurface?.perform(command)
         case .showSettings, .connectProvider, .showWelcome:
             // Answered by the app delegate (they reach it through the responder chain before this window).
             NSApp.sendAction(command.selector, to: nil, from: nil)
@@ -384,6 +388,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             self.window?.makeFirstResponder(view)
         }
     }
+    @objc func findInTranscript(_ sender: Any?) { perform(.findInThread) }
+    @objc func findNextInTranscript(_ sender: Any?) { perform(.findNext) }
+    @objc func findPreviousInTranscript(_ sender: Any?) { perform(.findPrevious) }
+    @objc func useSelectionForTranscriptFind(_ sender: Any?) { perform(.useSelectionForFind) }
+    @objc func copyTranscriptMessage(_ sender: Any?) { perform(.copyMessage) }
+    @objc func copyTranscriptMarkdown(_ sender: Any?) { perform(.copyAsMarkdown) }
+    @objc func copyTranscriptCode(_ sender: Any?) { perform(.copyCode) }
+    @objc func jumpToLatestOutput(_ sender: Any?) { perform(.jumpToLatest) }
+    @objc func showPreviousTurn(_ sender: Any?) { perform(.previousTurn) }
+    @objc func showNextTurn(_ sender: Any?) { perform(.nextTurn) }
+    @objc func showLastFailure(_ sender: Any?) { perform(.lastFailure) }
 
     // MARK: - Helpers
 

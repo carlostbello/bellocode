@@ -100,6 +100,7 @@ final class WorkspaceController {
             let context = ThreadSurfaceContext(
                 engine: engine, directory: directory, projectName: project?.name ?? Self.name(of: directory), thread: model)
             context.openThread = { [weak self] id in self?.threadModel(id) ?? model }
+            context.onOpenThread = { [weak self] id in self?.select(.thread(id)) }
             return context
         case .draft(let directory):
             guard let project = projectItem(directory: directory) else { return nil }

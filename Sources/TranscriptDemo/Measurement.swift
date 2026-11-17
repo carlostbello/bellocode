@@ -1,4 +1,5 @@
-// SPIKE G1-B measurement tools: display-link frame recorder, main-thread watchdog, CPU and memory, snapshots, JSON.
+// Measurement tools (ported from the G1-B spike): display-link frame recorder, main-thread watchdog, CPU and memory,
+// snapshots, JSON reports.
 
 import AppKit
 import Darwin
@@ -214,7 +215,7 @@ enum Snapshots {
         guard let rep = bitmap(view) else { return nil }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if let data = rep.representation(using: .png, properties: [:]) {
-            try? data.write(to: directory.appending(path: "G1-B-\(name).png"))
+            try? data.write(to: directory.appending(path: "transcript-bench-\(name).png"))
         }
         return rep
     }
@@ -246,7 +247,7 @@ enum Snapshots {
 }
 
 enum Report {
-    static let directory = URL(fileURLWithPath: "build/spikes/G1-B")
+    static let directory = URL(fileURLWithPath: "build/transcript-bench")
 
     static func write<T: Encodable>(_ value: T, name: String) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

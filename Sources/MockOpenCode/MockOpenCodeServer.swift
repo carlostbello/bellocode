@@ -141,6 +141,8 @@ public actor MockOpenCodeServer {
     var queuedSessionScripts: [String: [TurnScript]] = [:]
     /// Persistent PTYs and their WebSocket attachments (PTYRoutes.swift).
     var pty = MockPTYState()
+    /// Observes each streamed text/reasoning delta after it is published (harness latency measurements).
+    var deltaObserver: (@Sendable (_ messageID: String, _ utf8Length: Int, _ uptime: Double) -> Void)?
 
     public init(scenario: Scenario = .empty(), options: MockServerOptions = MockServerOptions()) {
         self.options = options
@@ -263,6 +265,12 @@ public actor MockOpenCodeServer {
     }
 
     public func setDefaultScript(_ script: TurnScript) { state.defaultScript = script }
+
+    /// Calls `observer` after each streamed text or reasoning delta is published, with the message ID, the block's
+    /// UTF-8 length so far and the monotonic time (`DispatchTime` uptime, seconds). For latency measurements.
+    public func setDeltaObserver(_ observer: (@Sendable (_ messageID: String, _ utf8Length: Int, _ uptime: Double) -> Void)?) {
+        deltaObserver = observer
+    }
     public func addScripts(_ scripts: [String: TurnScript]) { state.scripts.merge(scripts) { $1 } }
 
     /// How event-stream bytes are cut into writes from now on, and an optional pause between pieces.

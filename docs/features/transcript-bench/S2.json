@@ -1,0 +1,105 @@
+{
+  "documentHeight" : 2209440,
+  "down" : {
+    "durationS" : 359.9411074583186,
+    "frames" : 49353,
+    "maxMs" : 142.94554170919582,
+    "missedVsyncs" : 10020,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 1694,
+    "over33ms" : 65,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 15.106458333320916,
+    "p99Ms" : 22.79000001726672
+  },
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T03:19:00Z",
+    "memory" : {
+      "footprintMB" : 861.7,
+      "mallocInUseMB" : 595.3,
+      "residentMB" : 802.8
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S2",
+    "window" : "900x900"
+  },
+  "hugeRowHeight" : 23420,
+  "meanVelocityPtPerS" : 6906.85,
+  "memoryAfter" : {
+    "footprintMB" : 863,
+    "mallocInUseMB" : 594.2,
+    "residentMB" : 804.1
+  },
+  "metrics" : {
+    "asyncLayouts" : 29481,
+    "heightFlushes" : 1071,
+    "maxFlushMilliseconds" : 13.992208347190171,
+    "maxSyncMilliseconds" : 0,
+    "maxTailApplyMilliseconds" : 0,
+    "measureAllMilliseconds" : 796.42500000773,
+    "measureAllRows" : 13567,
+    "openMilliseconds" : 95.03741667140275,
+    "placeholderRows" : 0,
+    "syncLayouts" : 21,
+    "syncs" : 0,
+    "tailJobs" : 0
+  },
+  "realisticMeanVelocityPtPerS" : 3380.68,
+  "realisticSpeed60s" : {
+    "durationS" : 60.003882166638505,
+    "frames" : 7628,
+    "maxMs" : 29.30983336409554,
+    "missedVsyncs" : 2267,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 249,
+    "over33ms" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 15.597708348650485,
+    "p99Ms" : 19.796625012531877
+  },
+  "tableGeometryErrorPt" : 0,
+  "traversalSpeedMultiplier" : 3,
+  "up" : {
+    "durationS" : 357.55207937501837,
+    "frames" : 43691,
+    "maxMs" : 36.70345834689215,
+    "missedVsyncs" : 15365,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 2276,
+    "over33ms" : 15,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 16.82104164501652,
+    "p99Ms" : 22.522999963257462
+  },
+  "watchdog" : {
+    "maxStallMs" : 40.089791640639305,
+    "p99PingMs" : 17.84620829857886,
+    "pings" : 8024,
+    "stallsOver100ms" : 0,
+    "stallsOver50ms" : 0,
+    "worstStallsMs" : [
+      40.089791640639305,
+      30.903875012882054,
+      29.93299998342991,
+      28.71049998793751,
+      28.024750004988164,
+      27.56304171634838,
+      27.21720834961161,
+      26.85958333313465
+    ]
+  },
+  "whileHugeRowVisible" : {
+    "durationS" : 7.709431499999482,
+    "frames" : 1017,
+    "maxMs" : 31.91100002732128,
+    "missedVsyncs" : 254,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 15,
+    "over33ms" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 14.439416641835123,
+    "p99Ms" : 17.146124970167875
+  }
+}
