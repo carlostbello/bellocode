@@ -33,7 +33,11 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   refusal); unreachable = `EngineError.deliveryUnknown`: the entry stays `.sending`, the text is not put back in the
   draft, and `ThreadModel.unconfirmedSends` holds it (32 max) for `retryUnconfirmed(_:)` (check, then same-ID resend)
   or, once a retry is refused, `takeUnconfirmed(_:)`. Every successful resync checks unknown sends (never resends).
-  In memory only: a relaunch drops them (the resync shows the prompt if it was admitted). Rename/archive/model/agent/mode roll back on failure. Delete hides
+  In memory only: a relaunch drops them (the resync shows the prompt if it was admitted). Queued items sort by server
+  time only (the event's time until the answer brings the item's); optimistic IDs never go backwards. Steer and
+  withdraw are kept as unconfirmed edits (256 max) until their event arrives, so a late `inbox.enqueued` or an inbox
+  read from before the edit cannot undo them; a resync keeps items admitted while it read the inbox
+  (`QueueOrderingTests`). Rename/archive/model/agent/mode roll back on failure. Delete hides
   the row and restores it if the server refuses. A reply removes the request only after the server's 204.
 
 ## Schema (`Store/Schema.swift`, migration `v1-initial`)
