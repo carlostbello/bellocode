@@ -82,8 +82,8 @@ enum EndToEnd {
             basePath: "/usr/bin:/bin", expectedVersion: "2.3.0",
             extraEnvironment: [
                 "SHELL": helper, "BELLOCODE_EXEC_PATH": helper, "BELLOCODE_EXEC_CONFIG": execConfig,
-                "OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_CONFIG_CONTENT": configContent,
-            ]))
+                "OPENCODE_CONFIG_CONTENT": configContent,
+            ].merging(ProcessInfo.processInfo.environment["G6_CONTROL_PROJECT_CONFIG"] == nil ? ["OPENCODE_DISABLE_PROJECT_CONFIG": "1"] : [:]) { a, _ in a }))
         await supervisor.start()
         var endpoint = await supervisor.endpoint
         for _ in 0..<1500 where endpoint == nil {
@@ -107,7 +107,8 @@ enum EndToEnd {
                                                   argv: ["sh", "-c", "ps -eo pid,args --no-headers | grep -v -E 'sleep infinity|docker-init|ps -eo|grep|sh -c'"], wrap: false)
         let remaining = String(decoding: leftovers.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         check("no processes left in the workspace container", remaining.isEmpty, remaining)
-        try writeReport("e2e", checks)
+        let control = ProcessInfo.processInfo.environment["G6_CONTROL_PROJECT_CONFIG"] != nil
+        try writeReport(control ? "e2e-control-project-config-allowed" : prompts ? "e2e" : "e2e-no-prompts", checks)
         let failed = checks.filter { !$0.passed }.count
         log("End-to-end: \(checks.count - failed)/\(checks.count) passed")
     }
