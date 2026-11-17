@@ -79,6 +79,7 @@ extension MockOpenCodeServer {
         if let plan = routePTY(method, parts, request, connectionID: connectionID) { return plan }
         if let response = routeIntegrations(method, parts, request) { return .response(response) }
         if let response = routeWorkspace(method, parts, request) { return .response(response) }
+        if let response = routeVCS(method, parts, request) { return .response(response) }
         let response: HTTPResponse
         switch method {
         case "GET":
@@ -417,7 +418,7 @@ extension MockOpenCodeServer {
         model: ModelRef? = nil, metadata: JSONValue? = nil, permissions: JSONValue? = nil
     ) -> MockSession {
         let project: MockProject
-        if let existing = state.project(containing: directory) {
+        if let existing = state.project(containing: directory) ?? worktreeOwner(of: directory) {
             project = existing
         } else {
             project = MockProject(id: ids.hash40(), directory: directory, time: now())

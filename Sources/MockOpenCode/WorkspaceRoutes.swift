@@ -67,7 +67,7 @@ extension MockOpenCodeServer {
 
     private func locationInfo(_ request: HTTPRequest) -> HTTPResponse {
         let directory = location(request)
-        guard let project = state.project(containing: directory) else {
+        guard let project = state.project(containing: directory) ?? worktreeOwner(of: directory) else {
             return .error(
                 404, tag: "LocationNotFoundError", message: "Location not found: \(directory)",
                 extra: [("location", ["directory": .string(directory)])])

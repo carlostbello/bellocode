@@ -43,6 +43,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var isRestoringLayout = false
     /// The window's terminals (drawer and "Terminal" tab), found through the drawer's host controller.
     private(set) var terminals: TerminalSurfaces?
+    /// The window's "Changes" tab (M2-C; MainWindowController+Changes.swift).
+    private(set) var changes: ChangesSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -95,11 +97,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             self?.terminals?.display(context)
             self?.applyThreadPanel()
             self?.applyPendingReveal()
+            self?.changes?.display(context)
         }
         restoreLayout()
         terminals = (content.drawerItem.viewController as? TerminalHostController)?.terminals
         terminals?.bind(engine: workspace.engine, shell: self)
         content.onLayoutChange = { [weak self] in self?.terminals?.recordDrawerState() }
+        changes = surfaces.changes
+        changes?.bind(engine: workspace.engine, shell: self)
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -178,9 +183,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
     // MARK: - NSWindowDelegate
 
-    func windowDidBecomeKey(_ notification: Notification) { container.windowDidBecomeKey() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        container.windowDidBecomeKey()
+        changes?.refreshStatus()
+    }
 
-    func windowWillClose(_ notification: Notification) { workspace.saveNow() }
+    func windowWillClose(_ notification: Notification) {
+        workspace.saveNow()
+        changes?.saveOptions()
+    }
 
     /// One undo manager per window, owned by the workspace (text views share it, as AppKit intends).
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { workspace.undoManager }
@@ -220,7 +231,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             terminalHasSelectedText: terminals?.activeHasSelection ?? false,
             terminalSplit: terminals?.terminals?.set.splitSecondary != nil,
             terminalInPanel: terminals?.activePlacement == .panel,
-            availableTranscriptCommands: container.transcriptSurface?.availableCommands ?? [])
+            availableTranscriptCommands: container.transcriptSurface?.availableCommands ?? [],
+            changes: changesCommandState())
             .with(organisationOf: threadTargets(target: target), workspace: workspace, target: target,
                   terminalFocused: terminals?.focusIsInTerminal ?? false)
     }
@@ -407,6 +419,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         case .showSettings, .connectProvider, .showWelcome:
             // Answered by the app delegate (they reach it through the responder chain before this window).
             NSApp.sendAction(command.selector, to: nil, from: nil)
+        case .showChanges, .nextChange, .previousChange, .nextChangedFile, .previousChangedFile, .addReviewComment, .openInEditor,
+            .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .openPullRequest, .toggleDiffLayout,
+            .toggleDiffWhitespace, .toggleDiffWrap, .chooseWorkspace, .chooseBranch, .removeWorktree:
+            performChanges(command)
         }
     }
 

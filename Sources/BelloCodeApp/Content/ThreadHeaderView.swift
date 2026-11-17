@@ -15,6 +15,9 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     private let pathLabel = NSTextField(labelWithString: "")
     private let statusImage = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "")
+    /// "⎇ feature/x · Worktree · 3 changed ↑1" (M2-C), refreshed with the repository's status.
+    private let gitLabel = NSTextField(labelWithString: "")
+    private let gitDot = NSTextField(labelWithString: "·")
     private var loop: ObservationLoop?
     private var editingOriginal: String?
 
@@ -33,7 +36,7 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleField.setAccessibilityLabel("Thread title")
         titleField.toolTip = "Click to rename"
-        for label in [projectLabel, pathLabel, statusLabel] {
+        for label in [projectLabel, pathLabel, statusLabel, gitLabel] {
             label.font = typography.caption
             label.textColor = DS.Palette.secondaryText
             label.lineBreakMode = .byTruncatingMiddle
@@ -48,7 +51,11 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         let dot = NSTextField(labelWithString: "·")
         dot.textColor = DS.Palette.tertiaryText
         dot.font = typography.caption
-        let contextLine = NSStackView(views: [monogram, projectLabel, separator, pathLabel, dot, statusImage, statusLabel])
+        gitDot.stringValue = "·"
+        gitDot.textColor = DS.Palette.tertiaryText
+        gitDot.font = typography.caption
+        gitLabel.setContentCompressionResistancePriority(.init(240), for: .horizontal)
+        let contextLine = NSStackView(views: [monogram, projectLabel, separator, pathLabel, dot, statusImage, statusLabel, gitDot, gitLabel])
         contextLine.spacing = DS.Spacing.xs
         contextLine.setCustomSpacing(DS.Spacing.s, after: monogram)
         let stack = NSStackView(views: [titleField, contextLine])
@@ -94,9 +101,32 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
             statusImage.isHidden = true
             statusLabel.stringValue = context.isCreatingThread ? "Creating…" : "Draft — created when you send"
         }
+        let repository = context.engine.git.repository(for: context.directory)
+        gitLabel.stringValue = Self.gitText(repository)
+        gitDot.isHidden = gitLabel.stringValue.isEmpty
+        gitLabel.isHidden = gitLabel.stringValue.isEmpty
+        gitLabel.toolTip = repository.status.map(\.accessibleSummary)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("\(titleField.stringValue), \(context.projectName), \(pathLabel.stringValue), \(statusLabel.stringValue)")
+        setAccessibilityLabel(
+            "\(titleField.stringValue), \(context.projectName), \(pathLabel.stringValue), \(statusLabel.stringValue), \(gitLabel.stringValue)")
+    }
+
+    /// "⎇ main · Local checkout · 3 changed ↑2" (words, not colour; empty outside a repository).
+    static func gitText(_ repository: GitRepositoryModel) -> String {
+        guard repository.phase != .notRepository else { return "" }
+        var parts: [String] = []
+        if let status = repository.status {
+            parts.append(status.branch.map { "⎇ " + $0 } ?? status.head.map { "Detached at \($0.prefix(7))" } ?? "⎇ …")
+        }
+        parts.append(repository.workspaceKind.label)
+        if let status = repository.status {
+            var state = status.files.isEmpty ? "clean" : "\(status.files.count) changed"
+            if status.ahead > 0 { state += " ↑\(status.ahead)" }
+            if status.behind > 0 { state += " ↓\(status.behind)" }
+            parts.append(state)
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// Begins editing the title (Rename Thread from the menu while the content area is focused).

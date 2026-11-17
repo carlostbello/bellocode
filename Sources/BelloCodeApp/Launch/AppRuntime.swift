@@ -129,6 +129,11 @@ final class AppRuntime {
         await mockServer?.enqueueScript(script, for: sessionID?.rawValue)
     }
 
+    /// Scripts the files a turn changed (the Changes tab's snapshots). No effect outside mock mode.
+    func setMockTurnDiff(_ files: [MockOpenCode.JSONValue], for sessionID: SessionID) async {
+        await mockServer?.setTurnDiff(sessionID: sessionID.rawValue, files: files)
+    }
+
     /// Takes the mock server off the network (snapshots of the offline state). No effect outside mock mode.
     func takeMockOffline() async {
         await mockServer?.stop()

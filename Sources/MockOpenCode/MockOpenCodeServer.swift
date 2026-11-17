@@ -91,6 +91,8 @@ public actor MockOpenCodeServer {
     var state: ServerState
     /// Integrations, credentials, login attempts and saved permission rules (IntegrationRoutes.swift).
     var integration: IntegrationState
+    /// Scripted repositories, turn diffs, staged reverts and worktrees (VCSRoutes.swift).
+    var vcs = MockVCSState()
     var ids: IdentifierGenerator
     var virtualNow: Int64
 

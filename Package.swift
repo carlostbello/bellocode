@@ -73,7 +73,11 @@ let targets: [Target] =
         testDependencies: ["Engine", "MockOpenCode", "OpenCodeKit"]
     )
     + library("ComposerKit", dependencies: uiKitDependencies + ["Engine"])
-    + library("DiffKit", dependencies: uiKitDependencies)
+    // M2-C: diff engine and views, Changes panel, workspace and branch pickers (docs/features/diff-git.md). Reuses
+    // TranscriptKit's public HighlightService.
+    + library(
+        "DiffKit", dependencies: uiKitDependencies + ["Engine", "TranscriptKit"],
+        testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
     // M2-A: terminals on opencode's persistent PTYs (docs/features/terminal.md). Engine owns the PTY records and streams.
     + library(
         "TerminalKit", dependencies: uiKitDependencies + ["Engine", .product(name: "SwiftTerm", package: "SwiftTerm")],
@@ -99,6 +103,11 @@ let targets: [Target] =
             ],
             swiftSettings: swiftSettings
         ),
+        // M2-C diff harness: snapshots and scroll benchmarks (docs/features/diff-git.md).
+        .executableTarget(
+            name: "DiffDemo",
+            dependencies: ["DiffKit", "Engine", "BelloCore", "DesignSystem", "TranscriptKit", "OpenCodeKit", "MockOpenCode"],
+            swiftSettings: swiftSettings),
         // M1-C development harness: scripted composer scenarios and snapshots. See docs/features/composer.md.
         .executableTarget(name: "ComposerDemo", dependencies: ["ComposerKit"], swiftSettings: swiftSettings),
         // AgentUI demo and snapshot harness: `swift run AgentUIDemo --all` (docs/features/agent-ui.md).

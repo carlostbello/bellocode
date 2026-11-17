@@ -2,6 +2,7 @@ import AgentUI
 import AppKit
 import BelloCore
 import ComposerKit
+import DiffKit
 import Engine
 import MockOpenCode
 
@@ -186,6 +187,24 @@ struct SnapshotRunner {
         driver.settle()
         await shoot("child-approval")
 
+        // M2-C: the Changes tab beside the thread (a turn's diff from the mock), unified and side by side.
+        if only.isEmpty || only.contains("changes") || only.contains("changes-split") {
+            _ = await driver.select(.thread(runningID))
+            await runtime.setMockTurnDiff(Self.sampleTurnDiff, for: runningID)
+            driver.perform(.showChanges)
+            if let changes = controller.changes, let model = changes.model {
+                changes.panel.setScope(.turn(nil))
+                model.load()
+                _ = await waitUntil(timeout: .seconds(5)) { model.phase == .ready && changes.panel.diff.rowCount > 0 }
+                driver.settle(10)
+                await shoot("changes")
+                changes.panel.setLayout(.split)
+                driver.settle(10)
+                await shoot("changes-split")
+                changes.panel.setLayout(.unified)
+            }
+        }
+
         // Offline with cached content, and a send that failed (text and error back in the composer).
         _ = await driver.select(.thread(runningID))
         await runtime.takeMockOffline()
@@ -207,6 +226,56 @@ struct SnapshotRunner {
     }
 
     // MARK: Scripts
+
+    /// A turn that edited two files (full-file patches, as opencode returns without `context`).
+    static var sampleTurnDiff: [MockOpenCode.JSONValue] {
+        func full(_ path: String, _ old: String?, _ new: String?) -> MockOpenCode.JSONValue {
+            let hunks = LineDiff.hunks(old: LineDiff.lines(old ?? ""), new: LineDiff.lines(new ?? ""), context: 1_000_000)
+            let patch = PatchFile(oldPath: old == nil ? nil : path, newPath: new == nil ? nil : path, hunks: hunks).render()
+            return MockVCSRepository.fileDiff(path, status: old == nil ? "added" : "modified", patch: patch)
+        }
+        let parserOld = """
+            struct Parser {
+                var tokens: [Token]
+                var index = 0
+
+                mutating func parseExpression() throws -> Expression {
+                    let lhs = try parsePrimary()
+                    if peek() == .plus {
+                        advance()
+                        return .binary(lhs, .plus, try parseExpression())
+                    }
+                    return lhs
+                }
+            }
+
+            """
+        let parserNew = """
+            struct Parser {
+                var tokens: [Token]
+                var index = 0
+
+                mutating func parseExpression() throws -> Expression {
+                    try parseBinary(precedence: 0)
+                }
+
+                /// Precedence climbing: one function per level instead of recursion on the right.
+                mutating func parseBinary(precedence: Int) throws -> Expression {
+                    var lhs = try parsePrimary()
+                    while let op = peek()?.binaryOperator, op.precedence >= precedence {
+                        advance()
+                        lhs = .binary(lhs, op, try parseBinary(precedence: op.precedence + 1))
+                    }
+                    return lhs
+                }
+            }
+
+            """
+        return [
+            full("Sources/Core/Parser.swift", parserOld, parserNew),
+            full("Tests/CoreTests/ParserTests.swift", nil, "import Testing\n\n@Test func precedence() throws {\n    #expect(try parse(\"1 + 2 * 3\") == .binary(1, .plus, .binary(2, .times, 3)))\n}\n"),
+        ]
+    }
 
     static let longTurn = TurnScript(name: "snapshot-long") {
         TurnStep.reasoning("Split the parser by grammar rule, run the tests after each step.")

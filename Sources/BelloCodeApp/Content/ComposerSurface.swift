@@ -3,6 +3,7 @@ import AppKit
 import BelloCore
 import ComposerKit
 import DesignSystem
+import DiffKit
 import Engine
 import Observation
 
@@ -24,6 +25,9 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     private let contextLine = ComposerContextLine()
     private var loop: ObservationLoop?
     private var gitTask: Task<Void, Never>?
+    /// A draft's workspace choice (M2-C): local checkout, new worktree or existing worktree.
+    private(set) var workspaceDraft: WorkspaceDraft?
+    private var gitLoop: ObservationLoop?
 
     init(context: ThreadSurfaceContext, services: AppServices) {
         self.context = context
@@ -40,6 +44,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     isolated deinit {
         loop?.cancel()
         gitTask?.cancel()
+        gitLoop?.cancel()
     }
 
     // MARK: ComposerSurface
@@ -87,6 +92,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         contextLine.directory = context.directory
         readGitContext()
         loop = ObservationLoop { [weak self] in self?.observeSettings() }
+        observeGitStatus()
     }
 
     override func viewWillDisappear() {
@@ -164,7 +170,54 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
             onConnect: { [services] id in services.connectProvider(id) })
         modelPicker = picker
         let model = AppStyle.host(ModelPickerButton(model: picker))
-        install(leading: [plan, model], trailing: [mode])
+        // M2-C: where the new thread works (local checkout / new or existing worktree) and its branch.
+        let projectID = engine.root.projects.first { $0.directory == context.projectDirectory }?.projectID
+        let workspace = WorkspaceDraft(git: engine.git, projectDirectory: context.projectDirectory, projectID: projectID)
+        workspace.load()
+        workspaceDraft = workspace
+        (host as? DraftComposerHost)?.prepareDirectory = { [weak workspace] prompt in
+            try await workspace?.prepare(prompt: prompt).directory
+        }
+        install(
+            leading: [plan, model, AppStyle.host(WorkspacePickerButton(draft: workspace)), AppStyle.host(BranchPickerButton(draft: workspace))],
+            trailing: [mode])
+    }
+
+    /// Opens the draft's workspace picker (menu: Choose Workspace…).
+    func openWorkspacePicker() {
+        guard let workspaceDraft else { return NSSound.beep() }
+        workspaceDraft.requestWorkspacePicker()
+    }
+
+    /// Opens the draft's branch picker (menu: Choose Branch…).
+    func openBranchPicker() {
+        guard let workspaceDraft else { return NSSound.beep() }
+        workspaceDraft.requestBranchPicker()
+    }
+
+    /// Keeps the context line's git state (dirty, ahead/behind, worktree choice) current; status refreshes on window
+    /// focus and after each turn (ChangesSurfaces) and on file changes while the Changes tab watches.
+    private func observeGitStatus() {
+        let repository = context.engine.git.repository(for: context.directory)
+        gitLoop = ObservationLoop { [weak self] in
+            guard let self else { return }
+            let status = repository.status
+            var text = status.map { status -> String in
+                var parts = [status.files.isEmpty ? "clean" : "\(status.files.count) changed"]
+                if status.ahead > 0 { parts.append("↑\(status.ahead)") }
+                if status.behind > 0 { parts.append("↓\(status.behind)") }
+                return parts.joined(separator: " ")
+            }
+            if let draft = self.workspaceDraft {
+                self.contextLine.workspaceOverride = draft.mode == .local ? nil : draft.workspaceLabel
+                switch draft.phase {
+                case .preparing(let message): text = message
+                case .failed(let message): text = "⚠︎ " + message
+                case .idle: break
+                }
+            }
+            self.contextLine.statusText = text
+        }
     }
 
     private func install(leading: [NSView], trailing: [NSView]) {
@@ -204,6 +257,10 @@ final class ComposerContextLine: NSStackView {
     var project = "" { didSet { render() } }
     var directory = "" { didSet { render() } }
     var git: GitContext? { didSet { render() } }
+    /// "3 changed ↑2", or the worktree being prepared (M2-C).
+    var statusText: String? { didSet { if statusText != oldValue { render() } } }
+    /// The draft's chosen workspace when it is not the local checkout ("New worktree").
+    var workspaceOverride: String? { didSet { if workspaceOverride != oldValue { render() } } }
     private let projectLabel = ComposerContextLine.item(symbol: "folder")
     private let branchLabel = ComposerContextLine.item(symbol: "arrow.triangle.branch")
     private let workspaceLabel = ComposerContextLine.item(symbol: "laptopcomputer")
@@ -250,7 +307,7 @@ final class ComposerContextLine: NSStackView {
         branchLabel.image = NSImage(
             systemSymbolName: git?.workspace == .plainFolder ? "folder" : "arrow.triangle.branch", accessibilityDescription: nil)
         branchLabel.toolTip = git?.workspace == .plainFolder ? directory : "Branch"
-        workspaceLabel.title = git?.workspaceLabel ?? "Local checkout"
+        workspaceLabel.title = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
         workspaceLabel.isHidden = git?.workspace == .plainFolder
         for label in [projectLabel, branchLabel, workspaceLabel] { label.contentTintColor = DS.Palette.secondaryText }
         setAccessibilityLabel("Acts in \(project), \(branch), \(workspaceLabel.isHidden ? shortPath : workspaceLabel.title)")
@@ -293,6 +350,8 @@ final class DraftComposerHost: ComposerHost {
     let fileStore: AttachmentFileStore
     private(set) var created: ThreadModelComposerHost?
     private let cache = ComposerDraftCache.shared
+    /// Prepares the thread's directory before it is created (the workspace picker's new worktree); nil: the project.
+    var prepareDirectory: (@MainActor (String) async throws -> String?)?
 
     init(context: ThreadSurfaceContext, source: DraftAgentSource, fileStore: AttachmentFileStore) {
         self.context = context
@@ -317,7 +376,15 @@ final class DraftComposerHost: ComposerHost {
 
     func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {
         if let created { return await created.send(submission) }
-        guard let model = await context.createThread(source.options) else {
+        var options = source.options
+        if let prepareDirectory {
+            do {
+                options.directory = try await prepareDirectory(submission.text)
+            } catch {
+                return .failed((error as? WorktreeError)?.userMessage ?? (error as? GitError)?.userMessage ?? "The worktree could not be created.")
+            }
+        }
+        guard let model = await context.createThread(options) else {
             return .failed(context.visibleError ?? "The thread could not be created.")
         }
         let host = ThreadModelComposerHost(model, fileStore: fileStore)

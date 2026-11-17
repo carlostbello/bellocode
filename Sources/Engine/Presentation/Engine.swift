@@ -118,6 +118,8 @@ public final class Engine {
     public let terminals: TerminalService
     /// Palette frecency (app-owned; persisted in the store).
     public let frecency: FrecencyModel
+    /// Git status, diffs, worktrees and turn revert (docs/features/diff-git.md).
+    public let git: GitService
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -151,6 +153,7 @@ public final class Engine {
         modelPreferences = ModelPreferencesModel(store: store, retryBackoff: configuration.writeRetryBackoff, time: configuration.time)
         frecency = FrecencyModel(store: store)
         terminals = TerminalService(store: store, client: { [core] in try await core.currentClient() })
+        git = GitService(client: { [core] in try await core.currentClient() }, store: store)
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
     }
 
@@ -202,6 +205,7 @@ public final class Engine {
         await modelPreferences.flush()
         await frecency.flush()
         await terminals.shutdown()
+        git.shutdown()
         for thread in Array(openThreads.values) { thread.close() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
