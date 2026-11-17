@@ -163,6 +163,16 @@ enum Sheets {
         tabs.choiceButtons[2].setDisplayState(hovered: true)
         tabs.choiceButtons[3].setDisplayState(focused: true)
         sheet.row("tab bar (hover Browser, focus Terminal)", [tabs])
+        // Narrow panels: one density for the whole bar (selected keeps its title, the rest icon + count + tooltip).
+        let compact = DSTabBar(items: [
+            DSChoiceItem(id: "changes", title: "Changes", symbolName: "plusminus", count: 3),
+            DSChoiceItem(id: "files", title: "", symbolName: "doc.on.doc", accessibilityLabel: "Files"),
+            DSChoiceItem(id: "browser", title: "", symbolName: "globe", accessibilityLabel: "Browser"),
+            DSChoiceItem(id: "terminal", title: "", symbolName: "apple.terminal", accessibilityLabel: "Terminal"),
+            DSChoiceItem(id: "agents", title: "", symbolName: "point.3.connected.trianglepath.dotted", count: 2, accessibilityLabel: "Agents"),
+            DSChoiceItem(id: "mr", title: "", symbolName: "arrow.triangle.pull", accessibilityLabel: "Merge Requests"),
+        ], selectedID: "changes")
+        sheet.row("tab bar, narrow panel (one density)", [compact])
         let effort = DSSegmented(items: ["Low", "Medium", "High"].map { DSChoiceItem(id: $0, title: $0) }, selectedID: "High")
         let layout = DSSegmented(items: [
             DSChoiceItem(id: "unified", title: "", symbolName: "rectangle.split.1x2", accessibilityLabel: "Unified"),
@@ -201,7 +211,13 @@ enum Sheets {
         sheet.row("SwiftUI field (DSTextFieldStyle), button hint dropped first", [swiftUIField, hinted],
                   sizes: [NSSize(width: 240, height: 70), NSSize(width: 360, height: 28)])
 
+        let inputs = NSHostingView(rootView: GalleryInputs())
+        sheet.row("select, stepper, slider, progress (SwiftUI)", [inputs], sizes: [NSSize(width: 720, height: 28)])
+
         sheet.heading("Toggles")
+        let mixed = DSToggle(kind: .checkbox, title: "Mixed (some staged)")
+        mixed.isMixed = true
+        sheet.row("checkbox, mixed", [mixed], gap: 24)
         for kind in DSToggle.Kind.allCases {
             let views: [DSControl] = [
                 DSToggle(kind: kind, title: "Off"), DSToggle(kind: kind, title: "On", isOn: true),
@@ -522,6 +538,18 @@ final class SendButtonSample: NSView {
         DSDraw.fill(bounds, radius: bounds.width / 2, color: DS.Color.accent)
         if let arrow = DSDraw.symbol("arrow.up", pointSize: 13, weight: .semibold) {
             DSDraw.draw(template: arrow, in: bounds, color: DS.Color.onAccent)
+        }
+    }
+}
+
+/// The SwiftUI inputs row of the controls sheet.
+private struct GalleryInputs: View {
+    var body: some View {
+        HStack(spacing: 20) {
+            DSMenuSelect("Permissions", options: [(0, "Project default"), (1, "Ask")], selection: .constant(0))
+            DSStepper("Every", value: .constant(30), in: 5...600, step: 5, format: { "\($0) minutes" })
+            DSSlider(value: .constant(13), in: 11...18).frame(width: 160)
+            DSProgressBar(value: 0.42).frame(width: 160)
         }
     }
 }
