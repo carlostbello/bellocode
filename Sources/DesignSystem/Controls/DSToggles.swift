@@ -12,7 +12,15 @@ public final class DSToggle: DSControl {
     public var title: String { didSet { invalidateIntrinsicContentSize(); needsDisplay = true; setAccessibilityLabel(title) } }
     public var isOn: Bool {
         get { isSelected }
-        set { isSelected = newValue }
+        set { isSelected = newValue; isMixed = false }
+    }
+    /// Checkbox only: some but not all of what it stands for is on (a dash; accessibility value 2). Clicking turns it on.
+    public var isMixed = false {
+        didSet {
+            guard isMixed != oldValue else { return }
+            needsDisplay = true
+            setAccessibilityValue(isMixed ? 2 : (isSelected ? 1 : 0))
+        }
     }
 
     public init(kind: Kind, title: String = "", isOn: Bool = false, target: AnyObject? = nil, action: Selector? = nil) {
@@ -45,6 +53,12 @@ public final class DSToggle: DSControl {
     }
 
     public override func activate() {
+        if isMixed {
+            isMixed = false
+            isSelected = true
+            super.activate()
+            return
+        }
         if kind == .radio {
             guard !isSelected else { return }
             isSelected = true
@@ -61,7 +75,10 @@ public final class DSToggle: DSControl {
         let hover = state.phase == .hover || state.phase == .pressed
         switch kind {
         case .checkbox:
-            if state.isSelected {
+            if isMixed {
+                DSDraw.fill(box, radius: DS.Radius.xs, color: hover ? DS.Color.accentHover : DS.Color.accent)
+                DSDraw.fill(NSRect(x: box.minX + 3.5, y: box.midY - 0.8, width: box.width - 7, height: 1.6), radius: 0.8, color: DS.Color.onAccent)
+            } else if state.isSelected {
                 DSDraw.fill(box, radius: DS.Radius.xs, color: hover ? DS.Color.accentHover : DS.Color.accent)
                 let check = NSBezierPath()
                 check.move(to: NSPoint(x: box.minX + 3.5, y: box.midY))

@@ -58,7 +58,7 @@ public protocol DiffViewControllerDelegate: AnyObject {
 ///
 /// Mounting: `let diff = DiffViewController()`, add `diff.view`, then `diff.display(files)`.
 @MainActor
-public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
+public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     public weak var delegate: (any DiffViewControllerDelegate)?
     public var options = DiffViewOptions() {
         didSet {
@@ -84,10 +84,11 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
     let content: DiffContentView
     private let scrollView = DiffScrollView()
     private let findBar = NSStackView()
-    private let findField = NSSearchField()
+    private let findInput = DSTextField(style: .search, placeholder: "Find in diff")
+    private var findField: NSTextField { findInput.field }
     private let findCount = NSTextField(labelWithString: "")
     private let indicator = HorizontalIndicatorView()
-    private let emptyLabel = NSTextField(labelWithString: "")
+    private let emptyLabel = NSTextField(wrappingLabelWithString: "")
     private var findTopConstraint: NSLayoutConstraint?
     private var revertablePaths: Set<String> = []
     private var collapsedFiles: Set<String> = []
@@ -125,6 +126,7 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
         scrollView.borderType = .noBorder
+        DSScroller.install(on: scrollView)
         scrollView.contentView.postsBoundsChangedNotifications = true
         content.autoresizingMask = []
         scrollView.documentView = content
@@ -141,8 +143,9 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         buildFindBar()
         indicator.translatesAutoresizingMaskIntoConstraints = false
         indicator.isHidden = true
-        emptyLabel.font = DS.Typography.current.body
-        emptyLabel.textColor = DS.Palette.secondaryText
+        // Empty and loading states: `label text2`, centred (the panel's toolbar keeps the context).
+        emptyLabel.font = DS.TextRole.label.font
+        emptyLabel.textColor = DS.Color.text2
         emptyLabel.alignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
         for subview in [scrollView, findBar, indicator, emptyLabel] as [NSView] { container.addSubview(subview) }
@@ -169,38 +172,45 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
         updateEmptyState()
     }
 
+    /// The diff's find bar (⌘F): a 36 pt docked strip on `canvas` with a `border` hairline, the DS search field, match
+    /// count (`meta text3`, tabular), previous / next icon buttons and a ghost Done.
     private func buildFindBar() {
-        findField.placeholderString = "Find in diff"
+        findInput.showsHalo = false
         findField.delegate = self
-        findField.sendsSearchStringImmediately = true
-        findField.controlSize = .small
-        findField.target = self
-        findField.action = #selector(findFieldChanged(_:))
         findField.setAccessibilityLabel("Find in diff")
-        findCount.font = DS.Typography.current.caption
-        findCount.textColor = DS.Palette.secondaryText
-        func button(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
-            let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
-            button.bezelStyle = .accessoryBarAction
-            button.controlSize = .small
+        findCount.font = .monospacedDigitSystemFont(ofSize: DS.TextRole.meta.font.pointSize, weight: .regular)
+        findCount.textColor = DS.Color.text3
+        func button(_ symbol: String, _ label: String, _ action: Selector) -> DSButton {
+            let button = DSButton(icon: symbol, accessibilityTitle: label, size: .small, target: self, action: action)
             button.toolTip = label
             return button
         }
-        let done = NSButton(title: "Done", target: self, action: #selector(closeFind(_:)))
-        done.bezelStyle = .accessoryBarAction
-        done.controlSize = .small
-        for view in [findField, findCount, button("chevron.up", "Previous Match (⇧⌘G)", #selector(findPreviousAction(_:))),
+        let done = DSButton(title: "Done", variant: .ghost, size: .small, target: self, action: #selector(closeFind(_:)))
+        for view in [findInput, findCount, button("chevron.up", "Previous Match (⇧⌘G)", #selector(findPreviousAction(_:))),
                      button("chevron.down", "Next Match (⌘G)", #selector(findNextAction(_:))), done] as [NSView] {
             findBar.addArrangedSubview(view)
         }
-        findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        findInput.widthAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
+        findInput.heightAnchor.constraint(equalToConstant: DS.Size.controlSmall).isActive = true
         findBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
-        findBar.spacing = 6
+        findBar.spacing = DS.Space.s4
+        findBar.setCustomSpacing(DS.Space.s8, after: findInput)
+        findBar.alignment = .centerY
         findBar.wantsLayer = true
-        findBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         findBar.translatesAutoresizingMaskIntoConstraints = false
-        findBar.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        findBar.heightAnchor.constraint(equalToConstant: DS.Size.toolbar).isActive = true
+        let rule = DSDivider()
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        findBar.addSubview(rule)
+        NSLayoutConstraint.activate([
+            rule.leadingAnchor.constraint(equalTo: findBar.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: findBar.trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: findBar.bottomAnchor),
+            rule.heightAnchor.constraint(equalToConstant: DS.Border.hairline),
+        ])
     }
+
+    public func controlTextDidChange(_ notification: Notification) { findFieldChanged(nil) }
 
     public override func viewDidLayout() {
         super.viewDidLayout()
@@ -212,8 +222,8 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
     private func updateTheme() {
         let appearance = view.effectiveAppearance
         content.theme = DiffTheme.resolve(appearance: appearance, revision: Int(appearance.name.rawValue.hashValue & 0xFFFF))
-        findBar.layer?.backgroundColor = NSColor.windowBackgroundColor.resolvedCGColor(for: appearance)
-        scrollView.backgroundColor = NSColor.textBackgroundColor
+        findBar.layer?.backgroundColor = DS.Color.canvas.resolvedCGColor(for: appearance)
+        scrollView.backgroundColor = DS.Color.canvas
     }
 
     private func updateEmptyState() {
@@ -707,7 +717,7 @@ final class HorizontalIndicatorView: NSView {
         guard track.width > 20 else { return }
         let width = max(24, track.width * min(1, visibleShare))
         let x = track.minX + (track.width - width) * min(max(fraction, 0), 1)
-        NSColor.tertiaryLabelColor.setFill()
+        DS.Color.scrollThumb.setFill()
         NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: width, height: bounds.height), xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
     }
 
@@ -730,15 +740,25 @@ public final class CommentEditorController: NSViewController, NSTextViewDelegate
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// The comment popover's content (§6 menus/popovers recipe): title `title`, a `canvas` text box with the
+    /// `borderStrong` ring and `r.md`, the hint in `label text3`, ghost Cancel and primary "Add Comment ⌘↩".
     public override func loadView() {
         let title = NSTextField(labelWithString: "Comment on \(location)")
-        title.font = DS.Typography.current.bodyEmphasized
+        title.font = DS.TextRole.title.font
+        title.textColor = DS.Color.text
         title.lineBreakMode = .byTruncatingMiddle
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        DSScroller.install(on: scroll)
+        let box = DSCommentBox()
         textView.isRichText = false
-        textView.font = DS.Typography.current.body
+        textView.font = DS.TextRole.body.font
+        textView.textColor = DS.Color.text
+        textView.drawsBackground = false
+        textView.insertionPointColor = DS.Color.accent
+        textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.delegate = self
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -747,24 +767,30 @@ public final class CommentEditorController: NSViewController, NSTextViewDelegate
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         scroll.documentView = textView
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(scroll)
         let hint = NSTextField(labelWithString: "Goes to the composer as context.")
-        hint.font = DS.Typography.current.caption
-        hint.textColor = DS.Palette.secondaryText
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel(_:)))
-        let add = NSButton(title: "Add Comment", target: self, action: #selector(submit(_:)))
-        add.keyEquivalent = "\r"
-        add.keyEquivalentModifierMask = .command
-        add.bezelColor = .controlAccentColor
-        let buttons = NSStackView(views: [hint, NSView(), cancel, add])
-        let stack = NSStackView(views: [title, scroll, buttons])
+        hint.font = DS.TextRole.label.font
+        hint.textColor = DS.Color.text3
+        let cancel = DSButton(title: "Cancel", variant: .ghost, size: .small, target: self, action: #selector(cancel(_:)))
+        let add = DSButton(title: "Add Comment", variant: .primary, size: .small, shortcutHint: "⌘↩", target: self, action: #selector(submit(_:)))
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let buttons = NSStackView(views: [hint, spacer, cancel, add])
+        buttons.alignment = .centerY
+        let stack = NSStackView(views: [title, box, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = DS.Space.s8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        scroll.translatesAutoresizingMaskIntoConstraints = false
+        box.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalToConstant: 380), scroll.heightAnchor.constraint(equalToConstant: 80),
-            buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+            box.widthAnchor.constraint(equalToConstant: 380), box.heightAnchor.constraint(equalToConstant: 84),
+            scroll.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 1),
+            scroll.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -1),
+            scroll.topAnchor.constraint(equalTo: box.topAnchor, constant: 1),
+            scroll.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -1),
+            buttons.widthAnchor.constraint(equalTo: box.widthAnchor),
         ])
         view = stack
     }
@@ -792,7 +818,22 @@ public final class CommentEditorController: NSViewController, NSTextViewDelegate
             onCancel?()
             return true
         }
+        // ⌘↩ adds (the button shows the hint; DS buttons have no key equivalent).
+        if selector == #selector(NSResponder.insertNewline(_:)), NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+            submit(nil)
+            return true
+        }
         return false
+    }
+}
+
+/// The comment field's box: `canvas` fill, `borderStrong` ring, `r.md` (the DS text-field recipe for a multi-line box).
+@MainActor
+final class DSCommentBox: NSView {
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        DSDraw.fill(bounds, radius: DS.Radius.md, color: DS.Color.canvas)
+        DSDraw.ring(bounds, radius: DS.Radius.md, color: DS.Color.borderStrong)
     }
 }
 

@@ -91,7 +91,11 @@ final class DiffContentView: NSView {
     private var lineCache = BoundedCache<LineKey, CTLine>(limit: 4_000)
     private var numberCache = BoundedCache<Int, CTLine>(limit: 2_000)
     private var wordCache = BoundedCache<Int, IntraLineHighlight>(limit: 8_192)
-    private var revertButtons: [Int: CGRect] = [:]
+    /// The hunk under the pointer (its header row): shows that hunk's Revert, like keyboard focus does.
+    private var hoveredHunkRow: Int? { didSet { if hoveredHunkRow != oldValue { redrawRows([oldValue, hoveredHunkRow]) } } }
+    /// The pointer is over a Revert button (ghost hover fill) or a gap row (its hint).
+    private var hoveredRevert: Int? { didSet { if hoveredRevert != oldValue { redrawRows([oldValue, hoveredRevert]) } } }
+    private var hoveredGap: Int? { didSet { if hoveredGap != oldValue { redrawRows([oldValue, hoveredGap]) } } }
     private var matchesByRow: [Int: [Int]] = [:]
     /// Virtual accessibility elements by row (created on demand for any row, bounded; see +Accessibility).
     var accessibilityRowElements = BoundedCache<Int, DiffRowAccessibilityElement>(limit: DiffContentView.accessibilityElementLimit)
@@ -135,6 +139,9 @@ final class DiffContentView: NSView {
     func setContent(files: [DiffFile], rows: DiffRows, syntax: [Int: DiffSyntax], layout: DiffLayout) {
         self.files = files
         self.rows = rows
+        hoveredHunkRow = nil
+        hoveredRevert = nil
+        hoveredGap = nil
         self.syntax = syntax
         layoutMode = layout
         generation += 1
@@ -186,8 +193,8 @@ final class DiffContentView: NSView {
         let row = rows.rows[index]
         switch row.kind {
         case .fileHeader: return theme.fileHeaderHeight
-        case .hunkHeader: return theme.rowHeight + 6
-        case .gap: return theme.rowHeight + 4
+        case .hunkHeader: return theme.hunkHeaderHeight
+        case .gap: return theme.gapHeight
         case .notice: return theme.rowHeight + 12
         case .line:
             guard wraps else { return theme.rowHeight }
@@ -281,7 +288,7 @@ final class DiffContentView: NSView {
         switch row.kind {
         case .fileHeader: drawFileHeader(row, index: index, rect: rect, in: context)
         case .hunkHeader: drawHunkHeader(row, index: index, rect: rect, in: context)
-        case .gap(let hidden, let expandable): drawGap(hidden: hidden, expandable: expandable, rect: rect, in: context)
+        case .gap(let hidden, let expandable): drawGap(hidden: hidden, expandable: expandable, rect: rect, in: context, index: index)
         case .notice: drawNotice(row.text, rect: rect, in: context)
         case .line: drawLine(row, index: index, rect: rect, in: context)
         }
@@ -299,82 +306,136 @@ final class DiffContentView: NSView {
         CTLineDraw(line, context)
     }
 
+    /// A 34 pt file header (§6 "Right panel"): `canvas` with `border` hairlines, a disclosure chevron, the M/A/D badge,
+    /// the directory in `text3` and the file name in `text` (`labelEmph`), and the +/− stat right-aligned in the
+    /// semantic colours.
     private func drawFileHeader(_ row: DiffRow, index: Int, rect: CGRect, in context: CGContext) {
         let file = files[row.fileIndex]
-        let band = rect.insetBy(dx: 0, dy: 0).divided(atDistance: 6, from: .minYEdge).remainder
         context.setFillColor(theme.fileHeaderFill)
-        context.fill(band)
-        context.setFillColor(theme.base.separator)
-        context.fill(CGRect(x: 0, y: band.minY, width: rect.width, height: 1))
-        context.fill(CGRect(x: 0, y: band.maxY - 1, width: rect.width, height: 1))
+        context.fill(rect)
+        context.setFillColor(theme.border)
+        if index > 0 { context.fill(CGRect(x: 0, y: rect.minY, width: rect.width, height: 1)) }
+        context.fill(CGRect(x: 0, y: rect.maxY - 1, width: rect.width, height: 1))
         let collapsed = rows.rows.indices.contains(index + 1) ? rows.rows[index + 1].fileIndex != row.fileIndex || rows.rows[index + 1].kind == .fileHeader : true
-        var x: CGFloat = 8
-        let chevron = uiLine(collapsed && !file.hunks.isEmpty ? "▸" : "▾", font: theme.uiFont, color: theme.base.secondary)
-        draw(chevron, x: x, rect: band, in: context)
-        x += 14
-        let (letter, color) = Self.statusBadge(file.status, theme: theme)
-        let badge = uiLine(letter, font: theme.uiBoldFont, color: color)
-        let badgeWidth = CTLineGetTypographicBounds(badge, nil, nil, nil) + 8
-        let badgeRect = CGRect(x: x, y: band.midY - 8, width: badgeWidth, height: 16)
-        context.setFillColor(color.copy(alpha: 0.15) ?? color)
-        context.addPath(CGPath(roundedRect: badgeRect, cornerWidth: 4, cornerHeight: 4, transform: nil))
-        context.fillPath()
-        draw(badge, x: x + 4, rect: band, in: context)
-        x += badgeWidth + 8
+        var x: CGFloat = 10
+        let chevronName = collapsed && !file.hunks.isEmpty ? "chevron.right" : "chevron.down"
+        if let chevron = DSDraw.symbol(chevronName, pointSize: DS.Size.iconPointMeta) {
+            drawSymbol(chevron, in: CGRect(x: x, y: rect.minY, width: 12, height: rect.height), color: theme.text3, context: context)
+        }
+        x += 12 + 8
+        x += drawStatusBadge(file.status, x: x, midY: rect.midY, in: context) + 8
         let counts = NSMutableAttributedString()
-        if file.additions > 0 { counts.append(NSAttributedString(string: "+\(file.additions) ", attributes: [.font: theme.uiFont, .foregroundColor: theme.addedMarker])) }
-        if file.deletions > 0 { counts.append(NSAttributedString(string: "−\(file.deletions)", attributes: [.font: theme.uiFont, .foregroundColor: theme.removedMarker])) }
+        let statFont = NSFont.monospacedDigitSystemFont(ofSize: CTFontGetSize(theme.uiFont), weight: .regular)
+        if file.additions > 0 { counts.append(NSAttributedString(string: "+\(file.additions)", attributes: [.font: statFont, .foregroundColor: theme.addedMarker])) }
+        if file.deletions > 0 {
+            if counts.length > 0 { counts.append(NSAttributedString(string: " ", attributes: [.font: statFont])) }
+            counts.append(NSAttributedString(string: "−\(file.deletions)", attributes: [.font: statFont, .foregroundColor: theme.removedMarker]))
+        }
         let countsLine = CTLineCreateWithAttributedString(counts)
         let countsWidth = CTLineGetTypographicBounds(countsLine, nil, nil, nil)
-        let pathText = file.oldPath.map { "\($0) → \(file.path)" } ?? file.path
-        let available = rect.width - x - countsWidth - 20
-        let path = CTLineCreateTruncatedLine(
-            uiLine(pathText, font: theme.uiBoldFont, color: theme.base.text), max(40, available), .middle,
-            uiLine("…", font: theme.uiBoldFont, color: theme.base.text)) ?? uiLine(pathText, font: theme.uiBoldFont, color: theme.base.text)
-        draw(path, x: x, rect: band, in: context)
-        draw(countsLine, x: rect.width - countsWidth - 12, rect: band, in: context)
+        let shown = file.oldPath.map { "\($0) → \(file.path)" } ?? file.path
+        let name = (shown as NSString).lastPathComponent
+        let folder = String(shown.dropLast(name.count))
+        let pathText = NSMutableAttributedString(string: folder, attributes: [.font: theme.uiFont, .foregroundColor: theme.text3])
+        pathText.append(NSAttributedString(string: name, attributes: [.font: theme.uiBoldFont, .foregroundColor: theme.base.text]))
+        let available = rect.width - x - countsWidth - 24
+        let full = CTLineCreateWithAttributedString(pathText)
+        let path = CTLineGetTypographicBounds(full, nil, nil, nil) <= available ? full : (CTLineCreateTruncatedLine(
+            full, max(40, available), .start, uiLine("…", font: theme.uiFont, color: theme.text3)) ?? full)
+        draw(path, x: x, rect: rect, in: context)
+        draw(countsLine, x: rect.width - countsWidth - 12, rect: rect, in: context)
+    }
+
+    /// The 14 pt M/A/D badge (r 3, semantic 14 % fill, mono 9 bold); returns its width.
+    @discardableResult
+    private func drawStatusBadge(_ status: PatchFile.Status, x: CGFloat, midY: CGFloat, in context: CGContext) -> CGFloat {
+        let (letter, color) = Self.statusBadge(status, theme: theme)
+        let badgeRect = CGRect(x: x, y: midY - 7, width: 14, height: 14)
+        context.setFillColor(color.copy(alpha: 0.14) ?? color)
+        context.addPath(CGPath(roundedRect: badgeRect, cornerWidth: 3, cornerHeight: 3, transform: nil))
+        context.fillPath()
+        let badge = uiLine(letter, font: theme.badgeFont, color: color)
+        let width = CTLineGetTypographicBounds(badge, nil, nil, nil)
+        draw(badge, x: badgeRect.midX - width / 2, rect: badgeRect, in: context)
+        return badgeRect.width
+    }
+
+    private func drawSymbol(_ image: NSImage, in rect: CGRect, color: CGColor, context: CGContext) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        DSDraw.draw(template: image, in: rect, color: NSColor(cgColor: color) ?? .labelColor)
     }
 
     static func statusBadge(_ status: PatchFile.Status, theme: DiffTheme) -> (String, CGColor) {
         switch status {
         case .added: ("A", theme.addedMarker)
         case .deleted: ("D", theme.removedMarker)
-        case .renamed: ("R", theme.base.accent)
-        case .copied: ("C", theme.base.accent)
-        case .modified: ("M", theme.base.running)
+        case .renamed: ("R", theme.modifiedMarker)
+        case .copied: ("C", theme.modifiedMarker)
+        case .modified: ("M", theme.modifiedMarker)
         }
     }
 
+    /// The Revert ghost button's frame on a hunk bar (nil when the file cannot be reverted).
+    private func revertFrame(_ row: DiffRow, rect: CGRect) -> CGRect? {
+        guard revertableFiles.contains(row.fileIndex) else { return nil }
+        let width = CTLineGetTypographicBounds(uiLine(revertTitle(rect), font: theme.uiFont, color: theme.text2), nil, nil, nil)
+        let height = min(rect.height - 4, DS.Size.micro)
+        return CGRect(x: rect.width - width - 8 - 16, y: rect.midY - height / 2, width: width + 16, height: height)
+    }
+
+    private func revertTitle(_ rect: CGRect) -> String { rect.width < 420 ? "Revert" : "Revert Hunk" }
+
+    /// A 24 pt hunk bar in `diffHunk` with the header in `text3` mono; the keyboard-current hunk gets a 2 pt accent
+    /// edge. Revert is a ghost text button that appears only on hover or focus (visual-language.md §6).
     private func drawHunkHeader(_ row: DiffRow, index: Int, rect: CGRect, in context: CGContext) {
         context.setFillColor(theme.hunkFill)
         context.fill(rect)
-        if currentHunkRow == index {
+        let focused = currentHunkRow == index
+        if focused {
             context.setFillColor(theme.focusBar)
-            context.fill(CGRect(x: 0, y: rect.minY, width: 3, height: rect.height))
+            context.fill(CGRect(x: 0, y: rect.minY, width: 2, height: rect.height))
         }
         let textX = (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4
         var limit = rect.width - textX - 8
-        revertButtons[index] = nil
-        if revertableFiles.contains(row.fileIndex) {
-            let button = uiLine(rect.width < 420 ? "Revert" : "Revert Hunk", font: theme.uiFont, color: theme.base.accent)
-            let width = CTLineGetTypographicBounds(button, nil, nil, nil)
-            let frame = CGRect(x: rect.width - width - 14, y: rect.minY, width: width + 10, height: rect.height)
-            revertButtons[index] = frame
-            draw(button, x: frame.minX + 5, rect: rect, in: context)
+        if let frame = revertFrame(row, rect: rect), focused || hoveredHunkRow == index {
+            if hoveredRevert == index {
+                context.setFillColor(theme.hoverFill)
+                context.addPath(CGPath(roundedRect: frame, cornerWidth: DS.Radius.sm, cornerHeight: DS.Radius.sm, transform: nil))
+                context.fillPath()
+            }
+            let button = uiLine(revertTitle(rect), font: theme.uiFont, color: hoveredRevert == index ? theme.base.text : theme.text2)
+            draw(button, x: frame.minX + 8, rect: rect, in: context)
             limit = frame.minX - textX - 8
         }
-        draw(truncated(row.text, font: theme.font, color: theme.hunkText, width: limit), x: textX, rect: rect, in: context)
+        let header = NSAttributedString(string: row.text, attributes: [.font: theme.gutterFont, .foregroundColor: theme.hunkText])
+        let line = CTLineCreateWithAttributedString(header)
+        let fitted = CTLineGetTypographicBounds(line, nil, nil, nil) <= limit ? line
+            : (CTLineCreateTruncatedLine(line, max(20, limit), .end, uiLine("…", font: theme.gutterFont, color: theme.hunkText)) ?? line)
+        draw(fitted, x: textX, rect: rect, in: context)
     }
 
-    private func drawGap(hidden: Int, expandable: Bool, rect: CGRect, in context: CGContext) {
-        context.setFillColor(theme.gapFill)
+    /// "14 unchanged lines": 24 pt, `border` above and below, `chevron.up.chevron.down` and `label text3`; the
+    /// "show more" hint appears on hover.
+    private func drawGap(hidden: Int, expandable: Bool, rect: CGRect, in context: CGContext, index: Int) {
+        let hovered = expandable && hoveredGap == index
+        context.setFillColor(hovered ? theme.hoverFill : theme.gapFill)
         context.fill(rect)
-        let x = (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4
-        let base = "⋯ \(hidden) unchanged line\(hidden == 1 ? "" : "s")"
-        let full = base + (expandable ? "  ·  Click to show 20 more, ⌥-click for all" : "")
-        let line = uiLine(full, font: theme.uiFont, color: theme.base.secondary)
-        let fits = CTLineGetTypographicBounds(line, nil, nil, nil) <= rect.width - x - 8
-        draw(fits ? line : truncated(base + (expandable ? " · Click to show" : ""), font: theme.uiFont, color: theme.base.secondary, width: rect.width - x - 8), x: x, rect: rect, in: context)
+        context.setFillColor(theme.border)
+        context.fill(CGRect(x: 0, y: rect.minY, width: rect.width, height: 1))
+        context.fill(CGRect(x: 0, y: rect.maxY - 1, width: rect.width, height: 1))
+        var x = (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4
+        let color = hovered ? theme.text2 : theme.text3
+        if expandable, let glyph = DSDraw.symbol("chevron.up.chevron.down", pointSize: DS.Size.iconPointMeta) {
+            drawSymbol(glyph, in: CGRect(x: x - 18, y: rect.minY, width: 12, height: rect.height), color: color, context: context)
+        }
+        let base = "\(hidden) unchanged line\(hidden == 1 ? "" : "s")"
+        let label = uiLine(base, font: theme.uiFont, color: color)
+        draw(label, x: x, rect: rect, in: context)
+        guard hovered else { return }
+        x += CTLineGetTypographicBounds(label, nil, nil, nil)
+        let hint = uiLine("  ·  Click for 20 more, ⌥-click for all", font: theme.uiFont, color: DS.Color.text4.cgColor)
+        if CTLineGetTypographicBounds(hint, nil, nil, nil) <= rect.width - x - 8 { draw(hint, x: x, rect: rect, in: context) }
     }
 
     /// A one-line label cut with "…" to `width`.
@@ -418,7 +479,7 @@ final class DiffContentView: NSView {
             context.fill(area)
             context.saveGState()
             context.clip(to: area)
-            context.setStrokeColor(theme.emptyCellFill)
+            context.setStrokeColor(theme.border)
             context.setLineWidth(1)
             var stripe = x - rect.height - CGFloat(Int(rect.minY) % 8)
             while stripe < area.maxX {
@@ -448,7 +509,7 @@ final class DiffContentView: NSView {
         let file = files[row.fileIndex]
         for (offset, number) in gutters.enumerated() {
             guard let number else { continue }
-            let numberLine = numberCache.value(for: number) { uiLine(String(number), font: theme.font, color: theme.gutterText) }
+            let numberLine = numberCache.value(for: number) { uiLine(String(number), font: theme.gutterFont, color: theme.gutterText) }
             let numberWidth = CTLineGetTypographicBounds(numberLine, nil, nil, nil)
             draw(numberLine, x: x + CGFloat(offset + 1) * gutterWidth - numberWidth - 6, rect: lineRect, in: context)
             if commentMarks.contains(DiffCommentMark(path: file.path, side: cell.side, line: number)), offset == gutters.count - 1 {
@@ -626,7 +687,7 @@ final class DiffContentView: NSView {
         case .gap(_, let expandable):
             if expandable { onExpandGap?(row, event.modifierFlags.contains(.option)) }
         case .hunkHeader:
-            if let button = revertButtons[index], button.contains(point) {
+            if let button = revertFrame(row, rect: rowRect(index)), button.contains(point) {
                 onRevertHunk?(row.fileIndex, row.hunkIndex)
             } else {
                 currentHunkRow = index
@@ -664,6 +725,43 @@ final class DiffContentView: NSView {
     }
 
     private var selectingLines = false
+
+    // MARK: Hover (Revert and the gap hint appear on hover; no layout changes)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if trackingAreas.isEmpty {
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        updateHover(at: nil)
+    }
+
+    private func updateHover(at point: NSPoint?) {
+        guard let point, let index = rowIndex(atY: point.y), rowRect(index).contains(point) else {
+            hoveredHunkRow = nil
+            hoveredRevert = nil
+            hoveredGap = nil
+            return
+        }
+        let row = rows.rows[index]
+        let header = hunkHeaderRow(containing: index)
+        hoveredHunkRow = header.flatMap { rows.rows[$0].fileIndex == row.fileIndex ? $0 : nil }
+        if case .hunkHeader = row.kind, let frame = revertFrame(row, rect: rowRect(index)), frame.contains(point) {
+            hoveredRevert = index
+        } else {
+            hoveredRevert = nil
+        }
+        if case .gap(_, true) = row.kind { hoveredGap = index } else { hoveredGap = nil }
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard var current = selection else { return }

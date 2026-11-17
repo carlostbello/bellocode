@@ -37,21 +37,31 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
-    private let scopePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let detailPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let layoutControl = NSSegmentedControl()
-    private let optionsButton = NSPopUpButton(frame: .zero, pullsDown: true)
-    private let refreshButton = NSButton()
+    private let scopeSelect = DSSelectButton(title: "This turn", chevron: .upDown, size: .small)
+    private let scopeMenu = NSMenu()
+    private let detailSelect = DSSelectButton(title: "", chevron: .upDown, size: .small)
+    private let detailMenu = NSMenu()
+    /// "3 files · +42 −9" in `label`, the counts in the semantic colours.
+    private let summaryLabel = NSTextField(labelWithString: "")
+    private let layoutControl = DSSegmented(items: [
+        DSChoiceItem(id: DiffLayout.unified.rawValue, title: "", symbolName: "rectangle.split.1x2", accessibilityLabel: "Unified"),
+        DSChoiceItem(id: DiffLayout.split.rawValue, title: "", symbolName: "rectangle.split.2x1", accessibilityLabel: "Side by Side"),
+    ])
+    private let optionsButton = DSSelectButton(title: "", symbolName: "ellipsis", chevron: .none, size: .small)
+    private let optionsMenu = NSMenu()
+    private let refreshButton = DSButton(icon: "arrow.clockwise", accessibilityTitle: "Refresh", size: .small)
+    /// Branch, workspace and base (`meta text3`): where these changes live (UX rule 6).
     private let statusLine = NSTextField(labelWithString: "")
     private let messageLine = NSTextField(wrappingLabelWithString: "")
     private let outline = NSOutlineView()
     private let outlineScroll = NSScrollView()
-    private let split = NSSplitView()
+    private let split = HairlineSplitView()
     private let footer = NSStackView()
-    private let commitField = NSTextField()
-    private let commitButton = NSButton(title: "Commit", target: nil, action: nil)
-    private let pushButton = NSButton(title: "Push", target: nil, action: nil)
-    private let mergeRequestButton = NSButton(title: "Create Merge Request", target: nil, action: nil)
+    private let commitInput = DSTextField(placeholder: "Commit message")
+    private var commitField: NSTextField { commitInput.field }
+    private let commitButton = DSButton(title: "Commit", variant: .primary, size: .small, shortcutHint: "⌘↩")
+    private let pushButton = DSButton(title: "Push", variant: .outline, size: .small, symbolName: "arrow.up")
+    private let mergeRequestButton = DSButton(title: "Merge Request", variant: .ghost, size: .small, symbolName: "arrow.triangle.pull")
     private var tree: [FileTreeNode] = []
     private var footerCollapse: NSLayoutConstraint?
     private var loop: ObservationLoop?
@@ -74,7 +84,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
     // MARK: View
 
     public override func loadView() {
-        let container = NSView()
+        let container = CanvasView()
         container.setAccessibilityLabel("Changes")
         configureHeader()
         configureOutline()
@@ -90,18 +100,33 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         split.setHoldingPriority(.init(250), forSubviewAt: 1)
         outlineScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
 
-        let scopeRow = NSStackView(views: [scopePopup, detailPopup, NSView(), layoutControl, optionsButton, refreshButton])
-        scopeRow.spacing = DS.Spacing.s
-        detailPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The 36 pt toolbar (§6 "Right panel"): scope and turn selects, the summary, layout toggle, overflow, refresh.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        let scopeRow = NSStackView(views: [scopeSelect, detailSelect, summaryLabel, spacer, layoutControl, optionsButton, refreshButton])
+        scopeRow.spacing = DS.Space.s4
+        scopeRow.alignment = .centerY
+        scopeRow.setCustomSpacing(DS.Space.s8, after: detailSelect)
+        scopeRow.setCustomSpacing(DS.Space.s8, after: scopeSelect)
+        scopeRow.setCustomSpacing(DS.Space.s8, after: layoutControl)
+        scopeRow.heightAnchor.constraint(equalToConstant: DS.Size.toolbar).isActive = true
+        detailSelect.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        summaryLabel.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         let header = NSStackView(views: [scopeRow, statusLine, messageLine])
         header.orientation = .vertical
         header.alignment = .leading
-        header.spacing = DS.Spacing.xs
-        header.edgeInsets = NSEdgeInsets(top: DS.Spacing.s, left: DS.Spacing.m, bottom: DS.Spacing.s, right: DS.Spacing.m)
-        scopeRow.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -2 * DS.Spacing.m).isActive = true
-        messageLine.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -2 * DS.Spacing.m).isActive = true
-        let separator = NSBox()
-        separator.boxType = .separator
+        header.spacing = 0
+        header.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s8, bottom: DS.Space.s6, right: DS.Space.s8)
+        scopeRow.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -2 * DS.Space.s8).isActive = true
+        statusLine.widthAnchor.constraint(lessThanOrEqualTo: header.widthAnchor, constant: -2 * DS.Space.s16).isActive = true
+        messageLine.widthAnchor.constraint(equalTo: header.widthAnchor, constant: -2 * DS.Space.s16).isActive = true
+        header.setCustomSpacing(DS.Space.s4, after: statusLine)
+        for line in [statusLine, messageLine] {
+            // Text aligned with the select's title.
+            line.translatesAutoresizingMaskIntoConstraints = false
+        }
+        let separator = DSDivider()
         for view in [header, separator, split, footer] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
@@ -113,6 +138,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
             separator.topAnchor.constraint(equalTo: header.bottomAnchor),
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: DS.Border.hairline),
             split.topAnchor.constraint(equalTo: separator.bottomAnchor),
             split.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -156,54 +182,41 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
     }
 
     private func configureHeader() {
-        for (title, scope) in [("This Turn", 0), ("Branch", 1), ("Uncommitted", 2), ("Commit", 3)] {
-            scopePopup.addItem(withTitle: title)
-            scopePopup.lastItem?.tag = scope
+        for (title, scope) in [("This turn", 0), ("Branch", 1), ("Uncommitted", 2), ("Commit", 3)] {
+            let item = scopeMenu.addItem(withTitle: title, action: #selector(scopeChanged(_:)), keyEquivalent: "")
+            item.tag = scope
+            item.target = self
         }
-        scopePopup.controlSize = .small
-        scopePopup.autoenablesItems = false
-        scopePopup.font = DS.Typography.current.caption
-        scopePopup.target = self
-        scopePopup.action = #selector(scopeChanged(_:))
-        scopePopup.setAccessibilityLabel("Changes scope")
-        scopePopup.toolTip = "Which changes to show"
-        detailPopup.controlSize = .small
-        detailPopup.font = DS.Typography.current.caption
-        detailPopup.target = self
-        detailPopup.action = #selector(detailChanged(_:))
-        detailPopup.setAccessibilityLabel("Turn or commit")
-        layoutControl.segmentCount = 2
-        layoutControl.setImage(NSImage(systemSymbolName: "rectangle.grid.1x2", accessibilityDescription: "Unified"), forSegment: 0)
-        layoutControl.setImage(NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Side by Side"), forSegment: 1)
-        layoutControl.setToolTip("Unified", forSegment: 0)
-        layoutControl.setToolTip("Side by Side", forSegment: 1)
-        layoutControl.controlSize = .small
-        layoutControl.trackingMode = .selectOne
-        layoutControl.target = self
-        layoutControl.action = #selector(layoutChanged(_:))
+        scopeMenu.autoenablesItems = false
+        scopeSelect.popUpMenu = scopeMenu
+        scopeSelect.isMuted = false
+        scopeSelect.setAccessibilityLabel("Changes scope")
+        scopeSelect.toolTip = "Which changes to show"
+        detailMenu.autoenablesItems = false
+        detailSelect.popUpMenu = detailMenu
+        detailSelect.setAccessibilityLabel("Turn or commit")
+        summaryLabel.font = DS.TextRole.label.font
+        summaryLabel.textColor = DS.Color.text2
+        summaryLabel.lineBreakMode = .byTruncatingTail
+        layoutControl.onSelect = { [weak self] id in self?.setLayout(DiffLayout(rawValue: id) ?? .unified) }
         layoutControl.setAccessibilityLabel("Diff layout")
-        optionsButton.controlSize = .small
-        optionsButton.bezelStyle = .accessoryBarAction
-        optionsButton.addItem(withTitle: "")
-        optionsButton.lastItem?.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Diff options")
         for (title, action) in [("Ignore Whitespace", #selector(toggleWhitespace(_:))), ("Wrap Lines", #selector(toggleWrap(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
-            optionsButton.menu?.addItem(item)
+            optionsMenu.addItem(item)
         }
+        optionsButton.popUpMenu = optionsMenu
+        optionsButton.accessibilityTitle = "Diff options"
         optionsButton.setAccessibilityLabel("Diff options")
         optionsButton.toolTip = "Diff options"
-        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")
-        refreshButton.bezelStyle = .accessoryBarAction
-        refreshButton.controlSize = .small
         refreshButton.target = self
         refreshButton.action = #selector(refresh(_:))
         refreshButton.toolTip = "Refresh"
-        statusLine.font = DS.Typography.current.caption
-        statusLine.textColor = DS.Palette.secondaryText
+        statusLine.font = DS.TextRole.meta.font
+        statusLine.textColor = DS.Color.text3
         statusLine.lineBreakMode = .byTruncatingMiddle
         statusLine.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        messageLine.font = DS.Typography.current.caption
+        messageLine.font = DS.TextRole.label.font
         messageLine.isHidden = true
         syncOptionControls()
     }
@@ -217,9 +230,12 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         outline.outlineTableColumn = column
         outline.headerView = nil
         outline.rowSizeStyle = .custom
-        outline.rowHeight = DS.Spacing.sidebarRowHeight - 2
+        outline.rowHeight = DS.Size.fileRow
         outline.style = .plain
-        outline.indentationPerLevel = 12
+        outline.selectionHighlightStyle = .none
+        outline.backgroundColor = .clear
+        outline.intercellSpacing = NSSize(width: 0, height: 0)
+        outline.indentationPerLevel = 0
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
@@ -233,38 +249,47 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         outlineScroll.hasVerticalScroller = true
         outlineScroll.autohidesScrollers = true
         outlineScroll.drawsBackground = false
+        DSScroller.install(on: outlineScroll)
     }
 
     private let menuDelegate = FileMenuDelegate()
 
     private func configureFooter() {
-        commitField.placeholderString = "Commit message (⌘↩ to commit)"
-        commitField.font = DS.Typography.current.body
+        commitInput.placeholder = "Commit message"
         commitField.delegate = self
         commitField.setAccessibilityLabel("Commit message")
         commitField.lineBreakMode = .byTruncatingTail
         for (button, action) in [(commitButton, #selector(commit(_:))), (pushButton, #selector(push(_:))), (mergeRequestButton, #selector(createMergeRequest(_:)))] {
             button.target = self
             button.action = action
-            button.controlSize = .small
-            button.bezelStyle = .push
         }
+        mergeRequestButton.accessibilityTitle = "Create Merge Request"
         commitButton.toolTip = "Commit the staged changes (⌘↩ in the message field)"
         pushButton.toolTip = "Push the current branch (publishes it when it has no upstream)"
         mergeRequestButton.toolTip = "Open GitLab’s new merge request page for this branch in the browser"
-        let buttons = NSStackView(views: [commitButton, NSView(), pushButton, mergeRequestButton])
-        buttons.spacing = DS.Spacing.s
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let buttons = NSStackView(views: [mergeRequestButton, spacer, pushButton, commitButton])
+        buttons.spacing = DS.Space.s8
         footer.orientation = .vertical
         footer.alignment = .leading
-        footer.spacing = DS.Spacing.s
-        footer.edgeInsets = NSEdgeInsets(top: DS.Spacing.s, left: DS.Spacing.m, bottom: DS.Spacing.s, right: DS.Spacing.m)
-        footer.addArrangedSubview(commitField)
+        footer.spacing = DS.Space.s8
+        footer.edgeInsets = NSEdgeInsets(top: DS.Space.s10, left: DS.Space.s12, bottom: DS.Space.s10, right: DS.Space.s12)
+        footer.addArrangedSubview(commitInput)
         footer.addArrangedSubview(buttons)
-        commitField.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -2 * DS.Spacing.m).isActive = true
-        buttons.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -2 * DS.Spacing.m).isActive = true
-        footer.wantsLayer = true
+        commitInput.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -2 * DS.Space.s12).isActive = true
+        buttons.widthAnchor.constraint(equalTo: footer.widthAnchor, constant: -2 * DS.Space.s12).isActive = true
         footer.setHuggingPriority(.required, for: .vertical)
         footer.isHidden = true
+        let rule = DSDivider()
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        footer.addSubview(rule)
+        NSLayoutConstraint.activate([
+            rule.topAnchor.constraint(equalTo: footer.topAnchor),
+            rule.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            rule.heightAnchor.constraint(equalToConstant: DS.Border.hairline),
+        ])
     }
 
     // MARK: Binding
@@ -292,6 +317,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
     private func render() {
         guard let model else {
             statusLine.stringValue = ""
+            summaryLabel.stringValue = ""
             showMessage("Select a thread to see its changes.", isError: false)
             tree = []
             outline.reloadData()
@@ -304,6 +330,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         _ = model.repository.status
         syncScopeControls(model)
         statusLine.stringValue = statusText(model)
+        summaryLabel.attributedStringValue = summaryText(model)
         statusLine.toolTip = model.directory
         let repositoryPhase = model.repository.phase
         if repositoryPhase == .notRepository, model.scope != .turn(nil), !isTurn(model.scope) {
@@ -326,12 +353,12 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         if diffFiles != shownDiffFiles {
             let keep = !shownDiffFiles.isEmpty
             shownDiffFiles = diffFiles
-            tree = FileTree.build(files)
+            tree = FileTree.flat(files)
             outline.reloadData()
             outline.expandItem(nil, expandChildren: true)
             diff.display(diffFiles, revertable: model.revertablePaths, keepPosition: keep)
         } else if files.map(\.staged) != treeStagedState {
-            tree = FileTree.build(files)
+            tree = FileTree.flat(files)
             outline.reloadData()
             outline.expandItem(nil, expandChildren: true)
         }
@@ -352,8 +379,9 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
 
     private func showMessage(_ text: String, isError: Bool) {
         messageLine.isHidden = false
-        messageLine.stringValue = (isError ? "⚠︎ " : "") + text
-        messageLine.textColor = isError ? DS.Palette.failure : DS.Palette.secondaryText
+        // Errors carry a word as well as the colour ("Failed:"), never colour only.
+        messageLine.stringValue = (isError ? "Failed: " : "") + text
+        messageLine.textColor = isError ? DS.Color.dangerText : DS.Color.text3
     }
 
     private func emptyText(_ model: ChangesModel) -> String {
@@ -366,7 +394,19 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
-    /// "⎇ feature/login · Worktree · vs main · 3 files · +40 −12 · ↑2 ↓0".
+    /// "3 files · +42 −9" with the counts in `successText` / `dangerText`.
+    func summaryText(_ model: ChangesModel) -> NSAttributedString {
+        let font = DS.TextRole.label.font(base: DS.Typography.current.baseSize, monospacedDigits: true)
+        let files = model.files
+        guard !files.isEmpty else { return NSAttributedString(string: "No changes", attributes: [.font: font, .foregroundColor: DS.Color.text3]) }
+        let text = NSMutableAttributedString(
+            string: "\(files.count) file\(files.count == 1 ? "" : "s") · ", attributes: [.font: font, .foregroundColor: DS.Color.text2])
+        text.append(NSAttributedString(string: "+\(model.totalAdditions)", attributes: [.font: font, .foregroundColor: DS.Color.successText]))
+        text.append(NSAttributedString(string: " −\(model.totalDeletions)", attributes: [.font: font, .foregroundColor: DS.Color.dangerText]))
+        return text
+    }
+
+    /// "⎇ feature/login · Worktree · vs main · ↑2 ↓0" (the file count and stat are in the toolbar).
     func statusText(_ model: ChangesModel) -> String {
         var parts: [String] = []
         let status = model.repository.status
@@ -377,7 +417,6 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
         if model.repository.phase != .notRepository { parts.append(model.repository.workspaceKind.label) }
         if model.scope == .branch { parts.append("vs \(model.baseBranch ?? "base")") }
-        parts.append(model.summary)
         if let status {
             if status.ahead > 0 || status.behind > 0 { parts.append("↑\(status.ahead) ↓\(status.behind)") }
             if status.upstream == nil, status.branch != nil { parts.append("not published") }
@@ -392,39 +431,44 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         case .uncommitted: 2
         case .commit: 3
         }
-        scopePopup.selectItem(withTag: tag)
-        scopePopup.menu?.item(withTag: 0)?.isEnabled = model.sessionID != nil
-        scopePopup.menu?.item(withTag: 1)?.title = "Branch vs \(model.baseBranch ?? "base")"
-        detailPopup.removeAllItems()
+        scopeMenu.item(withTag: 0)?.isEnabled = model.sessionID != nil
+        scopeMenu.item(withTag: 1)?.title = "Branch vs \(model.baseBranch ?? "base")"
+        for item in scopeMenu.items { item.state = item.tag == tag ? .on : .off }
+        scopeSelect.title = scopeMenu.item(withTag: tag)?.title ?? ""
+        detailMenu.removeAllItems()
+        var selectedTitle: String?
+        func add(_ title: String, value: String, selected: Bool) {
+            let item = detailMenu.addItem(withTitle: title, action: #selector(detailChanged(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = selected ? .on : .off
+            if selected { selectedTitle = title }
+        }
         switch model.scope {
         case .turn(let selected):
-            let turns = model.turns()
-            detailPopup.isHidden = turns.isEmpty
-            for turn in turns.reversed() {
-                detailPopup.addItem(withTitle: "Turn \(turn.index + 1): \(turn.title)")
-                detailPopup.lastItem?.representedObject = turn.id.rawValue
+            let turns = Array(model.turns().reversed())
+            detailSelect.isHidden = turns.isEmpty
+            for (index, turn) in turns.enumerated() {
+                add("Turn \(turn.index + 1): \(turn.title)", value: turn.id.rawValue, selected: selected.map { $0 == turn.id } ?? (index == 0))
             }
-            if let selected, let index = detailPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == selected.rawValue }) {
-                detailPopup.selectItem(at: index)
-            } else {
-                detailPopup.selectItem(at: 0)
-            }
+            detailMenu.items.first?.tag = 1  // the newest turn: "follow the latest"
         case .commit(let hash):
-            detailPopup.isHidden = model.commits.isEmpty
-            for commit in model.commits {
-                detailPopup.addItem(withTitle: "\(commit.shortHash) \(commit.subject)")
-                detailPopup.lastItem?.representedObject = commit.hash
-            }
-            if let index = detailPopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == hash }) { detailPopup.selectItem(at: index) }
+            detailSelect.isHidden = model.commits.isEmpty
+            for commit in model.commits { add("\(commit.shortHash) \(commit.subject)", value: commit.hash, selected: commit.hash == hash) }
         default:
-            detailPopup.isHidden = true
+            detailSelect.isHidden = true
+        }
+        let shown = selectedTitle ?? detailMenu.items.first?.title ?? ""
+        if detailSelect.title != shown {
+            detailSelect.title = shown
+            detailSelect.toolTip = shown
         }
     }
 
     private func syncOptionControls() {
-        layoutControl.selectedSegment = diff.options.layout == .unified ? 0 : 1
-        optionsButton.menu?.items.first { $0.action == #selector(toggleWhitespace(_:)) }?.state = diff.options.ignoreWhitespace ? .on : .off
-        optionsButton.menu?.items.first { $0.action == #selector(toggleWrap(_:)) }?.state = diff.options.wraps ? .on : .off
+        layoutControl.selectedID = diff.options.layout.rawValue
+        optionsMenu.items.first { $0.action == #selector(toggleWhitespace(_:)) }?.state = diff.options.ignoreWhitespace ? .on : .off
+        optionsMenu.items.first { $0.action == #selector(toggleWrap(_:)) }?.state = diff.options.wraps ? .on : .off
     }
 
     /// Prints the panel's frames (DiffDemo diagnostics).
@@ -435,9 +479,9 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
 
     // MARK: Header actions
 
-    @objc private func scopeChanged(_ sender: NSPopUpButton) {
+    @objc private func scopeChanged(_ sender: NSMenuItem) {
         guard let model else { return }
-        switch sender.selectedTag() {
+        switch sender.tag {
         case 0: model.setScope(.turn(nil))
         case 1: model.setScope(.branch)
         case 2: model.setScope(.uncommitted)
@@ -447,16 +491,15 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
-    @objc private func detailChanged(_ sender: NSPopUpButton) {
-        guard let model, let value = sender.selectedItem?.representedObject as? String else { return }
+    @objc private func detailChanged(_ sender: NSMenuItem) {
+        guard let model, let value = sender.representedObject as? String else { return }
         switch model.scope {
-        case .turn: model.setScope(.turn(sender.indexOfSelectedItem == 0 ? nil : MessageID(value)))
+        case .turn: model.setScope(.turn(sender.tag == 1 ? nil : MessageID(value)))
         case .commit: model.setScope(.commit(value))
         default: break
         }
     }
 
-    @objc private func layoutChanged(_ sender: NSSegmentedControl) { setLayout(sender.selectedSegment == 0 ? .unified : .split) }
     @objc public func toggleWhitespace(_ sender: Any?) { options.ignoreWhitespace.toggle() }
     @objc public func toggleWrap(_ sender: Any?) { options.wraps.toggle() }
     @objc public func refresh(_ sender: Any?) {
@@ -534,6 +577,12 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
     }
 
     public func outlineView(_ outline: NSOutlineView, isItemExpandable item: Any) -> Bool { (item as? FileTreeNode)?.isFolder ?? false }
+
+    public func outlineView(_ outline: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let row = DSTableRowView()
+        row.horizontalInset = DS.Space.s4
+        return row
+    }
 
     public func outlineView(_ outline: NSOutlineView, viewFor column: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? FileTreeNode else { return nil }
@@ -779,39 +828,49 @@ final class FileMenuDelegate: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) { owner?.buildFileMenu(menu) }
 }
 
-/// One row of the changed-files tree: stage checkbox (uncommitted scope), status letter (with the word for
-/// VoiceOver and the tooltip), name, folder, and +/− counts.
+/// One 26 pt row of the changed-files list (visual-language.md §6 "Right panel"): stage checkbox (uncommitted scope),
+/// the 14 pt M/A/D badge (the word for VoiceOver and the tooltip), the name in `label`, its folder in `text3`, and the
+/// +/− counts right-aligned in `successText` / `dangerText`. Selection and hover are the row recipe (`DSTableRowView`).
 @MainActor
 final class FileRowView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("ChangedFileRow")
-    private let stage = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let badge = NSTextField(labelWithString: "")
+    private let stage = DSToggle(kind: .checkbox)
+    private let badge = FileStatusBadge()
     private let name = NSTextField(labelWithString: "")
+    private let folder = NSTextField(labelWithString: "")
     private let counts = NSTextField(labelWithString: "")
     private var onStage: ((Bool) -> Void)?
 
     init() {
         super.init(frame: .zero)
         identifier = Self.identifier
-        badge.font = .monospacedSystemFont(ofSize: DS.Typography.current.baseSize - 2, weight: .bold)
-        badge.alignment = .center
-        name.font = DS.Typography.current.body
+        name.font = DS.TextRole.label.font
+        name.textColor = DS.Color.text
         name.lineBreakMode = .byTruncatingMiddle
-        counts.font = .monospacedDigitSystemFont(ofSize: DS.Typography.current.baseSize - 2, weight: .regular)
-        stage.controlSize = .small
+        folder.font = DS.TextRole.label.font
+        folder.textColor = DS.Color.text3
+        folder.lineBreakMode = .byTruncatingHead
+        counts.font = DS.TextRole.label.font(base: DS.Typography.current.baseSize, monospacedDigits: true)
         stage.target = self
         stage.action = #selector(toggled(_:))
-        let stack = NSStackView(views: [stage, badge, name, NSView(), counts])
-        stack.spacing = DS.Spacing.xs
+        stage.setAccessibilityLabel("Staged")
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let stack = NSStackView(views: [stage, badge, name, folder, spacer, counts])
+        stack.spacing = DS.Space.s8
+        stack.setCustomSpacing(DS.Space.s6, after: name)
+        stack.alignment = .centerY
+        stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         textField = name
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        folder.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        counts.setContentCompressionResistancePriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Space.s12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Space.s12),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            badge.widthAnchor.constraint(equalToConstant: 14),
         ])
     }
 
@@ -821,50 +880,89 @@ final class FileRowView: NSTableCellView {
     func configure(_ node: FileTreeNode, showsStage: Bool, onStage: @escaping (Bool) -> Void) {
         self.onStage = onStage
         name.stringValue = node.name
-        if let file = node.file {
-            badge.isHidden = false
-            badge.stringValue = file.statusLetter
-            badge.textColor = switch file.statusLetter {
-            case "A", "?": DS.Palette.success
-            case "D": DS.Palette.failure
-            default: NSColor.controlAccentColor
-            }
-            badge.toolTip = file.statusWord
-            let attributed = NSMutableAttributedString()
-            if file.isBinary {
-                attributed.append(NSAttributedString(string: "binary", attributes: [.foregroundColor: DS.Palette.secondaryText]))
-            } else {
-                if file.additions > 0 { attributed.append(NSAttributedString(string: "+\(file.additions)", attributes: [.foregroundColor: NSColor.systemGreen])) }
-                if file.deletions > 0 {
-                    attributed.append(NSAttributedString(string: (attributed.length > 0 ? " " : "") + "−\(file.deletions)", attributes: [.foregroundColor: NSColor.systemRed]))
-                }
-            }
-            counts.attributedStringValue = attributed
-            name.font = DS.Typography.current.body
-            name.textColor = file.status == .deleted ? DS.Palette.secondaryText : DS.Palette.text
-            toolTip = file.oldPath.map { "\($0) → \(file.path)" } ?? file.path
-            stage.isHidden = !showsStage
-            stage.state = file.staged != nil ? (file.unstaged != nil ? .mixed : .on) : .off
-            stage.allowsMixedState = true
-            stage.setAccessibilityLabel("Staged")
-            setAccessibilityLabel("\(file.path), \(file.statusWord), \(file.additions) added, \(file.deletions) removed\(showsStage ? (file.staged != nil ? ", staged" : ", not staged") : "")")
-        } else {
+        stage.isHidden = !showsStage
+        guard let file = node.file else {
             badge.isHidden = true
             counts.stringValue = ""
-            name.font = DS.Typography.current.bodyEmphasized
-            name.textColor = DS.Palette.secondaryText
-            stage.isHidden = !showsStage
+            folder.stringValue = ""
+            name.textColor = DS.Color.text2
             let files = node.files
             let staged = files.filter { $0.staged != nil }.count
-            stage.state = staged == 0 ? .off : staged == files.count ? .on : .mixed
+            stage.isOn = staged == files.count && staged > 0
+            stage.isMixed = staged > 0 && staged < files.count
             toolTip = node.path
             setAccessibilityLabel("Folder \(node.path), \(files.count) files")
+            return
         }
+        badge.isHidden = false
+        badge.letter = file.statusLetter
+        badge.toolTip = file.statusWord
+        let directory = (file.path as NSString).deletingLastPathComponent
+        folder.stringValue = directory
+        folder.isHidden = directory.isEmpty
+        let attributed = NSMutableAttributedString()
+        if file.isBinary {
+            attributed.append(NSAttributedString(string: "binary", attributes: [.foregroundColor: DS.Color.text3]))
+        } else {
+            if file.additions > 0 { attributed.append(NSAttributedString(string: "+\(file.additions)", attributes: [.foregroundColor: DS.Color.successText])) }
+            if file.deletions > 0 {
+                attributed.append(NSAttributedString(string: (attributed.length > 0 ? " " : "") + "−\(file.deletions)", attributes: [.foregroundColor: DS.Color.dangerText]))
+            }
+        }
+        counts.attributedStringValue = attributed
+        name.textColor = file.status == .deleted ? DS.Color.text3 : DS.Color.text
+        toolTip = file.oldPath.map { "\($0) → \(file.path)" } ?? file.path
+        stage.isOn = file.staged != nil
+        stage.isMixed = file.staged != nil && file.unstaged != nil
+        setAccessibilityLabel("\(file.path), \(file.statusWord), \(file.additions) added, \(file.deletions) removed\(showsStage ? (file.staged != nil ? ", staged" : ", not staged") : "")")
     }
 
-    @objc private func toggled(_ sender: NSButton) {
-        onStage?(sender.state != .off)
+    @objc private func toggled(_ sender: DSToggle) {
+        onStage?(sender.isOn)
     }
+}
+
+/// The 14 pt M/A/D badge: r 3, the status colour at 14 % with the letter in mono 9 bold (`successText` added,
+/// `dangerText` deleted, `diffModifiedIcon` otherwise). The row's label carries the word.
+@MainActor
+final class FileStatusBadge: NSView {
+    var letter = "M" { didSet { if letter != oldValue { needsDisplay = true } } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: DS.Size.statusGlyph, height: DS.Size.statusGlyph) }
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let color: NSColor = switch letter {
+        case "A", "?": DS.Color.successText
+        case "D": DS.Color.dangerText
+        default: DS.Color.diffModifiedIcon
+        }
+        let box = NSRect(x: 0, y: (bounds.height - 14) / 2, width: 14, height: 14)
+        DSDraw.fill(box, radius: 3, color: color.withAlphaComponent(0.14 * color.alphaComponent / max(color.alphaComponent, 0.01)))
+        DSDraw.text(letter, in: box, font: .monospacedSystemFont(ofSize: 9, weight: .bold), color: color, alignment: .center)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+/// The panel's solid `canvas` (docked surfaces are solid, visual-language.md §4).
+@MainActor
+final class CanvasView: NSView {
+    override var isOpaque: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        DS.Color.canvas.setFill()
+        dirtyRect.fill()
+    }
+}
+
+/// A vertical split whose divider is a `border` hairline (not the system's grey).
+@MainActor
+final class HairlineSplitView: NSSplitView {
+    override var dividerColor: NSColor { DS.Color.border }
+    override var dividerThickness: CGFloat { 1 }
 }
 
 /// Re-runs `body` whenever observed state it read changes (the shell's pattern, local to DiffKit).
