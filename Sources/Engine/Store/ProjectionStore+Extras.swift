@@ -104,26 +104,26 @@ extension ProjectionStore {
         }
     }
 
-    // MARK: Pull-request watch state
+    // MARK: Merge-request watch state
 
-    public func pullRequestWatches() async throws -> [PullRequestWatchRecord] {
-        let rows = try await writer.read { db in try Data.fetchAll(db, sql: "SELECT json FROM app_pr_watch") }
-        return rows.compactMap { try? Self.extrasDecoder.decode(PullRequestWatchRecord.self, from: $0) }
+    public func mergeRequestWatches() async throws -> [MergeRequestWatchRecord] {
+        let rows = try await writer.read { db in try Data.fetchAll(db, sql: "SELECT json FROM app_mr_watch") }
+        return rows.compactMap { try? Self.extrasDecoder.decode(MergeRequestWatchRecord.self, from: $0) }
     }
 
-    public func savePullRequestWatch(_ record: PullRequestWatchRecord) async throws {
+    public func saveMergeRequestWatch(_ record: MergeRequestWatchRecord) async throws {
         let data = try Self.extrasEncoder.encode(record)
         try await writer.write { db in
             try db.execute(
-                sql: "INSERT OR REPLACE INTO app_pr_watch (session_id, url, updated, json) VALUES (?, ?, ?, ?)",
+                sql: "INSERT OR REPLACE INTO app_mr_watch (session_id, url, updated, json) VALUES (?, ?, ?, ?)",
                 arguments: [record.sessionID.rawValue, record.url, Date().timeIntervalSince1970, data])
         }
     }
 
-    public func deletePullRequestWatch(sessionID: SessionID, url: String) async throws {
+    public func deleteMergeRequestWatch(sessionID: SessionID, url: String) async throws {
         try await writer.write { db in
             try db.execute(
-                sql: "DELETE FROM app_pr_watch WHERE session_id = ? AND url = ?", arguments: [sessionID.rawValue, url])
+                sql: "DELETE FROM app_mr_watch WHERE session_id = ? AND url = ?", arguments: [sessionID.rawValue, url])
         }
     }
 

@@ -167,6 +167,8 @@ public final class Engine {
         if store.recovery != .none { root.setStorage(.recovered(store.recovery)) }
         orchestration = OrchestrationService(core: core, store: store, engine: self)
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
+        let mergeRequests = extras.mergeRequests
+        git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
     }
 
     /// The model of a thread that is open now, without opening it.

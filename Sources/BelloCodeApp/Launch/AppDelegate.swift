@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// M3-B (docs/features/orchestration-extras.md): the visual renderer, and after the Mac wakes, an immediate check
-    /// of due scheduled tasks (catch-up policy) and watched pull requests.
+    /// of due scheduled tasks (catch-up policy) and watched merge requests.
     private func startExtras(_ runtime: AppRuntime) {
         guard let extras = runtime.engine.extras else { return }
         extras.visuals.renderer = visualRenderer
@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let extras else { return }
                 Task {
                     await extras.schedules.tick()
-                    await extras.pullRequests.pollDue()
+                    await extras.mergeRequests.pollDue()
                 }
             }
         }

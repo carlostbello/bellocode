@@ -25,8 +25,8 @@ import Testing
     }
 
     @Test func wakesAreOneLineNotesWithoutReferences() {
-        #expect(RowBuilder.belloCodeWake("[BelloCode PR watch] a/b#1: Checks finished on abc1234: 1 check failed.\nPull request: …")
-            == "↻ PR watch woke this thread: a/b#1: Checks finished on abc1234: 1 check failed.")
+        #expect(RowBuilder.belloCodeWake("[BelloCode MR watch] team/app!12: Pipeline #9 finished: Pipeline failed (1 job).\nMerge request: …")
+            == "↻ MR watch woke this thread: team/app!12: Pipeline #9 finished: Pipeline failed (1 job).")
         let secret = RowBuilder.belloCodeWake("[BelloCode secret] The user saved “npm token”. secretRef: bcsecret_abc (one use, …)")
         #expect(secret == "Secret request: The user saved “npm token”.")
         #expect(RowBuilder.belloCodeWake("Hello") == nil)
@@ -35,7 +35,7 @@ import Testing
     @Test func appToolsReadAsActions() {
         #expect(RowBuilder.describe(name: "bellocode_app_request_secret", input: ["label": "npm token"], active: false).1 == "Asked for secret")
         #expect(RowBuilder.describe(name: "bellocode_app_schedule_task", input: ["name": "Nightly"], active: false).2 == "Nightly")
-        #expect(RowBuilder.describe(name: "bellocode_app_link_pull_requests", input: ["urls": ["https://github.com/a/b/pull/7"]], active: false).2 == "#7")
-        #expect(RowBuilder.describe(name: "bellocode_app_watch_pull_request", input: ["url": "https://github.com/a/b/pull/9"], active: false).2 == "#9")
+        #expect(RowBuilder.describe(name: "bellocode_app_link_merge_requests", input: ["refs": ["https://gitlab.example.com/team/app/-/merge_requests/7", "!8"]], active: false).2 == "!7, !8")
+        #expect(RowBuilder.describe(name: "bellocode_app_watch_merge_request", input: ["ref": "https://code.corp/gitlab/a/b/-/merge_requests/9"], active: false).2 == "!9")
     }
 }

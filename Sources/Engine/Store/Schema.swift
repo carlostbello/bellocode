@@ -6,7 +6,7 @@ import GRDB
 /// Tables holding a cache of opencode state (rebuildable from the server): `project`, `session`, `message`, `part`,
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
 /// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
-/// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_pr_watch`, `app_secret`.
+/// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`.
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
@@ -132,7 +132,7 @@ enum ProjectionSchema {
         }
         // M3-B orchestration extras (docs/features/orchestration-extras.md): scheduled task definitions and their run
         // history (bounded per task), app-level grants (agent schedules per project, network hosts for HTML visuals),
-        // pull-request watch state (what each wake already reported), and the labels of secrets kept in the Keychain.
+        // merge-request watch state (what each wake already reported), and the labels of secrets kept in the Keychain.
         // `app_secret` never holds a value: only the label, the Keychain account and timestamps.
         migrator.registerMigration("v5-orchestration-extras") { db in
             try db.execute(sql: """
@@ -156,7 +156,7 @@ enum ProjectionSchema {
                     granted REAL NOT NULL,
                     PRIMARY KEY (kind, scope)
                 );
-                CREATE TABLE app_pr_watch (
+                CREATE TABLE app_mr_watch (
                     session_id TEXT NOT NULL,
                     url TEXT NOT NULL,
                     updated REAL NOT NULL,

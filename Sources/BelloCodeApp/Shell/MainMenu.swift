@@ -190,8 +190,8 @@ enum MainMenu {
         agents.addItem(.separator())
         agents.add(.openParentThread)
         menu.addItem(submenu: agents, title: "Agents")
-        // M3-B: linked pull requests (docs/features/orchestration-extras.md).
-        menu.add(.showPullRequests)
+        // M3-B: linked merge requests (docs/features/orchestration-extras.md).
+        menu.add(.showMergeRequests)
         return menu
     }
 
@@ -250,7 +250,7 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.add(.commitChanges)
         menu.add(.pushBranch)
-        menu.add(.openPullRequest)
+        menu.add(.createMergeRequest)
         menu.addItem(.separator())
         menu.add(.chooseWorkspace)
         menu.add(.chooseBranch)

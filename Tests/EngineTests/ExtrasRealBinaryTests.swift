@@ -10,7 +10,7 @@ import Testing
 /// M3-B against the pinned opencode with the bellocode plugin and the app tools (client MCP). Opt-in:
 /// `BELLOCODE_EXTRAS_REAL=1 swift test --filter ExtrasRealBinary`. Seven short model runs in total on the zero-cost
 /// default model; HOME and XDG directories in a fresh temporary directory (never the user's opencode data); an
-/// in-memory secret vault (never the Keychain) and recorded GitHub answers (no GitHub traffic); every process stopped.
+/// in-memory secret vault (never the Keychain) and recorded GitLab answers (no forge traffic); every process stopped.
 @Suite(
     "Extras real binary", .serialized,
     .enabled(
@@ -24,7 +24,7 @@ struct ExtrasRealBinaryTests {
         let supervisor: ServerSupervisor
         let engine: Engine
         let vault: InMemorySecretVault
-        let gitHub: FixtureGitHubTransport
+        let gitLab: FixtureForgeTransport
         let renderer: FakeRenderer
         let events: EventRecorder
 
@@ -41,11 +41,12 @@ struct ExtrasRealBinaryTests {
             var configuration = EngineConfiguration(server: .supervised(supervisor), store: .inMemory)
             configuration.defaultDirectory = project.path
             let vault = InMemorySecretVault()
-            let gitHub = FixtureGitHubTransport()
+            let gitLab = FixtureForgeTransport()
             configuration.secretVault = vault
-            configuration.gitHub = gitHub
+            configuration.forgeTransport = gitLab
+            configuration.forgeTokens = GitLabFixtures.tokens()
             configuration.visualsDirectory = root.appending(path: "visuals", directoryHint: .isDirectory)
-            configuration.pullRequestPoll = .seconds(3)
+            configuration.mergeRequestPoll = .seconds(3)
             let engine = try Engine(configuration: configuration)
             let renderer = FakeRenderer()
             engine.extras.visuals.renderer = renderer
@@ -55,8 +56,9 @@ struct ExtrasRealBinaryTests {
             let client = try await engine.core.currentClient()
             let events = EventRecorder()
             events.start(client.connection)
+            _ = try await engine.extras.mergeRequests.saveInstance(baseURL: GitLabFixtures.instance.baseURL, token: nil)
             await engine.orchestration.hostAppTools(directories: [project.path])
-            return Sandbox(root: root, project: project, supervisor: supervisor, engine: engine, vault: vault, gitHub: gitHub, renderer: renderer, events: events)
+            return Sandbox(root: root, project: project, supervisor: supervisor, engine: engine, vault: vault, gitLab: gitLab, renderer: renderer, events: events)
         }
 
         func client() async throws -> OpenCodeClient { try await engine.core.currentClient() }
@@ -201,12 +203,8 @@ struct ExtrasRealBinaryTests {
         let engine = sandbox.engine
         let thread = try await engine.createThread(in: sandbox.project.path, title: "tools")
         try await waitUntil("graph") { engine.orchestration.node(thread.id) != nil }
-        let ref = PullRequestRef(owner: "octocat", repo: "Hello-World", number: 1)
-        sandbox.gitHub.setJSON(
-            "repos/octocat/Hello-World/pulls/1",
-            #"{"number":1,"title":"Probe PR","state":"open","merged":false,"draft":false,"head":{"sha":"abc","ref":"probe"},"base":{"ref":"main"},"user":{"login":"o"},"comments":0,"review_comments":0}"#)
-        sandbox.gitHub.setJSON("repos/octocat/Hello-World/commits/abc/check-runs?per_page=100", #"{"check_runs":[]}"#)
-        sandbox.gitHub.setJSON("repos/octocat/Hello-World/pulls/1/reviews?per_page=100", "[]")
+        let ref = GitLabFixtures.ref
+        GitLabFixtures.install(sandbox.gitLab, mr: GitLabFixtures.mr(pipelineStatus: "success"))
         // Run 4: three app tools in one turn.
         _ = try await engine.send(
             """
@@ -226,8 +224,8 @@ struct ExtrasRealBinaryTests {
         let session = try await sandbox.client().session(thread.id.rawValue)
         let metadata = String(describing: session.metadata ?? .null)
         print("M3-B real: metadata \(metadata.prefix(300))")
-        #expect(metadata.contains(LinkedPullRequest.metadataKey))
-        #expect(engine.extras.pullRequests.links(for: thread.id).map(\.ref) == [ref])
+        #expect(metadata.contains(LinkedMergeRequest.metadataKey))
+        #expect(engine.extras.mergeRequests.links(for: thread.id).map(\.ref) == [ref])
         #expect(sandbox.renderer.requests.contains { $0.html.contains("probe") })
         let transcript = try await sandbox.messageText(thread.id)
         #expect(transcript.contains("bellocode_app_html_render"))
@@ -246,37 +244,27 @@ struct ExtrasRealBinaryTests {
         #expect(runText.contains("SCHEDULED-OK"))
     }
 
-    @Test func watchedPullRequestWakesTheThreadOnce() async throws {
+    @Test func watchedMergeRequestWakesTheThreadOnce() async throws {
         let sandbox = try await Sandbox.start("watch")
         defer { Task { await sandbox.stop() } }
         let engine = sandbox.engine
         let thread = try await engine.createThread(in: sandbox.project.path, title: "watch")
         try await waitUntil("graph") { engine.orchestration.node(thread.id) != nil }
-        let ref = PullRequestRef(owner: "octocat", repo: "Hello-World", number: 2)
-        func install(_ status: String, _ conclusion: String?) {
-            sandbox.gitHub.setJSON(
-                "repos/octocat/Hello-World/pulls/2",
-                #"{"number":2,"title":"Watch probe","state":"open","merged":false,"head":{"sha":"def"},"base":{"ref":"main"},"user":{"login":"o"},"comments":0,"review_comments":0}"#)
-            sandbox.gitHub.setJSON(
-                "repos/octocat/Hello-World/commits/def/check-runs?per_page=100",
-                #"{"check_runs":[{"id":1,"name":"ci","status":"\#(status)","conclusion":\#(conclusion.map { "\"\($0)\"" } ?? "null")}]}"#)
-            sandbox.gitHub.setJSON("repos/octocat/Hello-World/pulls/2/reviews?per_page=100", "[]")
-        }
-        install("in_progress", nil)
-        try await engine.extras.pullRequests.setWatching(ref, for: thread.id, true)
-        await engine.extras.pullRequests.waitForFetches()
-        await engine.extras.pullRequests.pollDue()
-        try await waitUntil("baseline", timeout: .seconds(10)) { engine.extras.pullRequests.watch(thread.id, ref.url)?.baseline != nil }
-        install("completed", "success")
-        // Run 6 (the wake): the poller (3 s here) finds the finished check; later polls must not wake again.
-        try await waitUntil("woken", timeout: .seconds(60)) { engine.extras.pullRequests.watch(thread.id, ref.url)?.wakes == 1 }
+        let ref = GitLabFixtures.ref
+        GitLabFixtures.install(sandbox.gitLab, mr: GitLabFixtures.mr(), jobs: GitLabFixtures.jobs([("unit", "running")]))
+        try await engine.extras.mergeRequests.setWatching(ref, for: thread.id, true)
+        await engine.extras.mergeRequests.waitForFetches()
+        await engine.extras.mergeRequests.pollDue()
+        try await waitUntil("baseline", timeout: .seconds(10)) { engine.extras.mergeRequests.watch(thread.id, ref.url)?.baseline != nil }
+        GitLabFixtures.install(sandbox.gitLab, mr: GitLabFixtures.mr(pipelineStatus: "success"), jobs: GitLabFixtures.jobs([("unit", "success")]))
+        // One model run (the wake): the poller (3 s here) finds the finished pipeline; later polls must not wake again.
+        try await waitUntil("woken", timeout: .seconds(60)) { engine.extras.mergeRequests.watch(thread.id, ref.url)?.wakes == 1 }
         try await eventually("wake run done", timeout: .seconds(120)) {
-            ((try? await sandbox.messageText(thread.id)) ?? "").contains("[BelloCode PR watch]") && engine.orchestration.node(thread.id)?.node.ownStatus != .running
+            ((try? await sandbox.messageText(thread.id)) ?? "").contains("[BelloCode MR watch]") && engine.orchestration.node(thread.id)?.node.ownStatus != .running
         }
         try await Task.sleep(for: .seconds(8))  // two more polls
         let text = try await sandbox.messageText(thread.id)
-        print("M3-B real: wake text present \(text.contains("[BelloCode PR watch]")), wakes \(engine.extras.pullRequests.watch(thread.id, ref.url)?.wakes ?? -1)")
-        #expect(text.components(separatedBy: "[BelloCode PR watch]").count == 2, "exactly one wake")
-        #expect(engine.extras.pullRequests.watch(thread.id, ref.url)?.wakes == 1)
+        #expect(text.components(separatedBy: "[BelloCode MR watch]").count == 2, "exactly one wake")
+        #expect(engine.extras.mergeRequests.watch(thread.id, ref.url)?.wakes == 1)
     }
 }

@@ -22,7 +22,7 @@ public enum ChangeTopic: Hashable, Sendable {
     /// Sessions and statuses of every project, for the orchestration task graph (docs/features/orchestration.md).
     /// Session and status changes only (busy/idle, metadata, title, attention): never message content or tokens.
     case lineage
-    /// Finished shell commands whose output may name a GitHub pull request (PR auto-linking,
+    /// Finished shell commands whose output may name a GitLab merge request (MR auto-linking,
     /// docs/features/orchestration-extras.md). Only those messages, never streaming text.
     case commandOutputs
 }
@@ -67,7 +67,7 @@ public enum ProjectionChange: Sendable {
         case .sessionRemoved(let id, let projectID): [.sessions(projectID), .thread(id), .lineage]
         case .status(let status): [.sessions(status.projectID), .thread(status.sessionID), .lineage]
         case .message(let message):
-            PullRequestHints.mayContain(message) ? [.thread(message.sessionID), .commandOutputs] : [.thread(message.sessionID)]
+            MergeRequestHints.mayContain(message) ? [.thread(message.sessionID), .commandOutputs] : [.thread(message.sessionID)]
         case .messageRemoved(_, let sessionID): [.thread(sessionID)]
         case .pending(let request, let ancestors): [.thread(request.sessionID)] + ancestors.map(ChangeTopic.thread)
         case .pendingResolved(_, let sessionID, let ancestors): [.thread(sessionID)] + ancestors.map(ChangeTopic.thread)

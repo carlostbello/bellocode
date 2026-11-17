@@ -15,19 +15,21 @@ public protocol SecretVault: Sendable {
 /// The macOS Keychain, generic passwords under BelloCode's own service, readable only while the Mac is unlocked and
 /// never synced (`…ThisDeviceOnly`).
 public struct KeychainSecretVault: SecretVault {
+    /// Secrets agents asked for.
     public static let service = "app.bellocode.agent-secrets"
+    public let service: String
 
-    public init() {}
+    public init(service: String = KeychainSecretVault.service) { self.service = service }
 
     private func base(_ account: String) -> [CFString: Any] {
-        [kSecClass: kSecClassGenericPassword, kSecAttrService: Self.service, kSecAttrAccount: account]
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
     }
 
     public func store(account: String, label: String, value: SecretValue) throws {
         SecItemDelete(base(account) as CFDictionary)
         var item = base(account)
         item[kSecValueData] = value.utf8
-        item[kSecAttrLabel] = "BelloCode agent secret: \(label)"
+        item[kSecAttrLabel] = "BelloCode: \(label)"
         item[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw ExtrasError("The Keychain refused to save it (status \(status)).") }

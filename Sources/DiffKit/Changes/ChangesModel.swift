@@ -507,5 +507,6 @@ public final class ChangesModel {
         }
     }
 
-    public func pullRequestURL() async -> URL? { await repository.pullRequestURL() }
+    /// GitLab's new-merge-request page for the branch (Create Merge Request), or nil without a configured GitLab remote.
+    public func newMergeRequestURL() async -> URL? { await repository.newMergeRequestURL(instances: git.forgeInstances()) }
 }

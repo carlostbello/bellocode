@@ -17,7 +17,7 @@ public protocol ChangesPanelHost: AnyObject {
 
 /// The right panel's "Changes" tab: scope switcher (this turn / branch vs base / uncommitted / one commit), a status
 /// line naming the branch, workspace and base, the changed-files tree with status and line counts, the diff, and for
-/// uncommitted changes stage toggles, a commit field, Push and Open Pull Request.
+/// uncommitted changes stage toggles, a commit field, Push and Create Merge Request (GitLab).
 ///
 /// Mounting: `ChangesPanelController(model:)`; replace the model with `display(_:)` when the thread changes. Previous
 /// content stays visible (marked stale) while a scope reloads.
@@ -51,7 +51,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
     private let commitField = NSTextField()
     private let commitButton = NSButton(title: "Commit", target: nil, action: nil)
     private let pushButton = NSButton(title: "Push", target: nil, action: nil)
-    private let pullRequestButton = NSButton(title: "Open Pull Request", target: nil, action: nil)
+    private let mergeRequestButton = NSButton(title: "Create Merge Request", target: nil, action: nil)
     private var tree: [FileTreeNode] = []
     private var footerCollapse: NSLayoutConstraint?
     private var loop: ObservationLoop?
@@ -243,7 +243,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         commitField.delegate = self
         commitField.setAccessibilityLabel("Commit message")
         commitField.lineBreakMode = .byTruncatingTail
-        for (button, action) in [(commitButton, #selector(commit(_:))), (pushButton, #selector(push(_:))), (pullRequestButton, #selector(openPullRequest(_:)))] {
+        for (button, action) in [(commitButton, #selector(commit(_:))), (pushButton, #selector(push(_:))), (mergeRequestButton, #selector(createMergeRequest(_:)))] {
             button.target = self
             button.action = action
             button.controlSize = .small
@@ -251,8 +251,8 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
         commitButton.toolTip = "Commit the staged changes (⌘↩ in the message field)"
         pushButton.toolTip = "Push the current branch (publishes it when it has no upstream)"
-        pullRequestButton.toolTip = "Open GitHub’s compare page in the browser"
-        let buttons = NSStackView(views: [commitButton, NSView(), pushButton, pullRequestButton])
+        mergeRequestButton.toolTip = "Open GitLab’s new merge request page for this branch in the browser"
+        let buttons = NSStackView(views: [commitButton, NSView(), pushButton, mergeRequestButton])
         buttons.spacing = DS.Spacing.s
         footer.orientation = .vertical
         footer.alignment = .leading
@@ -342,7 +342,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         footerCollapse?.isActive = footer.isHidden
         commitButton.isEnabled = model.canCommit
         pushButton.isEnabled = model.busy == nil && model.repository.status?.branch != nil
-        pullRequestButton.isEnabled = model.repository.status?.branch != nil
+        mergeRequestButton.isEnabled = model.repository.status?.branch != nil
         if commitField.stringValue != model.commitMessage, commitField.currentEditor() == nil { commitField.stringValue = model.commitMessage }
     }
 
@@ -493,13 +493,13 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
-    @objc public func openPullRequest(_ sender: Any?) {
+    @objc public func createMergeRequest(_ sender: Any?) {
         guard let model else { return }
         Task {
-            if let url = await model.pullRequestURL() {
+            if let url = await model.newMergeRequestURL() {
                 NSWorkspace.shared.open(url)
             } else {
-                host?.changesPanel(self, notice: "Open Pull Request needs a GitHub remote named origin.")
+                host?.changesPanel(self, notice: "Create Merge Request needs an origin remote on a GitLab instance added in Settings ▸ GitLab.")
             }
         }
     }

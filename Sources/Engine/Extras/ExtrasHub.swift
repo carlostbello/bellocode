@@ -34,7 +34,7 @@ public struct ExtrasCaller: Sendable, Hashable {
 @Observable
 public final class ExtrasHub {
     public let schedules: SchedulerService
-    public let pullRequests: PullRequestService
+    public let mergeRequests: MergeRequestService
     public let secrets: SecretService
     public let visuals: VisualService
 
@@ -49,13 +49,13 @@ public final class ExtrasHub {
         self.core = core
         self.engine = engine
         schedules = SchedulerService(store: store, clock: configuration.wallClock)
-        pullRequests = PullRequestService(
-            store: store, clock: configuration.wallClock, provider: configuration.gitHub,
-            baseInterval: configuration.pullRequestPoll.seconds, maxBackoff: configuration.pullRequestMaxBackoff.seconds)
+        mergeRequests = MergeRequestService(
+            store: store, clock: configuration.wallClock, transport: configuration.forgeTransport, tokens: configuration.forgeTokens,
+            baseInterval: configuration.mergeRequestPoll.seconds, maxBackoff: configuration.mergeRequestMaxBackoff.seconds)
         secrets = SecretService(vault: configuration.secretVault, store: store, clock: configuration.wallClock)
         visuals = VisualService(store: store, directory: configuration.visualsDirectory)
         schedules.runner = self
-        pullRequests.host = self
+        mergeRequests.host = self
     }
 
     func start(store: ProjectionStore) async {
@@ -73,8 +73,8 @@ public final class ExtrasHub {
                     for session in sessions {
                         if session.isArchived { self.archived.insert(session.id) } else { self.archived.remove(session.id) }
                     }
-                    self.pullRequests.ingest(sessions)
-                    if !change.removedSessions.isEmpty { self.pullRequests.removed(change.removedSessions) }
+                    self.mergeRequests.ingest(sessions)
+                    if !change.removedSessions.isEmpty { self.mergeRequests.removed(change.removedSessions) }
                 }
             })
         let outputs = store.observe(.commandOutputs)
@@ -84,20 +84,20 @@ public final class ExtrasHub {
                 for await change in outputs {
                     guard let self else { return }
                     for message in change.messages.values {
-                        for hint in PullRequestHints.commands(in: message) {
-                            await self.pullRequests.noticeCommand(partID: hint.partID, sessionID: message.sessionID, command: hint.command, output: hint.output)
+                        for hint in MergeRequestHints.commands(in: message) {
+                            await self.mergeRequests.noticeCommand(partID: hint.partID, sessionID: message.sessionID, command: hint.command, output: hint.output)
                         }
                     }
                 }
             })
-        await pullRequests.start()
+        await mergeRequests.start()
         if engine?.configuration.startsExtras ?? true { await schedules.start() }
     }
 
     func stop() {
         tasks.cancelAll()
         schedules.shutdown()
-        pullRequests.shutdown()
+        mergeRequests.shutdown()
         secrets.shutdown()
         started = false
     }
@@ -120,22 +120,22 @@ public final class ExtrasHub {
                 try await schedules.runNow(task.id)
                 let last = schedules.task(task.id)?.lastRun
                 return ClientMCPResult(text: "Ran “\(task.name)”: \(last?.label ?? "started")\(last?.sessionID.map { " in thread \($0.rawValue)" } ?? "").")
-            case ExtrasTools.linkPullRequests:
-                let refs = try Self.refs(arguments["urls"])
-                let links = try await pullRequests.link(refs, to: caller.sessionID, source: .agent, watch: arguments["watch"]?.boolValue == true)
-                return ClientMCPResult(text: "Linked: \(refs.map(\.description).joined(separator: ", ")). This thread has \(links.count) linked PR(s).")
-            case ExtrasTools.unlinkPullRequests:
-                let refs = try Self.refs(arguments["urls"])
-                try await pullRequests.unlink(refs, from: caller.sessionID)
+            case ExtrasTools.linkMergeRequests:
+                let refs = try await mergeRequestRefs(arguments["refs"], caller)
+                let links = try await mergeRequests.link(refs, to: caller.sessionID, source: .agent, watch: arguments["watch"]?.boolValue == true)
+                return ClientMCPResult(text: "Linked: \(refs.map(\.description).joined(separator: ", ")). This thread has \(links.count) linked merge request(s).")
+            case ExtrasTools.unlinkMergeRequests:
+                let refs = try await mergeRequestRefs(arguments["refs"], caller)
+                try await mergeRequests.unlink(refs, from: caller.sessionID)
                 return ClientMCPResult(text: "Unlinked: \(refs.map(\.description).joined(separator: ", ")).")
-            case ExtrasTools.listThreadPullRequests: return await listPullRequests(caller)
-            case ExtrasTools.watchPullRequest, ExtrasTools.unwatchPullRequest:
-                let refs = try Self.refs(arguments["url"].map { .array([$0]) })
-                let watching = call.tool == ExtrasTools.watchPullRequest
-                try await pullRequests.setWatching(refs[0], for: caller.sessionID, watching)
+            case ExtrasTools.listThreadMergeRequests: return await listMergeRequests(caller)
+            case ExtrasTools.watchMergeRequest, ExtrasTools.unwatchMergeRequest:
+                let refs = try await mergeRequestRefs(arguments["ref"].map { .array([$0]) }, caller)
+                let watching = call.tool == ExtrasTools.watchMergeRequest
+                try await mergeRequests.setWatching(refs[0], for: caller.sessionID, watching)
                 return ClientMCPResult(
                     text: watching
-                        ? "Watching \(refs[0]). You will be woken once per event (checks finished, review, comments, merged/closed). Do not poll; end your turn."
+                        ? "Watching \(refs[0]). You will be woken once per event (pipeline finished, approval given or revoked, comments, merged/closed). Do not poll; end your turn."
                         : "Stopped watching \(refs[0]).")
             case ExtrasTools.requestSecret: return try await requestSecret(arguments, caller)
             case ExtrasTools.secretFile:
@@ -311,29 +311,28 @@ public final class ExtrasHub {
         return formatter.string(from: date)
     }
 
-    // MARK: Pull requests
+    // MARK: Merge requests
 
-    static func refs(_ value: JSONValue?) throws -> [PullRequestRef] {
-        let urls = stringList(value)
-        guard !urls.isEmpty, urls.count <= 10 else { throw ExtrasError("Give 1 to 10 PR URLs.") }
-        return try urls.map { url in
-            guard let ref = PullRequestRef.parse(url) else { throw ExtrasError("Not a GitHub pull request URL: \(url)") }
-            return ref
-        }
+    private func mergeRequestRefs(_ value: JSONValue?, _ caller: ExtrasCaller) async throws -> [MergeRequestRef] {
+        let texts = Self.stringList(value)
+        guard !texts.isEmpty, texts.count <= 10 else { throw ExtrasError("Give 1 to 10 merge requests (URL or !iid).") }
+        var refs: [MergeRequestRef] = []
+        for text in texts { refs.append(try await mergeRequests.resolve(text, for: caller.sessionID)) }
+        return refs
     }
 
-    private func listPullRequests(_ caller: ExtrasCaller) async -> ClientMCPResult {
-        let links = pullRequests.links(for: caller.sessionID)
-        guard !links.isEmpty else { return ClientMCPResult(text: "No pull requests are linked to this thread.") }
+    private func listMergeRequests(_ caller: ExtrasCaller) async -> ClientMCPResult {
+        let links = mergeRequests.links(for: caller.sessionID)
+        guard !links.isEmpty else { return ClientMCPResult(text: "No merge requests are linked to this thread.") }
         var lines: [String] = []
         for link in links {
-            let snapshot = await pullRequests.refresh(link.ref) ?? pullRequests.snapshots[link.ref.url]
+            let snapshot = await mergeRequests.refresh(link.ref) ?? mergeRequests.snapshots[link.ref.url]
             var line = "- \(link.ref.url)"
             if let snapshot {
-                line += " “\(snapshot.title)”: \(snapshot.state.label); \(snapshot.reviewDecision.label); \(snapshot.checksSummary.text)"
-                let failed = snapshot.checks.filter { $0.conclusion?.isFailure == true }.map(\.name)
-                if !failed.isEmpty { line += " (failed: \(failed.prefix(6).joined(separator: ", ")))" }
-            } else if let problem = pullRequests.problems[link.ref.url] {
+                line += " “\(snapshot.title)”: \(snapshot.stateLabel); \(snapshot.approvals.label); \(snapshot.pipelineSummary.text); \(snapshot.unresolvedDiscussions) unresolved discussions"
+                let failed = snapshot.pipeline?.jobs.filter(\.isFailure).map(\.name) ?? []
+                if !failed.isEmpty { line += " (failed jobs: \(failed.prefix(6).joined(separator: ", ")))" }
+            } else if let problem = mergeRequests.problems[link.ref.url] {
                 line += ": \(problem)"
             }
             if link.watching { line += "; watching" }
@@ -467,50 +466,49 @@ extension ExtrasHub: ScheduleRunner {
     public func threadExists(_ id: SessionID) -> Bool { engine?.orchestration?.node(id) != nil }
 }
 
-extension ExtrasHub: PullRequestHost {
+extension ExtrasHub: MergeRequestHost {
     public func allSessions() async -> [Session] { await core.allSessions().sessions }
 
-    public func writeLinks(_ sessionID: SessionID, _ transform: @escaping @Sendable ([LinkedPullRequest]) -> [LinkedPullRequest]) async throws -> [LinkedPullRequest] {
+    public func writeLinks(_ sessionID: SessionID, _ transform: @escaping @Sendable ([LinkedMergeRequest]) -> [LinkedMergeRequest]) async throws -> [LinkedMergeRequest] {
         let box = LinksBox()
         try await core.mergeSessionMetadata(sessionID) { raw in
-            let updated = transform(LinkedPullRequest.decode(fromMetadata: raw))
+            let updated = transform(LinkedMergeRequest.decode(fromMetadata: raw))
             box.set(updated)
-            return LinkedPullRequest.encode(updated, intoMetadata: raw)
+            return LinkedMergeRequest.encode(updated, intoMetadata: raw)
         }
         return box.value
     }
 
     public func wake(_ sessionID: SessionID, text: String, url: String) async throws {
         try await core.postSynthetic(
-            sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("pull_request"), "url": .string(url)])]))
+            sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("merge_request"), "url": .string(url)])]))
     }
 
-    public func pause(_ sessionID: SessionID) -> PullRequestPause {
+    public func pause(_ sessionID: SessionID) -> MergeRequestPause {
         if archived.contains(sessionID) { return .archived }
         if engine?.root.organisation[sessionID]?.settled == true { return .settled }
         return .none
     }
 
-    public func branch(of sessionID: SessionID) async -> (owner: String, repo: String, branch: String)? {
+    public func checkout(of sessionID: SessionID) async -> (remote: String, branch: String)? {
         guard let directory = engine?.orchestration?.node(sessionID)?.node.directory else { return nil }
         let git = GitRunner()
         guard let head = try? await git.run(["rev-parse", "--abbrev-ref", "HEAD"], in: directory, timeout: .seconds(5)),
-            let remote = try? await git.run(["remote", "get-url", "origin"], in: directory, timeout: .seconds(5)),
-            let place = GitHubRemote.parse(remote.text)
+            let remote = try? await git.run(["remote", "get-url", "origin"], in: directory, timeout: .seconds(5))
         else { return nil }
-        return (place.owner, place.repo, head.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        return (remote.text.trimmingCharacters(in: .whitespacesAndNewlines), head.text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
 
 /// Carries the links written inside the metadata transform back out.
 private final class LinksBox: Sendable {
-    private let stored = Mutex<[LinkedPullRequest]>([])
-    func set(_ value: [LinkedPullRequest]) { stored.withLock { $0 = value } }
-    var value: [LinkedPullRequest] { stored.withLock { $0 } }
+    private let stored = Mutex<[LinkedMergeRequest]>([])
+    func set(_ value: [LinkedMergeRequest]) { stored.withLock { $0 = value } }
+    var value: [LinkedMergeRequest] { stored.withLock { $0 } }
 }
 
-/// Finished shell commands in a message whose output may name a PR (for auto-linking).
-enum PullRequestHints {
+/// Finished shell commands in a message whose output may name a GitLab MR (for auto-linking after `git push`).
+enum MergeRequestHints {
     struct Hint {
         var partID: String
         var command: String
@@ -520,13 +518,13 @@ enum PullRequestHints {
     static func commands(in message: Message) -> [Hint] {
         switch message.kind {
         case .shell(let shell):
-            guard let output = shell.output, output.contains("/pull/") else { return [] }
+            guard let output = shell.output, output.contains("/-/merge_requests/") else { return [] }
             return [Hint(partID: message.id.rawValue, command: shell.command, output: output)]
         default:
             return message.parts.compactMap { part in
                 guard case .tool(let call) = part.content, call.status == .completed, ["bash", "shell"].contains(call.name) else { return nil }
                 let output = call.outputText
-                guard output.contains("/pull/") else { return nil }
+                guard output.contains("/-/merge_requests/") else { return nil }
                 let input = call.input.flatMap { try? JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any] }
                 return Hint(partID: part.id.rawValue, command: input?["command"] as? String ?? "", output: output)
             }
@@ -536,11 +534,11 @@ enum PullRequestHints {
     /// Whether the message is worth publishing to `.commandOutputs` (cheap check).
     static func mayContain(_ message: Message) -> Bool {
         switch message.kind {
-        case .shell(let shell): return shell.output?.contains("/pull/") == true
+        case .shell(let shell): return shell.output?.contains("/-/merge_requests/") == true
         default:
             return message.parts.contains { part in
                 guard case .tool(let call) = part.content, call.status == .completed, ["bash", "shell"].contains(call.name) else { return false }
-                return call.outputText.contains("github.com/")
+                return call.outputText.contains("/-/merge_requests/")
             }
         }
     }

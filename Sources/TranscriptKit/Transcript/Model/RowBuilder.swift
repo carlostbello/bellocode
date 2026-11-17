@@ -101,7 +101,7 @@ public enum RowBuilder {
             if let report = subagentReport(user.text) {
                 return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: report)))]
             }
-            // BelloCode's own wakes (PR watch, secret answers) are not the person's message: one line saying why.
+            // BelloCode's own wakes (MR watch, secret answers) are not the person's message: one line saying why.
             if let note = belloCodeWake(user.text) {
                 return [row(.lifecycle(message.id), .system, .lifecycle(LifecycleContent(kind: .note, text: note)))]
             }
@@ -321,15 +321,22 @@ public enum RowBuilder {
         return "↩ “\(description)” \(verb)" + (clipped.isEmpty ? "" : ": " + clipped)
     }
 
-    /// "[BelloCode PR watch] a/b#1: Checks finished…" → "PR watch woke this thread: a/b#1: Checks finished…";
+    /// "!12" for an MR URL or "!12" itself.
+    static func mergeRequestLabel(_ text: String) -> String {
+        if text.hasPrefix("!") { return text }
+        if let range = text.range(of: "/-/merge_requests/") { return "!" + text[range.upperBound...].prefix { $0.isNumber } }
+        return text
+    }
+
+    /// "[BelloCode MR watch] group/proj!1: Pipeline #9 finished…" → "MR watch woke this thread: group/proj!1: …";
     /// "[BelloCode secret] The user saved “X”. secretRef: …" → "Secret: The user saved “X”." (references stay out of
     /// the note). nil for other text.
     static func belloCodeWake(_ text: String) -> String? {
         guard text.hasPrefix("[BelloCode ") else { return nil }
         let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
-        if first.hasPrefix("[BelloCode PR watch] ") {
-            let rest = first.dropFirst("[BelloCode PR watch] ".count)
-            return "↻ PR watch woke this thread: " + (rest.count > 200 ? rest.prefix(199) + "…" : rest)
+        if first.hasPrefix("[BelloCode MR watch] ") {
+            let rest = first.dropFirst("[BelloCode MR watch] ".count)
+            return "↻ MR watch woke this thread: " + (rest.count > 200 ? rest.prefix(199) + "…" : rest)
         }
         if first.hasPrefix("[BelloCode secret] ") {
             var rest = String(first.dropFirst("[BelloCode secret] ".count))
@@ -402,14 +409,13 @@ public enum RowBuilder {
             return (.other, active ? "Listing scheduled tasks" : "Listed scheduled tasks", "")
         case "delete_scheduled_task", "run_scheduled_task_now":
             return (.other, lower.hasPrefix("delete") ? (active ? "Deleting schedule" : "Deleted schedule") : (active ? "Running schedule" : "Ran schedule"), string("taskID"))
-        case "link_pull_requests", "unlink_pull_requests":
-            let urls = (input["urls"] as? [String] ?? []).compactMap { url in url.split(separator: "/").last.map { "#" + $0 } }
-            return (.other, lower.hasPrefix("link") ? (active ? "Linking PR" : "Linked PR") : (active ? "Unlinking PR" : "Unlinked PR"), urls.joined(separator: ", "))
-        case "list_thread_pull_requests":
-            return (.other, active ? "Checking linked PRs" : "Checked linked PRs", "")
-        case "watch_pull_request", "unwatch_pull_request":
-            let number = string("url").split(separator: "/").last.map { "#" + $0 } ?? ""
-            return (.other, lower.hasPrefix("watch") ? (active ? "Watching PR" : "Watching PR") : "Stopped watching PR", number)
+        case "link_merge_requests", "unlink_merge_requests":
+            let refs = (input["refs"] as? [String] ?? []).map(mergeRequestLabel)
+            return (.other, lower.hasPrefix("link") ? (active ? "Linking MR" : "Linked MR") : (active ? "Unlinking MR" : "Unlinked MR"), refs.joined(separator: ", "))
+        case "list_thread_merge_requests":
+            return (.other, active ? "Checking linked MRs" : "Checked linked MRs", "")
+        case "watch_merge_request", "unwatch_merge_request":
+            return (.other, lower.hasPrefix("watch") ? "Watching MR" : "Stopped watching MR", mergeRequestLabel(string("ref")))
         case "html_preview":
             return (.other, active ? "Previewing visual" : "Previewed visual", string("path"))
         case "read", "view", "cat":

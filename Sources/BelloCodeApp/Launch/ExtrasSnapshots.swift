@@ -7,9 +7,9 @@ import MockOpenCode
 import OpenCodeKit
 import TranscriptKit
 
-/// `--snapshot extras` (M3-B, docs/features/orchestration-extras.md): the Scheduled Tasks pane, PR chips and the Pull
+/// `--snapshot extras` (M3-B, docs/features/orchestration-extras.md): the Scheduled Tasks pane, MR chips and the Merge
 /// Requests tab, a secret request card, an app approval card and an HTML visual in the transcript (snapshot and live),
-/// in light and dark, on mock data (in-memory vault, recorded GitHub answers).
+/// in light and dark, on mock data (in-memory vault, recorded GitLab answers on a self-managed instance with a path prefix).
 extension SnapshotRunner {
     func runExtras() async -> Bool {
         do {
@@ -57,25 +57,27 @@ extension SnapshotRunner {
                 ClientMCPCall(tool: tool, arguments: .object(arguments), sessionID: thread.rawValue, directory: project.directory))
         }
 
-        // 1. Pull requests: a linked, watched PR with a failing check and a review; a second one linked from the branch.
-        let prThread = threads[0]
-        _ = await driver.select(.thread(prThread))
-        _ = await waitUntil(timeout: .seconds(5)) { workspace.threadModel(prThread).phase == .ready }
-        _ = try? await extras.pullRequests.link([MockGitHub.ref], to: prThread, source: .output, watch: false)
-        _ = try? await extras.pullRequests.link([MockGitHub.secondRef], to: prThread, source: .branch)
-        try? await extras.pullRequests.setWatching(MockGitHub.ref, for: prThread, true)
-        await extras.pullRequests.waitForFetches()
-        await extras.pullRequests.pollDue()
-        _ = await waitUntil(timeout: .seconds(5)) { extras.pullRequests.watch(prThread, MockGitHub.ref.url)?.baseline != nil }
-        if let transport = engine.configuration.gitHub as? FixtureGitHubTransport { MockGitHub.finish(transport) }
+        // 1. Merge requests: a linked, watched MR whose pipeline fails while a review is in progress; a second, approved one
+        // linked from the branch. The instance is configured as the person would in Settings ▸ GitLab.
+        _ = try? await extras.mergeRequests.saveInstance(baseURL: MockGitLab.instance.baseURL, token: nil)
+        let mrThread = threads[0]
+        _ = await driver.select(.thread(mrThread))
+        _ = await waitUntil(timeout: .seconds(5)) { workspace.threadModel(mrThread).phase == .ready }
+        _ = try? await extras.mergeRequests.link([MockGitLab.ref], to: mrThread, source: .output, watch: false)
+        _ = try? await extras.mergeRequests.link([MockGitLab.secondRef], to: mrThread, source: .branch)
+        try? await extras.mergeRequests.setWatching(MockGitLab.ref, for: mrThread, true)
+        await extras.mergeRequests.waitForFetches()
+        await extras.mergeRequests.pollDue()
+        _ = await waitUntil(timeout: .seconds(5)) { extras.mergeRequests.watch(mrThread, MockGitLab.ref.url)?.baseline != nil }
+        if let transport = engine.configuration.forgeTransport as? FixtureForgeTransport { MockGitLab.finish(transport) }
         // The 2 s mock poll interval finds the finished checks and wakes the thread once.
-        _ = await waitUntil(timeout: .seconds(8)) { extras.pullRequests.watch(prThread, MockGitHub.ref.url)?.wakes == 1 }
-        _ = await waitUntil(timeout: .seconds(5)) { !workspace.threadModel(prThread).isRunning }
-        driver.perform(.showPullRequests)
+        _ = await waitUntil(timeout: .seconds(8)) { extras.mergeRequests.watch(mrThread, MockGitLab.ref.url)?.wakes == 1 }
+        _ = await waitUntil(timeout: .seconds(5)) { !workspace.threadModel(mrThread).isRunning }
+        driver.perform(.showMergeRequests)
         driver.settle(10)
         try? await Task.sleep(for: .milliseconds(300))
         driver.settle(6)
-        await shoot("pr")
+        await shoot("mr")
 
         // 2. A secret request card (pinned above the composer), from a scripted turn that calls request_secret.
         let secretThread = threads[1]
@@ -139,12 +141,12 @@ extension SnapshotRunner {
         controller.split.setCollapsed(controller.split.panelItem, false)
 
         // 4. An agent's first scheduled task in a project: the approval card.
-        _ = await driver.select(.thread(prThread))
+        _ = await driver.select(.thread(mrThread))
         _ = await call(
             ExtrasTools.scheduleTask,
-            ["name": "Nightly dependency check", "prompt": "Check for outdated dependencies and open a PR with safe updates.", "time": "02:30",
-             "weekdays": .array(["mon", "tue", "wed", "thu", "fri"])], from: prThread)
-        _ = await waitUntil(timeout: .seconds(5)) { workspace.threadModel(prThread).pendingRequests.contains { $0.isApp } }
+            ["name": "Nightly dependency check", "prompt": "Check for outdated dependencies and open a merge request with safe updates.", "time": "02:30",
+             "weekdays": .array(["mon", "tue", "wed", "thu", "fri"])], from: mrThread)
+        _ = await waitUntil(timeout: .seconds(5)) { workspace.threadModel(mrThread).pendingRequests.contains { $0.isApp } }
         driver.settle(10)
         await shoot("approval")
 

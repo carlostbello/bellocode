@@ -49,8 +49,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private(set) var browser: BrowserSurfaces?
     /// The window's Agents panel ("Agents" tab, M3-A; MainWindowController+Agents.swift).
     private(set) var agents: AgentsSurfaces?
-    /// The window's "Pull Requests" tab (M3-B; MainWindowController+PullRequests.swift).
-    private(set) var pullRequests: PullRequestSurfaces?
+    /// The window's "Merge Requests" tab (M3-B; MainWindowController+MergeRequests.swift).
+    private(set) var mergeRequests: MergeRequestSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -120,9 +120,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         terminals?.browser = browser
         agents = surfaces.agents
         agents?.bind(engine: workspace.engine, shell: self)
-        pullRequests = surfaces.pullRequests
-        pullRequests?.showPanel = { [weak self] in self?.showPullRequestsPanel() }
-        pullRequests?.bind(engine: workspace.engine)
+        mergeRequests = surfaces.mergeRequests
+        mergeRequests?.showPanel = { [weak self] in self?.showMergeRequestsPanel() }
+        mergeRequests?.bind(engine: workspace.engine)
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -445,13 +445,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             // Answered by the app delegate (they reach it through the responder chain before this window).
             NSApp.sendAction(command.selector, to: nil, from: nil)
         case .showChanges, .nextChange, .previousChange, .nextChangedFile, .previousChangedFile, .addReviewComment, .openInEditor,
-            .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .openPullRequest, .toggleDiffLayout,
+            .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .createMergeRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .chooseWorkspace, .chooseBranch, .removeWorktree:
             performChanges(command)
         case .showAgents, .nextAgent, .previousAgent, .openAgent, .followUpAgent, .stopAgentTree, .openParentThread:
             performAgents(command)
-        case .showPullRequests:
-            showPullRequestsPanel()
+        case .showMergeRequests:
+            showMergeRequestsPanel()
         case .showScheduledTasks:
             (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
         }

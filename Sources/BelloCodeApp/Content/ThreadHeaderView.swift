@@ -23,8 +23,8 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     /// the parent). Hidden without lineage.
     private let agentsButton = NSButton(title: "", target: nil, action: nil)
     private var agentsIsChild = false
-    /// Linked pull requests (M3-B): "#42 Open · ✓ Check passed"; shows the Pull Requests tab.
-    private let pullRequestButton = NSButton(title: "", target: nil, action: nil)
+    /// Linked merge requests (M3-B): "#42 Open · ✓ Check passed"; shows the Merge Requests tab.
+    private let mergeRequestButton = NSButton(title: "", target: nil, action: nil)
     private var loop: ObservationLoop?
     private var editingOriginal: String?
 
@@ -69,17 +69,17 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         agentsButton.action = #selector(agentsStripClicked)
         agentsButton.setContentCompressionResistancePriority(.init(230), for: .horizontal)
         agentsButton.isHidden = true
-        pullRequestButton.isBordered = false
-        pullRequestButton.font = typography.caption
-        pullRequestButton.contentTintColor = DS.Palette.accent
-        pullRequestButton.target = self
-        pullRequestButton.action = #selector(pullRequestsClicked)
-        pullRequestButton.imagePosition = .imageLeading
-        pullRequestButton.setContentCompressionResistancePriority(.init(220), for: .horizontal)
-        pullRequestButton.isHidden = true
+        mergeRequestButton.isBordered = false
+        mergeRequestButton.font = typography.caption
+        mergeRequestButton.contentTintColor = DS.Palette.accent
+        mergeRequestButton.target = self
+        mergeRequestButton.action = #selector(mergeRequestsClicked)
+        mergeRequestButton.imagePosition = .imageLeading
+        mergeRequestButton.setContentCompressionResistancePriority(.init(220), for: .horizontal)
+        mergeRequestButton.isHidden = true
         let contextLine = NSStackView(views: [
             monogram, projectLabel, separator, pathLabel, dot, statusImage, statusLabel, gitDot, gitLabel, agentsButton,
-            pullRequestButton,
+            mergeRequestButton,
         ])
         contextLine.spacing = DS.Spacing.xs
         contextLine.setCustomSpacing(DS.Spacing.s, after: monogram)
@@ -129,10 +129,10 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
                     .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [DS.Palette.running])))
             }
             renderAgentsStrip(thread.sessionID)
-            renderPullRequests(thread.sessionID)
+            renderMergeRequests(thread.sessionID)
         } else {
             agentsButton.isHidden = true
-            pullRequestButton.isHidden = true
+            mergeRequestButton.isHidden = true
             titleField.isEditable = false
             titleField.stringValue = "New Thread"
             statusImage.isHidden = true
@@ -161,26 +161,26 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         agentsButton.isHidden = false
     }
 
-    private func renderPullRequests(_ id: SessionID) {
-        guard let service = context.engine.extras?.pullRequests else { return }
+    private func renderMergeRequests(_ id: SessionID) {
+        guard let service = context.engine.extras?.mergeRequests else { return }
         let links = service.links(for: id)
         guard let first = links.first else {
-            pullRequestButton.isHidden = true
+            mergeRequestButton.isHidden = true
             return
         }
         let snapshot = service.snapshots[first.ref.url]
-        var title = "· " + PullRequestText.chip(first, snapshot)
+        var title = "· " + MergeRequestText.chip(first, snapshot)
         if links.count > 1 { title += " +\(links.count - 1)" }
-        pullRequestButton.title = title
-        pullRequestButton.image = NSImage(systemSymbolName: snapshot?.state.symbolName ?? "arrow.triangle.pull", accessibilityDescription: nil)?
+        mergeRequestButton.title = title
+        mergeRequestButton.image = NSImage(systemSymbolName: snapshot?.state.symbolName ?? "arrow.triangle.pull", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .medium))
-        pullRequestButton.toolTip = links.map { PullRequestText.accessibility($0, service.snapshots[$0.ref.url]) }.joined(separator: "\n")
-            + "\nShow the Pull Requests panel"
-        pullRequestButton.setAccessibilityLabel(links.map { PullRequestText.accessibility($0, service.snapshots[$0.ref.url]) }.joined(separator: "; "))
-        pullRequestButton.isHidden = false
+        mergeRequestButton.toolTip = links.map { MergeRequestText.accessibility($0, service.snapshots[$0.ref.url]) }.joined(separator: "\n")
+            + "\nShow the Merge Requests panel"
+        mergeRequestButton.setAccessibilityLabel(links.map { MergeRequestText.accessibility($0, service.snapshots[$0.ref.url]) }.joined(separator: "; "))
+        mergeRequestButton.isHidden = false
     }
 
-    @objc private func pullRequestsClicked() { context.onShowPullRequests?() }
+    @objc private func mergeRequestsClicked() { context.onShowMergeRequests?() }
 
     @objc private func agentsStripClicked() {
         guard let id = context.thread?.sessionID else { return }

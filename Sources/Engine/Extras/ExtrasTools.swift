@@ -11,19 +11,19 @@ public enum ExtrasTools {
     public static let updateScheduledTask = "update_scheduled_task"
     public static let deleteScheduledTask = "delete_scheduled_task"
     public static let runScheduledTaskNow = "run_scheduled_task_now"
-    public static let linkPullRequests = "link_pull_requests"
-    public static let unlinkPullRequests = "unlink_pull_requests"
-    public static let listThreadPullRequests = "list_thread_pull_requests"
-    public static let watchPullRequest = "watch_pull_request"
-    public static let unwatchPullRequest = "unwatch_pull_request"
+    public static let linkMergeRequests = "link_merge_requests"
+    public static let unlinkMergeRequests = "unlink_merge_requests"
+    public static let listThreadMergeRequests = "list_thread_merge_requests"
+    public static let watchMergeRequest = "watch_merge_request"
+    public static let unwatchMergeRequest = "unwatch_merge_request"
     public static let requestSecret = "request_secret"
     public static let secretFile = "secret_file"
     public static let htmlPreview = "html_preview"
     public static let htmlRender = "html_render"
 
     public static let all = [
-        scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkPullRequests,
-        unlinkPullRequests, listThreadPullRequests, watchPullRequest, unwatchPullRequest, requestSecret, secretFile,
+        scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkMergeRequests,
+        unlinkMergeRequests, listThreadMergeRequests, watchMergeRequest, unwatchMergeRequest, requestSecret, secretFile,
         htmlPreview, htmlRender,
     ]
 
@@ -72,22 +72,22 @@ public enum ExtrasTools {
             name: runScheduledTaskNow, description: "Run an approved scheduled task of this project now (its schedule is unchanged).",
             inputSchema: object(["taskID": string("The task.")], required: ["taskID"])),
         ClientMCPTool(
-            name: linkPullRequests,
-            description: "Link GitHub pull requests to this thread by URL (shown in the thread header). watch: also wake this thread when checks finish, reviews or comments arrive, or it is merged/closed.",
-            inputSchema: object(["urls": strings("https://github.com/OWNER/REPO/pull/N URLs (1-10)."), "watch": boolean("Also watch them.")], required: ["urls"])),
+            name: linkMergeRequests,
+            description: "Link GitLab merge requests to this thread (shown in the thread header), by URL or as !iid in this project. watch: also wake this thread when its pipeline finishes, approvals change, comments arrive, or it is merged/closed.",
+            inputSchema: object(["refs": strings("MR URLs (https://gitlab.example.com/group/project/-/merge_requests/12) or !12 (1-10)."), "watch": boolean("Also watch them.")], required: ["refs"])),
         ClientMCPTool(
-            name: unlinkPullRequests, description: "Unlink pull requests from this thread (stops watching them).",
-            inputSchema: object(["urls": strings("PR URLs.")], required: ["urls"])),
+            name: unlinkMergeRequests, description: "Unlink merge requests from this thread (stops watching them).",
+            inputSchema: object(["refs": strings("MR URLs or !iid.")], required: ["refs"])),
         ClientMCPTool(
-            name: listThreadPullRequests, description: "List this thread's linked pull requests with state, review decision and checks.",
+            name: listThreadMergeRequests, description: "List this thread's linked merge requests with state, approvals, pipeline and unresolved discussions.",
             inputSchema: object([:])),
         ClientMCPTool(
-            name: watchPullRequest,
-            description: "Watch a pull request: this thread is woken (once per event) when checks finish, a review is submitted, comments arrive, or it is merged or closed. Do not poll.",
-            inputSchema: object(["url": string("PR URL.")], required: ["url"])),
+            name: watchMergeRequest,
+            description: "Watch a merge request: this thread is woken (once per event) when its pipeline finishes, an approval is given or revoked, comments arrive, or it is merged or closed. Do not poll.",
+            inputSchema: object(["ref": string("MR URL or !iid.")], required: ["ref"])),
         ClientMCPTool(
-            name: unwatchPullRequest, description: "Stop watching a pull request (it stays linked).",
-            inputSchema: object(["url": string("PR URL.")], required: ["url"])),
+            name: unwatchMergeRequest, description: "Stop watching a merge request (it stays linked).",
+            inputSchema: object(["ref": string("MR URL or !iid.")], required: ["ref"])),
         ClientMCPTool(
             name: requestSecret,
             description:

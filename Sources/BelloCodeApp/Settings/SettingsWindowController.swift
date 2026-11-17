@@ -80,6 +80,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                         return controller
                     })
                 panes.append(
+                    SettingsPane(id: "gitlab", title: "GitLab", symbolName: "arrow.triangle.pull") {
+                        let model = GitLabSettingsModel(service: extras.mergeRequests)
+                        let view = GitLabSettingsView(model: model) { instance in
+                            let alert = NSAlert()
+                            alert.messageText = "Remove \(instance.baseURL)?"
+                            alert.informativeText = "Its access token is deleted from your Keychain. Linked merge requests on it stop updating until you add it again with a token."
+                            alert.addButton(withTitle: "Remove")
+                            alert.addButton(withTitle: "Cancel")
+                            alert.buttons.first?.hasDestructiveAction = true
+                            return alert.runModal() == .alertFirstButtonReturn
+                        }
+                        let controller = NSHostingController(rootView: view)
+                        controller.sizingOptions = [.preferredContentSize]
+                        return controller
+                    })
+                panes.append(
                     SettingsPane(id: "secrets", title: "Secrets", symbolName: "key") {
                         let view = SecretsSettingsView(secrets: extras.secrets, visuals: extras.visuals) { label in
                             let alert = NSAlert()

@@ -8,221 +8,300 @@ import Testing
 
 @testable import Engine
 
-// Orchestration extras (docs/features/orchestration-extras.md): PR model and poller rules with recorded GitHub fixtures
-// (no network), secret delivery and non-leakage, app-tool routing and scoping, against MockOpenCode.
+// Orchestration extras (docs/features/orchestration-extras.md): GitLab merge-request model and poller rules with
+// recorded GitLab API fixtures (no network), secret delivery and non-leakage, app-tool routing and scoping, against
+// MockOpenCode.
 
-// MARK: - Pull-request model
+// MARK: - Merge-request model
 
-struct PullRequestModelTests {
-    @Test func parsesAndFindsPullRequestURLs() {
-        #expect(PullRequestRef.parse("https://github.com/acme/rocket/pull/42") == PullRequestRef(owner: "acme", repo: "rocket", number: 42))
-        #expect(PullRequestRef.parse("github.com/acme/rocket.js/pull/7/files#diff") == PullRequestRef(owner: "acme", repo: "rocket.js", number: 7))
-        #expect(PullRequestRef.parse("https://github.com/acme/rocket/issues/42") == nil)
-        let text = "Created https://github.com/a/b/pull/1 and see https://github.com/a/b/pull/1 plus https://github.com/c/d/pull/22."
-        #expect(PullRequestRef.find(in: text).map(\.description) == ["a/b#1", "c/d#22"])
-        #expect(GitHubRemote.parse("git@github.com:acme/rocket.git")! == ("acme", "rocket"))
-        #expect(GitHubRemote.parse("https://github.com/acme/rocket")! == ("acme", "rocket"))
-        #expect(GitHubRemote.parse("https://gitlab.com/acme/rocket") == nil)
+struct MergeRequestModelTests {
+    static let root = GitLabInstance(baseURL: "https://gitlab.example.com/")!
+    static let prefixed = GitLabInstance(baseURL: "https://code.corp.test:8443/gitlab")!
+
+    @Test func instancesNormalise() {
+        #expect(Self.root.baseURL == "https://gitlab.example.com")
+        #expect(Self.prefixed.baseURL == "https://code.corp.test:8443/gitlab")
+        #expect(Self.prefixed.pathPrefix == "gitlab")
+        #expect(Self.prefixed.apiBase == "https://code.corp.test:8443/gitlab/api/v4")
+        #expect(GitLabInstance(baseURL: "gitlab.example.com") == nil)
+        #expect(GitLabInstance(baseURL: "ftp://x.y") == nil)
+    }
+
+    @Test func parsesMergeRequestURLsOnConfiguredInstancesOnly() {
+        let instances = [Self.root, Self.prefixed]
+        #expect(MergeRequestRef.parse("https://gitlab.example.com/team/sub/app/-/merge_requests/42/diffs", instances: instances)
+            == MergeRequestRef(instance: Self.root.baseURL, projectPath: "team/sub/app", iid: 42))
+        #expect(MergeRequestRef.parse("https://code.corp.test:8443/gitlab/platform/rocket/-/merge_requests/7", instances: instances)
+            == MergeRequestRef(instance: Self.prefixed.baseURL, projectPath: "platform/rocket", iid: 7))
+        #expect(MergeRequestRef.parse("https://other.example.org/a/b/-/merge_requests/1", instances: instances) == nil, "unknown host")
+        #expect(MergeRequestRef.parse("https://gitlab.example.com/a/b/-/merge_requests/new?x=1", instances: instances) == nil, "the new-MR page")
+        let output = "remote:\nremote: View merge request for parser:\nremote:   https://gitlab.example.com/team/app/-/merge_requests/12\nremote:\n"
+        #expect(MergeRequestRef.find(in: output, instances: instances).map(\.description) == ["team/app!12"])
+    }
+
+    @Test func remotesResolveAgainstConfiguredHostsWithPathPrefixes() {
+        let instances = [Self.root, Self.prefixed]
+        #expect(ForgeProject.resolve(remote: "git@gitlab.example.com:team/sub/app.git", instances: instances)?.projectPath == "team/sub/app")
+        #expect(ForgeProject.resolve(remote: "ssh://git@code.corp.test:2222/platform/rocket.git", instances: instances)
+            == ForgeProject(instance: Self.prefixed, projectPath: "platform/rocket"))
+        #expect(ForgeProject.resolve(remote: "https://code.corp.test:8443/gitlab/platform/rocket.git", instances: instances)?.projectPath == "platform/rocket")
+        #expect(ForgeProject.resolve(remote: "https://code.corp.test:8443/platform/rocket.git", instances: instances) == nil, "HTTPS without the prefix")
+        #expect(ForgeProject.resolve(remote: "git@github.com:acme/app.git", instances: instances) == nil)
+        #expect(ForgeProject.resolve(remote: "/tmp/origin.git", instances: instances) == nil)
+        let project = ForgeProject(instance: Self.prefixed, projectPath: "platform/rocket")
+        #expect(project.newMergeRequestURL(branch: "feat/x", target: "main")?.absoluteString
+            == "https://code.corp.test:8443/gitlab/platform/rocket/-/merge_requests/new?merge_request%5Bsource_branch%5D=feat/x&merge_request%5Btarget_branch%5D=main")
     }
 
     @Test func linksRoundTripThroughMetadataKeepingOtherKeys() {
         let raw = RawJSON(#"{"bellocode":{"kind":"delegated"},"other":1}"#)
-        let link = LinkedPullRequest(ref: PullRequestRef(owner: "a", repo: "b", number: 3), source: .agent, watching: true, linked: Date(timeIntervalSince1970: 1_000))
-        let object = LinkedPullRequest.encode([link], intoMetadata: raw)
+        let link = LinkedMergeRequest(ref: MergeRequestRef(instance: Self.root.baseURL, projectPath: "a/b", iid: 3), source: .agent, watching: true, linked: Date(timeIntervalSince1970: 1_000))
+        let object = LinkedMergeRequest.encode([link], intoMetadata: raw)
         #expect(object["other"] as? Int == 1)
         #expect((object["bellocode"] as? [String: Any])?["kind"] as? String == "delegated")
         let data = try! JSONSerialization.data(withJSONObject: object)
-        #expect(LinkedPullRequest.decode(fromMetadata: RawJSON(String(decoding: data, as: UTF8.self))) == [link])
+        #expect(LinkedMergeRequest.decode(fromMetadata: RawJSON(String(decoding: data, as: UTF8.self))) == [link])
     }
 
-    @Test func checksSummaryReadsWithoutColour() {
-        let pending = ChecksSummary([CheckRun(id: 1, name: "build", status: .inProgress), CheckRun(id: 2, name: "lint", status: .completed, conclusion: .success)])
-        #expect(pending == .pending(done: 1, total: 2))
-        #expect(pending.text == "Checks 1/2")
-        let failing = ChecksSummary([CheckRun(id: 1, name: "build", status: .completed, conclusion: .failure)])
-        #expect(failing.text == "1 check failed")
-        #expect(failing.glyph == "✕")
-        #expect(ChecksSummary([]).text == "No checks")
-    }
-
-    @Test func ghOutputParsing() throws {
-        let raw = "HTTP/2.0 304 Not Modified\r\nEtag: W/\"abc\"\r\nX-Other: 1\r\n\r\n"
-        let response = try GHCLITransport.parse(Data(raw.utf8))
-        #expect(response.status == 304)
-        #expect(response.etag == "W/\"abc\"")
-        let ok = try GHCLITransport.parse(Data("HTTP/2.0 200 OK\nETag: \"x\"\n\n{\"a\":1}".utf8))
-        #expect(ok.status == 200)
-        #expect(String(decoding: ok.body, as: UTF8.self) == "{\"a\":1}")
+    @Test func pipelineSummaryReadsWithoutColour() {
+        #expect(PipelineSummary(Pipeline(id: 1, status: "running", jobs: [PipelineJob(id: 1, name: "a", status: "success"), PipelineJob(id: 2, name: "b", status: "running")])).text == "Pipeline running 1/2")
+        let failed = PipelineSummary(Pipeline(id: 1, status: "failed", jobs: [PipelineJob(id: 1, name: "a", status: "failed")]))
+        #expect(failed.text == "Pipeline failed (1 job)")
+        #expect(failed.glyph == "✕")
+        #expect(PipelineSummary(nil).text == "No pipeline")
+        #expect(MergeRequestApprovals(approved: false, required: 2, left: 1, approvedBy: ["mara"]).label == "1 of 2 approvals")
     }
 
     @Test func baselineFiresEachEventOnce() {
-        let ref = PullRequestRef(owner: "a", repo: "b", number: 1)
-        var snapshot = PullRequestSnapshot(
-            ref: ref, title: "T", state: .open, headSHA: "sha1", checks: [CheckRun(id: 1, name: "build", status: .inProgress)], fetched: .now)
-        var baseline = PullRequestWakeBaseline.initial(snapshot)
+        let ref = MergeRequestRef(instance: Self.root.baseURL, projectPath: "team/app", iid: 1)
+        var snapshot = MergeRequestSnapshot(ref: ref, title: "T", state: .opened, pipeline: Pipeline(id: 9, status: "running"), fetched: .now)
+        var baseline = MergeRequestWakeBaseline.initial(snapshot)
         #expect(baseline.diff(snapshot).events.isEmpty)
-        snapshot.checks = [CheckRun(id: 1, name: "build", status: .completed, conclusion: .failure)]
+        snapshot.pipeline = Pipeline(id: 9, status: "failed", jobs: [PipelineJob(id: 1, name: "unit", status: "failed")])
         var (events, next) = baseline.diff(snapshot)
-        #expect(events == [.checksFinished(sha: "sha1", summary: .failing(failed: 1, total: 1), failed: ["build"])])
+        #expect(events == [.pipelineFinished(id: 9, summary: .failed(jobs: 1), failedJobs: ["unit"])])
         baseline = next
-        #expect(baseline.diff(snapshot).events.isEmpty, "the same finished checks never wake twice")
-        // A new push: checks run again and finish again → one more wake.
-        snapshot.headSHA = "sha2"
-        snapshot.checks = [CheckRun(id: 2, name: "build", status: .completed, conclusion: .success)]
+        #expect(baseline.diff(snapshot).events.isEmpty, "the same pipeline never wakes twice")
+        snapshot.pipeline = Pipeline(id: 10, status: "success")
         (events, next) = baseline.diff(snapshot)
-        #expect(events.count == 1)
+        #expect(events.count == 1, "a new pipeline finishing wakes again")
         baseline = next
-        // A review with its comments is one event; plain comments are another.
-        snapshot.reviews = [PullRequestReview(id: 10, author: "rev", state: "CHANGES_REQUESTED")]
-        snapshot.reviewComments = 2
+        snapshot.approvals = MergeRequestApprovals(approved: true, required: 1, left: 0, approvedBy: ["mara"])
         (events, next) = baseline.diff(snapshot)
-        #expect(events == [.reviewSubmitted(authors: ["rev"], decision: .changesRequested)])
+        #expect(events == [.approved(by: ["mara"])])
         baseline = next
-        snapshot.comments = 1
+        snapshot.approvals = MergeRequestApprovals()
         (events, next) = baseline.diff(snapshot)
-        #expect(events == [.newComments(1)])
+        #expect(events == [.approvalRevoked(by: ["mara"])])
+        baseline = next
+        snapshot.userNotes = 2
+        (events, next) = baseline.diff(snapshot)
+        #expect(events == [.newNotes(2)])
         baseline = next
         snapshot.state = .merged
         (events, next) = baseline.diff(snapshot)
         #expect(events == [.closed(.merged)])
         #expect(next.diff(snapshot).events.isEmpty)
-        #expect(PullRequestWakeText.message(snapshot, events: events).hasPrefix("[BelloCode PR watch] a/b#1"))
+        #expect(MergeRequestWakeText.message(snapshot, events: events).hasPrefix("[BelloCode MR watch] team/app!1: The merge request was merged."))
     }
 }
 
-// MARK: - GitHub fixtures
+// MARK: - GitLab fixtures
 
-enum GitHubFixtures {
-    static let ref = PullRequestRef(owner: "acme", repo: "rocket", number: 42)
+enum GitLabFixtures {
+    static let instance = GitLabInstance(baseURL: "https://code.corp.test/gitlab")!
+    static let ref = MergeRequestRef(instance: instance.baseURL, projectPath: "platform/rocket", iid: 42)
+    static let api = "https://code.corp.test/gitlab/api/v4/projects/platform%2Frocket"
 
-    static func pull(state: String = "open", merged: Bool = false, sha: String = "abc123", comments: Int = 0, reviewComments: Int = 0) -> String {
-        """
-        {"number":42,"title":"Add launch checklist","state":"\(state)","merged":\(merged),"draft":false,
-         "head":{"sha":"\(sha)","ref":"feature/checklist"},"base":{"ref":"main"},"user":{"login":"octo"},
-         "comments":\(comments),"review_comments":\(reviewComments),"mergeable":true}
-        """
+    static func mr(state: String = "opened", pipeline: Int = 900, pipelineStatus: String = "running", notes: Int = 0) -> String {
+        #"{"iid":42,"title":"Add launch checklist","state":"\#(state)","draft":true,"source_branch":"feat/checklist","target_branch":"main","author":{"username":"octo"},"sha":"abc123","web_url":"https://code.corp.test/gitlab/platform/rocket/-/merge_requests/42","user_notes_count":\#(notes),"head_pipeline":{"id":\#(pipeline),"status":"\#(pipelineStatus)","web_url":"https://code.corp.test/gitlab/platform/rocket/-/pipelines/\#(pipeline)"}}"#
     }
 
-    static func checks(_ runs: [(String, String, String?)]) -> String {
-        let items = runs.enumerated().map { index, run in
-            #"{"id":\#(index + 1),"name":"\#(run.0)","status":"\#(run.1)","conclusion":\#(run.2.map { "\"\($0)\"" } ?? "null"),"html_url":"https://github.com/acme/rocket/runs/\#(index + 1)"}"#
-        }
-        return #"{"total_count":\#(runs.count),"check_runs":[\#(items.joined(separator: ","))]}"#
+    static func jobs(_ items: [(String, String)], from: Int = 0) -> String {
+        "[" + items.enumerated().map { #"{"id":\#(from + $0.offset + 1),"name":"\#($0.element.0)","stage":"test","status":"\#($0.element.1)","web_url":"https://code.corp.test/gitlab/platform/rocket/-/jobs/\#(from + $0.offset + 1)"}"# }.joined(separator: ",") + "]"
     }
 
-    static func reviews(_ items: [(Int, String, String)]) -> String {
-        "[" + items.map { #"{"id":\#($0.0),"user":{"login":"\#($0.1)"},"state":"\#($0.2)"}"# }.joined(separator: ",") + "]"
+    static func approvals(_ by: [String], required: Int = 1) -> String {
+        #"{"approved":\#(by.count >= required),"approvals_required":\#(required),"approvals_left":\#(max(0, required - by.count)),"approved_by":[\#(by.map { #"{"user":{"username":"\#($0)"}}"# }.joined(separator: ","))]}"#
     }
 
-    static func install(_ transport: FixtureGitHubTransport, pull: String, checks: String, reviews: String = "[]", sha: String = "abc123", etag: String? = nil) {
-        transport.setJSON("repos/acme/rocket/pulls/42", pull, etag: etag)
-        transport.setJSON("repos/acme/rocket/commits/\(sha)/check-runs?per_page=100", checks)
-        transport.setJSON("repos/acme/rocket/pulls/42/reviews?per_page=100", reviews)
+    static func install(
+        _ transport: FixtureForgeTransport, mr: String, jobs: String = "[]", approvals: String = GitLabFixtures.approvals([]), pipeline: Int = 900,
+        discussions: String = "[]", etag: String? = nil
+    ) {
+        transport.setJSON("\(api)/merge_requests/42", mr, etag: etag)
+        transport.setJSON("\(api)/merge_requests/42/approvals", approvals)
+        transport.setJSON("\(api)/pipelines/\(pipeline)/jobs?per_page=100", jobs)
+        transport.setJSON("\(api)/merge_requests/42/discussions?per_page=100", discussions)
+    }
+
+    static func tokens() -> InMemorySecretVault {
+        let vault = InMemorySecretVault()
+        try? vault.store(account: instance.baseURL, label: "test", value: SecretValue("glpat-TEST-TOKEN-SENTINEL"))
+        return vault
+    }
+}
+
+struct GitLabProviderTests {
+    @Test func readsAnMRWithPaginationApprovalsAndDiscussions() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed", notes: 5), approvals: GitLabFixtures.approvals(["mara"], required: 2))
+        // Jobs over two pages (X-Next-Page), discussions with one unresolved thread.
+        transport.setJSON("\(GitLabFixtures.api)/pipelines/900/jobs?per_page=100", GitLabFixtures.jobs([("build", "success")]), headers: ["X-Next-Page": "2"])
+        transport.setJSON("\(GitLabFixtures.api)/pipelines/900/jobs?per_page=100&page=2", GitLabFixtures.jobs([("unit", "failed")], from: 1))
+        transport.setJSON(
+            "\(GitLabFixtures.api)/merge_requests/42/discussions?per_page=100",
+            #"[{"id":"a","notes":[{"id":1,"resolvable":true,"resolved":false}]},{"id":"b","notes":[{"id":2,"resolvable":true,"resolved":true}]},{"id":"c","notes":[{"id":3,"resolvable":false}]}]"#)
+        let snapshot = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        #expect(snapshot.title == "Add launch checklist")
+        #expect(snapshot.stateLabel == "Draft")
+        #expect(snapshot.pipeline?.jobs.map(\.name) == ["build", "unit"])
+        #expect(snapshot.pipelineSummary == .failed(jobs: 1))
+        #expect(snapshot.approvals.label == "1 of 2 approvals")
+        #expect(snapshot.unresolvedDiscussions == 1)
+        #expect(snapshot.userNotes == 5)
+        let requests = transport.requests
+        #expect(requests.allSatisfy { $0.hadToken }, "every call carries the token header")
+        #expect(transport.requests.allSatisfy { $0.url.hasPrefix("https://code.corp.test/gitlab/api/v4/") }, "the path prefix is kept")
+    }
+
+    @Test func conditionalRequestsReuseTheCachedBody() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(), etag: "W/\"v1\"")
+        _ = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        let second = try await provider.mergeRequest(GitLabFixtures.ref, now: .now)
+        let mrs = transport.requests.filter { $0.url == "\(GitLabFixtures.api)/merge_requests/42" }
+        #expect(mrs.map(\.etag) == [nil, "W/\"v1\""])
+        #expect(second.title == "Add launch checklist", "a 304 reuses the cached body")
+    }
+
+    @Test func failuresAreTyped() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        transport.set("\(GitLabFixtures.api)/merge_requests/42", [ForgeResponse(status: 401, body: Data(#"{"message":"401 Unauthorized"}"#.utf8))])
+        await #expect(throws: ForgeError.tokenInvalid(GitLabFixtures.instance.baseURL)) { try await provider.mergeRequest(GitLabFixtures.ref, now: .now) }
+        #expect(ForgeError.tokenInvalid("x").description.contains("invalid or expired"))
+        transport.set("\(GitLabFixtures.api)/merge_requests/42", [ForgeResponse(status: 429, headers: ["Retry-After": "90"])])
+        await #expect(throws: ForgeError.rateLimited(retryAfter: 90)) { try await provider.mergeRequest(GitLabFixtures.ref, now: .now) }
+        let noToken = GitLabProvider(transport: transport, tokens: InMemorySecretVault())
+        await #expect(throws: ForgeError.noToken(GitLabFixtures.instance.baseURL)) { try await noToken.mergeRequest(GitLabFixtures.ref, now: .now) }
+        #expect(!transport.requests.contains { !$0.hadToken }, "nothing is sent without a token")
+    }
+
+    @Test func openMRsForABranch() async throws {
+        let transport = FixtureForgeTransport()
+        let provider = GitLabProvider(transport: transport, tokens: GitLabFixtures.tokens())
+        transport.setJSON("\(GitLabFixtures.api)/merge_requests?state=opened&source_branch=feat%2Fchecklist&per_page=20", #"[{"iid":42}]"#)
+        let refs = try await provider.openMergeRequests(ForgeProject(instance: GitLabFixtures.instance, projectPath: "platform/rocket"), sourceBranch: "feat/checklist")
+        #expect(refs == [GitLabFixtures.ref])
     }
 }
 
 @MainActor
-final class FakePullRequestHost: PullRequestHost {
-    var links: [SessionID: [LinkedPullRequest]] = [:]
+final class FakeMergeRequestHost: MergeRequestHost {
+    var links: [SessionID: [LinkedMergeRequest]] = [:]
     var wakes: [(SessionID, String)] = []
-    var pauses: [SessionID: PullRequestPause] = [:]
-    var failWakes = false
+    var pauses: [SessionID: MergeRequestPause] = [:]
+    var remote = "git@code.corp.test:platform/rocket.git"
 
     func allSessions() async -> [Session] { [] }
 
-    func writeLinks(_ sessionID: SessionID, _ transform: @escaping @Sendable ([LinkedPullRequest]) -> [LinkedPullRequest]) async throws -> [LinkedPullRequest] {
+    func writeLinks(_ sessionID: SessionID, _ transform: @escaping @Sendable ([LinkedMergeRequest]) -> [LinkedMergeRequest]) async throws -> [LinkedMergeRequest] {
         let updated = transform(links[sessionID] ?? [])
         links[sessionID] = updated
         return updated
     }
 
-    func wake(_ sessionID: SessionID, text: String, url: String) async throws {
-        if failWakes { throw ExtrasError("offline") }
-        wakes.append((sessionID, text))
-    }
-
-    func pause(_ sessionID: SessionID) -> PullRequestPause { pauses[sessionID] ?? .none }
-    func branch(of sessionID: SessionID) async -> (owner: String, repo: String, branch: String)? { ("acme", "rocket", "feature/checklist") }
+    func wake(_ sessionID: SessionID, text: String, url: String) async throws { wakes.append((sessionID, text)) }
+    func pause(_ sessionID: SessionID) -> MergeRequestPause { pauses[sessionID] ?? .none }
+    func checkout(of sessionID: SessionID) async -> (remote: String, branch: String)? { (remote, "feat/checklist") }
 }
 
 @MainActor
-struct PullRequestServiceTests {
-    let thread = SessionID("ses_pr")
+struct MergeRequestServiceTests {
+    let thread = SessionID("ses_mr")
 
-    func make(store: ProjectionStore? = nil, transport: FixtureGitHubTransport = FixtureGitHubTransport()) throws -> (PullRequestService, ManualWallClock, FakePullRequestHost, FixtureGitHubTransport) {
+    func make(store: ProjectionStore? = nil, tokens: InMemorySecretVault = GitLabFixtures.tokens()) async throws
+        -> (MergeRequestService, ManualWallClock, FakeMergeRequestHost, FixtureForgeTransport)
+    {
         let clock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
-        let service = PullRequestService(store: try store ?? ProjectionStore(location: .inMemory), clock: clock, provider: transport, baseInterval: 120, maxBackoff: 1_800, autoPoll: false)
-        let host = FakePullRequestHost()
+        let transport = FixtureForgeTransport()
+        let service = MergeRequestService(
+            store: try store ?? ProjectionStore(location: .inMemory), clock: clock, transport: transport, tokens: tokens, baseInterval: 120,
+            maxBackoff: 1_800, autoPoll: false)
+        let host = FakeMergeRequestHost()
         service.host = host
+        await service.start()
+        _ = try await service.saveInstance(baseURL: GitLabFixtures.instance.baseURL, token: nil)
         return (service, clock, host, transport)
     }
 
     @Test func watchWakesOncePerEventAndStopsWhenMerged() async throws {
-        let (service, clock, host, transport) = try make()
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "in_progress", nil)]))
-        try await service.setWatching(GitHubFixtures.ref, for: thread, true)
+        let (service, clock, host, transport) = try await make()
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(), jobs: GitLabFixtures.jobs([("unit", "running")]))
+        try await service.setWatching(GitLabFixtures.ref, for: thread, true)
         await service.waitForFetches()
-        #expect(host.links[thread]?.first?.watching == true)
-        await service.pollDue()  // baseline: checks running
+        await service.pollDue()
         #expect(host.wakes.isEmpty)
-        #expect(service.snapshots[GitHubFixtures.ref.url]?.checksSummary == .pending(done: 0, total: 1))
-
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "completed", "failure")]))
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]))
         clock.advance(by: 120)
         await service.pollDue()
         try #require(host.wakes.count == 1)
-        #expect(host.wakes[0].1.contains("1 check failed"))
+        #expect(host.wakes[0].1.contains("Pipeline failed (1 job)"))
         clock.advance(by: 120)
         await service.pollDue()
-        #expect(host.wakes.count == 1, "no second wake for the same checks")
-
-        GitHubFixtures.install(
-            transport, pull: GitHubFixtures.pull(state: "closed", merged: true), checks: GitHubFixtures.checks([("build", "completed", "failure")]),
-            reviews: GitHubFixtures.reviews([(5, "reviewer", "APPROVED")]))
+        #expect(host.wakes.count == 1, "no second wake for the same pipeline")
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]), approvals: GitLabFixtures.approvals(["mara"]))
         clock.advance(by: 120)
         await service.pollDue()
         #expect(host.wakes.count == 2)
-        #expect(host.wakes[1].1.contains("merged"))
-        #expect(service.watch(thread, GitHubFixtures.ref.url)?.stoppedReason == "merged")
-        #expect(service.nextPollDate(thread, GitHubFixtures.ref.url) == nil)
+        #expect(host.wakes[1].1.contains("Approved by mara"))
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(state: "merged", pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]), approvals: GitLabFixtures.approvals(["mara"]))
+        clock.advance(by: 120)
+        await service.pollDue()
+        #expect(host.wakes.count == 3)
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.stoppedReason == "merged")
+        #expect(service.nextPollDate(thread, GitLabFixtures.ref.url) == nil)
         #expect(host.links[thread]?.first?.watching == false)
+        for (_, text) in host.wakes { #expect(!text.contains("SENTINEL"), "the token never reaches a wake") }
         service.shutdown()
     }
 
     @Test func relaunchDoesNotRepeatAWake() async throws {
         let store = try ProjectionStore(location: .inMemory)
         do {
-            let (service, clock, host, transport) = try make(store: store)
-            GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "in_progress", nil)]))
-            try await service.setWatching(GitHubFixtures.ref, for: thread, true)
-        await service.waitForFetches()
+            let (service, clock, host, transport) = try await make(store: store)
+            GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+            try await service.setWatching(GitLabFixtures.ref, for: thread, true)
+            await service.waitForFetches()
             await service.pollDue()
-            GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "completed", "success")]))
+            GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "success"))
             clock.advance(by: 120)
             await service.pollDue()
             #expect(host.wakes.count == 1)
             service.shutdown()
         }
-        let (service, _, host, transport) = try make(store: store)
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "completed", "success")]))
-        await service.start()
+        let (service, _, host, transport) = try await make(store: store)
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "success"))
         await service.pollDue()
         #expect(host.wakes.isEmpty, "the baseline was persisted")
         service.shutdown()
     }
 
-    @Test func settledThreadsAbsorbEventsAndArchivedThreadsAreNotPolled() async throws {
-        let (service, clock, host, transport) = try make()
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "in_progress", nil)]))
-        try await service.setWatching(GitHubFixtures.ref, for: thread, true)
+    @Test func settledAbsorbsAndArchivedIsNotPolled() async throws {
+        let (service, clock, host, transport) = try await make()
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+        try await service.setWatching(GitLabFixtures.ref, for: thread, true)
         await service.waitForFetches()
         await service.pollDue()
         host.pauses[thread] = .settled
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "completed", "success")]))
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "success"))
         clock.advance(by: 120)
         await service.pollDue()
         #expect(host.wakes.isEmpty)
-        host.pauses[thread] = .none
+        host.pauses[thread] = MergeRequestPause.none
         clock.advance(by: 120)
         await service.pollDue()
         #expect(host.wakes.isEmpty, "unsettling does not replay absorbed events")
@@ -230,61 +309,84 @@ struct PullRequestServiceTests {
         let before = transport.requests.count
         clock.advance(by: 120)
         await service.pollDue()
-        #expect(transport.requests.count == before, "archived: no requests")
+        #expect(transport.requests.count == before)
         service.shutdown()
     }
 
-    @Test func failuresBackOffThenStopTheWatch() async throws {
-        let (service, clock, host, transport) = try make()
-        transport.set("repos/acme/rocket/pulls/42", [GitHubResponse(status: 599)])
-        try await service.setWatching(GitHubFixtures.ref, for: thread, true)
+    @Test func rateLimitWaitsForRetryAfterAndFailuresBackOff() async throws {
+        let (service, clock, host, transport) = try await make()
+        defer { withExtendedLifetime(host) {} }
+        transport.set("\(GitLabFixtures.api)/merge_requests/42", [ForgeResponse(status: 429, headers: ["Retry-After": "600"])])
+        try await service.setWatching(GitLabFixtures.ref, for: thread, true)
         await service.waitForFetches()
+        var now = clock.now()
+        await service.pollDue()
+        #expect(service.nextPollDate(thread, GitLabFixtures.ref.url)?.timeIntervalSince(now) == 600)
+        transport.set("\(GitLabFixtures.api)/merge_requests/42", [ForgeResponse(status: 599)])
         var gaps: [TimeInterval] = []
-        for _ in 0..<PullRequestService.maxFailures {
-            let now = clock.now()
+        for _ in 0..<MergeRequestService.maxFailures {
+            clock.advance(to: service.nextPollDate(thread, GitLabFixtures.ref.url) ?? clock.now())
+            now = clock.now()
             await service.pollDue()
-            guard let next = service.nextPollDate(thread, GitHubFixtures.ref.url) else { break }
+            guard let next = service.nextPollDate(thread, GitLabFixtures.ref.url) else { break }
             gaps.append(next.timeIntervalSince(now))
-            clock.advance(to: next)
         }
-        #expect(gaps.prefix(5) == [240, 480, 960, 1_800, 1_800])
-        #expect(service.watch(thread, GitHubFixtures.ref.url)?.stoppedReason?.contains("could not be reached") == true)
-        #expect(host.wakes.isEmpty)
-        #expect(service.problems[GitHubFixtures.ref.url] != nil)
+        #expect(gaps.prefix(3) == [1_200, 1_800, 1_800])
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.stoppedReason?.contains("could not be reached") == true)
         service.shutdown()
     }
 
-    @Test func etagsMakeUnchangedPollsCheap() async throws {
-        let (service, _, _, transport) = try make()
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([]), etag: "\"v1\"")
-        _ = await service.refresh(GitHubFixtures.ref)
-        _ = await service.refresh(GitHubFixtures.ref)
-        let pulls = transport.requests.filter { $0.path == "repos/acme/rocket/pulls/42" }
-        #expect(pulls.count == 2)
-        #expect(pulls[0].etag == nil)
-        #expect(pulls[1].etag == "\"v1\"")
-        #expect(service.snapshots[GitHubFixtures.ref.url]?.title == "Add launch checklist", "a 304 reuses the cached body")
+    @Test func invalidTokenHoldsTheWatchUntilReplaced() async throws {
+        let (service, clock, host, transport) = try await make()
+        transport.set("\(GitLabFixtures.api)/merge_requests/42", [ForgeResponse(status: 401)])
+        try await service.setWatching(GitLabFixtures.ref, for: thread, true)
+        await service.waitForFetches()
+        await service.pollDue()
+        #expect(service.instanceProblems[GitLabFixtures.instance.baseURL]?.contains("invalid or expired") == true)
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.stoppedReason == nil, "held, not stopped")
+        #expect((service.nextPollDate(thread, GitLabFixtures.ref.url)?.timeIntervalSince(clock.now()) ?? 0) >= 1_800)
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+        _ = try await service.saveInstance(baseURL: GitLabFixtures.instance.baseURL, token: SecretValue("glpat-NEW"))
+        #expect(service.instanceProblems.isEmpty)
+        #expect(service.nextPollDate(thread, GitLabFixtures.ref.url) == clock.now(), "re-armed at once")
+        await service.pollDue()
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.baseline != nil)
+        #expect(host.wakes.isEmpty)
+        service.shutdown()
     }
 
-    @Test func autoLinksFromGhPrCreateOutputAndFromTheBranch() async throws {
-        let (service, _, host, transport) = try make()
-        GitHubFixtures.install(transport, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([]))
-        await service.noticeCommand(partID: "prt_1", sessionID: thread, command: "git status", output: "https://github.com/acme/rocket/pull/42")
-        #expect(host.links[thread] == nil, "only PR commands link")
-        await service.noticeCommand(partID: "prt_2", sessionID: thread, command: "gh pr create --fill", output: "https://github.com/acme/rocket/pull/42\n")
+    @Test func resolvesBangIIDAndAutoLinks() async throws {
+        let (service, _, host, transport) = try await make()
+        #expect(try await service.resolve("!42", for: thread) == GitLabFixtures.ref)
+        await #expect(throws: ExtrasError.self) { try await service.resolve("https://elsewhere.test/a/b/-/merge_requests/1", for: thread) }
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr())
+        await service.noticeCommand(partID: "p1", sessionID: thread, command: "git status", output: GitLabFixtures.ref.url)
+        #expect(host.links[thread] == nil, "only git push output links")
+        await service.noticeCommand(partID: "p2", sessionID: thread, command: "git push -u origin feat/checklist", output: "remote: View merge request for feat/checklist:\nremote:   \(GitLabFixtures.ref.url)\n")
         #expect(host.links[thread]?.map(\.source) == [.output])
         let other = SessionID("ses_branch")
-        transport.setJSON("repos/acme/rocket/pulls?state=open&head=acme:feature/checklist", #"[{"number":42}]"#)
+        transport.setJSON("\(GitLabFixtures.api)/merge_requests?state=opened&source_branch=feat%2Fchecklist&per_page=20", #"[{"iid":42}]"#)
         await service.autoLinkBranch(other)
-        #expect(host.links[other]?.map(\.ref) == [GitHubFixtures.ref])
+        #expect(host.links[other]?.map(\.ref) == [GitLabFixtures.ref])
         #expect(host.links[other]?.first?.source == .branch)
     }
 
-    @Test func publicAPIWithoutAccessSaysHowToConnect() async throws {
-        let transport = FixtureGitHubTransport(access: .publicAPI)
-        let (service, _, _, _) = try make(transport: transport)
-        _ = await service.refresh(GitHubFixtures.ref)
-        #expect(service.problems[GitHubFixtures.ref.url]?.contains("gh auth login") == true)
+    @Test func instancesPersistAndTokensStayInTheVault() async throws {
+        let store = try ProjectionStore(location: .inMemory)
+        let tokens = InMemorySecretVault()
+        let (service, _, host, transport) = try await make(store: store, tokens: tokens)
+        defer { withExtendedLifetime(host) {} }
+        transport.setJSON("\(GitLabFixtures.instance.apiBase)/user", #"{"username":"mara"}"#)
+        _ = try await service.saveInstance(baseURL: "https://code.corp.test/gitlab/", token: SecretValue("glpat-SENTINEL-VALUE"))
+        #expect(service.instancesWithToken == [GitLabFixtures.instance.baseURL])
+        #expect(try await service.testConnection(GitLabFixtures.instance).get() == "mara")
+        let saved = try await store.preference(MergeRequestService.instancesKey, as: [String].self)
+        #expect(saved == [GitLabFixtures.instance.baseURL])
+        let dump = try await store.writer.read { db in try String.fetchAll(db, sql: "SELECT CAST(json AS TEXT) FROM app_preference").joined() }
+        #expect(!dump.contains("SENTINEL"), "the token is never in the store")
+        await service.removeInstance(GitLabFixtures.instance)
+        #expect(tokens.count == 0)
+        await #expect(throws: ExtrasError.self) { _ = try await service.saveInstance(baseURL: "not a url", token: nil) }
     }
 }
 
@@ -369,7 +471,7 @@ struct ExtrasToolTests {
         let harness: MockHarness
         let engine: Engine
         let vault: InMemorySecretVault
-        let gitHub: FixtureGitHubTransport
+        let gitLab: FixtureForgeTransport
 
         static func start() async throws -> Fixture {
             let harness = try await MockHarness.start(.empty(directory: "/tmp/mock-extras"))
@@ -377,14 +479,15 @@ struct ExtrasToolTests {
             configuration.eventBackoff = BackoffPolicy(initial: .milliseconds(20), maximum: .milliseconds(200))
             configuration.writeInterval = .milliseconds(20)
             let vault = InMemorySecretVault()
-            let gitHub = FixtureGitHubTransport()
+            let gitLab = FixtureForgeTransport()
             configuration.secretVault = vault
-            configuration.gitHub = gitHub
+            configuration.forgeTransport = gitLab
+            configuration.forgeTokens = GitLabFixtures.tokens()
             configuration.wallClock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
             let engine = try Engine(configuration: configuration)
             await engine.start()
             try await waitUntil("live") { engine.root.connection == .live }
-            return Fixture(harness: harness, engine: engine, vault: vault, gitHub: gitHub)
+            return Fixture(harness: harness, engine: engine, vault: vault, gitLab: gitLab)
         }
 
         func stop() async {
@@ -508,24 +611,26 @@ struct ExtrasToolTests {
         #expect(await fixture.call("list_scheduled_tasks", [:], session: nil).isError)
     }
 
-    @Test func linkPullRequestsWritesSessionMetadata() async throws {
+    @Test func linkMergeRequestsWritesSessionMetadata() async throws {
         let fixture = try await Fixture.start()
         defer { Task { await fixture.stop() } }
         let engine = fixture.engine
-        GitHubFixtures.install(fixture.gitHub, pull: GitHubFixtures.pull(), checks: GitHubFixtures.checks([("build", "completed", "success")]))
-        let session = try await engine.createThread(in: "/tmp/mock-extras", title: "pr")
+        _ = try await engine.extras.mergeRequests.saveInstance(baseURL: GitLabFixtures.instance.baseURL, token: nil)
+        GitLabFixtures.install(fixture.gitLab, mr: GitLabFixtures.mr(pipelineStatus: "success"), jobs: GitLabFixtures.jobs([("unit", "success")]))
+        let session = try await engine.createThread(in: "/tmp/mock-extras", title: "mr")
         try await waitUntil("graph") { engine.orchestration.node(session.id) != nil }
-        let linked = await fixture.call("link_pull_requests", ["urls": .array([.string(GitHubFixtures.ref.url)])], session: session.id)
+        let linked = await fixture.call("link_merge_requests", ["refs": .array([.string(GitLabFixtures.ref.url)])], session: session.id)
         #expect(!linked.isError, "\(linked.text)")
         let stored = try await fixture.harness.client.session(session.id.rawValue)
-        #expect(String(describing: stored.metadata ?? .null).contains("bellocode_prs"))
-        let list = await fixture.call("list_thread_pull_requests", [:], session: session.id)
-        #expect(list.text.contains("Add launch checklist") && list.text.contains("Check passed"))
-        let bad = await fixture.call("link_pull_requests", ["urls": .array(["https://example.com/x"])], session: session.id)
-        #expect(bad.isError)
+        #expect(String(describing: stored.metadata ?? .null).contains("bellocode_mrs"))
+        let list = await fixture.call("list_thread_merge_requests", [:], session: session.id)
+        #expect(list.text.contains("Add launch checklist") && list.text.contains("Pipeline passed"), "\(list.text)")
+        #expect(!list.text.contains("SENTINEL"), "the token never reaches a tool result")
+        let unknown = await fixture.call("link_merge_requests", ["refs": .array(["https://github.com/a/b/pull/1"])], session: session.id)
+        #expect(unknown.isError)
         // The wake path posts a labelled synthetic message through the mock.
-        try await engine.extras.wake(session.id, text: "[BelloCode PR watch] acme/rocket#42: checks finished", url: GitHubFixtures.ref.url)
-        #expect((await fixture.harness.server.syntheticTexts).last?.hasPrefix("[BelloCode PR watch]") == true)
+        try await engine.extras.wake(session.id, text: "[BelloCode MR watch] platform/rocket!42: Pipeline #900 finished.", url: GitLabFixtures.ref.url)
+        #expect((await fixture.harness.server.syntheticTexts).last?.hasPrefix("[BelloCode MR watch]") == true)
     }
 
     @Test func htmlRenderStoresTheVisualAndAsksForNetwork() async throws {
