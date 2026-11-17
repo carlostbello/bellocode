@@ -151,6 +151,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     return controller
                 })
         }
+        panes.append(
+            SettingsPane(id: "acknowledgements", title: "Acknowledgements", symbolName: "doc.text") {
+                let controller = NSHostingController(rootView: AcknowledgementsView())
+                controller.sizingOptions = [.preferredContentSize]
+                return controller
+            })
         self.panes = panes
         root = SettingsRootViewController(panes: panes)
         let window = NSWindow(

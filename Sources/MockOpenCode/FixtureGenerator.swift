@@ -100,6 +100,40 @@ public struct FixtureGenerator: Sendable {
         request reply event queue delta frame width height offset index state actor task value result error retry \
         quickly carefully then while because after before during into over under across between fast stable native
         """.split(whereSeparator: \.isWhitespace).map(String.init)
+    /// Realistic thread titles and prose (snapshot reviews judge the design, not the data). Chosen from the same random
+    /// draws as the old word salad, so every count, ID and timestamp of a seeded scenario is unchanged.
+    static let titles = [
+        "Fix flaky parser recovery test", "Migrate sessions to passkeys", "Pick a CI cache strategy", "Release checklist 2.4",
+        "Audit tokenizer edge cases", "Write fence regression tests", "Bump swift-markdown to 0.9", "Tidy CI cache keys",
+        "Speed up cold launch", "Add retry to the upload client", "Fix sidebar scroll jump", "Document the plugin API",
+        "Split the settings view model", "Profile transcript layout", "Handle offline reconnects", "Rename the build target",
+        "Cache syntax highlighting", "Review the auth middleware", "Port the CLI to Swift concurrency", "Trim the Docker image",
+        "Fix dark mode contrast", "Add keyboard shortcuts for tabs", "Investigate memory growth", "Clean up feature flags",
+        "Stream large diffs lazily", "Make the queue cancellable", "Upgrade the SQLite schema", "Localise error messages",
+        "Draft the 2.5 release notes", "Reproduce the crash on launch", "Shorten test run time", "Validate webhook payloads",
+    ]
+    static let sentences = [
+        "The failure comes from two suites sharing one line buffer, so a second feed can land past the stable end.",
+        "I read the parser and its tests first to see where the state is kept between calls.",
+        "Making the buffer per instance fixes the race without measurable cost on the benchmark.",
+        "The cache key includes the lockfile hash, so a dependency bump invalidates it as expected.",
+        "Nothing else references the old helper, so it is safe to delete it in the same change.",
+        "The test passes fifty runs in a row with the fix and fails eleven times without it.",
+        "I kept the public API unchanged and moved the logic into a private extension.",
+        "Next I will add a regression test for nested fences and run the full suite.",
+        "The reconnect path rebuilds state from the list endpoints instead of replaying events.",
+        "Launch spends most of its time decoding the cache before the first frame is drawn.",
+        "Deferring that work until after the window appears cuts cold launch by about a third.",
+        "The middleware checks the session before the CSRF token, which is the order we want.",
+        "Two call sites still pass a raw string; I converted them to the typed identifier.",
+        "The schema migration is versioned and the test covers both upgrade and a fresh install.",
+        "Large diffs now build their rows off the main thread and stream into the view.",
+        "I could not reproduce the crash with a clean profile, so it likely depends on old data.",
+        "The image drops from 1.2 GB to 410 MB after removing the build toolchain from the final stage.",
+        "Contrast on secondary labels was below 4.5 to 1 in dark mode; the new token fixes it.",
+        "Cancelling a queued item now removes it at once and tells the server in the background.",
+        "The flag has been on for everyone for two releases, so the old path can go.",
+    ]
     static let languages = ["swift", "python", "typescript", "rust", "go", "json", "bash", "sql", "ruby", "c"]
 
     /// Generation state: random source, ids and a clock that only moves forward.
@@ -127,14 +161,19 @@ public struct FixtureGenerator: Sendable {
             (0..<random.int(in: range)).map { _ in random.pick(FixtureGenerator.words) }.joined(separator: " ")
         }
 
+        /// The same draws as `words(range)`, folded into an index (keeps the random sequence of the old generator).
+        mutating func draw(_ range: ClosedRange<Int>) -> Int {
+            var index = 0
+            for _ in 0..<random.int(in: range) { index = index &* 31 &+ random.int(in: 0...(FixtureGenerator.words.count - 1)) }
+            return abs(index)
+        }
+
         mutating func sentence() -> String {
-            let text = words(6...16)
-            return text.prefix(1).uppercased() + text.dropFirst() + "."
+            FixtureGenerator.sentences[draw(6...16) % FixtureGenerator.sentences.count]
         }
 
         mutating func title() -> String {
-            let text = words(2...5)
-            return text.prefix(1).uppercased() + text.dropFirst()
+            FixtureGenerator.titles[draw(2...5) % FixtureGenerator.titles.count]
         }
 
         mutating func paragraph() -> String {

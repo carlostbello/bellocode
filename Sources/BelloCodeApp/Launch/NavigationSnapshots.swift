@@ -150,12 +150,12 @@ extension SnapshotRunner {
         workspace.setGrouping(.byProject)
 
         // Settings ▸ Notifications and ▸ Threads.
-        if only.isEmpty || only.contains("settings-notifications") || only.contains("settings-threads") {
+        if only.isEmpty || only.contains("settings-notifications") || only.contains("settings-threads") || only.contains("settings-acknowledgements") {
             let notifier = AttentionNotifier(engine: engine, settings: settings, delivery: nil, defaults: nil)
             let settingsWindow = SettingsWindowController(
                 settings: settings, auth: nil, importSource: nil, engine: engine, notifier: notifier)
             settings.notifications.mutedProjects = [projects[2].directory]
-            for pane in ["notifications", "threads"] where only.isEmpty || only.contains("settings-\(pane)") {
+            for pane in ["notifications", "threads", "acknowledgements"] where only.isEmpty || only.contains("settings-\(pane)") {
                 settingsWindow.show(pane: pane)
                 await driver.idle(6)
                 if let panel = settingsWindow.window { written += renderStandalone(panel, state: "settings-\(pane)") }
