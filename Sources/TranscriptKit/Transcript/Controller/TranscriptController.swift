@@ -192,6 +192,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var announced: Set<MessageID> = []
     var announcedOrder: [MessageID] = []
     var streamingSeen: Set<MessageID> = []
+    /// Replies announced (tests: a finished reply is announced once).
+    var announcementCount = 0
 
     // Measure-all and tasks.
     var openTask: Task<Void, Never>?

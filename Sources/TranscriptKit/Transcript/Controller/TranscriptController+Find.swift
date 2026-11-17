@@ -459,6 +459,7 @@ extension TranscriptController {
     // MARK: Accessibility
 
     func announce(_ text: String) {
+        announcementCount += 1
         let trimmed = text.count > 600 ? String(text.prefix(600)) + "…" : text
         NSAccessibility.post(
             element: tableView, notification: .announcementRequested,
@@ -492,13 +493,6 @@ extension TranscriptController {
         case .working: return "Agent working"
         case .unknown(let type): return "Unsupported content \(type)"
         }
-    }
-
-    /// The text VoiceOver reads for a row: its visible blocks.
-    func accessibilityValue(_ index: Int) -> String {
-        let rowBlocks = blocks(row: index)
-        let visible = visibility(row: index, blocks: rowBlocks)
-        return zip(rowBlocks, visible).filter(\.1).map(\.0.plainText).joined(separator: "\n")
     }
 
     func accessibilityActions(_ index: Int, layout: RowLayout?) -> [NSAccessibilityCustomAction] {

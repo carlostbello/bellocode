@@ -237,8 +237,14 @@ final class TranscriptCellView: NSView {
 
     weak var controller: TranscriptController?
     var rowID: RowID?
-    var row: TranscriptRow?
-    var layout: RowLayout?
+    var row: TranscriptRow? {
+        didSet { if row != oldValue { accessibilityTextCache = nil } }
+    }
+    var layout: RowLayout? {
+        didSet { if layout !== oldValue { accessibilityTextCache = nil } }
+    }
+    /// The row's accessibility text, built when an assistive client first asks (one per live cell).
+    private var accessibilityTextCache: RowAccessibilityText?
     var drawState = RowLayout.DrawState(selectionColor: NSColor.selectedTextBackgroundColor.cgColor)
     private(set) var isHovered = false
     let canvas = TranscriptCanvasView()
@@ -339,6 +345,7 @@ final class TranscriptCellView: NSView {
     /// the row's whole visible text (a 100 KB code block for the largest row) and the custom actions allocate objects
     /// per hotspot. Configure only announces that the element changed, and only to a running client.
     func updateAccessibility() {
+        accessibilityTextCache = nil
         guard controller?.isVoiceOverRunning == true else { return }
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
@@ -348,10 +355,7 @@ final class TranscriptCellView: NSView {
         return controller.accessibilityLabel(row)
     }
 
-    override func accessibilityValue() -> Any? {
-        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
-        return controller.accessibilityValue(index)
-    }
+    override func accessibilityValue() -> Any? { accessibilityText()?.text.string as String? }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
@@ -363,13 +367,105 @@ final class TranscriptCellView: NSView {
         return row.role == .user ? "prompt" : row.role == .system ? "event" : "reply"
     }
 
-    // Accessibility text range support for VoiceOver's reading of selected text.
+    // MARK: Accessibility text (review m2)
+    //
+    // The row is a static-text element with the parameterized text attributes, so VoiceOver can read it by
+    // character, word and line and select a passage. Everything is derived from the row's blocks and its current
+    // layout; rows off screen have no cell and no element (the table's own navigation scrolls them in).
+
+    private func accessibilityText() -> (text: RowAccessibilityText, index: Int)? {
+        guard let controller, let row, let index = controller.rowIndex[row.id] else { return nil }
+        if let cached = accessibilityTextCache { return (cached, index) }
+        let text = controller.accessibilityText(index, layout: layout)
+        accessibilityTextCache = text
+        return (text, index)
+    }
+
+    /// The column's offset in this view (the layout's coordinates start at the text column).
+    private var columnX: CGFloat {
+        TranscriptGeometry.columnX(forTableWidth: bounds.width, contentWidth: layout?.width ?? bounds.width)
+    }
+
+    private func clamp(_ range: NSRange, _ text: RowAccessibilityText) -> NSRange {
+        let location = min(max(0, range.location), text.length)
+        return NSRange(location: location, length: min(max(0, range.length), text.length - location))
+    }
+
+    override func accessibilityNumberOfCharacters() -> Int { accessibilityText()?.text.length ?? 0 }
+
+    override func accessibilityString(for range: NSRange) -> String? {
+        guard let text = accessibilityText()?.text else { return nil }
+        return text.string.substring(with: clamp(range, text))
+    }
+
+    override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
+        accessibilityString(for: range).map { NSAttributedString(string: $0) }
+    }
+
+    override func accessibilityLine(for index: Int) -> Int { accessibilityText()?.text.line(for: index) ?? 0 }
+
+    override func accessibilityRange(forLine line: Int) -> NSRange {
+        accessibilityText()?.text.range(forLine: line) ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    override func accessibilityRange(for index: Int) -> NSRange {
+        guard let text = accessibilityText()?.text, index >= 0, index < text.length else { return NSRange(location: NSNotFound, length: 0) }
+        return text.string.rangeOfComposedCharacterSequence(at: index)
+    }
+
+    override func accessibilityStyleRange(for index: Int) -> NSRange {
+        accessibilityText()?.text.blockRange(for: index) ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        guard let (text, index) = accessibilityText(), let controller, let layout else { return NSRange(location: 0, length: 0) }
+        let visible = visibleRect
+        if visible.minY <= bounds.minY + 0.5, visible.maxY >= bounds.maxY - 0.5 { return text.fullRange }
+        guard !visible.isEmpty else { return NSRange(location: 0, length: 0) }
+        let top = controller.accessibilityIndex(at: CGPoint(x: 0, y: visible.minY), row: index, text: text, layout: layout)
+        let bottom = controller.accessibilityIndex(at: CGPoint(x: layout.width, y: visible.maxY - 1), row: index, text: text, layout: layout)
+        let lineStart = text.range(forLine: text.line(for: top))?.location ?? top
+        let lineEnd = text.range(forLine: text.line(for: bottom)).map { $0.location + $0.length } ?? bottom
+        return NSRange(location: lineStart, length: max(0, lineEnd - lineStart))
+    }
+
+    override func accessibilityFrame(for range: NSRange) -> NSRect {
+        guard let (text, index) = accessibilityText(), let controller, let window else { return .zero }
+        var rect = bounds
+        if let layout, let local = controller.accessibilityRect(for: clamp(range, text), row: index, text: text, layout: layout) {
+            rect = local.offsetBy(dx: columnX, dy: 0)
+        }
+        return window.convertToScreen(convert(rect, to: nil))
+    }
+
+    override func accessibilityRange(for point: NSPoint) -> NSRange {
+        guard let (text, index) = accessibilityText(), let controller, let layout, let window else { return NSRange(location: NSNotFound, length: 0) }
+        let local = convert(window.convertPoint(fromScreen: point), from: nil)
+        let at = controller.accessibilityIndex(at: CGPoint(x: local.x - columnX, y: local.y), row: index, text: text, layout: layout)
+        if at < text.length { return text.string.rangeOfComposedCharacterSequence(at: at) }
+        return NSRange(location: text.length, length: 0)
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard let (text, index) = accessibilityText(), let controller else { return NSRange(location: 0, length: 0) }
+        return controller.accessibilitySelectedRange(index, text: text) ?? NSRange(location: 0, length: 0)
+    }
+
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let (text, index) = accessibilityText(), let controller else { return }
+        controller.setAccessibilitySelectedRange(clamp(range, text), row: index, text: text)
+    }
+
     override func accessibilitySelectedText() -> String? {
-        guard let controller, let row, let index = controller.rowIndex[row.id],
-            let selection = controller.selection?.rowSelection(row: index, rowID: row.id, { controller.rowIndex[$0] })
+        guard let (text, index) = accessibilityText(), let controller,
+            let range = controller.accessibilitySelectedRange(index, text: text), range.length > 0
         else { return nil }
-        _ = selection
-        return controller.selectedText()
+        return text.string.substring(with: range)
+    }
+
+    override func accessibilityInsertionPointLineNumber() -> Int {
+        guard let (text, _) = accessibilityText() else { return 0 }
+        return text.line(for: accessibilitySelectedTextRange().location)
     }
 }
 
