@@ -84,8 +84,10 @@ public struct MockVCSRepository: Sendable {
 /// VCS state the mock keeps beside `ServerState`.
 struct MockVCSState: Sendable {
     var repositories: [String: MockVCSRepository] = [:]
-    /// Per-turn diffs: session → user message ID (or "" for the newest turn) → files.
+    /// Per-turn diffs: session → user message ID (or "" for the newest turn) → files (full-file patches).
     var turnDiffs: [String: [String: [JSONValue]]] = [:]
+    /// The same with a few lines of context (served when the request has `context`); falls back to `turnDiffs`.
+    var turnDiffsWithContext: [String: [String: [JSONValue]]] = [:]
     /// Staged reverts per session (`Session.Revert`).
     var reverts: [String: JSONValue] = [:]
     /// Worktrees per project (the main checkout is listed first and never stored here).
@@ -103,9 +105,11 @@ extension MockOpenCodeServer {
         vcs.repositories[directory] = repository
     }
 
-    /// Scripts the files a turn changed. `from` is the turn's user message; nil sets the newest turn's diff.
-    public func setTurnDiff(sessionID: String, from messageID: String? = nil, files: [JSONValue]) {
+    /// Scripts the files a turn changed. `from` is the turn's user message; nil sets the newest turn's diff. `files`
+    /// hold full-file patches (no `context`); `withContext` the patches served when a request asks for context.
+    public func setTurnDiff(sessionID: String, from messageID: String? = nil, files: [JSONValue], withContext: [JSONValue]? = nil) {
         vcs.turnDiffs[sessionID, default: [:]][messageID ?? ""] = files
+        vcs.turnDiffsWithContext[sessionID, default: [:]][messageID ?? ""] = withContext
     }
 
     /// Adds a worktree to a project's inventory (as a `refresh` after `git worktree add` would); `dirty` marks it as
@@ -207,7 +211,8 @@ extension MockOpenCodeServer {
 
     private func turnDiff(_ sessionID: String, _ request: HTTPRequest) -> HTTPResponse {
         guard state.sessions[sessionID] != nil else { return Self.sessionNotFound(sessionID) }
-        let diffs = vcs.turnDiffs[sessionID] ?? [:]
+        var diffs = vcs.turnDiffs[sessionID] ?? [:]
+        if request.queryValue("context") != nil { diffs.merge(vcs.turnDiffsWithContext[sessionID] ?? [:]) { _, context in context } }
         let from = request.queryValue("from") ?? ""
         if !from.isEmpty, !(state.messages[sessionID] ?? []).contains(where: { $0.id == from }), diffs[from] == nil {
             return .error(404, tag: "MessageNotFoundError", message: "Message not found: \(from)", extra: [("messageID", .string(from))])
