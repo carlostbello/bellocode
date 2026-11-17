@@ -42,14 +42,23 @@ public enum WorkingCopyError: Error, Sendable, Equatable, CustomStringConvertibl
 }
 
 /// Reads and writes files of one working tree for revert operations. Writes are all-or-nothing across files and each
-/// is preceded by a check that the file still holds the bytes the plan was made from, so a concurrent edit (by the
-/// user or an agent) is never overwritten. Synchronous: call it from off-main work (`@concurrent` helpers below).
+/// is a compare-and-swap against the bytes the plan was made from (see `replace`), so a concurrent edit (by the user
+/// or an agent) is never overwritten, including one saved after the preflight check. Synchronous: call it from off-main work (`@concurrent` helpers below).
 public struct WorkingCopy: Sendable {
     public let root: String
     /// Files above this size are refused for text operations.
     public static let textLimit = 16 << 20
 
-    public init(root: String) { self.root = root }
+    /// Test seam: runs just before each file is replaced (after the preflight check), so tests can force a
+    /// concurrent edit deterministically. Nil in production.
+    let beforeReplace: (@Sendable (String) -> Void)?
+
+    public init(root: String) { self.init(root: root, beforeReplace: nil) }
+
+    init(root: String, beforeReplace: (@Sendable (String) -> Void)?) {
+        self.root = root
+        self.beforeReplace = beforeReplace
+    }
 
     func url(_ path: String) -> URL { URL(filePath: root, directoryHint: .isDirectory).appending(path: path) }
 
@@ -85,7 +94,9 @@ public struct WorkingCopy: Sendable {
         FileChangePlan(before: snapshot(path), after: content)
     }
 
-    /// Applies plans: verifies every file first, then writes; if a write fails, the files already written are put back.
+    /// Applies plans: verifies every file first, then replaces each with a compare-and-swap (`replace`), so an edit
+    /// made after the preflight check is never overwritten. If a file changed or a write fails, the files already
+    /// written are put back with the same check: a file edited again since we wrote it keeps that edit.
     /// Returns the plans that changed something (their `before` is the Undo state).
     @discardableResult
     public func apply(_ plans: [FileChangePlan]) throws -> [FileChangePlan] {
@@ -93,17 +104,21 @@ public struct WorkingCopy: Sendable {
         var written: [FileChangePlan] = []
         do {
             for plan in plans where plan.before.data != plan.after {
-                try write(plan.path, plan.after, permissions: plan.before.permissions)
+                beforeReplace?(plan.path)
+                try replace(plan)
                 written.append(plan)
             }
         } catch {
-            for plan in written.reversed() { try? write(plan.path, plan.before.data, permissions: plan.before.permissions) }
+            for plan in written.reversed() {
+                try? replace(FileChangePlan(before: FileSnapshot(path: plan.path, data: plan.after, permissions: plan.before.permissions), after: plan.before.data))
+            }
             throw error
         }
         return written
     }
 
-    /// Undo of `apply`: restores each file's `before`, but only where the file still holds what was written.
+    /// Undo of `apply`: restores each file's exact `before` bytes and permissions, but only where the file still holds
+    /// what was written; otherwise it refuses and changes nothing.
     public func undo(_ applied: [FileChangePlan]) throws {
         let inverse = applied.map { plan in
             FileChangePlan(before: FileSnapshot(path: plan.path, data: plan.after, permissions: plan.before.permissions), after: plan.before.data)
@@ -111,17 +126,74 @@ public struct WorkingCopy: Sendable {
         try apply(inverse)
     }
 
-    private func write(_ path: String, _ data: Data?, permissions: Int?) throws {
-        let url = url(path)
-        do {
-            if let data {
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try data.write(to: url, options: .atomic)
-                if let permissions { try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path) }
-            } else if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
+    /// Replaces one file only if it still holds `plan.before`, as a compare-and-swap built on `renamex_np`:
+    /// - create: the new file is renamed into place with `RENAME_EXCL`, which fails if anything appeared at the path;
+    /// - replace: the new file is atomically swapped with the current one (`RENAME_SWAP`), and the bytes swapped out are
+    ///   compared with `before`; on a mismatch they are swapped back, so the other writer's version stays;
+    /// - delete: the file is renamed aside, compared, and renamed back (`RENAME_EXCL`) on a mismatch.
+    /// Every write that completed before the swap is detected. A writer that still holds the old file open and writes
+    /// into it after the swap cannot be serialized without its cooperation (editors and agents do not coordinate); the
+    /// window is the few microseconds between the swap and the comparison.
+    private func replace(_ plan: FileChangePlan) throws {
+        let target = url(plan.path)
+        let directory = target.deletingLastPathComponent()
+        let aside = directory.appending(path: ".\(target.lastPathComponent).bellocode-\(UUID().uuidString)")
+        switch (plan.before.data, plan.after) {
+        case (nil, nil):
+            return
+        case (nil, let new?):
+            do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) } catch {
+                throw WorkingCopyError.writeFailed(plan.path)
             }
+            try writeTemporary(new, to: aside, permissions: plan.before.permissions, path: plan.path)
+            if rename(aside, target, flags: UInt32(RENAME_EXCL)) != 0 {
+                let code = errno
+                try? FileManager.default.removeItem(at: aside)
+                throw code == EEXIST ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
+            }
+        case (let old?, let new?):
+            try writeTemporary(new, to: aside, permissions: plan.before.permissions, path: plan.path)
+            if rename(aside, target, flags: UInt32(RENAME_SWAP)) != 0 {
+                let code = errno
+                try? FileManager.default.removeItem(at: aside)
+                throw code == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
+            }
+            // `aside` now holds what was at the path an instant ago.
+            if (try? Data(contentsOf: aside)) != old {
+                _ = rename(aside, target, flags: UInt32(RENAME_SWAP))
+                // Drop our bytes only if `aside` really holds them again; otherwise keep it for recovery.
+                if (try? Data(contentsOf: aside)) == new { try? FileManager.default.removeItem(at: aside) }
+                throw WorkingCopyError.changedOnDisk(plan.path)
+            }
+            try? FileManager.default.removeItem(at: aside)
+        case (let old?, nil):
+            if rename(target, aside, flags: UInt32(RENAME_EXCL)) != 0 {
+                throw errno == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
+            }
+            if (try? Data(contentsOf: aside)) != old {
+                // Put it back; if something new appeared at the path meanwhile, both are kept (`aside` stays).
+                _ = rename(aside, target, flags: UInt32(RENAME_EXCL))
+                throw WorkingCopyError.changedOnDisk(plan.path)
+            }
+            try? FileManager.default.removeItem(at: aside)
+        }
+    }
+
+    private func rename(_ from: URL, _ to: URL, flags: UInt32) -> Int32 {
+        from.withUnsafeFileSystemRepresentation { source in
+            to.withUnsafeFileSystemRepresentation { destination in
+                guard let source, let destination else { errno = EINVAL; return -1 }
+                return renamex_np(source, destination, flags)
+            }
+        }
+    }
+
+    private func writeTemporary(_ data: Data, to url: URL, permissions: Int?, path: String) throws {
+        do {
+            try data.write(to: url, options: .withoutOverwriting)
+            if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path) }
         } catch {
+            try? FileManager.default.removeItem(at: url)
             throw WorkingCopyError.writeFailed(path)
         }
     }

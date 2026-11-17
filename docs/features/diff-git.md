@@ -7,7 +7,12 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
 - **Engine** `Git/`: `GitRunner` runs git off the main actor. Both pipes are drained, output is bounded, there is a timeout, cancellation kills the process, and git runs with `GIT_TERMINAL_PROMPT=0` and `GIT_OPTIONAL_LOCKS=0`. The other pieces:
   - `GitStatusParser`: porcelain v2 and numstat.
   - `UnifiedPatchParser` and `HunkApplier`: a hunk applies only on an exact match at its line, or at the nearest unique match within 300 lines. A stale or ambiguous hunk throws.
-  - `WorkingCopy`: all-or-nothing writes, each checked against the bytes it was planned from, with Undo snapshots.
+  - `WorkingCopy`: all-or-nothing writes with Undo snapshots. Each file is replaced by a compare-and-swap
+    (`renamex_np` with `RENAME_SWAP`/`RENAME_EXCL`, then a comparison of the bytes swapped out), so an edit saved after
+    the preflight check is never overwritten: the revert fails with the file left as the other writer saved it. Rollback
+    and Undo use the same check and restore exact bytes and permissions or refuse. Limit: a writer that keeps the old
+    file open and writes into it in the microseconds between the swap and the comparison cannot be serialized without
+    its cooperation.
   - `GitRepository`: status, branches, commits, diffs, stage, commit, push, worktree list and the GitHub compare URL.
   - `WorktreeService`: create, with APFS `clonefile` copies and a setup script; remove; restore.
   - `GitService` (`engine.git`): bounded per-directory `GitRepositoryModel`s with FSEvents watching (250 ms debounce, coalesced refreshes, generation checks), workspace preferences (`app_preference`, so no migration) and turn revert.
