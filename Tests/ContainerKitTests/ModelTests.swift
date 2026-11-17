@@ -110,6 +110,19 @@ struct WorkspaceModelTests {
         #expect(config.workspace(for: "/tmp") == nil)
     }
 
+    @Test func resolvedWorkingDirectoryMapsBackToTheMountedPath() throws {
+        // A shell's current directory is resolved (/private/var/…) while the project was opened as /var/….
+        let base = FileManager.default.temporaryDirectory.appending(path: "bc-resolve-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: base + "/src", withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let config = ExecHelperConfig(socket: "/s", workspaces: [.init(roots: [base], container: "a")])
+        let resolved = (base as NSString).resolvingSymlinksInPath + "/src"
+        let match = try #require(config.resolve(directory: resolved))
+        #expect(match.workspace.container == "a")
+        #expect(match.directory == base + "/src")
+        #expect(config.resolve(directory: "/usr/bin") == nil)
+    }
+
     @Test func hostOnlyVariablesAreNotForwarded() {
         let forwarded = ExecHelperConfig.forwardedEnvironment([
             "PATH": "/opt/homebrew/bin", "HOME": "/Users/me", "TMPDIR": "/var/folders/x", "XDG_DATA_HOME": "/d",

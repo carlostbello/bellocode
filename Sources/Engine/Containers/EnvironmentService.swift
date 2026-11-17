@@ -264,9 +264,6 @@ public final class EnvironmentService {
         if state.isReady && !wasReady {
             tasks.set("events", Task { [weak self] in await self?.followEvents() })
             for model in models.values { refreshImageAndPhase(model) }
-            if isolation == nil, isolationContext != nil {
-                tasks.set("isolation-start", Task { [weak self] in _ = await self?.verifyIsolation() })
-            }
         } else if !state.isReady {
             tasks.set("events", Task {})
             for model in models.values {
@@ -329,6 +326,7 @@ public final class EnvironmentService {
             scheduleConfigWrite()
             return
         }
+        if model.phase == .noImage { model.phase = .unknown }
         if case .pulling = model.phase { return }
         if case .pullFailed = model.phase, !recreate { return }
         let generation = nextGeneration(model.directory)
@@ -763,10 +761,10 @@ public final class EnvironmentService {
 
     /// Ensures the container runs and returns (id, spec, shell). Throws the blocked message otherwise.
     func readyContainer(_ directory: String) async throws -> (String, WorkspaceSpec, String) {
-        guard isEnabled else { throw ContainerError.unreachable("container execution is off") }
+        guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
         let model = environment(for: directory)
-        if let blocked = model.phase.blocked { throw ContainerError.unreachable(blocked.message) }
-        guard let spec = workspaceSpec(model) else { throw ContainerError.notFound("no image is configured") }
+        if let blocked = model.phase.blocked { throw EnvironmentBlockedError(message: blocked.message) }
+        guard let spec = workspaceSpec(model) else { throw EnvironmentBlockedError(message: EnvironmentPhase.noImage.blocked?.message ?? "No image is set.") }
         let id = try await activeRuntime.ensureRunning(spec)
         model.record.containerID = id
         if model.phase != .ready { refreshImageAndPhase(model) }
@@ -860,8 +858,15 @@ public final class EnvironmentService {
 
     nonisolated static func describe(_ error: any Error) -> String {
         if let error = error as? WorkspaceError { return error.description }
+        if let error = error as? EnvironmentBlockedError { return error.message }
         return ContainerError.from(error).description
     }
+}
+
+/// A command BelloCode itself would run (setup script, secret exec) cannot run now; `message` says why and what to do.
+public struct EnvironmentBlockedError: Error, CustomStringConvertible, Sendable, Equatable {
+    public var message: String
+    public var description: String { message }
 }
 
 /// True when `path` is strictly inside one of `roots`.
