@@ -20,6 +20,7 @@ final class ScenarioRunner {
     var scrollSpeed = 3.0
     var streamSeconds = 60.0
     var messageCount = 10_000
+    var streamRate = 100.0
 
     var server: MockOpenCodeServer?
     var engine: Engine?
@@ -38,6 +39,7 @@ final class ScenarioRunner {
         scrollSpeed = option("--scroll-speed") ?? 3
         streamSeconds = option("--stream-seconds") ?? 60
         messageCount = Int(option("--large") ?? 10_000)
+        streamRate = option("--rate") ?? 100
     }
 
     // MARK: Setup
@@ -225,6 +227,7 @@ final class ScenarioRunner {
             case "layout": await runLayoutProfile()
             case "P": await runProfile()
             case "control": await runControl()
+            case "stream-cost": await runStreamCost()
             default: log("unknown scenario \(scenario)")
             }
             if scenario != "S8" { unmount() }

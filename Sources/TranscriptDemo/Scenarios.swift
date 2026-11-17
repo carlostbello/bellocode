@@ -270,7 +270,7 @@ extension ScenarioRunner {
     /// Streams a scripted reply through mock → Engine → ThreadModel → transcript; `during` runs once per frame.
     func stream(seconds: Double, during: ((Double, Double) -> Void)? = nil) async -> StreamStats {
         guard let controller, let server, let thread, let sessionID else { fatalError("no transcript") }
-        let rate = 100.0
+        let rate = streamRate
         let (script, text) = streamingScript(seconds: seconds, rate: rate, chunk: 9)
         let clock = DeltaClock()
         let appliedClock = DeltaClock()

@@ -1,0 +1,63 @@
+{
+  "cpuMicroseconds" : {
+    "max" : 5956.46,
+    "mean" : 3571.01,
+    "p50" : 3589.83,
+    "p95" : 5151.42
+  },
+  "deltasShown" : 1848,
+  "finalTextMatches" : true,
+  "frames" : {
+    "durationS" : 14.265474708285183,
+    "frames" : 2352,
+    "maxMs" : 10.273874970152974,
+    "missedVsyncs" : 1,
+    "nominalMs" : 6.06087502092123,
+    "over16_7ms" : 0,
+    "over33ms" : 0,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 6.10999995842576,
+    "p99Ms" : 6.110124988481402
+  },
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T07:25:46Z",
+    "memory" : {
+      "footprintMB" : 147.5,
+      "mallocInUseMB" : 73.7,
+      "residentMB" : 224
+    },
+    "messages" : 5000,
+    "nominalMs" : 6.06,
+    "scenario" : "stream-cost",
+    "window" : "900x900"
+  },
+  "nonTail" : [
+    {
+      "cpuMicroseconds" : 18140.42,
+      "rowWork" : 25357,
+      "wallMs" : 18.16
+    },
+    {
+      "cpuMicroseconds" : 9629,
+      "rowWork" : 25361,
+      "wallMs" : 9.63
+    }
+  ],
+  "ratePerSecond" : 150,
+  "rowWork" : {
+    "max" : 38935,
+    "mean" : 38932,
+    "p50" : 38932,
+    "p95" : 38932
+  },
+  "rows" : 6787,
+  "syncs" : 375,
+  "tailOnlySyncs" : 373,
+  "wallMs" : {
+    "max" : 5.97,
+    "mean" : 3.57,
+    "p50" : 3.59,
+    "p95" : 5.17
+  }
+}
