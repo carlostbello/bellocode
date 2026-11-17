@@ -79,6 +79,8 @@ final class DiffContentView: NSView {
     var onRevertHunk: ((Int, Int) -> Void)?
     var onSelectionChange: (() -> Void)?
     var onCurrentHunkChange: ((Int?) -> Void)?
+    /// Opens the comment editor for the current selection (the accessibility "Add Comment" action selects a row first).
+    var onComment: (() -> Void)?
     var contextMenuProvider: ((Int?, NSEvent) -> NSMenu?)?
     var keyHandler: ((NSEvent) -> Bool)?
 
@@ -91,7 +93,11 @@ final class DiffContentView: NSView {
     private var wordCache = BoundedCache<Int, IntraLineHighlight>(limit: 8_192)
     private var revertButtons: [Int: CGRect] = [:]
     private var matchesByRow: [Int: [Int]] = [:]
-    private var generation = 0
+    /// Virtual accessibility elements by row (created on demand for any row, bounded; see +Accessibility).
+    var accessibilityRowElements = BoundedCache<Int, DiffRowAccessibilityElement>(limit: DiffContentView.accessibilityElementLimit)
+    /// A change made through accessibility, announced (once) when the rebuilt rows arrive.
+    var pendingAccessibilityChange: DiffAccessibilityChange?
+    private(set) var generation = 0
     private var lastWidth: CGFloat = 0
     static let signposter = OSSignposter(subsystem: "dev.bellocode.diffkit", category: .pointsOfInterest)
     /// Time spent in `draw(_:)` (last call), for the benchmark harness.
@@ -137,7 +143,9 @@ final class DiffContentView: NSView {
         rowColumns = rows.rows.map { row in (row.left.map { DiffRowBuilder.columns($0.text) } ?? 0, row.right.map { DiffRowBuilder.columns($0.text) } ?? 0) }
         if let selection, selection.end.row >= rows.rows.count { self.selection = nil }
         if let row = currentHunkRow, row >= rows.rows.count { currentHunkRow = nil }
+        accessibilityRowElements.removeAll()
         invalidateGeometry()
+        announcePendingAccessibilityChange()
     }
 
     /// Syntax arrived later than the rows (it is computed after them).
@@ -725,19 +733,6 @@ final class DiffContentView: NSView {
     }
 
     // MARK: Accessibility
-
-    override func accessibilityChildren() -> [Any]? {
-        guard let first = rowIndex(atY: visibleRect.minY), let last = rowIndex(atY: visibleRect.maxY) else { return [] }
-        return (first...min(last, first + 120)).map { index -> NSAccessibilityElement in
-            let row = rows.rows[index]
-            let element = NSAccessibilityElement()
-            element.setAccessibilityParent(self)
-            element.setAccessibilityRole(.staticText)
-            element.setAccessibilityFrameInParentSpace(rowRect(index))
-            element.setAccessibilityLabel(Self.accessibilityText(row, files: files, layout: layoutMode))
-            return element
-        }
-    }
 
     static func accessibilityText(_ row: DiffRow, files: [DiffFile], layout: DiffLayout) -> String {
         func describe(_ cell: DiffCell?) -> String {

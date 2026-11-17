@@ -81,7 +81,16 @@ Other measurements:
 - **States**: pass by test or snapshot for empty (per scope), loading, stale ("Updating…", content kept), offline or failed (message plus last content), not a repository, binary, image, large file, preparing a worktree, and failure.
 - **Speed**: rows are built off the main actor (16–51 ms); a cached model shows at once when switching threads.
 - **Keyboard**: every action has a menu item; the pickers work by keyboard; driven programmatically only.
-- **Accessibility**: statuses are a letter plus a word (+/− markers, "Added", "Staged"), and accessibility rows exist. VoiceOver itself is unverified.
+- **Accessibility**: statuses are a letter plus a word (+/− markers, "Added", "Staged"). Every row of the diff is a
+  virtual accessibility element (`DiffContentView+Accessibility.swift`), not only the drawn ones: the list reports all
+  rows through the ranged children API (count, index range, index of child), lists every row directly for documents up
+  to 2,048 rows and the rows around the viewport beyond that, and makes elements on demand (bounded cache of 4,096,
+  dropped on each rebuild). Labels give file headers (path, status, counts), change headers ("Change 3: @@ …"), and
+  lines (added/removed/unchanged, line number, text; old and new in split). Focusing an element scrolls it into view.
+  Drawn controls are actions: file header press toggles it; gap press shows 20 more lines, with a "Show All Lines"
+  action; "Revert Hunk" on change headers of revertable files; "Add Comment" on lines. After an action, the new state
+  is announced once and focus moves to the element for the acted-on row. Tested through the accessibility API in
+  process; VoiceOver itself (rotor, VO-arrow traversal through the ranged API, speech) is unverified.
 - **Artifacts and safety**: pass. Hunk revert after a manual edit fails explicitly (test); turn revert keeps or explicitly replaces later edits; Undo restores exact bytes.
 - **Persistence**: diff options and workspace defaults persist. The panel's scope is not restored after relaunch.
 
