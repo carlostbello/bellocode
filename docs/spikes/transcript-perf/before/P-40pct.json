@@ -1,0 +1,476 @@
+{
+  "attribution" : {
+    "all" : {
+      "frames" : 16507,
+      "phaseMs" : {
+        "accessibility" : 573.52,
+        "configure" : 159.41,
+        "draw" : 2396.53,
+        "eviction" : 2678.78,
+        "heightFlush" : 1672.71,
+        "layoutApply" : 133.48,
+        "prefetch" : 9985.71,
+        "scroll" : 468.32,
+        "syncLayout" : 620.82,
+        "viewCreation" : 166.1
+      },
+      "unattributedMs" : 7951.98
+    },
+    "counters" : {
+      "cellViewsCreated" : 6,
+      "layoutsEvicted" : 4815
+    },
+    "over16_7ms" : {
+      "frames" : 656,
+      "phaseMs" : {
+        "accessibility" : 326.93,
+        "configure" : 92.73,
+        "draw" : 1013.66,
+        "eviction" : 1860.65,
+        "heightFlush" : 1325.15,
+        "layoutApply" : 100.91,
+        "prefetch" : 2919.5,
+        "scroll" : 180.82,
+        "syncLayout" : 617.57,
+        "viewCreation" : 125.82
+      },
+      "unattributedMs" : 7951.98
+    },
+    "over33ms" : {
+      "frames" : 206,
+      "phaseMs" : {
+        "accessibility" : 265.86,
+        "configure" : 68.2,
+        "draw" : 796.91,
+        "eviction" : 1352.78,
+        "heightFlush" : 873.96,
+        "layoutApply" : 84.27,
+        "prefetch" : 1318.55,
+        "scroll" : 166.57,
+        "syncLayout" : 601.52,
+        "viewCreation" : 117.97
+      },
+      "unattributedMs" : 7187.33
+    },
+    "worst" : [
+      {
+        "at" : 50.68,
+        "intervalMs" : 100,
+        "phaseMs" : {
+
+        }
+      },
+      {
+        "at" : 50.9,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.06,
+          "draw" : 0.29,
+          "prefetch" : 0.2
+        }
+      },
+      {
+        "at" : 51.34,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.22,
+          "configure" : 4.63,
+          "draw" : 0.33,
+          "heightFlush" : 43.54,
+          "layoutApply" : 0.12,
+          "prefetch" : 40.46
+        }
+      },
+      {
+        "at" : 51.57,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.16,
+          "configure" : 0.06,
+          "draw" : 1.3,
+          "eviction" : 1.01,
+          "heightFlush" : 11.74,
+          "layoutApply" : 0.07,
+          "prefetch" : 1.37,
+          "scroll" : 3.8,
+          "viewCreation" : 1.03
+        }
+      },
+      {
+        "at" : 51.8,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.07,
+          "draw" : 15.9,
+          "eviction" : 7.89,
+          "layoutApply" : 0.12,
+          "prefetch" : 2.13
+        }
+      },
+      {
+        "at" : 51.92,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "draw" : 0.74,
+          "eviction" : 1.52,
+          "heightFlush" : 118.01,
+          "layoutApply" : 0.05,
+          "prefetch" : 13.98
+        }
+      },
+      {
+        "at" : 52.49,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.14,
+          "prefetch" : 0.55,
+          "viewCreation" : 2.23
+        }
+      },
+      {
+        "at" : 53.48,
+        "intervalMs" : 100,
+        "phaseMs" : {
+
+        }
+      },
+      {
+        "at" : 54.15,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 1.67,
+          "draw" : 9.43,
+          "eviction" : 26.27,
+          "layoutApply" : 29.75,
+          "prefetch" : 47.55
+        }
+      },
+      {
+        "at" : 54.25,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.27,
+          "configure" : 0.17,
+          "draw" : 0.39,
+          "eviction" : 0.57,
+          "prefetch" : 0.26,
+          "viewCreation" : 14.5
+        }
+      },
+      {
+        "at" : 54.43,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 21.71,
+          "configure" : 0.78,
+          "draw" : 0.95,
+          "eviction" : 47.04,
+          "heightFlush" : 45.02,
+          "layoutApply" : 0.2,
+          "prefetch" : 3.08,
+          "scroll" : 0.11,
+          "syncLayout" : 2.75,
+          "viewCreation" : 0.1
+        }
+      },
+      {
+        "at" : 55.03,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 30.73,
+          "draw" : 1.04,
+          "eviction" : 22.66,
+          "layoutApply" : 0.25,
+          "prefetch" : 30.83
+        }
+      },
+      {
+        "at" : 55.13,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.21,
+          "configure" : 0.05,
+          "draw" : 42.21,
+          "layoutApply" : 0.05,
+          "prefetch" : 17.09
+        }
+      },
+      {
+        "at" : 55.23,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 2.59,
+          "configure" : 0.24,
+          "draw" : 35.63,
+          "eviction" : 0.68,
+          "heightFlush" : 1.92,
+          "prefetch" : 45.29,
+          "viewCreation" : 0.41
+        }
+      },
+      {
+        "at" : 55.55,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 1.11,
+          "draw" : 4.58,
+          "prefetch" : 1.72
+        }
+      },
+      {
+        "at" : 55.65,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.07,
+          "configure" : 0.07,
+          "draw" : 1.54,
+          "eviction" : 33.89,
+          "heightFlush" : 70.39,
+          "layoutApply" : 0.08,
+          "prefetch" : 1.5
+        }
+      },
+      {
+        "at" : 58.53,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "eviction" : 0.34,
+          "prefetch" : 1.12
+        }
+      },
+      {
+        "at" : 58.89,
+        "intervalMs" : 100,
+        "phaseMs" : {
+
+        }
+      },
+      {
+        "at" : 58.99,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.1,
+          "draw" : 0.15,
+          "prefetch" : 50.79
+        }
+      },
+      {
+        "at" : 59.22,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "draw" : 0.06,
+          "eviction" : 0.15,
+          "prefetch" : 10.06
+        }
+      },
+      {
+        "at" : 59.32,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "draw" : 0.07,
+          "eviction" : 0.2,
+          "prefetch" : 6.11,
+          "scroll" : 154.8
+        }
+      },
+      {
+        "at" : 59.6,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 4.34,
+          "configure" : 3.8,
+          "draw" : 0.68,
+          "eviction" : 94.73,
+          "prefetch" : 0.15,
+          "syncLayout" : 46.75,
+          "viewCreation" : 0.06
+        }
+      },
+      {
+        "at" : 59.7,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.85,
+          "configure" : 0.83,
+          "draw" : 0.46,
+          "eviction" : 23.67,
+          "prefetch" : 12.71,
+          "syncLayout" : 77.71,
+          "viewCreation" : 1.47
+        }
+      },
+      {
+        "at" : 59.8,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.6,
+          "configure" : 7.13,
+          "draw" : 0.38,
+          "eviction" : 82.15,
+          "heightFlush" : 3.47,
+          "layoutApply" : 0.1,
+          "prefetch" : 0.22,
+          "syncLayout" : 11.6,
+          "viewCreation" : 0.06
+        }
+      },
+      {
+        "at" : 59.9,
+        "intervalMs" : 100,
+        "phaseMs" : {
+          "accessibility" : 0.5,
+          "configure" : 0.39,
+          "draw" : 0.18,
+          "eviction" : 4.41,
+          "heightFlush" : 52.31,
+          "layoutApply" : 2.91,
+          "prefetch" : 0.61,
+          "scroll" : 0.05,
+          "syncLayout" : 6.67,
+          "viewCreation" : 0.18
+        }
+      }
+    ]
+  },
+  "cachesBeforePurge" : {
+    "availableCellViews" : 4,
+    "canvasBackingBytes" : 4306848,
+    "findIndexEntries" : 0,
+    "findIndexUTF16" : 0,
+    "highlightCacheCost" : 799860,
+    "highlightCacheEntries" : 1221,
+    "imageBytes" : 100454400,
+    "imageCount" : 109,
+    "layoutCost" : 3552,
+    "layoutCostLimit" : 25000,
+    "layoutCount" : 300,
+    "liveCellViews" : 16,
+    "parseCacheCost" : 4904482,
+    "parseCacheCostLimit" : 25165824,
+    "parseCacheEntries" : 3871,
+    "rows" : 13579,
+    "segmentCacheEntries" : 10000
+  },
+  "display" : {
+    "backingScale" : 1,
+    "displayName" : "MAG321UP OLED",
+    "loadAverage1m" : 9.26,
+    "maximumFPS" : 165,
+    "screenLocked" : true
+  },
+  "down" : {
+    "durationS" : 135.8154132916825,
+    "frames" : 16507,
+    "maxMs" : 774.5909166987985,
+    "missedVsyncs" : 1229,
+    "nominalMs" : 16.666624986100942,
+    "over16_7ms" : 656,
+    "over33ms" : 206,
+    "p50Ms" : 6.06087502092123,
+    "p95Ms" : 15.149166691116989,
+    "p99Ms" : 42.8987083141692
+  },
+  "floor" : {
+    "footprintMB" : 153.7,
+    "mallocInUseMB" : 93.6,
+    "residentMB" : 219.5
+  },
+  "fraction" : 0.4,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T03:58:23Z",
+    "memory" : {
+      "footprintMB" : 220.2,
+      "mallocInUseMB" : 115,
+      "residentMB" : 375.3
+    },
+    "messages" : 10000,
+    "nominalMs" : 16.67,
+    "scenario" : "P",
+    "window" : "900x900"
+  },
+  "mallocReleasedMB" : {
+    "closeTranscript" : 86.7,
+    "findIndex" : 0,
+    "highlight" : 2.5,
+    "images" : 0.1,
+    "layouts" : 8.8,
+    "parse" : 5.3
+  },
+  "memoryAfterClose" : {
+    "footprintMB" : 220.2,
+    "mallocInUseMB" : 114.9,
+    "residentMB" : 375.1
+  },
+  "memoryBeforePurge" : {
+    "footprintMB" : 464.8,
+    "mallocInUseMB" : 218.3,
+    "residentMB" : 401.5
+  },
+  "metrics" : {
+    "asyncLayouts" : 5699,
+    "heightFlushes" : 387,
+    "maxFlushMilliseconds" : 224.2240000050515,
+    "maxSyncMilliseconds" : 0,
+    "maxTailApplyMilliseconds" : 0,
+    "measureAllMilliseconds" : 2240.783624991309,
+    "measureAllRows" : 13567,
+    "openMilliseconds" : 89.27033335203305,
+    "placeholderRows" : 3,
+    "syncLayouts" : 152,
+    "syncs" : 0,
+    "tailJobs" : 0
+  },
+  "peak" : {
+    "cachesAtPeak" : {
+      "availableCellViews" : 4,
+      "canvasBackingBytes" : 7052416,
+      "findIndexEntries" : 0,
+      "findIndexUTF16" : 0,
+      "highlightCacheCost" : 799860,
+      "highlightCacheEntries" : 1221,
+      "imageBytes" : 100454400,
+      "imageCount" : 109,
+      "layoutCost" : 3216,
+      "layoutCostLimit" : 25000,
+      "layoutCount" : 300,
+      "liveCellViews" : 16,
+      "parseCacheCost" : 4559768,
+      "parseCacheCostLimit" : 25165824,
+      "parseCacheEntries" : 3638,
+      "rows" : 13579,
+      "segmentCacheEntries" : 10000
+    },
+    "maxCaches" : {
+      "availableCellViews" : 14,
+      "canvasBackingBytes" : 9797984,
+      "findIndexEntries" : 0,
+      "findIndexUTF16" : 0,
+      "highlightCacheCost" : 799860,
+      "highlightCacheEntries" : 1221,
+      "imageBytes" : 100454400,
+      "imageCount" : 6,
+      "layoutCost" : 4022,
+      "layoutCostLimit" : 25000,
+      "layoutCount" : 300,
+      "liveCellViews" : 16,
+      "parseCacheCost" : 4942368,
+      "parseCacheCostLimit" : 25165824,
+      "parseCacheEntries" : 3960,
+      "rows" : 13579,
+      "segmentCacheEntries" : 10000
+    },
+    "maxSampleMs" : 2.53,
+    "peakFootprint" : {
+      "footprintMB" : 486.4,
+      "mallocInUseMB" : 173.5,
+      "residentMB" : 370.7
+    },
+    "peakMalloc" : {
+      "footprintMB" : 455.5,
+      "mallocInUseMB" : 217.2,
+      "residentMB" : 405.4
+    },
+    "samples" : 550
+  }
+}

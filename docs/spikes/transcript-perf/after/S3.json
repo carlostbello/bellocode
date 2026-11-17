@@ -1,0 +1,62 @@
+{
+  "followedToTheEnd" : true,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:53:56Z",
+    "memory" : {
+      "footprintMB" : 218,
+      "mallocInUseMB" : 117.4,
+      "residentMB" : 299.8
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S3",
+    "window" : "900x900"
+  },
+  "stream" : {
+    "cpuPercentOfOneCore" : 22.89,
+    "deltaToApplied" : {
+      "maxMs" : 48.46,
+      "p50Ms" : 27.21,
+      "p95Ms" : 41.24,
+      "samples" : 2040
+    },
+    "deltaToVisible" : {
+      "maxMs" : 112.43,
+      "p50Ms" : 48.76,
+      "p95Ms" : 84.91,
+      "samples" : 2040
+    },
+    "deltasProduced" : 2040,
+    "deltasShown" : 2040,
+    "engineToApplied" : {
+      "maxMs" : 12.59,
+      "p50Ms" : 4.86,
+      "p95Ms" : 7.49,
+      "samples" : 611
+    },
+    "engineToVisible" : {
+      "maxMs" : 96.47,
+      "p50Ms" : 40.81,
+      "p95Ms" : 80.46,
+      "samples" : 611
+    },
+    "finalTextMatches" : true,
+    "frames" : {
+      "durationS" : 22.569710624986328,
+      "frames" : 3704,
+      "maxMs" : 15.76033333549276,
+      "missedVsyncs" : 18,
+      "nominalMs" : 6.06087502092123,
+      "over16_7ms" : 0,
+      "over33ms" : 0,
+      "p50Ms" : 6.06087502092123,
+      "p95Ms" : 6.110124988481402,
+      "p99Ms" : 6.112749979365617
+    },
+    "maxDistanceFromBottomWhileFollowing" : 0,
+    "maxTailApplyMs" : 0.66,
+    "streamedBytes" : 18359,
+    "tailJobs" : 611
+  }
+}

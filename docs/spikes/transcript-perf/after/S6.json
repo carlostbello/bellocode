@@ -1,0 +1,51 @@
+{
+  "cases" : [
+    {
+      "anchorDriftPt" : 0,
+      "frames" : {
+        "durationS" : 2.000928166671656,
+        "frames" : 330,
+        "maxMs" : 6.110374990385026,
+        "missedVsyncs" : 0,
+        "nominalMs" : 6.06087502092123,
+        "over16_7ms" : 0,
+        "over33ms" : 0,
+        "p50Ms" : 6.06087502092123,
+        "p95Ms" : 6.06087502092123,
+        "p99Ms" : 6.110291637014598
+      },
+      "name" : "900→1400→900 (column stays 760 pt)",
+      "roundTripPixelsDiffer" : 0
+    },
+    {
+      "anchorDriftPt" : 0,
+      "frames" : {
+        "durationS" : 2.0075525833526626,
+        "frames" : 282,
+        "maxMs" : 15.134291665162891,
+        "missedVsyncs" : 49,
+        "nominalMs" : 6.06087502092123,
+        "over16_7ms" : 0,
+        "over33ms" : 0,
+        "p50Ms" : 6.06087502092123,
+        "p95Ms" : 13.69320834055543,
+        "p99Ms" : 14.180958387441933
+      },
+      "name" : "560→1000→560 (column re-wraps 512↔760 pt)",
+      "roundTripPixelsDiffer" : 0
+    }
+  ],
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:55:23Z",
+    "memory" : {
+      "footprintMB" : 247.3,
+      "mallocInUseMB" : 140.9,
+      "residentMB" : 341.8
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S6",
+    "window" : "900x900"
+  }
+}

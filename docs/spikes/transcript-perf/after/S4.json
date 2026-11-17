@@ -1,0 +1,68 @@
+{
+  "distanceAfterJump" : 0,
+  "header" : {
+    "build" : "release",
+    "date" : "2026-11-17T06:54:27Z",
+    "memory" : {
+      "footprintMB" : 234.8,
+      "mallocInUseMB" : 117,
+      "residentMB" : 326.8
+    },
+    "messages" : 10000,
+    "nominalMs" : 6.06,
+    "scenario" : "S4",
+    "window" : "900x900"
+  },
+  "maxDriftWhileReadingPt" : 0,
+  "pillShown" : true,
+  "readingPauses" : 7,
+  "rejoinedByJumpToLatest" : true,
+  "releasedOnScrollUp" : true,
+  "stream" : {
+    "cpuPercentOfOneCore" : 23.98,
+    "deltaToApplied" : {
+      "maxMs" : 48.16,
+      "p50Ms" : 28.23,
+      "p95Ms" : 42.75,
+      "samples" : 2040
+    },
+    "deltaToVisible" : {
+      "maxMs" : 112.55,
+      "p50Ms" : 48.24,
+      "p95Ms" : 85.69,
+      "samples" : 2040
+    },
+    "deltasProduced" : 2040,
+    "deltasShown" : 2040,
+    "engineToApplied" : {
+      "maxMs" : 13.63,
+      "p50Ms" : 6.54,
+      "p95Ms" : 10.04,
+      "samples" : 612
+    },
+    "engineToVisible" : {
+      "maxMs" : 99.82,
+      "p50Ms" : 42.2,
+      "p95Ms" : 81.69,
+      "samples" : 612
+    },
+    "finalTextMatches" : true,
+    "frames" : {
+      "durationS" : 22.525288458331488,
+      "frames" : 3657,
+      "maxMs" : 15.268999966792762,
+      "missedVsyncs" : 59,
+      "nominalMs" : 6.06087502092123,
+      "over16_7ms" : 0,
+      "over33ms" : 0,
+      "p50Ms" : 6.06087502092123,
+      "p95Ms" : 6.110249960329384,
+      "p99Ms" : 12.390749994665384
+    },
+    "maxDistanceFromBottomWhileFollowing" : 0,
+    "maxTailApplyMs" : 0.51,
+    "streamedBytes" : 18359,
+    "tailJobs" : 612
+  },
+  "unexpectedFollow" : false
+}
