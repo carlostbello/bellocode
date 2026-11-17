@@ -1,0 +1,109 @@
+import Foundation
+
+/// A request BelloCode itself raises for an agent (docs/features/orchestration-extras.md): a secret the agent asked
+/// for, or an app-level approval (agent-created schedules in a project, network access for an HTML visual). It joins
+/// opencode's permissions and questions in `PendingRequest`, so it is pinned above the composer, counted in "Needs
+/// you" and never auto-dismissed. It holds no secret value, ever.
+public struct AppRequest: Hashable, Sendable, Codable, Identifiable {
+    public enum Kind: Hashable, Sendable, Codable {
+        case secret(SecretPrompt)
+        case approval(AppApproval)
+    }
+
+    /// `app_…`, unique; never collides with opencode's `per_…`/`frm_…`.
+    public var id: String
+    public var sessionID: SessionID
+    public var kind: Kind
+    public var received: Timestamp
+
+    public static let idPrefix = "app_"
+
+    public init(id: String, sessionID: SessionID, kind: Kind, received: Timestamp) {
+        self.id = id
+        self.sessionID = sessionID
+        self.kind = kind
+        self.received = received
+    }
+
+    public static func makeID(_ tag: String) -> String {
+        idPrefix + tag + "_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(20).lowercased()
+    }
+
+    /// A secret blocks like a question; an approval like a permission.
+    public var isApproval: Bool { if case .approval = kind { true } else { false } }
+}
+
+/// What the agent asked for with `request_secret`. Never carries the value.
+public struct SecretPrompt: Hashable, Sendable, Codable {
+    /// How the agent receives the secret once saved.
+    public enum Delivery: String, Hashable, Sendable, Codable {
+        /// A one-use reference (`bcsecret_…`), exchanged later for a one-read file with `secret_file`.
+        case reference
+        /// A one-read file path at once (a named pipe that yields the value to one reader, then disappears).
+        case file
+    }
+
+    public var label: String
+    public var reason: String
+    /// A sign-in or setup page, shown as a button (opened only on the user's click).
+    public var setupURL: String?
+    public var delivery: Delivery
+
+    public init(label: String, reason: String, setupURL: String? = nil, delivery: Delivery = .reference) {
+        self.label = label
+        self.reason = reason
+        self.setupURL = setupURL
+        self.delivery = delivery
+    }
+}
+
+/// An app-level approval card.
+public struct AppApproval: Hashable, Sendable, Codable {
+    public enum Action: String, Hashable, Sendable, Codable {
+        /// The first agent-created scheduled task in a project.
+        case schedule
+        /// An HTML visual wants to load from network hosts.
+        case network
+    }
+
+    public var action: Action
+    /// "Create a scheduled task", "Let a visual load from the network".
+    public var title: String
+    /// What exactly would happen (schedule summary, host list).
+    public var detail: String
+    /// The project directory (schedules) or the hosts (network) an "always" covers.
+    public var scope: String
+    /// The schedule ID or the tool call part ID the decision applies to.
+    public var subjectID: String
+    public var allowsAlways: Bool
+
+    public init(action: Action, title: String, detail: String, scope: String, subjectID: String, allowsAlways: Bool = true) {
+        self.action = action
+        self.title = title
+        self.detail = detail
+        self.scope = scope
+        self.subjectID = subjectID
+        self.allowsAlways = allowsAlways
+    }
+}
+
+/// The user's answer to an app request. A secret value travels only inside `SecretValue`, which never prints.
+public enum AppRequestResponse: Sendable {
+    case saveSecret(SecretValue)
+    /// Use the value already stored under the same label.
+    case useSavedSecret
+    case approve(always: Bool)
+    case decline
+}
+
+/// A secret value in memory. `description` is redacted so it cannot reach logs or string interpolation by accident.
+public struct SecretValue: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+    public let utf8: Data
+
+    public init(_ string: String) { utf8 = Data(string.utf8) }
+    public init(data: Data) { utf8 = data }
+
+    public var isEmpty: Bool { utf8.isEmpty }
+    public var description: String { "<secret>" }
+    public var debugDescription: String { "<secret>" }
+}

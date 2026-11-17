@@ -391,6 +391,9 @@ actor EngineCore {
     }
 
     /// Publishes changes, queues writes, re-derives attention and queues effects.
+    /// `commit` for extensions in other files.
+    func commitExternal(_ reduction: Reduction) { commit(reduction) }
+
     private func commit(_ reduction: Reduction) {
         guard !reduction.isEmpty else { return }
         if !reduction.changes.isEmpty {
@@ -816,7 +819,10 @@ actor EngineCore {
         serverPending += snapshot.forms.map { .question(Mapping.question($0, received: state.pending[$0.id]?.received ?? now)) }
         if snapshot.pendingComplete {
             let keep = Set(serverPending.map(\.id))
-            for id in state.pending.keys where !keep.contains(id) { state.resolvePending(id, into: &reduction) }
+            // App requests are BelloCode's own (never on the server): a resync keeps them.
+            for id in state.pending.keys where !keep.contains(id) && !id.hasPrefix(AppRequest.idPrefix) {
+                state.resolvePending(id, into: &reduction)
+            }
         }
         for request in serverPending { state.putPending(request, into: &reduction) }
 
@@ -1873,4 +1879,55 @@ actor EngineCore {
 
     /// The in-memory projection, for tests.
     var projectionForTesting: ProjectionState { pipeline.state }
+}
+
+// MARK: - App requests (docs/features/orchestration-extras.md)
+
+extension EngineCore {
+    /// Adds one of BelloCode's own requests (secret, app approval) to the pending set: pinned in the thread, counted in
+    /// "Needs you", persisted like the others (no value is ever in it) and kept across resyncs.
+    func putAppRequest(_ request: AppRequest) {
+        var reduction = Reduction()
+        pipeline.state.putPending(.app(request), into: &reduction)
+        commitAppRequestChange(reduction)
+    }
+
+    func resolveAppRequest(_ id: String) {
+        guard id.hasPrefix(AppRequest.idPrefix) else { return }
+        var reduction = Reduction()
+        pipeline.state.resolvePending(id, into: &reduction)
+        commitAppRequestChange(reduction)
+    }
+
+    func appRequest(_ id: String) -> AppRequest? {
+        if case .app(let request) = pipeline.state.pending[id] { return request }
+        return nil
+    }
+
+    func appRequests() -> [AppRequest] {
+        pipeline.state.pending.values.compactMap { if case .app(let request) = $0 { request } else { nil } }
+    }
+
+    /// Whether a session is known (scheduler destinations, wake targets).
+    func knownSession(_ id: SessionID) -> Session? { pipeline.state.sessions[id] }
+
+    /// A synthetic message (not the person's): opencode admits it durably and starts a run unless `resume` is false.
+    func postSynthetic(_ sessionID: SessionID, text: String, metadata: JSONValue? = nil, resume: Bool = true) async throws {
+        try await call { try await $0.postSynthetic(sessionID: sessionID.rawValue, text: text, metadata: metadata, resume: resume) }
+    }
+
+    /// Merges top-level keys into a session's metadata (read from the server first, so other writers' keys survive).
+    func mergeSessionMetadata(_ sessionID: SessionID, _ update: @Sendable (RawJSON?) -> [String: Any]) async throws {
+        let dto = try await call { try await $0.session(sessionID.rawValue) }
+        let current = Mapping.session(dto).metadata
+        let object = update(current)
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let value = try JSONValue.parse(data)
+        try await call { try await $0.updateSession(sessionID.rawValue, SessionUpdateRequest(metadata: value)) }
+        var reduction = Reduction()
+        pipeline.state.updateSession(sessionID, into: &reduction) { $0.metadata = RawJSON(String(decoding: data, as: UTF8.self)) }
+        commitAppRequestChange(reduction)
+    }
+
+    private func commitAppRequestChange(_ reduction: Reduction) { commitExternal(reduction) }
 }

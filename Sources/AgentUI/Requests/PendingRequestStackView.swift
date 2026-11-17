@@ -38,6 +38,11 @@ public struct PendingRequestStackView: View {
             PermissionCard(model: model, request: permission, count: count)
         case .question(let question):
             QuestionCard(model: model, request: question, form: model.form(for: question), count: count)
+        case .app(let app):
+            switch app.kind {
+            case .secret(let prompt): SecretRequestCard(model: model, request: app, prompt: prompt, count: count, draft: model.secretDraft(for: app))
+            case .approval(let approval): AppApprovalCard(model: model, request: app, approval: approval, count: count)
+            }
         }
     }
 

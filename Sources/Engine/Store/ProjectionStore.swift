@@ -242,7 +242,7 @@ public actor ProjectionStore {
 
     public nonisolated let changes: ChangeBus
     public nonisolated let location: Location
-    private let writer: any DatabaseWriter
+    let writer: any DatabaseWriter
     public nonisolated let recovery: Recovery
     /// Whether opening found an incompatible or unreadable database and set it aside for a new one.
     public nonisolated var wasRecreated: Bool { recovery != .none }

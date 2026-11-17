@@ -237,7 +237,7 @@ struct EngineOrganisationTests {
         }
         try queue.close()
         let store = try ProjectionStore(location: .file(url))
-        #expect(try await store.appliedMigrations().last == "v4-thread-organisation")
+        #expect(try await store.appliedMigrations().contains("v4-thread-organisation"))
         let states = try await store.threadUIStates()
         #expect(states.count == 1)
         #expect(states[0].draft == "half a thought")
