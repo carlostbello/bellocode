@@ -7,6 +7,7 @@ import DesignSystem
 /// several wait. Zero height when nothing is pending. Requests leave only when the server acknowledged the reply.
 public struct PendingRequestStackView: View {
     @Environment(\.agentUIStyle) private var style
+    @Environment(\.agentUIAttachedOverlap) private var attachedOverlap
     @Bindable var model: PendingRequestStackModel
 
     public init(model: PendingRequestStackModel) {
@@ -20,10 +21,13 @@ public struct PendingRequestStackView: View {
                 VStack(spacing: 0) {
                     card(for: current, count: requests.count)
                         .id(current.id)
-                    if requests.count > 1 { stackEdges(min(requests.count - 1, 2)) }
+                    // Attached to the composer, the edges would sit under it; the header's "1 of 3" says it instead.
+                    if requests.count > 1, attachedOverlap == 0 { stackEdges(min(requests.count - 1, 2)) }
                 }
-                .padding(.horizontal, DS.Space.s8)
-                .padding(.vertical, DS.Space.s4)
+                // Attached: exactly the composer's width, and the composer covers the bottom `attachedOverlap`.
+                .padding(.horizontal, attachedOverlap > 0 ? 0 : DS.Space.s8)
+                .padding(.top, DS.Space.s4)
+                .padding(.bottom, attachedOverlap > 0 ? 0 : DS.Space.s4)
             }
         }
         .noImplicitAnimation()

@@ -82,7 +82,7 @@ import Testing
         #expect(composer.host is ThreadModelComposerHost)
         #expect(composer.leadingControls.arrangedSubviews.count == 2, "plan toggle and model picker")
         #expect(composer.trailingControls.arrangedSubviews.count == 1, "permission mode")
-        #expect(composer.contextLineView is ComposerContextLine)
+        #expect(composer.contextLineView is ComposerContextStrip)
         await thread.setPermissionMode(.ask)
 
         // Type and send through the Thread menu's Send command; the scripted turn streams in.

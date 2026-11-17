@@ -9,11 +9,14 @@ import SwiftUI
 public enum AgentUIFactories {
     /// The pinned approvals/questions stack for an open thread, to place directly above the composer. Its height
     /// follows its content (zero when nothing is pending) through the intrinsic content size; pin its width.
+    /// - Parameter attachedOverlap: how far the host overlaps the composer onto the card's bottom edge (T3's attached
+    ///   look; 0 when the stack stands alone). The card reserves that much room under its content.
     public static func pendingRequestStack(
-        thread: ThreadModel, engine: Engine, style: AgentUIStyle = .standard
+        thread: ThreadModel, engine: Engine, style: AgentUIStyle = .standard, attachedOverlap: CGFloat = 0
     ) -> (view: NSView, model: PendingRequestStackModel) {
         let model = PendingRequestStackModel(source: thread, context: context(for: thread, engine: engine))
-        return (host(PendingRequestStackView(model: model), style: style), model)
+        let view = PendingRequestStackView(model: model).environment(\.agentUIAttachedOverlap, attachedOverlap)
+        return (host(view, style: style), model)
     }
 
     /// Names for the stack: the project and child-thread titles, read from the engine's cached models.

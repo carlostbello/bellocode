@@ -87,7 +87,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
             mountDraftControls(source)
         }
         composer.host = host
-        composer.contextLineView = contextLine
+        composer.contextLineView = contextLine.strip
         contextLine.project = context.projectName
         contextLine.directory = context.directory
         readGitContext()
@@ -129,6 +129,14 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         if composer.configuration.sendKey != sendKey { composer.configuration.sendKey = sendKey }
         let style = AppStyle.composer(hero: context.isDraft)
         if composer.style.font != style.font { composer.style = style }
+        contextLine.hint = Self.sendHint(sendKey: sendKey, running: context.thread?.isRunning ?? false)
+    }
+
+    /// The strip's trailing hint: what Return does now (UX rule 5: queue and steer are distinct and labelled).
+    static func sendHint(sendKey: SendKey, running: Bool) -> String {
+        let plain = SendKeyPolicy.shortcutLabel(sendKey: sendKey, alternate: false)
+        let alternate = SendKeyPolicy.shortcutLabel(sendKey: sendKey, alternate: true)
+        return running ? "\(plain) queues · \(alternate) steers" : "\(plain) sends"
     }
 
     // MARK: Controls
@@ -251,62 +259,48 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     }
 }
 
-/// "project · ⎇ branch · Local checkout": where the agent will act (AGENTS.md UX rule 6). Text, never colour only.
+/// "project · ⎇ branch · Local checkout": where the agent will act (AGENTS.md UX rule 6), shown in ComposerKit's
+/// `ComposerContextStrip` under the composer (`meta text3`, 12 pt glyphs, the send hint at the trailing end).
 @MainActor
-final class ComposerContextLine: NSStackView {
-    var project = "" { didSet { render() } }
-    var directory = "" { didSet { render() } }
+final class ComposerContextLine {
+    let strip = ComposerContextStrip()
+    var project = "" { didSet { if project != oldValue { render() } } }
+    var directory = "" { didSet { if directory != oldValue { render() } } }
     var git: GitContext? { didSet { render() } }
     /// "3 changed ↑2", or the worktree being prepared (M2-C).
     var statusText: String? { didSet { if statusText != oldValue { render() } } }
     /// The draft's chosen workspace when it is not the local checkout ("New worktree").
     var workspaceOverride: String? { didSet { if workspaceOverride != oldValue { render() } } }
-    private let projectLabel = ComposerContextLine.item(symbol: "folder")
-    private let branchLabel = ComposerContextLine.item(symbol: "arrow.triangle.branch")
-    private let workspaceLabel = ComposerContextLine.item(symbol: "laptopcomputer")
-
-    /// The 26 pt context strip under the composer (visual-language.md §6 "Composer"): project, branch, worktree in
-    /// `meta text3` with 12 pt glyphs. Display only.
-    init() {
-        super.init(frame: .zero)
-        spacing = DS.Space.s16
-        for view in [projectLabel, branchLabel, workspaceLabel] { addArrangedSubview(view) }
-        setAccessibilityElement(true)
-        setAccessibilityRole(.staticText)
-        render()
+    var hint: String {
+        get { strip.hint }
+        set { if strip.hint != newValue { strip.hint = newValue } }
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    private static func item(symbol: String) -> HeaderCrumb {
-        let crumb = HeaderCrumb(symbolName: symbol)
-        crumb.font = DS.TextRole.meta.font
-        crumb.color = DS.Color.text3
-        crumb.glyphPointSize = DS.Size.iconPointMeta + 1
-        crumb.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return crumb
+    init() {
+        strip.toolTip = nil
+        render()
     }
 
     private func render() {
         let shortPath = (directory as NSString).abbreviatingWithTildeInPath
-        projectLabel.text = project
-        projectLabel.toolTip = directory
+        let plainFolder = git?.workspace == .plainFolder
         let branch: String
         if let git, let name = git.branch {
             branch = git.isDetached ? "Detached at \(name)" : name
-        } else if git?.workspace == .plainFolder {
+        } else if plainFolder {
             branch = shortPath
         } else {
             branch = "…"
         }
-        branchLabel.text = branch
-        branchLabel.symbolName = git?.workspace == .plainFolder ? "folder" : "arrow.triangle.branch"
-        branchLabel.toolTip = git?.workspace == .plainFolder ? directory : "Branch"
-        workspaceLabel.text = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
-        workspaceLabel.symbolName = git?.workspace == .worktree || workspaceOverride != nil ? "square.on.square.dashed" : "laptopcomputer"
-        workspaceLabel.isHidden = git?.workspace == .plainFolder
-        setAccessibilityLabel("Acts in \(project), \(branch), \(workspaceLabel.isHidden ? shortPath : workspaceLabel.text)")
+        var items = [ComposerContextStrip.Item(symbolName: "folder", text: project)]
+        items.append(.init(symbolName: plainFolder ? "folder" : "arrow.triangle.branch", text: branch))
+        if !plainFolder {
+            let worktree = git?.workspace == .worktree || workspaceOverride != nil
+            let text = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
+            items.append(.init(symbolName: worktree ? "square.on.square.dashed" : "laptopcomputer", text: text))
+        }
+        strip.items = items
+        strip.toolTip = directory
     }
 }
 
