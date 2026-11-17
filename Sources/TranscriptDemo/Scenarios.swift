@@ -4,6 +4,7 @@ import Engine
 import MockOpenCode
 import QuartzCore
 import Synchronization
+import Observation
 import TranscriptKit
 
 extension ScenarioRunner {
@@ -205,6 +206,10 @@ extension ScenarioRunner {
         var deltaToVisible: LatencyStats
         /// Delta emitted → its text received, parsed and laid out by the transcript (before line buffering).
         var deltaToApplied: LatencyStats
+        /// Engine published the text (MessageModel change) → laid out by the transcript: the transcript's own share.
+        var engineToApplied: LatencyStats
+        /// Engine published → shown (includes the line buffer's hold of partial lines).
+        var engineToVisible: LatencyStats
         var deltasProduced: Int
         var deltasShown: Int
         var finalTextMatches: Bool
@@ -251,6 +256,10 @@ extension ScenarioRunner {
         let (script, text) = streamingScript(seconds: seconds, rate: rate, chunk: 9)
         let clock = DeltaClock()
         let appliedClock = DeltaClock()
+        let engineApplied = DeltaClock()
+        let engineVisible = DeltaClock()
+        var engineTracked: MessageID?
+        let watcher = EngineWatcher(thread: thread, clocks: [engineApplied, engineVisible])
         await server.setDeltaObserver { id, length, time in
             clock.record(id, length, time)
             appliedClock.record(id, length, time)
@@ -258,12 +267,16 @@ extension ScenarioRunner {
         await server.enqueueScript(script, for: sessionID.rawValue)
         var latencies: [Double] = []
         var applied: [Double] = []
+        var engineAppliedTimes: [Double] = []
+        var engineVisibleTimes: [Double] = []
         controller.onTailCommit = { id in
             guard let messageID = clock.messageID, id.rawValue.contains(messageID), let shown = controller.displayedTailLength(id) else { return }
             let now = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
             // Drawn at the next display refresh.
             latencies += clock.drain(upTo: shown).map { (now - $0) * 1000 }
             applied += appliedClock.drain(upTo: controller.appliedTailLength(id) ?? 0).map { (now - $0) * 1000 }
+            engineAppliedTimes += engineApplied.drain(upTo: controller.appliedTailLength(id) ?? 0).map { (now - $0) * 1000 }
+            engineVisibleTimes += engineVisible.drain(upTo: shown).map { (now - $0) * 1000 }
         }
         let cpuStart = ProcessStats.cpuSeconds()
         let wallStart = CACurrentMediaTime()
@@ -279,6 +292,15 @@ extension ScenarioRunner {
             during?(dt, elapsed)
             if controller.following { maxDistance = max(maxDistance, Double(controller.distanceFromBottom)) }
             if thread.isRunning { sawRunning = true }
+            if engineTracked == nil, let id = clock.messageID {
+                engineTracked = MessageID(id)
+                watcher.track(MessageID(id))
+            }
+            if ProcessInfo.processInfo.environment["BENCH_TRACE"] != nil, Int(elapsed * 120) % 240 == 0 {
+                let last = thread.messageIDs.last.flatMap { thread.message($0)?.message }
+                let length = last?.parts.compactMap { if case .text(let t) = $0.content { t.utf8.count } else { nil } }.first ?? -1
+                self.log("t=\(Int(elapsed)) pending \(clock.count) engineText \(length) tails \(controller.streamingRowIDs.count) applied \(controller.streamingRowIDs.first.flatMap { controller.appliedTailLength($0) } ?? -1) running \(thread.isRunning) conn \(self.engine?.root.connection.label ?? "")")
+            }
             let finished = sawRunning && !thread.isRunning && controller.streamingRowIDs.isEmpty
             return !finished && elapsed < seconds * 3 + 30
         }
@@ -293,6 +315,11 @@ extension ScenarioRunner {
         }.last
         let sorted = latencies.sorted()
         func pct(_ p: Double) -> Double { sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))] }
+        func stats(_ values: [Double]) -> LatencyStats {
+            let sorted = values.sorted()
+            func p(_ q: Double) -> Double { sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * q))] }
+            return LatencyStats(samples: sorted.count, p50Ms: round2(p(0.5)), p95Ms: round2(p(0.95)), maxMs: round2(sorted.last ?? 0))
+        }
         let appliedSorted = applied.sorted()
         func apct(_ p: Double) -> Double { appliedSorted.isEmpty ? 0 : appliedSorted[min(appliedSorted.count - 1, Int(Double(appliedSorted.count - 1) * p))] }
         let produced = Int(ceil(Double(text.utf8.count) / 9))
@@ -301,6 +328,7 @@ extension ScenarioRunner {
             deltaToVisible: LatencyStats(samples: sorted.count, p50Ms: round2(pct(0.5)), p95Ms: round2(pct(0.95)), maxMs: round2(sorted.last ?? 0)),
             deltaToApplied: LatencyStats(
                 samples: appliedSorted.count, p50Ms: round2(apct(0.5)), p95Ms: round2(apct(0.95)), maxMs: round2(appliedSorted.last ?? 0)),
+            engineToApplied: stats(engineAppliedTimes), engineToVisible: stats(engineVisibleTimes),
             deltasProduced: produced, deltasShown: sorted.count, finalTextMatches: shownText == text,
             cpuPercentOfOneCore: round2(cpu), maxDistanceFromBottomWhileFollowing: round2(maxDistance), streamedBytes: text.utf8.count,
             maxTailApplyMs: round2(controller.metrics.maxTailApplyMilliseconds), tailJobs: controller.metrics.tailJobs)
@@ -594,6 +622,7 @@ extension ScenarioRunner {
             controller.showFind()
             controller.setFindQuery(query, debounce: false)
             while controller.findMatches.isEmpty, CACurrentMediaTime() - start < 10 { await sleep(0.005) }
+            log("find “\(query.prefix(40))”: \(controller.findMatches.count) matches")
             await controller.settle()
             return (CACurrentMediaTime() - start) * 1000
         }
@@ -601,7 +630,7 @@ extension ScenarioRunner {
         var proseMs = -1.0
         var proseAway = 0
         if let target = (min(controller.rows.count - 1, here + 3_000)...).lazy.first(where: { if case .markdown = controller.rows[$0].content { true } else { false } }),
-            case .markdown(let text, _) = controller.rows[target].content
+            let text = RenderBlocks.blocks(for: controller.rows[target]).first?.plainText
         {
             let words = text.split(separator: " ").prefix(6).joined(separator: " ")
             proseMs = await find(words)
@@ -660,5 +689,34 @@ extension ScenarioRunner {
         unmount()
         await sleep(1)
         Report.write(S8Report(header: header("S8"), afterScenarios: after, cycles: cycles, afterClose: Memory.now()), name: "S8")
+    }
+}
+
+/// Timestamps each Engine publish of a message (Observation fires on willSet) and records its text length after.
+@MainActor
+final class EngineWatcher {
+    let thread: ThreadModel
+    let clocks: [ScenarioRunner.DeltaClock]
+
+    init(thread: ThreadModel, clocks: [ScenarioRunner.DeltaClock]) {
+        self.thread = thread
+        self.clocks = clocks
+    }
+
+    func track(_ id: MessageID) {
+        withObservationTracking {
+            _ = thread.message(id)?.message
+        } onChange: { [weak self] in
+            let time = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let length = self.thread.message(id)?.message.parts.compactMap { part -> Int? in
+                    if case .text(let text) = part.content { return text.utf8.count }
+                    return nil
+                }.first ?? 0
+                for clock in self.clocks { clock.record(id.rawValue, length, time) }
+                self.track(id)
+            }
+        }
     }
 }

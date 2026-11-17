@@ -327,6 +327,17 @@ extension ScenarioRunner {
         for index in inputs.indices { inputs[index].highlighter = TokenizerHighlighter(costLimit: 1) }
         _ = await LayoutEngine.measure(inputs)
         let layoutMs = (CACurrentMediaTime() - start) * 1000
+        var t = CACurrentMediaTime()
+        let entries = rows.indices.map { FindIndexEntry(rowID: rows[$0].id, version: rows[$0].version, blocks: parsed[$0].map(\.plainText)) }
+        log("find index \(Int((CACurrentMediaTime() - t) * 1000)) ms")
+        t = CACurrentMediaTime()
+        let matches = FindSearch.matches(entries, query: "stable native")
+        log("find search \(Int((CACurrentMediaTime() - t) * 1000)) ms, \(matches.count) matches")
+        t = CACurrentMediaTime()
+        controller.showFind()
+        controller.setFindQuery("stable native", debounce: false)
+        while controller.findMatches.isEmpty, CACurrentMediaTime() - t < 20 { await sleep(0.005) }
+        log("controller find \(Int((CACurrentMediaTime() - t) * 1000)) ms")
         log("rows \(rows.count): parse \(Int(parseMs)) ms; layout without highlight \(Int(layoutNoHighlightMs)) ms; with highlight \(Int(layoutMs)) ms (single thread)")
         for (label, priority, cached) in [("utility, parsed", TaskPriority.utility, false), ("userInitiated, parsed", .userInitiated, false), ("utility, cache", .utility, true)] {
             let cache = RenderBlockCache()
