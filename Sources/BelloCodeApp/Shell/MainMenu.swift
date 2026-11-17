@@ -1,5 +1,6 @@
 import AppKit
 import ComposerKit
+import Engine
 
 /// Builds the main menu in code. App commands come from `ShellCommand` and use a nil target, so they travel the
 /// responder chain (text views first, then the window controller) and are validated there. Standard items use the
@@ -14,6 +15,9 @@ enum MainMenu {
         mainMenu.addItem(submenu: fileMenu())
         mainMenu.addItem(submenu: editMenu())
         mainMenu.addItem(submenu: viewMenu())
+        // Before Terminal: the menu bar is searched in order, so ⌘K reaches Command Palette (Go) unless it is disabled
+        // because a terminal has focus, and then Clear Terminal (see `CommandContext.isEnabled`).
+        mainMenu.addItem(submenu: goMenu())
         mainMenu.addItem(submenu: threadMenu())
         mainMenu.addItem(submenu: terminalMenu())
 
@@ -52,9 +56,14 @@ enum MainMenu {
     private static func fileMenu() -> NSMenu {
         let menu = NSMenu(title: "File")
         menu.add(.newThread)
+        menu.add(.newWindow)
         menu.add(.addProject)
         menu.addItem(.separator())
+        menu.add(.reopenClosedThread)
+        menu.addItem(.separator())
         menu.add(.togglePinProject)
+        menu.add(.moveProjectUp)
+        menu.add(.moveProjectDown)
         menu.add(.removeProject)
         menu.addItem(.separator())
         menu.add(.revealInFinder)
@@ -89,6 +98,9 @@ enum MainMenu {
         find.add(.findNext)
         find.add(.findPrevious)
         find.add(.useSelectionForFind)
+        find.addItem(.separator())
+        find.add(.globalSearch)
+        find.add(.filterSidebar)
         menu.addItem(submenu: find, title: "Find")
         // AppKit appends AutoFill, Writing Tools, Start Dictation and Emoji & Symbols to a menu titled "Edit".
         return menu
@@ -108,6 +120,9 @@ enum MainMenu {
             title: "Show Inspector", action: #selector(NSSplitViewController.toggleInspector(_:)), key: "i",
             modifiers: [.command, .option])
         menu.add(.toggleTerminal)
+        menu.addItem(.separator())
+        menu.add(.groupByProject)
+        menu.add(.showThreadsByState)
         menu.addItem(.separator())
         menu.add(.jumpToLatest)
         menu.add(.previousTurn)
@@ -142,10 +157,40 @@ enum MainMenu {
         requests.add(.nextRequest)
         menu.addItem(submenu: requests, title: "Approvals and Questions")
         menu.addItem(.separator())
+        menu.add(.togglePinThread)
+        menu.add(.settleThread)
+        let snooze = NSMenu(title: "Snooze")
+        snooze.add(.snoozeLaterToday)
+        snooze.add(.snoozeTomorrow)
+        snooze.add(.snoozeNextWeek)
+        snooze.add(.snoozeUntil)
+        snooze.addItem(.separator())
+        snooze.add(.wakeThread)
+        for item in snooze.items {
+            guard let action = item.action, let command = ShellCommand.command(for: action) else { continue }
+            item.title = command == .snoozeUntil ? "Custom…" : SnoozePreset.title(for: command)
+        }
+        menu.addItem(submenu: snooze, title: "Snooze")
+        menu.add(.toggleNeverAutoSettle)
+        menu.addItem(.separator())
         menu.add(.renameThread)
         menu.add(.markUnread)
         menu.add(.archiveThread)
         menu.add(.deleteThread)
+        menu.addItem(.separator())
+        menu.add(.nextNeedsAttention)
+        return menu
+    }
+
+    /// Navigation: palette, quick open, history.
+    private static func goMenu() -> NSMenu {
+        let menu = NSMenu(title: "Go")
+        menu.add(.commandPalette)
+        menu.add(.quickOpen)
+        menu.add(.globalSearch)
+        menu.addItem(.separator())
+        menu.add(.goBack)
+        menu.add(.goForward)
         menu.addItem(.separator())
         menu.add(.nextNeedsAttention)
         return menu

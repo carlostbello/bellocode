@@ -14,14 +14,27 @@ public struct FuzzyMatch: Hashable, Sendable {
 /// "Tests: fix flaky").
 public enum FuzzyMatcher {
     public static func match(_ query: String, in candidate: String) -> FuzzyMatch? {
-        let words = query.split(whereSeparator: { $0 == " " }).map(String.init)
+        match(PreparedQuery(query), in: Prepared(candidate))
+    }
+
+    /// A query split into folded words once per keystroke.
+    public struct PreparedQuery: Sendable {
+        let words: [[Character]]
+        public init(_ query: String) {
+            words = query.split(whereSeparator: { $0 == " " }).map { Prepared(String($0)).folded }
+        }
+        public var isEmpty: Bool { words.isEmpty }
+    }
+
+    /// Matches a prepared query against a prepared candidate (the palette prepares both once).
+    public static func match(_ query: PreparedQuery, in target: Prepared) -> FuzzyMatch? {
+        let words = query.words
         guard !words.isEmpty else { return FuzzyMatch(score: 0, positions: []) }
-        let target = Prepared(candidate)
-        if words.count == 1 { return match(Prepared(words[0]).folded, target) }
+        if words.count == 1 { return match(words[0], target) }
         var total = 0.0
         var positions = Set<Int>()
         for word in words {
-            guard let match = match(Prepared(word).folded, target) else { return nil }
+            guard let match = match(word, target) else { return nil }
             total += match.score
             positions.formUnion(match.positions)
         }

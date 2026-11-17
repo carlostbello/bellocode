@@ -47,6 +47,26 @@ import BelloCore
     func restartTerminal(_ sender: Any?)
     func moveTerminal(_ sender: Any?)
     func sendTerminalSelectionToComposer(_ sender: Any?)
+    // M2-D: sidebar organisation, palette, search, history and windows (docs/features/navigation.md).
+    func togglePinThread(_ sender: Any?)
+    func settleThread(_ sender: Any?)
+    func snoozeLaterToday(_ sender: Any?)
+    func snoozeTomorrow(_ sender: Any?)
+    func snoozeNextWeek(_ sender: Any?)
+    func snoozeUntil(_ sender: Any?)
+    func wakeThread(_ sender: Any?)
+    func toggleNeverAutoSettle(_ sender: Any?)
+    func groupThreadsByProject(_ sender: Any?)
+    func showThreadsByState(_ sender: Any?)
+    func filterSidebar(_ sender: Any?)
+    func moveProjectUp(_ sender: Any?)
+    func moveProjectDown(_ sender: Any?)
+    func showCommandPalette(_ sender: Any?)
+    func showQuickOpen(_ sender: Any?)
+    func showGlobalSearch(_ sender: Any?)
+    func goBackInHistory(_ sender: Any?)
+    func goForwardInHistory(_ sender: Any?)
+    func reopenClosedThread(_ sender: Any?)
 }
 
 /// Every app command with its menu title and shortcut (docs/research/03-ux-patterns.md, section D), including the
@@ -65,6 +85,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showSettings, connectProvider, showWelcome
     case newTerminal, closeTerminal, splitTerminal, nextTerminal, previousTerminal, clearTerminal, renameTerminal
     case restartTerminal, moveTerminal, sendTerminalSelection
+    // M2-D (docs/features/navigation.md).
+    case togglePinThread, settleThread, snoozeLaterToday, snoozeTomorrow, snoozeNextWeek, snoozeUntil, wakeThread
+    case toggleNeverAutoSettle, groupByProject, showThreadsByState, filterSidebar, moveProjectUp, moveProjectDown
+    case commandPalette, quickOpen, globalSearch, goBack, goForward, reopenClosedThread, newWindow
 
     @MainActor var selector: Selector {
         switch self {
@@ -123,6 +147,27 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .restartTerminal: #selector(MainWindowController.restartTerminal(_:))
         case .moveTerminal: #selector(MainWindowController.moveTerminal(_:))
         case .sendTerminalSelection: #selector(MainWindowController.sendTerminalSelectionToComposer(_:))
+        case .togglePinThread: #selector(MainWindowController.togglePinThread(_:))
+        case .settleThread: #selector(MainWindowController.settleThread(_:))
+        case .snoozeLaterToday: #selector(MainWindowController.snoozeLaterToday(_:))
+        case .snoozeTomorrow: #selector(MainWindowController.snoozeTomorrow(_:))
+        case .snoozeNextWeek: #selector(MainWindowController.snoozeNextWeek(_:))
+        case .snoozeUntil: #selector(MainWindowController.snoozeUntil(_:))
+        case .wakeThread: #selector(MainWindowController.wakeThread(_:))
+        case .toggleNeverAutoSettle: #selector(MainWindowController.toggleNeverAutoSettle(_:))
+        case .groupByProject: #selector(MainWindowController.groupThreadsByProject(_:))
+        case .showThreadsByState: #selector(MainWindowController.showThreadsByState(_:))
+        case .filterSidebar: #selector(MainWindowController.filterSidebar(_:))
+        case .moveProjectUp: #selector(MainWindowController.moveProjectUp(_:))
+        case .moveProjectDown: #selector(MainWindowController.moveProjectDown(_:))
+        case .commandPalette: #selector(MainWindowController.showCommandPalette(_:))
+        case .quickOpen: #selector(MainWindowController.showQuickOpen(_:))
+        case .globalSearch: #selector(MainWindowController.showGlobalSearch(_:))
+        case .goBack: #selector(MainWindowController.goBackInHistory(_:))
+        case .goForward: #selector(MainWindowController.goForwardInHistory(_:))
+        case .reopenClosedThread: #selector(MainWindowController.reopenClosedThread(_:))
+        // Answered by the app delegate (works with no window open).
+        case .newWindow: #selector(AppDelegate.newMainWindow(_:))
         }
     }
 
@@ -136,10 +181,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .addProject: "Add Project…"
         case .renameThread: "Rename Thread"
         case .archiveThread: "Archive Thread"
-        case .deleteThread: "Delete Thread…"
+        case .deleteThread: "Delete Thread"
         case .markUnread: "Mark as Unread"
         case .togglePinProject: "Pin Project"
-        case .removeProject: "Remove Project from Sidebar"
+        case .removeProject: "Archive Project"
         case .revealInFinder: "Reveal in Finder"
         case .copyPath: "Copy Path"
         case .nextNeedsAttention: "Next Needs Attention"
@@ -185,6 +230,26 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .restartTerminal: "Restart Terminal"
         case .moveTerminal: "Move Terminal to Right Panel"
         case .sendTerminalSelection: "Send Selection to Composer"
+        case .togglePinThread: "Pin Thread"
+        case .settleThread: "Settle Thread"
+        case .snoozeLaterToday: "Snooze Until Later Today"
+        case .snoozeTomorrow: "Snooze Until Tomorrow"
+        case .snoozeNextWeek: "Snooze Until Next Week"
+        case .snoozeUntil: "Snooze Until…"
+        case .wakeThread: "Wake Now"
+        case .toggleNeverAutoSettle: "Never Auto-Settle"
+        case .groupByProject: "Group Threads by Project"
+        case .showThreadsByState: "Show All Threads by State"
+        case .filterSidebar: "Filter Threads…"
+        case .moveProjectUp: "Move Project Up"
+        case .moveProjectDown: "Move Project Down"
+        case .commandPalette: "Command Palette…"
+        case .quickOpen: "Quick Open…"
+        case .globalSearch: "Search Messages…"
+        case .goBack: "Back"
+        case .goForward: "Forward"
+        case .reopenClosedThread: "Reopen Closed Thread"
+        case .newWindow: "New Window"
         }
     }
 
@@ -249,6 +314,32 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .clearTerminal: ("k", .command)
         case .sendTerminalSelection: ("l", [.command, .shift])
         case .renameTerminal, .restartTerminal, .moveTerminal: ("", [])
+        // T3 Code's keys where they do not collide (research 04, section 3).
+        case .togglePinThread: ("p", [.command, .shift])
+        case .settleThread: ("s", [.command, .shift])
+        case .snoozeUntil: ("s", [.command, .option])
+        case .snoozeLaterToday, .snoozeTomorrow, .snoozeNextWeek, .wakeThread, .toggleNeverAutoSettle: ("", [])
+        case .groupByProject, .showThreadsByState, .moveProjectUp, .moveProjectDown: ("", [])
+        case .filterSidebar: ("f", [.command, .option])
+        // ⌘K is shared with Clear Terminal, focus-aware: exactly one of the two is enabled at a time (see
+        // `CommandContext.isEnabled`); a focused terminal keeps ⌘K as in Terminal.app.
+        case .commandPalette: ("k", .command)
+        case .quickOpen: ("p", .command)
+        case .globalSearch: ("f", [.command, .shift])
+        case .goBack: ("[", .command)
+        case .goForward: ("]", .command)
+        case .reopenClosedThread: ("t", [.command, .shift])
+        case .newWindow: ("n", [.command, .shift])
+        }
+    }
+
+    /// Commands that act on several selected sidebar threads at once.
+    var actsOnSelection: Bool {
+        switch self {
+        case .archiveThread, .deleteThread, .markUnread, .togglePinThread, .settleThread, .snoozeLaterToday, .snoozeTomorrow,
+            .snoozeNextWeek, .snoozeUntil, .wakeThread, .toggleNeverAutoSettle:
+            true
+        default: false
         }
     }
 
@@ -263,6 +354,16 @@ enum ShellCommand: String, CaseIterable, Sendable {
         switch self {
         case .archiveThread, .deleteThread: true
         default: false
+        }
+    }
+
+    /// Checkmark state in menus (nil: no checkmark).
+    func isChecked(in context: CommandContext) -> Bool? {
+        switch self {
+        case .toggleNeverAutoSettle: context.targetsNeverAutoSettle
+        case .groupByProject: context.grouping == .byProject
+        case .showThreadsByState: context.grouping == .byState
+        default: nil
         }
     }
 
@@ -325,6 +426,21 @@ struct CommandContext: Equatable, Sendable {
     var terminalInPanel = false
     /// Transcript commands the displayed transcript can run now.
     var availableTranscriptCommands: Set<ShellCommand> = []
+    /// Keyboard focus is inside a terminal (it keeps ⌘K for Clear).
+    var terminalFocused = false
+    /// Threads a selection command acts on (the sidebar's multi-selection, else the target).
+    var selectedThreadCount = 0
+    /// Organisation of the targeted threads: all pinned / settled / snoozed / never auto-settle.
+    var targetsPinned = false
+    var targetsSettled = false
+    var targetsSnoozed = false
+    var targetsNeverAutoSettle = false
+    var grouping: SidebarGrouping = .byProject
+    var canGoBack = false
+    var canGoForward = false
+    var canReopenClosedThread = false
+    var projectCanMoveUp = false
+    var projectCanMoveDown = false
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -349,9 +465,61 @@ struct CommandContext: Equatable, Sendable {
             return availableTranscriptCommands.contains(command)
         case .showSettings, .connectProvider, .showWelcome: return true
         case .newTerminal, .splitTerminal: return terminalAvailable
-        case .closeTerminal, .nextTerminal, .previousTerminal, .clearTerminal, .renameTerminal, .restartTerminal, .moveTerminal:
+        // Clear Terminal owns ⌘K only while a terminal has focus (the palette has it elsewhere).
+        case .clearTerminal: return terminalSelected && terminalFocused
+        case .closeTerminal, .nextTerminal, .previousTerminal, .renameTerminal, .restartTerminal, .moveTerminal:
             return terminalSelected
         case .sendTerminalSelection: return terminalHasSelectedText && composerVisible
+        case .togglePinThread, .settleThread, .snoozeLaterToday, .snoozeTomorrow, .snoozeNextWeek, .snoozeUntil,
+            .toggleNeverAutoSettle:
+            return target?.threadID != nil || selectedThreadCount > 0
+        case .wakeThread: return targetsSnoozed
+        case .groupByProject, .showThreadsByState: return true
+        case .filterSidebar: return hasProjects
+        case .moveProjectUp: return projectCanMoveUp
+        case .moveProjectDown: return projectCanMoveDown
+        // Focus-aware ⌘K: the palette steps aside while a terminal has focus.
+        case .commandPalette: return !terminalFocused
+        case .quickOpen, .globalSearch, .newWindow: return true
+        case .goBack: return canGoBack
+        case .goForward: return canGoForward
+        case .reopenClosedThread: return canReopenClosedThread
+        }
+    }
+
+    /// Why a command is disabled, for the palette (nil when enabled).
+    func disabledReason(for command: ShellCommand) -> String? {
+        guard !isEnabled(command) else { return nil }
+        if command.conflictsWithTextEditing, textInputFocused { return "Text editing uses this key" }
+        switch command {
+        case .newThread, .filterSidebar: return "Add a project first"
+        case .renameThread, .archiveThread, .deleteThread, .markUnread, .togglePinThread, .settleThread, .snoozeLaterToday,
+            .snoozeTomorrow, .snoozeNextWeek, .snoozeUntil, .toggleNeverAutoSettle:
+            return "Select a thread"
+        case .wakeThread: return "The thread is not snoozed"
+        case .togglePinProject, .removeProject, .revealInFinder, .copyPath: return "Select a project or thread"
+        case .moveProjectUp, .moveProjectDown: return "Select a project that can move"
+        case .nextNeedsAttention: return "Nothing needs you"
+        case .focusComposer, .chooseModel, .permissionMode, .togglePlan: return "Open a thread"
+        case .sendMessage: return composerVisible ? "The composer is empty" : "Open a thread"
+        case .queueFollowUp, .steerFollowUp: return composerRunning ? "The composer is empty" : "The agent is not running"
+        case .stopRun: return "The agent is not running"
+        case .retryUnconfirmed: return "No message is waiting for confirmation"
+        case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
+            return "No approval or question is pending"
+        case .findInThread, .findNext, .findPrevious, .useSelectionForFind, .copyMessage, .copyAsMarkdown, .copyCode,
+            .jumpToLatest, .previousTurn, .nextTurn, .lastFailure:
+            return "Open a thread with messages"
+        case .newTerminal, .splitTerminal: return "Open a thread"
+        case .clearTerminal: return terminalSelected ? "Click in the terminal first (⌘K clears it there)" : "No terminal is open"
+        case .closeTerminal, .nextTerminal, .previousTerminal, .renameTerminal, .restartTerminal, .moveTerminal:
+            return "No terminal is open"
+        case .sendTerminalSelection: return "Select text in a terminal"
+        case .commandPalette: return "A terminal has focus (⌘K clears it); use ⌘P and type >"
+        case .goBack: return "No earlier thread"
+        case .goForward: return "No later thread"
+        case .reopenClosedThread: return "No thread was closed"
+        default: return "Not available now"
         }
     }
 
@@ -362,6 +530,12 @@ struct CommandContext: Equatable, Sendable {
         case .toggleTerminal: isTerminalVisible ? "Hide Terminal" : "Show Terminal"
         case .splitTerminal: terminalSplit ? "Unsplit Terminal" : "Split Terminal"
         case .moveTerminal: terminalInPanel ? "Move Terminal to Drawer" : "Move Terminal to Right Panel"
+        case .togglePinThread:
+            (targetsPinned ? "Unpin " : "Pin ") + (selectedThreadCount > 1 ? "\(selectedThreadCount) Threads" : "Thread")
+        case .settleThread:
+            (targetsSettled ? "Un-settle " : "Settle ") + (selectedThreadCount > 1 ? "\(selectedThreadCount) Threads" : "Thread")
+        case .archiveThread: selectedThreadCount > 1 ? "Archive \(selectedThreadCount) Threads" : command.title
+        case .deleteThread: selectedThreadCount > 1 ? "Delete \(selectedThreadCount) Threads" : command.title
         default: command.title
         }
     }

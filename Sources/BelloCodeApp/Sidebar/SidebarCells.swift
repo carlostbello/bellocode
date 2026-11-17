@@ -56,9 +56,11 @@ final class ThreadCell: SidebarRowView {
             if showsProject { projectName = project.name }
             childCount = workspace.projectModel(project)?.children(of: sessionID).count ?? 0
         }
+        let organisation = workspace.engine.root.organisation[sessionID]
         let presentation = ThreadRowPresentation(
-            session: session, status: row.status?.status, manuallyUnread: workspace.manualUnread.contains(sessionID),
-            childCount: childCount, projectName: projectName)
+            session: session, status: row.status?.status,
+            manuallyUnread: organisation?.markedUnread ?? false || workspace.manualUnread.contains(sessionID),
+            childCount: childCount, projectName: projectName, snoozedUntil: organisation?.snoozedUntil?.date)
         guard presentation != self.presentation else { return }
         self.presentation = presentation
         if title.currentEditor() == nil { title.stringValue = presentation.title }
@@ -181,4 +183,83 @@ final class SidebarTextCell: NSTableCellView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+/// A section header inside a project ("PINNED 2", "SETTLED 14"), or a group row when grouped by state. The outline
+/// view draws the disclosure triangle; the label carries the count for VoiceOver.
+@MainActor
+final class SidebarSectionCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("section")
+    let symbol = NSImageView()
+    let label = NSTextField(labelWithString: "")
+    let count = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        identifier = Self.identifier
+        label.font = DS.Typography.current.sectionHeader
+        label.textColor = DS.Palette.secondaryText
+        count.font = DS.Typography.current.badge
+        count.textColor = DS.Palette.tertiaryText
+        symbol.imageScaling = .scaleProportionallyDown
+        textField = label
+        let stack = NSStackView(views: [symbol, label, count])
+        stack.spacing = DS.Spacing.xs
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 0),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DS.Spacing.s),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbol.widthAnchor.constraint(equalToConstant: 12),
+        ])
+        setAccessibilityRole(.row)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func configure(_ id: SidebarNodeID, count: Int) {
+        guard case .section(let scope, let section) = id else { return }
+        let isGroup = scope == nil
+        label.stringValue = isGroup ? section.title : section.title.uppercased()
+        label.font = isGroup ? DS.Typography.current.sectionHeader : .systemFont(ofSize: DS.Typography.current.baseSize - 3, weight: .semibold)
+        self.count.stringValue = "\(count)"
+        symbol.isHidden = isGroup
+        symbol.image = NSImage(systemSymbolName: section.symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold).applying(.init(paletteColors: [DS.Palette.tertiaryText])))
+        setAccessibilityLabel("\(section.title), \(count == 1 ? "1 thread" : "\(count) threads")")
+    }
+}
+
+/// The insertion gap of a forced drop preview (snapshots): an empty row with an accent insertion line, as the outline
+/// view draws during a real drag.
+@MainActor
+final class DropGapCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("dropGap")
+    private let line = NSView()
+
+    init() {
+        super.init(frame: .zero)
+        identifier = Self.identifier
+        line.wantsLayer = true
+        line.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(line)
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.s),
+            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.heightAnchor.constraint(equalToConstant: 2),
+        ])
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func layout() {
+        super.layout()
+        line.layer?.backgroundColor = DS.Palette.accent.cgColor
+        line.layer?.cornerRadius = 1
+    }
 }

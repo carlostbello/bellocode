@@ -10,8 +10,9 @@ import Engine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: LaunchOptions
     private var runtime: AppRuntime?
-    private var mainWindowController: MainWindowController?
-    private var workspace: WorkspaceController?
+    /// Every main window (⇧⌘N opens another); they share the runtime's engine.
+    private(set) var windows: MainWindows?
+    private var mainWindowController: MainWindowController? { windows?.current }
     private var services: AppServices?
     private var settingsWindow: SettingsWindowController?
     private var onboardingWindow: UtilityWindowController?
@@ -85,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let runtime, !runtime.isStopped else { return .terminateNow }
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
-        workspace?.close()
+        windows?.closeAllForTermination()
         Task { @MainActor in
             await runtime.stop()
             await PreviewFiles.current.removeAll()
@@ -100,17 +101,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         guard let runtime, let services else { return }
-        if mainWindowController == nil {
-            let workspace = WorkspaceController(
-                engine: runtime.engine, stateStore: ShellStateStore(defaults: runtime.defaults))
-            self.workspace = workspace
-            mainWindowController = MainWindowController(
-                workspace: workspace,
-                configuration: .init(
-                    surfaces: .builtIn(services: services), autosaveSuffix: runtime.autosaveSuffix,
-                    sourceLabel: runtime.sourceLabel))
+        if let windows {
+            windows.showPrimary()
+            return
         }
-        mainWindowController?.showWindow(nil)
+        let windows = MainWindows(defaults: runtime.defaults) { id in
+            let workspace = WorkspaceController(
+                engine: runtime.engine, stateStore: ShellStateStore(defaults: runtime.defaults, key: MainWindows.stateKey(for: id)))
+            // The first window keeps the M1 autosave names; others get their own (frame, split dividers).
+            let suffix = id == MainWindows.primaryID ? runtime.autosaveSuffix : runtime.autosaveSuffix + "." + id
+            return MainWindowController(
+                workspace: workspace,
+                configuration: .init(surfaces: .builtIn(services: services), autosaveSuffix: suffix, sourceLabel: runtime.sourceLabel))
+        }
+        self.windows = windows
+        windows.restore()
+    }
+
+    /// ⇧⌘N: a new main window with its own selection, sharing the engine.
+    @objc func newMainWindow(_ sender: Any?) {
+        guard windows != nil else { return }
+        windows?.openNew()
+    }
+
+    /// Opens a selection in a new window; `background` keeps the current window in front (palette ⌘↩).
+    func openWindow(selection: ShellSelection, background: Bool, reveal: PendingReveal? = nil) {
+        windows?.openNew(selection: selection, background: background, reveal: reveal)
     }
 
     // MARK: - Settings, onboarding, connect (menu actions reach the delegate through the responder chain)

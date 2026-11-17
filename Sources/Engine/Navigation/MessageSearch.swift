@@ -10,6 +10,13 @@ public struct ThreadSearchGroup: Hashable, Sendable, Identifiable {
         public var snippet: SearchSnippet
         public var created: Timestamp
         public var id: MessageID { messageID }
+
+        public init(messageID: MessageID, sessionID: SessionID, snippet: SearchSnippet, created: Timestamp) {
+            self.messageID = messageID
+            self.sessionID = sessionID
+            self.snippet = snippet
+            self.created = created
+        }
     }
 
     /// The top-level thread.
@@ -24,6 +31,20 @@ public struct ThreadSearchGroup: Hashable, Sendable, Identifiable {
     public var totalHits: Int
     public var newest: Timestamp
     public var id: SessionID { sessionID }
+
+    public init(
+        sessionID: SessionID, title: String, projectID: ProjectID?, directory: String, isArchived: Bool, hits: [Hit],
+        totalHits: Int, newest: Timestamp
+    ) {
+        self.sessionID = sessionID
+        self.title = title
+        self.projectID = projectID
+        self.directory = directory
+        self.isArchived = isArchived
+        self.hits = hits
+        self.totalHits = totalHits
+        self.newest = newest
+    }
 }
 
 /// A snippet with its highlighted ranges (character offsets), parsed from the store's markers.

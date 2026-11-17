@@ -66,6 +66,14 @@ final class UndoCoordinator {
         dismissToast()
     }
 
+    /// Removes an action that can no longer be undone (a deferred delete that has been carried out), from the undo
+    /// stack and the toast.
+    func retire(_ token: UndoToken) {
+        undoManager()?.removeAllActions(withTarget: token)
+        registered.removeAll { $0 === token }
+        if toasts.current?.token == ObjectIdentifier(token) { dismissToast() }
+    }
+
     func dismissToast() {
         if let id = toasts.current?.token { tokens[id] = nil }
         toasts.dismiss()
