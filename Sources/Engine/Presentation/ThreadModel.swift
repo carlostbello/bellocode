@@ -72,6 +72,10 @@ public final class ThreadModel: Identifiable {
     public private(set) var submittingRequestIDs: Set<String> = []
     /// Follow-ups admitted (or being admitted) but not yet delivered, oldest first.
     public private(set) var queue: [QueuedPrompt] = []
+    /// Sends whose delivery is unknown (every answer was lost), or that a retry found were not sent, oldest first. Pin
+    /// them above the composer with `retryUnconfirmed(_:)` (same prompt ID, so at most once on the server) and, for a
+    /// not-sent entry, `takeUnconfirmed(_:)` to edit it again. Never offer to send their text as a new prompt.
+    public private(set) var unconfirmedSends: [UnconfirmedSend] = []
     /// The last command failure, for an inline error; cleared by the next successful command.
     public private(set) var lastError: EngineError?
     /// App-owned per-thread state (pin, snooze, settle, scroll anchor). The draft is `draft`.
@@ -179,10 +183,23 @@ public final class ThreadModel: Identifiable {
             lastError = nil
             return id
         } catch {
-            lastError = EngineError.from(error)
-            if fromDraft, draft.isEmpty { draft = text }
+            let failure = EngineError.from(error)
+            lastError = failure
+            // Delivery unknown: the text stays in `unconfirmedSends` under its ID; back in the draft it would invite a
+            // second send under a new ID.
+            if failure != .deliveryUnknown, fromDraft, draft.isEmpty { draft = text }
             return nil
         }
+    }
+
+    /// Checks an unconfirmed send with opencode and, if it does not have it, resends it under the same ID.
+    public func retryUnconfirmed(_ id: MessageID) async {
+        await core.retryUnconfirmed(id)
+    }
+
+    /// Removes a send that a retry found was not sent and returns its text, to edit and send again.
+    public func takeUnconfirmed(_ id: MessageID) async -> String? {
+        await core.takeUnconfirmed(id)
     }
 
     /// Runs a server slash command (`/name arguments`). Returns whether the server accepted it; `lastError` otherwise.
@@ -327,6 +344,7 @@ public final class ThreadModel: Identifiable {
         hasOlder = snapshot.hasOlder
         pendingRequests = snapshot.pending
         queue = snapshot.queue
+        if snapshot.unconfirmed != unconfirmedSends { unconfirmedSends = snapshot.unconfirmed }
         uiState = snapshot.ui
         if !isDraftLoaded { hydrateDraft(stored: snapshot.ui.draft) }
         if phase != .deleted { phase = .ready }
@@ -369,6 +387,13 @@ public final class ThreadModel: Identifiable {
             for (id, prompt) in change.queue { byID[id] = prompt }
             let updated = byID.values.sorted { $0.created == $1.created ? $0.id < $1.id : $0.created < $1.created }
             if updated != queue { queue = updated }
+        }
+        if !change.unconfirmed.isEmpty || !change.removedUnconfirmed.isEmpty {
+            var updated = unconfirmedSends.filter { !change.removedUnconfirmed.contains($0.id) }
+            for send in change.unconfirmed.values.sorted(by: { $0.id < $1.id }) {
+                if let index = updated.firstIndex(where: { $0.id == send.id }) { updated[index] = send } else { updated.append(send) }
+            }
+            if updated != unconfirmedSends { unconfirmedSends = updated }
         }
         if let serverHasOlder = change.historyHasOlder[sessionID], !didPage, serverHasOlder != hasOlder {
             hasOlder = serverHasOlder

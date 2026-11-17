@@ -22,6 +22,9 @@ public enum ComposerSendOutcome: Hashable, Sendable {
     case accepted
     /// Not sent. The composer puts the draft back and shows `message` inline.
     case failed(String)
+    /// Every answer was lost: it may or may not have been admitted. The host keeps it (with its ID) and offers an
+    /// explicit check/retry; the composer stays clear (restoring the text would invite a duplicate) and shows `message`.
+    case unconfirmed(String)
 }
 
 public enum ComposerRunState: Hashable, Sendable {

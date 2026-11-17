@@ -33,6 +33,9 @@ public struct HTTPFault: Sendable {
         case delay(Duration)
         /// Close the connection without any response.
         case resetConnection
+        /// Serve the real route (its effects happen), then close the connection without sending the response: a lost
+        /// answer to a request the server applied.
+        case dropResponse
     }
 
     public var method: String?
@@ -481,6 +484,7 @@ public actor MockOpenCodeServer {
         let interval = signposter.beginInterval("request")
         defer { signposter.endInterval("request", interval) }
         var delay: Duration?
+        var dropResponse = false
         if let index = httpFaults.firstIndex(where: { $0.matches(request) }) {
             let fault = httpFaults[index]
             if let count = fault.count {
@@ -493,13 +497,16 @@ public actor MockOpenCodeServer {
                 return .reset
             case let .delay(duration):
                 delay = duration
+            case .dropResponse:
+                dropResponse = true
             }
         }
         if let delay { try? await Task.sleep(for: delay) }
         // Each request moves the virtual clock by 1 ms, so request-driven changes get distinct, ordered timestamps.
         if options.clock == .virtual { virtualNow += 1 }
         if let unauthenticated = authenticate(request) { return .response(unauthenticated) }
-        return await route(request, connectionID: connectionID)
+        let plan = await route(request, connectionID: connectionID)
+        return dropResponse ? .reset : plan
     }
 
     private func authenticate(_ request: HTTPRequest) -> HTTPResponse? {

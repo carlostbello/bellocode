@@ -23,7 +23,30 @@ public struct ThreadSnapshot: Sendable {
     public var hasOlder: Bool
     public var pending: [PendingRequest]
     public var queue: [QueuedPrompt]
+    /// Sends whose delivery is unknown or that a retry found not sent, oldest first.
+    public var unconfirmed: [UnconfirmedSend] = []
     public var ui: ThreadUIState
+}
+
+/// A send whose answers were all lost: opencode may or may not have admitted it. Kept (with its prompt ID) until a check
+/// finds it on the server, a retry under the same ID is answered, or the server definitively refuses it.
+public struct UnconfirmedSend: Hashable, Sendable, Identifiable {
+    public enum State: Hashable, Sendable {
+        /// Not known whether opencode has it. Offer Retry (same ID; at most once on the server).
+        case unknown
+        /// A check or retry is in flight.
+        case checking
+        /// opencode answered and does not have it: definitively not sent. Offer to put the text back in the composer.
+        case notSent(String)
+    }
+
+    /// The prompt ID: opencode's user message ID once delivered.
+    public var id: MessageID
+    public var sessionID: SessionID
+    public var text: String
+    /// It was a follow-up for a running turn (queue or steer), not a direct send.
+    public var isFollowUp: Bool
+    public var state: State
 }
 
 /// A page of older messages, oldest first.
@@ -80,6 +103,10 @@ actor EngineCore {
     private var serverPID: Int?
     /// The last resync found a different server process: locally streamed text from the old one is discarded.
     private var serverRestarted = false
+    /// Sends whose answers were lost, with the request to resend under the same ID (bounded by `unconfirmedLimit`).
+    private var unconfirmed: [MessageID: (send: UnconfirmedSend, request: PromptRequest, order: Int)] = [:]
+    private var unconfirmedOrder = 0
+    let unconfirmedLimit = 32
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -446,6 +473,7 @@ actor EngineCore {
                 guard generation == syncGeneration, !Task.isCancelled else { return }
                 setConnection(.live)
                 if catalogs[defaultCatalogDirectory()] == nil { enqueue([.refreshCatalog(directory: nil)]) }
+                if !unconfirmed.isEmpty { spawn { await $0.checkUnconfirmed() } }
                 return
             } catch is CancellationError {
                 return
@@ -791,6 +819,7 @@ actor EngineCore {
             pending: state.pending.values.filter { state.isWithin($0.sessionID, of: sessionID) }
                 .sorted { $0.received == $1.received ? $0.id < $1.id : $0.received < $1.received },
             queue: state.queue.values.filter { $0.sessionID == sessionID }.sorted { $0.created < $1.created },
+            unconfirmed: unconfirmedSends(sessionID),
             ui: state.threadUI[sessionID] ?? ThreadUIState(sessionID: sessionID))
     }
 
@@ -1017,12 +1046,17 @@ actor EngineCore {
     }
 
     /// Sends a prompt. Idle: the user message appears at once as `.sending`. Busy: it is listed in the queue as
-    /// `.sending` (queue by default, or steer). Either way it becomes `.accepted`/`.queued` only when the server answers.
-    /// On failure the optimistic entry is removed and the error thrown (the caller restores the draft).
+    /// `.sending` (queue by default, or steer). Either way it becomes `.accepted`/`.queued` only when the server answers
+    /// (or a check finds it under its ID). On a definite failure the optimistic entry is removed and the error thrown
+    /// (the caller restores the draft). If every answer was lost and the server cannot be asked, it throws
+    /// `.deliveryUnknown` and keeps the entry plus an `UnconfirmedSend` for an explicit same-ID retry.
     func sendPrompt(
         _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
     ) async throws -> MessageID {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+        guard unconfirmed.count < unconfirmedLimit else {
+            throw EngineError.failed("Too many messages have unknown delivery. Retry them before sending more.")
+        }
         let now = serverNow()
         let id = ids.messageID(now: now)
         let running = session.isRunning && !pipeline.state.orphaned.contains(sessionID)
@@ -1053,25 +1087,168 @@ actor EngineCore {
             agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
             skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
             delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        switch await deliver(request, id: id, sessionID: sessionID) {
+        case .admitted(let created):
+            acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
+            return id
+        case .rejected(let error):
+            rollbackSend(id, sessionID: sessionID)
+            throw EngineError.from(error)
+        case .unknown:
+            // Keep the optimistic entry and the request: a retry reuses the ID, so it is admitted at most once.
+            unconfirmedOrder += 1
+            let send = UnconfirmedSend(id: id, sessionID: sessionID, text: text, isFollowUp: busy, state: .unknown)
+            unconfirmed[id] = (send, request, unconfirmedOrder)
+            bus.publish([.unconfirmed(send)])
+            throw EngineError.deliveryUnknown
+        }
+    }
+
+    /// What became of a prompt request.
+    enum DeliveryOutcome: Sendable {
+        /// The server answered, or a check found it under its ID.
+        case admitted(Timestamp)
+        /// The server answered with a refusal and does not have it.
+        case rejected(any Error)
+        /// Every answer was lost and the server could not be asked.
+        case unknown
+    }
+
+    /// Sends `request`, retrying a lost answer (transport failure) under the same ID: opencode 2.3.0 answers a repeated
+    /// ID with the original item and keeps one message (verified against the real binary, `PromptRetryRealBinaryTests`).
+    /// If any answer was lost, the outcome is decided by asking the server for the ID, never assumed.
+    private func deliver(_ request: PromptRequest, id: MessageID, sessionID: SessionID, attempts: Int = 3) async -> DeliveryOutcome {
         var lastError: (any Error)?
-        for attempt in 0..<3 {
+        var answerLost = false
+        for attempt in 0..<attempts {
             do {
                 let item = try await currentClient().prompt(sessionID: sessionID.rawValue, request)
                 observeServerTime(item.time.created)
-                acknowledgeSend(id, sessionID: sessionID, serverCreated: Timestamp(milliseconds: item.time.created))
-                return id
+                return .admitted(Timestamp(milliseconds: item.time.created))
             } catch {
                 lastError = error
-                // Only a lost answer is retried, with the same ID, so the server admits it at most once.
-                guard case OpenCodeError.transport = error, attempt < 2 else { break }
-                try? await time.sleep(for: .milliseconds(150 * (attempt + 1)))
+                guard case OpenCodeError.transport = error else { break }
+                answerLost = true
+                if attempt < attempts - 1 { try? await time.sleep(for: .milliseconds(150 * (attempt + 1))) }
             }
         }
+        let failure = lastError ?? EngineError.failed("Send failed.")
+        guard answerLost else { return .rejected(failure) }
+        switch await lookUpPrompt(id, sessionID: sessionID) {
+        case .found(let created):
+            return .admitted(created)
+        case .unreachable:
+            return .unknown
+        case .absent:
+            // The server is reachable again and does not have it. If the last attempt's answer was lost, send once
+            // more under the same ID to get a definite answer; a refusal after a lost answer is definite as it is.
+            guard case OpenCodeError.transport = failure else { return .rejected(failure) }
+            do {
+                let item = try await currentClient().prompt(sessionID: sessionID.rawValue, request)
+                observeServerTime(item.time.created)
+                return .admitted(Timestamp(milliseconds: item.time.created))
+            } catch {
+                if case OpenCodeError.transport = error { return .unknown }
+                return .rejected(error)
+            }
+        }
+    }
+
+    enum PromptLookup: Sendable {
+        case found(Timestamp)
+        case absent
+        case unreachable
+    }
+
+    /// Whether the server has a prompt under `id`: delivered (a user message) or admitted and waiting (inbox).
+    private func lookUpPrompt(_ id: MessageID, sessionID: SessionID) async -> PromptLookup {
+        do {
+            let client = try await currentClient()
+            func message() async throws -> Timestamp? {
+                do {
+                    let dto = try await client.message(sessionID: sessionID.rawValue, messageID: id.rawValue)
+                    if case .user(let user) = dto { return Timestamp(milliseconds: user.time.created) }
+                    return serverNow()
+                } catch let error as OpenCodeError where error.status == 404 {
+                    return nil
+                }
+            }
+            if let created = try await message() { return .found(created) }
+            if let item = try await client.inbox(sessionID: sessionID.rawValue).first(where: { $0.id == id.rawValue }) {
+                return .found(Timestamp(milliseconds: item.time.created))
+            }
+            // Delivered between the two reads: it left the inbox after the message lookup.
+            if let created = try await message() { return .found(created) }
+            return .absent
+        } catch {
+            return .unreachable
+        }
+    }
+
+    private func rollbackSend(_ id: MessageID, sessionID: SessionID) {
         var rollback = Reduction()
         if pipeline.state.queue[id]?.state == .sending { pipeline.state.removeQueued(id, into: &rollback) }
         if pipeline.state.messages[id]?.delivery == .sending { pipeline.state.removeMessage(id, sessionID: sessionID, into: &rollback) }
         commit(rollback)
-        throw EngineError.from(lastError ?? EngineError.failed("Send failed."))
+    }
+
+    func unconfirmedSends(_ sessionID: SessionID) -> [UnconfirmedSend] {
+        unconfirmed.values.filter { $0.send.sessionID == sessionID }.sorted { $0.order < $1.order }.map(\.send)
+    }
+
+    /// Checks an unconfirmed send and, if the server does not have it, resends it under the same ID. Admitted: it
+    /// becomes an ordinary accepted send. Refused: it is marked `notSent` (the text stays until `takeUnconfirmed`).
+    /// Unreachable: it stays `unknown`.
+    func retryUnconfirmed(_ id: MessageID) async {
+        guard let held = unconfirmed[id], held.send.state == .unknown else { return }
+        setUnconfirmedState(id, .checking)
+        let outcome = await deliver(held.request, id: id, sessionID: held.send.sessionID, attempts: 1)
+        resolveUnconfirmed(id, outcome)
+    }
+
+    /// Asks the server about every unknown send (after a resync); never resends on its own.
+    func checkUnconfirmed() async {
+        let ids = unconfirmed.values.filter { $0.send.state == .unknown }.sorted { $0.order < $1.order }.map(\.send.id)
+        for id in ids {
+            guard let held = unconfirmed[id], held.send.state == .unknown else { continue }
+            setUnconfirmedState(id, .checking)
+            switch await lookUpPrompt(id, sessionID: held.send.sessionID) {
+            case .found(let created): resolveUnconfirmed(id, .admitted(created))
+            case .absent, .unreachable: setUnconfirmedState(id, .unknown)
+            }
+        }
+    }
+
+    /// Removes a not-sent entry and returns its text (to put back in the composer). Unknown entries stay: dropping
+    /// one could invite sending the same instruction twice.
+    func takeUnconfirmed(_ id: MessageID) -> String? {
+        guard let held = unconfirmed[id], case .notSent = held.send.state else { return nil }
+        unconfirmed[id] = nil
+        bus.publish([.unconfirmedRemoved(id, sessionID: held.send.sessionID)])
+        return held.send.text
+    }
+
+    private func setUnconfirmedState(_ id: MessageID, _ state: UnconfirmedSend.State) {
+        guard var held = unconfirmed[id], held.send.state != state else { return }
+        held.send.state = state
+        unconfirmed[id] = held
+        bus.publish([.unconfirmed(held.send)])
+    }
+
+    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) {
+        guard let held = unconfirmed[id] else { return }
+        let sessionID = held.send.sessionID
+        switch outcome {
+        case .admitted(let created):
+            unconfirmed[id] = nil
+            bus.publish([.unconfirmedRemoved(id, sessionID: sessionID)])
+            acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
+        case .rejected(let error):
+            rollbackSend(id, sessionID: sessionID)
+            setUnconfirmedState(id, .notSent(EngineError.from(error).userMessage))
+        case .unknown:
+            setUnconfirmedState(id, .unknown)
+        }
     }
 
     /// A turn whose status is unknown after a server restart (still "busy" on the server, owned by no live process):

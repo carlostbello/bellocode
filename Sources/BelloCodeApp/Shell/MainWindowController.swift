@@ -162,6 +162,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             composerVisible: container.composerSurface != nil, composerHasText: container.composerSurface?.hasSendableText ?? false,
             composerRunning: container.composerController.map { $0.runState != .idle } ?? false,
             isTerminalVisible: !split.contentSplit.drawerItem.isCollapsed,
+            hasUnconfirmedSend: container.context?.thread?.unconfirmedSends.contains { $0.state == .unknown } ?? false,
             availableRequestCommands: Set(RequestCommand.allCases.filter { container.requestStackController?.model?.canPerform($0) ?? false }))
     }
 
@@ -250,6 +251,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             } else {
                 Task { await workspace.threadModel(id).stop() }
             }
+        case .retryUnconfirmed:
+            guard let thread = container.context?.thread,
+                  let send = thread.unconfirmedSends.first(where: { $0.state == .unknown }) else { return }
+            Task { await thread.retryUnconfirmed(send.id) }
         case .chooseModel:
             container.composerController?.openModelPicker()
         case .permissionMode:
@@ -285,6 +290,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     @objc func queuePrompt(_ sender: Any?) { perform(.queueFollowUp) }
     @objc func steerPrompt(_ sender: Any?) { perform(.steerFollowUp) }
     @objc func stopAgent(_ sender: Any?) { perform(.stopRun) }
+    @objc func retryUnconfirmedSend(_ sender: Any?) { perform(.retryUnconfirmed) }
     @objc func chooseModel(_ sender: Any?) { perform(.chooseModel) }
     @objc func choosePermissionMode(_ sender: Any?) { perform(.permissionMode) }
     @objc func togglePlanMode(_ sender: Any?) { perform(.togglePlan) }

@@ -209,6 +209,10 @@ public final class ComposerController {
                 self.announce(delivery.acknowledgement)
             case .failed(let message):
                 self.announce("Not sent. \(message)")
+            case .unconfirmed(let message):
+                // Kept by the host for an explicit same-ID retry; the composer stays clear.
+                if self.host === host { self.sendError = message }
+                self.announce(message)
             }
             self.onStateChange()
         }

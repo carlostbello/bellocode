@@ -75,6 +75,9 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
     case server(String)
     /// No answer in time; the server may or may not have applied it.
     case timedOut
+    /// Every answer to a send was lost and opencode could not be asked whether it has the prompt. It is kept, with its
+    /// ID, as an `UnconfirmedSend`: retrying reuses the ID, so opencode admits it at most once.
+    case deliveryUnknown
     case cancelled
     case failed(String)
 
@@ -86,6 +89,8 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
         case .rejected(let detail): "opencode refused the request. \(detail)"
         case .server(let detail): "opencode reported an error. \(detail)"
         case .timedOut: "opencode did not answer in time. Check the thread before retrying."
+        case .deliveryUnknown:
+            "Delivery unknown: opencode did not confirm it received this message. Retry checks and resends it under the same ID, so it cannot run twice."
         case .cancelled: "Cancelled."
         case .failed(let detail): "Something went wrong. \(detail)"
         }
@@ -96,7 +101,7 @@ public enum EngineError: Error, Sendable, Hashable, CustomStringConvertible {
     /// Whether retrying the same request may succeed.
     public var isTransient: Bool {
         switch self {
-        case .offline, .timedOut, .server: true
+        case .offline, .timedOut, .server, .deliveryUnknown: true
         default: false
         }
     }

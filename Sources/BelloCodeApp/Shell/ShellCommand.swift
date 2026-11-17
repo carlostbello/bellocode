@@ -27,6 +27,7 @@ import BelloCore
     func queuePrompt(_ sender: Any?)
     func steerPrompt(_ sender: Any?)
     func stopAgent(_ sender: Any?)
+    func retryUnconfirmedSend(_ sender: Any?)
     func chooseModel(_ sender: Any?)
     func choosePermissionMode(_ sender: Any?)
     func togglePlanMode(_ sender: Any?)
@@ -46,7 +47,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case renameThread, archiveThread, deleteThread, markUnread
     case togglePinProject, removeProject, revealInFinder, copyPath
     case nextNeedsAttention, focusComposer, focusNextRegion, focusPreviousRegion, toggleTerminal
-    case sendMessage, queueFollowUp, steerFollowUp, stopRun
+    case sendMessage, queueFollowUp, steerFollowUp, stopRun, retryUnconfirmed
     case chooseModel, permissionMode, togglePlan
     case allowOnce, allowAlways, denyRequest, submitAnswer, previousRequest, nextRequest
     case showSettings, connectProvider, showWelcome
@@ -72,6 +73,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .queueFollowUp: #selector(MainWindowController.queuePrompt(_:))
         case .steerFollowUp: #selector(MainWindowController.steerPrompt(_:))
         case .stopRun: #selector(MainWindowController.stopAgent(_:))
+        case .retryUnconfirmed: #selector(MainWindowController.retryUnconfirmedSend(_:))
         case .chooseModel: #selector(MainWindowController.chooseModel(_:))
         case .permissionMode: #selector(MainWindowController.choosePermissionMode(_:))
         case .togglePlan: #selector(MainWindowController.togglePlanMode(_:))
@@ -112,6 +114,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .queueFollowUp: "Queue After This Turn"
         case .steerFollowUp: "Steer at Next Step"
         case .stopRun: "Stop Agent"
+        case .retryUnconfirmed: "Retry Unconfirmed Message"
         case .chooseModel: "Choose Model…"
         case .permissionMode: "Permission Mode…"
         case .togglePlan: "Plan Mode"
@@ -166,7 +169,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .previousRequest: agent(.previousRequest)
         case .nextRequest: agent(.nextRequest)
         case .showSettings: (",", .command)
-        case .connectProvider, .showWelcome: ("", [])
+        case .connectProvider, .showWelcome, .retryUnconfirmed: ("", [])
         }
     }
 
@@ -224,6 +227,8 @@ struct CommandContext: Equatable, Sendable {
     /// The displayed thread runs (the composer offers queue, steer and stop).
     var composerRunning = false
     var isTerminalVisible = false
+    /// The displayed thread has a send whose delivery is unknown (Retry checks and resends under the same ID).
+    var hasUnconfirmedSend = false
     /// Request commands the displayed thread's front request accepts now.
     var availableRequestCommands: Set<RequestCommand> = []
 
@@ -241,6 +246,7 @@ struct CommandContext: Equatable, Sendable {
         case .stopRun:
             if case .thread(_, _, true) = target { return true }
             return false
+        case .retryUnconfirmed: return hasUnconfirmedSend
         case .chooseModel, .permissionMode, .togglePlan: return composerVisible
         case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
             return command.requestCommand.map(availableRequestCommands.contains) ?? false

@@ -105,3 +105,38 @@ final class LateDraftHost: ComposerHost {
         #expect(!host.isDraftLoaded)
     }
 }
+
+/// M4: an unconfirmed send is not "Not sent": the composer stays clear and says delivery is unknown.
+@MainActor
+@Suite struct UnconfirmedSendTests {
+    @Test func unconfirmedOutcomeKeepsTheComposerClear() async {
+        let controller = ComposerController()
+        let view = FakeView()
+        view.bind(controller)
+        let host = FakeComposerHost("a")
+        host.outcomes = [.unconfirmed("Delivery unknown")]
+        var announcements: [String] = []
+        controller.announce = { announcements.append($0) }
+        controller.attach(host)
+        view.draft = ComposerDraft(text: "deploy")
+        #expect(controller.submit())
+        for _ in 0..<1_000 where controller.pendingSends > 0 { await Task.yield() }
+        #expect(controller.pendingSends == 0)
+        #expect(view.draft == .empty)
+        #expect(host.draft == .empty)
+        #expect(controller.errorMessage == "Delivery unknown")
+        #expect(announcements.last == "Delivery unknown")
+    }
+
+    @Test func adapterMapsUnknownDelivery() async {
+        let thread = FakeThread()
+        thread.nextResult = nil
+        thread.unknown = true
+        let host = ThreadModelComposerHost(thread, cache: ComposerDraftCache())
+        let outcome = await host.send(ComposerSubmission(text: "x", tokens: [], attachments: [], delivery: .now))
+        guard case .unconfirmed = outcome else {
+            Issue.record("expected unconfirmed, got \(outcome)")
+            return
+        }
+    }
+}

@@ -119,6 +119,7 @@ enum MainMenu {
         menu.add(.queueFollowUp)
         menu.add(.steerFollowUp)
         menu.add(.stopRun)
+        menu.add(.retryUnconfirmed)
         menu.addItem(.separator())
         menu.add(.chooseModel)
         menu.add(.permissionMode)

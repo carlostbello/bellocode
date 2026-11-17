@@ -15,6 +15,8 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     var isRunning: Bool { get }
     var isStopping: Bool { get }
     var composerErrorMessage: String? { get }
+    /// The last send's delivery is unknown (kept by the thread for a same-ID retry), not failed.
+    var composerDeliveryUnknown: Bool { get }
     /// Earlier user prompts, oldest first.
     var composerPromptHistory: [String] { get }
     func send(_ text: String?, attachments: PromptAttachments, delivery: PromptDelivery?) async -> MessageID?
@@ -26,10 +28,12 @@ public protocol ComposerThreadSource: AnyObject, Observable {
 
 extension ComposerThreadSource {
     public var isDraftLoaded: Bool { true }
+    public var composerDeliveryUnknown: Bool { false }
 }
 
 extension ThreadModel: ComposerThreadSource {
     public var composerErrorMessage: String? { lastError?.userMessage }
+    public var composerDeliveryUnknown: Bool { lastError == .deliveryUnknown }
 
     public var composerPromptHistory: [String] {
         messageIDs.compactMap { id in
@@ -117,6 +121,9 @@ public final class ThreadModelComposerHost: ComposerHost {
             return .failed(source.composerErrorMessage ?? "The command was not run.")
         }
         if await source.send(input.text, attachments: input.attachments, delivery: delivery) != nil { return .accepted }
+        if source.composerDeliveryUnknown {
+            return .unconfirmed(source.composerErrorMessage ?? "Delivery unknown: opencode did not confirm it received this message.")
+        }
         return .failed(source.composerErrorMessage ?? "The message was not sent.")
     }
 

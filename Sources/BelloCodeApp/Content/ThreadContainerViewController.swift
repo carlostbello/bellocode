@@ -21,6 +21,7 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var requestStack: NSViewController?
     private(set) var statusBanner: StatusUnknownBanner?
     private(set) var queuedPrompts: QueuedPromptsView?
+    private(set) var unconfirmedSends: UnconfirmedSendsView?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
@@ -123,6 +124,7 @@ final class ThreadContainerViewController: NSViewController {
         requestStack = nil
         statusBanner = nil
         queuedPrompts = nil
+        unconfirmedSends = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -160,13 +162,16 @@ final class ThreadContainerViewController: NSViewController {
             statusBanner = unknown
             let queued = QueuedPromptsView(thread: thread)
             queuedPrompts = queued
-            let column = NSStackView(views: [unknown, queued])
+            let unconfirmed = UnconfirmedSendsView(thread: thread)
+            unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
+            unconfirmedSends = unconfirmed
+            let column = NSStackView(views: [unknown, unconfirmed, queued])
             column.orientation = .vertical
             column.alignment = .leading
             column.spacing = 0
             column.detachesHiddenViews = true
             column.translatesAutoresizingMaskIntoConstraints = false
-            for view in [unknown, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
+            for view in [unknown, unconfirmed, queued] { view.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true }
             banner = column
         } else {
             banner = NSView()

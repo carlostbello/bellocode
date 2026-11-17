@@ -36,6 +36,9 @@ public enum ProjectionChange: Sendable {
     case pendingResolved(id: String, sessionID: SessionID, ancestors: [SessionID] = [])
     case queued(QueuedPrompt)
     case queueRemoved(MessageID, sessionID: SessionID)
+    /// A send whose delivery is not confirmed (lost answers), or its check or outcome changed.
+    case unconfirmed(UnconfirmedSend)
+    case unconfirmedRemoved(MessageID, sessionID: SessionID)
     case threadUI(ThreadUIState)
     /// The thread's history was replaced (resync found a gap, or the cache was rebuilt): reload its window.
     case threadReset(SessionID)
@@ -58,6 +61,8 @@ public enum ProjectionChange: Sendable {
         case .pendingResolved(_, let sessionID, let ancestors): [.thread(sessionID)] + ancestors.map(ChangeTopic.thread)
         case .queued(let prompt): [.thread(prompt.sessionID)]
         case .queueRemoved(_, let sessionID): [.thread(sessionID)]
+        case .unconfirmed(let send): [.thread(send.sessionID)]
+        case .unconfirmedRemoved(_, let sessionID): [.thread(sessionID)]
         case .threadUI(let state): [.thread(state.sessionID)]
         case .threadReset(let id), .threadHistory(let id, _): [.thread(id)]
         case .attention: [.attention]
@@ -111,6 +116,8 @@ public struct ChangeSet: Sendable {
     public var resolvedRequests: Set<String> = []
     public var queue: [MessageID: QueuedPrompt] = [:]
     public var removedQueue: Set<MessageID> = []
+    public var unconfirmed: [MessageID: UnconfirmedSend] = [:]
+    public var removedUnconfirmed: Set<MessageID> = []
     public var threadUI: [SessionID: ThreadUIState] = [:]
     public var resetThreads: Set<SessionID> = []
     /// Whether the server has history older than its newest window, per thread.
@@ -126,7 +133,8 @@ public struct ChangeSet: Sendable {
     var entityCount: Int {
         projects.count + removedProjects.count + registry.count + removedRegistry.count + sessions.count
             + removedSessions.count + statuses.count + messages.count + removedMessages.count + pending.count
-            + resolvedRequests.count + queue.count + removedQueue.count + threadUI.count + resetThreads.count
+            + resolvedRequests.count + queue.count + removedQueue.count + unconfirmed.count + removedUnconfirmed.count
+            + threadUI.count + resetThreads.count
             + historyHasOlder.count
     }
 
@@ -176,6 +184,12 @@ public struct ChangeSet: Sendable {
         case .queueRemoved(let id, _):
             queue[id] = nil
             removedQueue.insert(id)
+        case .unconfirmed(let send):
+            unconfirmed[send.id] = send
+            removedUnconfirmed.remove(send.id)
+        case .unconfirmedRemoved(let id, _):
+            unconfirmed[id] = nil
+            removedUnconfirmed.insert(id)
         case .threadUI(let state):
             threadUI[state.sessionID] = state
         case .threadReset(let id):

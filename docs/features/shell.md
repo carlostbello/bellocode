@@ -9,7 +9,9 @@ Status: integrated 2026-11-16 against MockOpenCode and opencode 2.3.0 (`opencode
   the non-modal onboarding window (free models work at once). "Connect…" in the model picker opens a Connect window.
   `--smoke-test`, `--snapshot <name>` (12 states, see `Launch/SnapshotRunner.swift`).
 - **Content column** (`Content/`): header › transcript (temporary placeholder; seam unchanged for TranscriptKit) ›
-  request stack (AgentUI, `RequestStackSurface.swift`) › "Status unknown" banner › queued follow-ups (Queued / Steering /
+  request stack (AgentUI, `RequestStackSurface.swift`) › "Status unknown" banner › sends with unknown delivery
+  (`UnconfirmedSendsView`: "Delivery unknown" with **Retry**, which checks and resends under the same ID; "Not sent"
+  with **Edit in Composer**; never a send-as-new action) › queued follow-ups (Queued / Steering /
   Parked, Steer Now, Remove) › composer (ComposerKit, `ComposerSurface.swift`). One centred column (760 pt max,
   24 pt margins). Drafts use the hero composer (3 lines) and dock once the first send creates the thread.
 - **Composer**: plan toggle and model picker leading, permission mode trailing, context line (project · branch or
@@ -39,6 +41,7 @@ Status: integrated 2026-11-16 against MockOpenCode and opencode 2.3.0 (`opencode
 | Next / Previous Region | F6 / ⇧F6 (includes pending requests) | Previous / Next Request | ⌥⌘[ / ⌥⌘] |
 | Sidebar / Inspector / Terminal | ⌃⌘S / ⌥⌘I / ⌃` | Settings… | ⌘, |
 | Paste Inline (no chip) | ⌥⌘V | Connect Provider…, Welcome… | menu only |
+| Retry Unconfirmed Message | menu only (Thread menu) | | |
 
 The focused composer handles ⌘↩ and ⌥⌘↩ itself (`performKeyEquivalent`), so its send-key policy wins while typing
 (⌘↩ = alternate follow-up when Return sends). Request actions act on the front request of the displayed thread;

@@ -25,8 +25,15 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   `.catalog`, `.connection`). A token re-renders only the tail `MessageModel`; `messageIDs` changes only when a message
   is added, removed or reordered. Follow-tail and scroll position belong to the view.
 - Optimistic: a send appears at once with `delivery == .sending` (idle) or as a `.sending` queue item (busy; queue is
-  the default, steer on request); `.accepted`/`.queued` only after the server answers; on failure it is removed, the
-  text returns to the draft and `lastError` is set. Rename/archive/model/agent/mode roll back on failure. Delete hides
+  the default, steer on request); `.accepted`/`.queued` only after the server answers; on a definite failure it is
+  removed, the text returns to the draft and `lastError` is set. A lost answer is retried under the same prompt ID
+  (opencode 2.3.0 answers a repeated ID with the original item and keeps one message: `PromptRetryRealBinaryTests`,
+  run 2026-11-16). If any answer was lost, the outcome is decided by asking the server: `GET …/message/{id}`, then the
+  inbox, then the message again; found = accepted; absent = one more same-ID send (or not sent after a definite
+  refusal); unreachable = `EngineError.deliveryUnknown`: the entry stays `.sending`, the text is not put back in the
+  draft, and `ThreadModel.unconfirmedSends` holds it (32 max) for `retryUnconfirmed(_:)` (check, then same-ID resend)
+  or, once a retry is refused, `takeUnconfirmed(_:)`. Every successful resync checks unknown sends (never resends).
+  In memory only: a relaunch drops them (the resync shows the prompt if it was admitted). Rename/archive/model/agent/mode roll back on failure. Delete hides
   the row and restores it if the server refuses. A reply removes the request only after the server's 204.
 
 ## Schema (`Store/Schema.swift`, migration `v1-initial`)

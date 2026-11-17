@@ -196,6 +196,8 @@ final class FakeThread: ComposerThreadSource {
     var draft = ""
     var loaded = true
     var isDraftLoaded: Bool { loaded }
+    var unknown = false
+    var composerDeliveryUnknown: Bool { unknown }
     var isRunning = false
     var isStopping = false
     var composerErrorMessage: String?
