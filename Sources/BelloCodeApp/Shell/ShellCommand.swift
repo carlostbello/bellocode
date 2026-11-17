@@ -36,6 +36,16 @@ import BelloCore
     func submitRequestAnswer(_ sender: Any?)
     func showPreviousRequest(_ sender: Any?)
     func showNextRequest(_ sender: Any?)
+    func newTerminal(_ sender: Any?)
+    func closeTerminal(_ sender: Any?)
+    func splitTerminal(_ sender: Any?)
+    func selectNextTerminal(_ sender: Any?)
+    func selectPreviousTerminal(_ sender: Any?)
+    func clearTerminal(_ sender: Any?)
+    func renameTerminal(_ sender: Any?)
+    func restartTerminal(_ sender: Any?)
+    func moveTerminal(_ sender: Any?)
+    func sendTerminalSelectionToComposer(_ sender: Any?)
 }
 
 /// Every app command with its menu title and shortcut (docs/research/03-ux-patterns.md, section D), including the
@@ -50,6 +60,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case chooseModel, permissionMode, togglePlan
     case allowOnce, allowAlways, denyRequest, submitAnswer, previousRequest, nextRequest
     case showSettings, connectProvider, showWelcome
+    case newTerminal, closeTerminal, splitTerminal, nextTerminal, previousTerminal, clearTerminal, renameTerminal
+    case restartTerminal, moveTerminal, sendTerminalSelection
 
     @MainActor var selector: Selector {
         switch self {
@@ -84,6 +96,17 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showSettings: #selector(AppDelegate.showSettings(_:))
         case .connectProvider: #selector(AppDelegate.connectProvider(_:))
         case .showWelcome: #selector(AppDelegate.showWelcome(_:))
+        case .newTerminal: #selector(MainWindowController.newTerminal(_:))
+        case .closeTerminal: #selector(MainWindowController.closeTerminal(_:))
+        case .splitTerminal: #selector(MainWindowController.splitTerminal(_:))
+        case .nextTerminal: #selector(MainWindowController.selectNextTerminal(_:))
+        case .previousTerminal: #selector(MainWindowController.selectPreviousTerminal(_:))
+        // The focused terminal answers these two itself (same selectors on TerminalPaneView).
+        case .clearTerminal: #selector(MainWindowController.clearTerminal(_:))
+        case .renameTerminal: #selector(MainWindowController.renameTerminal(_:))
+        case .restartTerminal: #selector(MainWindowController.restartTerminal(_:))
+        case .moveTerminal: #selector(MainWindowController.moveTerminal(_:))
+        case .sendTerminalSelection: #selector(MainWindowController.sendTerminalSelectionToComposer(_:))
         }
     }
 
@@ -124,6 +147,16 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showSettings: "Settings…"
         case .connectProvider: "Connect Provider…"
         case .showWelcome: "Welcome to BelloCode…"
+        case .newTerminal: "New Terminal"
+        case .closeTerminal: "Close Terminal"
+        case .splitTerminal: "Split Terminal"
+        case .nextTerminal: "Next Terminal"
+        case .previousTerminal: "Previous Terminal"
+        case .clearTerminal: "Clear Terminal"
+        case .renameTerminal: "Rename Terminal…"
+        case .restartTerminal: "Restart Terminal"
+        case .moveTerminal: "Move Terminal to Right Panel"
+        case .sendTerminalSelection: "Send Selection to Composer"
         }
     }
 
@@ -167,8 +200,22 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .nextRequest: agent(.nextRequest)
         case .showSettings: (",", .command)
         case .connectProvider, .showWelcome: ("", [])
+        // Terminal.app's keys where they exist; all use ⌘ so a focused terminal keeps its control sequences.
+        case .newTerminal: ("t", .command)
+        case .closeTerminal: ("w", [.command, .shift])
+        case .splitTerminal: ("d", .command)
+        case .nextTerminal: ("}", .command)
+        case .previousTerminal: ("{", .command)
+        case .clearTerminal: ("k", .command)
+        case .sendTerminalSelection: ("l", [.command, .shift])
+        case .renameTerminal, .restartTerminal, .moveTerminal: ("", [])
         }
     }
+
+    /// Shortcuts without ⌘ that still reach the app while a terminal has focus. Every other non-⌘ key (F6 for
+    /// region cycling included) goes to the program in the terminal (AGENTS.md UX rule 2); leave a terminal with ⌃`
+    /// or ⌥⌘M (Focus Composer).
+    var isKeptWhileTerminalFocused: Bool { self == .toggleTerminal }
 
     /// Shortcuts that are also text-editing keys: disabled while a text view has focus so text keeps them
     /// (AGENTS.md UX rule 2). A disabled menu item does not consume its key equivalent.
@@ -226,6 +273,14 @@ struct CommandContext: Equatable, Sendable {
     var isTerminalVisible = false
     /// Request commands the displayed thread's front request accepts now.
     var availableRequestCommands: Set<RequestCommand> = []
+    /// A thread or draft is displayed and the terminals are bound (New Terminal can act).
+    var terminalAvailable = false
+    /// The terminal surface commands act on has a selected terminal.
+    var terminalSelected = false
+    var terminalHasSelectedText = false
+    var terminalSplit = false
+    /// The terminal commands act on is in the right panel.
+    var terminalInPanel = false
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -245,6 +300,10 @@ struct CommandContext: Equatable, Sendable {
         case .allowOnce, .allowAlways, .denyRequest, .submitAnswer, .previousRequest, .nextRequest:
             return command.requestCommand.map(availableRequestCommands.contains) ?? false
         case .showSettings, .connectProvider, .showWelcome: return true
+        case .newTerminal, .splitTerminal: return terminalAvailable
+        case .closeTerminal, .nextTerminal, .previousTerminal, .clearTerminal, .renameTerminal, .restartTerminal, .moveTerminal:
+            return terminalSelected
+        case .sendTerminalSelection: return terminalHasSelectedText && composerVisible
         }
     }
 
@@ -253,6 +312,8 @@ struct CommandContext: Equatable, Sendable {
         switch command {
         case .togglePinProject: targetProjectPinned ? "Unpin Project" : "Pin Project"
         case .toggleTerminal: isTerminalVisible ? "Hide Terminal" : "Show Terminal"
+        case .splitTerminal: terminalSplit ? "Unsplit Terminal" : "Split Terminal"
+        case .moveTerminal: terminalInPanel ? "Move Terminal to Drawer" : "Move Terminal to Right Panel"
         default: command.title
         }
     }

@@ -2,6 +2,7 @@ import AppKit
 import ComposerKit
 import DesignSystem
 import Observation
+import TerminalKit
 
 /// App preferences (Settings ▸ General) plus first-run state. Persisted in `UserDefaults` (no secrets here).
 ///
@@ -38,6 +39,17 @@ final class AppSettings {
             applyAppearance()
         }
     }
+    /// Settings ▸ Terminal: font size, scrollback, OSC 52 clipboard writes, Option as Meta, paste confirmation.
+    var terminalPreferences: TerminalPreferences {
+        didSet {
+            guard terminalPreferences != oldValue else { return }
+            save(Double(terminalPreferences.fontSize), Keys.terminalFontSize)
+            save(terminalPreferences.scrollback, Keys.terminalScrollback)
+            save(terminalPreferences.allowsClipboardWrites, Keys.terminalClipboardWrites)
+            save(terminalPreferences.optionAsMeta, Keys.terminalOptionAsMeta)
+            save(terminalPreferences.confirmsMultilinePaste, Keys.terminalConfirmPaste)
+        }
+    }
     /// Onboarding finished or skipped once; it is then offered from Settings ▸ Accounts only.
     var hasCompletedOnboarding: Bool { didSet { save(hasCompletedOnboarding, Keys.onboarding) } }
 
@@ -48,6 +60,11 @@ final class AppSettings {
         static let baseFontSize = "BelloCodeBaseFontSize"
         static let appearance = "BelloCodeAppearance"
         static let onboarding = "BelloCodeOnboardingCompleted"
+        static let terminalFontSize = "BelloCodeTerminalFontSize"
+        static let terminalScrollback = "BelloCodeTerminalScrollback"
+        static let terminalClipboardWrites = "BelloCodeTerminalAllowsClipboardWrites"
+        static let terminalOptionAsMeta = "BelloCodeTerminalOptionAsMeta"
+        static let terminalConfirmPaste = "BelloCodeTerminalConfirmsMultilinePaste"
     }
 
     /// `defaults` nil keeps everything in memory (tests and snapshots).
@@ -58,6 +75,13 @@ final class AppSettings {
         baseFontSize = min(max(size, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         appearance = defaults?.string(forKey: Keys.appearance).flatMap(Appearance.init(rawValue:)) ?? .system
         hasCompletedOnboarding = defaults?.bool(forKey: Keys.onboarding) ?? false
+        let defaultTerminal = TerminalPreferences()
+        terminalPreferences = TerminalPreferences(
+            fontSize: CGFloat(defaults?.object(forKey: Keys.terminalFontSize) as? Double ?? Double(defaultTerminal.fontSize)),
+            scrollback: defaults?.object(forKey: Keys.terminalScrollback) as? Int ?? defaultTerminal.scrollback,
+            allowsClipboardWrites: defaults?.object(forKey: Keys.terminalClipboardWrites) as? Bool ?? defaultTerminal.allowsClipboardWrites,
+            optionAsMeta: defaults?.object(forKey: Keys.terminalOptionAsMeta) as? Bool ?? defaultTerminal.optionAsMeta,
+            confirmsMultilinePaste: defaults?.object(forKey: Keys.terminalConfirmPaste) as? Bool ?? defaultTerminal.confirmsMultilinePaste)
     }
 
     /// Applies typography and appearance process-wide (launch and after a change).

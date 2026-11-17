@@ -12,7 +12,7 @@ import SwiftUI
 //   requestStack → AgentUI         (RequestStackSurfaceController, Content/RequestStackSurface.swift)
 //   composer     → ComposerKit     (ComposerSurfaceController, Content/ComposerSurface.swift)
 //   rightPanel   → DiffKit / BrowserKit tabs (replaces the placeholder tabs)
-//   terminal     → TerminalKit     (replaces the placeholder drawer)
+//   terminal     → TerminalKit     (TerminalSurfaces, Content/TerminalSurface.swift: drawer + "Terminal" tab)
 //
 // A surface is created for one `ThreadSurfaceContext` (one displayed thread or draft) and released when the
 // selection changes, so it must cancel its own observation/tasks when its view controller is deallocated or in
@@ -36,7 +36,9 @@ struct ShellSurfaces {
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
     static func builtIn(services: AppServices) -> ShellSurfaces {
-        ShellSurfaces(
+        // TerminalKit (Content/TerminalSurface.swift): the drawer and the "Terminal" tab share one set per window.
+        let terminals = TerminalSurfaces(services: services)
+        return ShellSurfaces(
             transcript: { TemporaryTranscriptViewController(context: $0) },
             requestStack: { RequestStackSurfaceController(context: $0) },
             composer: { ComposerSurfaceController(context: $0, services: services) },
@@ -50,10 +52,9 @@ struct ShellSurfaces {
                 RightPanelTab(id: "browser", title: "Browser", symbolName: "globe") {
                     placeholder("Browser", symbol: "globe", detail: "The built-in browser appears here.")
                 },
+                RightPanelTab(id: "terminal", title: "Terminal", symbolName: "terminal") { terminals.makePanelController() },
             ],
-            terminalDrawer: {
-                placeholder("Terminal", symbol: "terminal", detail: "Per-thread terminals appear here.")
-            })
+            terminalDrawer: { terminals.makeDrawerController() })
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {
