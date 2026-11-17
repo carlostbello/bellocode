@@ -295,6 +295,23 @@ public final class ThreadModel: Identifiable {
         await run { try await $0.dismissQuestion(id) }
     }
 
+    /// Answers one of BelloCode's own requests (a secret card, an app approval; docs/features/orchestration-extras.md).
+    /// The card stays until the answer is applied; a failure shows on it.
+    public func respond(to request: AppRequest, _ response: AppRequestResponse) async {
+        guard let extras = engine?.extras else { return }
+        submittingRequestIDs.insert(request.id)
+        defer { submittingRequestIDs.remove(request.id) }
+        do {
+            try await extras.respond(to: request.id, response)
+            lastError = nil
+        } catch {
+            lastError = .failed(ExtrasError.message(error))
+        }
+    }
+
+    /// Whether a secret is saved under `label` (the card's "Use Saved Value").
+    public func savedSecretExists(label: String) -> Bool { engine?.extras.secrets.hasSaved(label: label) ?? false }
+
     public func setModel(_ model: ModelSelection) async { await run { try await $0.setModel(self.sessionID, model: model) } }
     public func setAgent(_ agent: String) async { await run { try await $0.setAgent(self.sessionID, agent: agent) } }
     public func setPermissionMode(_ mode: PermissionMode) async {
