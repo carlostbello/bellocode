@@ -66,7 +66,7 @@ struct EnvironmentBannerView: View {
             VStack(alignment: .leading, spacing: DS.Space.s2) {
                 Text(notice.title).font(.ds(.bodyEmph)).foregroundStyle(DSColor.text)
                 Text(notice.message).font(.ds(.meta)).foregroundStyle(DSColor.text2).fixedSize(horizontal: false, vertical: true)
-                if let progress { ProgressView(value: progress).progressViewStyle(.linear).frame(maxWidth: 240) }
+                if let progress { DSProgressBar(value: progress).frame(maxWidth: 240).padding(.top, DS.Space.s4) }
             }
             Spacer(minLength: DS.Space.s8)
             if let action = notice.fix {
@@ -75,48 +75,11 @@ struct EnvironmentBannerView: View {
             Button("Retry") { retry() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                 .help("Check again; commands run as soon as the environment is ready (no restart needed)")
         }
-        .padding(DS.Space.s8)
-        .background(SwiftUI.Color(nsColor: DS.Color.tone(notice.tone.ds).surface), in: RoundedRectangle(cornerRadius: DS.Radius.md))
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s10)
+        .background(SwiftUI.Color(nsColor: DS.Color.tone(notice.tone.ds).surface), in: RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(notice.title). \(notice.message)")
-    }
-}
-
-/// A field drawn in the new visual language (no bezel).
-private struct DSField: ViewModifier {
-    func body(content: Content) -> some View {
-        content.textFieldStyle(.plain).font(.ds(.body))
-            .padding(.horizontal, DS.Space.s8).frame(height: DS.Size.control)
-            .background(DSColor.fillSubtle, in: RoundedRectangle(cornerRadius: DS.Radius.sm))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DSColor.borderStrong, lineWidth: 1))
-    }
-}
-
-private struct SectionLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View { Text(text).font(.ds(.labelEmph)).foregroundStyle(DSColor.text3).padding(.top, DS.Space.s8) }
-}
-
-private struct Row<Trailing: View>: View {
-    let title: String
-    let detail: String?
-    let trailing: Trailing
-    init(_ title: String, detail: String? = nil, @ViewBuilder trailing: () -> Trailing) {
-        self.title = title
-        self.detail = detail
-        self.trailing = trailing()
-    }
-    var body: some View {
-        HStack(alignment: .center, spacing: DS.Space.s8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.ds(.body)).foregroundStyle(DSColor.text)
-                if let detail { Text(detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).lineLimit(2) }
-            }
-            Spacer(minLength: DS.Space.s8)
-            trailing
-        }
-        .frame(minHeight: DS.Size.sidebarRow)
     }
 }
 
@@ -197,82 +160,84 @@ struct ContainersSettingsView: View {
     let confirmRemove: (ManagedContainer) -> Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.s6) {
-                Text("Everything the agent or you run executes in a Linux container on Rancher Desktop, with the project at the same path. Nothing falls back to this Mac.")
-                    .font(.ds(.meta)).foregroundStyle(DSColor.text2).fixedSize(horizontal: false, vertical: true)
-                SectionLabel("Runtime")
-                Row(service.isEnabled ? (service.runtime?.userMessage ?? "Checking Rancher Desktop…") : "Container execution is off in this build.",
-                    detail: runtimeDetail) {
+        SettingsPaneBody {
+            SettingsNote("Everything the agent or you run executes in a Linux container on Rancher Desktop, with the project at the same path. Nothing falls back to this Mac.")
+            SettingsGroup("Runtime") {
+                SettingsRow(
+                    service.isEnabled ? (service.runtime?.userMessage ?? "Checking Rancher Desktop…") : "Container execution is off in this build.",
+                    detail: runtimeDetail, divided: false
+                ) {
                     RuntimeStatusLabel(runtime: service.runtime, enabled: service.isEnabled)
                 }
-                HStack(spacing: DS.Space.s6) {
+                SettingsActionsRow {
                     if let fix = service.runtime?.fix {
                         Button(fix.rawValue) { EnvironmentFixes.perform(EnvironmentFix(fix) ?? .retry, directory: nil, engine: model.engine, openSettings: { _ in }) }
                             .buttonStyle(DSButtonStyle(.primary, size: .small))
                     }
                     Button("Check Again") { Task { await service.recheckRuntime() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                 }
-
-                SectionLabel("Default image")
-                Text("Used by projects without their own image. There is no built-in public default: point this at your organisation's registry.")
-                    .font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11")).modifier(DSField())
-                        .accessibilityLabel("Default container image")
+            }
+            SettingsGroup(
+                "Default image",
+                footer: "Used by projects without their own image. There is no built-in public default: point this at your organisation's registry."
+            ) {
+                SettingsFieldRow(divided: false) {
+                    TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
+                        .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
                     Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                 }
-
-                SectionLabel("Registry sign-in")
-                HStack {
-                    TextField("", text: $model.registry, prompt: Text("registry.example.com")).modifier(DSField()).accessibilityLabel("Registry host")
-                    TextField("", text: $model.username, prompt: Text("User")).modifier(DSField()).frame(width: 120).accessibilityLabel("Registry user")
-                    SecureField("", text: $model.password, prompt: Text("Password or token")).modifier(DSField()).frame(width: 150)
+            }
+            SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
+                SettingsFieldRow(divided: false) {
+                    TextField("", text: $model.registry, prompt: Text("registry.example.com")).textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Registry host")
+                    TextField("", text: $model.username, prompt: Text("User")).textFieldStyle(DSTextFieldStyle()).frame(width: 96).accessibilityLabel("Registry user")
+                    SecureField("", text: $model.password, prompt: Text("Password or token")).textFieldStyle(DSTextFieldStyle()).frame(width: 128)
                         .accessibilityLabel("Registry password")
                     Button("Sign In") { model.signIn() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         .disabled(model.registry.isEmpty || model.username.isEmpty || model.password.isEmpty)
                 }
-
-                SectionLabel("Isolation")
+            }
+            SettingsGroup("Isolation") {
                 IsolationReportView(report: service.isolation, running: service.isVerifyingIsolation) {
                     Task { await service.verifyIsolation(full: true) }
                 }
-
-                SectionLabel("Host requirements")
-                ForEach(model.requirements) { item in
-                    Row(item.name, detail: item.detail) {
+            }
+            SettingsGroup("Host requirements") {
+                ForEach(Array(model.requirements.enumerated()), id: \.element.id) { index, item in
+                    SettingsRow(item.name, detail: item.detail, divided: index > 0) {
                         DSPillView(item.ok ? "Found" : "Missing", tone: item.ok ? .success : .danger, symbolName: item.ok ? "checkmark" : "xmark")
                     }
                 }
-
-                SectionLabel("Containers")
+            }
+            SettingsGroup("Containers") {
                 if model.containers.isEmpty {
-                    Text(service.runtime?.isReady == true ? "No BelloCode containers." : "Containers are listed while Rancher Desktop runs.")
-                        .font(.ds(.meta)).foregroundStyle(DSColor.text3)
-                }
-                ForEach(model.containers) { container in
-                    Row(container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name,
-                        detail: "\(container.image) · \(container.status)") {
-                        DSPillView(container.isRunning ? "Running" : container.state.capitalized, tone: container.isRunning ? .success : .neutral,
-                                   symbolName: container.isRunning ? "shippingbox.fill" : "shippingbox")
-                        if container.isRunning {
-                            Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                            Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                        } else {
-                            Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                        }
-                        Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                        Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
-                            .buttonStyle(DSButtonStyle(.ghost, size: .small))
+                    SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs", divided: false) {
+                        EmptyView()
                     }
                 }
-                if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
-                if let message = model.message { Text(message).font(.ds(.meta)).foregroundStyle(DSColor.text2) }
+                ForEach(Array(model.containers.enumerated()), id: \.element.id) { index, container in
+                    SettingsRow(container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name,
+                                detail: "\(container.image) · \(container.status)", divided: index > 0) {
+                        HStack(spacing: DS.Space.s2) {
+                            DSPillView(container.isRunning ? "Running" : container.state.capitalized, tone: container.isRunning ? .success : .neutral,
+                                       symbolName: container.isRunning ? "shippingbox" : "shippingbox")
+                                .padding(.trailing, DS.Space.s4)
+                            if container.isRunning {
+                                Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                                Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                            } else {
+                                Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                            }
+                            Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                            Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
+                                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        }
+                    }
+                }
             }
-            .padding(DS.Space.s20)
+            if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
+            if let message = model.message { SettingsNote(message) }
         }
-        .frame(width: 640, height: 620)
-        .background(DSColor.canvas)
         .task { await model.reload() }
     }
 
@@ -283,33 +248,41 @@ struct ContainersSettingsView: View {
     }
 }
 
+/// Verify Isolation: the verdict as a status pill (glyph + word) and summary, the button, then one row per check with
+/// its outcome word (`dangerText` for problems), name and detail. Lives inside a `SettingsGroup`.
 struct IsolationReportView: View {
     let report: IsolationReport?
     let running: Bool
     let verify: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s4) {
-            HStack {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DS.Space.s8) {
                 if let report {
                     DSPillView(report.passed ? "Isolated" : "Problem", tone: report.passed ? .success : .danger,
                                symbolName: report.passed ? "checkmark.shield" : "exclamationmark.shield")
                     Text(report.summary).font(.ds(.meta)).foregroundStyle(DSColor.text2).lineLimit(2)
                 } else {
-                    Text("Not checked yet.").font(.ds(.meta)).foregroundStyle(DSColor.text3)
+                    Text("Not checked yet").font(.ds(.body)).foregroundStyle(DSColor.text2)
                 }
-                Spacer()
+                Spacer(minLength: DS.Space.s8)
                 Button(running ? "Verifying…" : "Verify Isolation") { verify() }.buttonStyle(DSButtonStyle(.outline, size: .small)).disabled(running)
                     .help("Runs a shell command, a PTY, a command template, a schedule condition and a terminal and proves where each one ran")
             }
+            .padding(.horizontal, DS.Space.s12)
+            .frame(minHeight: 40)
             if let report {
                 ForEach(report.checks) { check in
-                    HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
+                    HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
                         Text(check.outcome.word).font(.ds(.metaEmph))
-                            .foregroundStyle(check.outcome.isProblem ? DSColor.dangerText : DSColor.text2).frame(width: 70, alignment: .leading)
-                        Text(check.name).font(.ds(.meta)).foregroundStyle(DSColor.text).frame(width: 170, alignment: .leading)
+                            .foregroundStyle(check.outcome.isProblem ? DSColor.dangerText : DSColor.successText).frame(width: 64, alignment: .leading)
+                        Text(check.name).font(.ds(.label)).foregroundStyle(DSColor.text).frame(width: 150, alignment: .leading)
                         Text(check.outcome.detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).lineLimit(2)
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, DS.Space.s12)
+                    .padding(.vertical, DS.Space.s6)
+                    .overlay(alignment: .top) { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
                 }
             }
         }
@@ -450,37 +423,29 @@ struct EnvironmentSettingsView: View {
     @ObservedObject var model: EnvironmentSettingsModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.s6) {
-                HStack {
-                    Menu {
-                        ForEach(model.projects, id: \.directory) { project in
-                            Button(project.name) { model.directory = project.directory }
+        SettingsPaneBody {
+            SettingsGroup {
+                SettingsRow(
+                    model.projects.first { $0.directory == model.directory }?.name ?? model.directory.map { ($0 as NSString).lastPathComponent } ?? "No project",
+                    detail: model.directory.map { ($0 as NSString).abbreviatingWithTildeInPath }, divided: false
+                ) {
+                    HStack(spacing: DS.Space.s8) {
+                        if let environment = model.environment {
+                            DSPillView(environment.phase.label, tone: environment.phase.tone.ds, symbolName: environment.phase.symbolName)
                         }
-                    } label: {
-                        Label(model.directory.map { ($0 as NSString).lastPathComponent } ?? "No project", systemImage: "folder")
-                            .font(.ds(.bodyEmph)).foregroundStyle(DSColor.text)
-                    }
-                    .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Project")
-                    Spacer()
-                    if let environment = model.environment {
-                        DSPillView(environment.phase.label, tone: environment.phase.tone.ds, symbolName: environment.phase.symbolName)
+                        SettingsMenuPicker(
+                            label: "Project", options: model.projects.map { ($0.directory, $0.name) },
+                            selection: Binding(get: { model.directory ?? "" }, set: { model.directory = $0 }))
                     }
                 }
-                if let directory = model.directory {
-                    Text(directory).font(.ds(.meta)).foregroundStyle(DSColor.text3).lineLimit(1).truncationMode(.middle)
-                }
-                if let environment = model.environment {
-                    content(environment)
-                } else {
-                    Text("Open a project to set its environment.").font(.ds(.body)).foregroundStyle(DSColor.text3)
-                }
-                if let message = model.message { Text(message).font(.ds(.meta)).foregroundStyle(DSColor.text2) }
             }
-            .padding(DS.Space.s20)
+            if let environment = model.environment {
+                content(environment)
+            } else {
+                SettingsNote("Open a project to set its environment.")
+            }
+            if let message = model.message { SettingsNote(message) }
         }
-        .frame(width: 640, height: 640)
-        .background(DSColor.canvas)
     }
 
     @ViewBuilder
@@ -491,69 +456,73 @@ struct EnvironmentSettingsView: View {
                                   fix: { fix in EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { _ in }) },
                                   retry: { Task { await service.retry(environment.directory) } })
         }
-        SectionLabel("Image")
-        HStack {
-            TextField("", text: $model.image, prompt: Text(service.defaults.defaultImage.map { "Default: \($0)" } ?? "registry.example.com/team/image:tag"))
-                .modifier(DSField()).accessibilityLabel("Container image")
-            Button("Pull") { service.pull(environment) }.buttonStyle(DSButtonStyle(.outline, size: .small)).disabled(environment.image == nil)
-            Button("Rebuild") { service.rebuild(environment.directory) }.buttonStyle(DSButtonStyle(.outline, size: .small))
-                .help("Removes the container and creates it again from the image (the project folder is untouched)")
+        SettingsGroup("Image", footer: environment.record.inventory.map { "\($0.os) · \($0.arch) · \($0.tools.joined(separator: ", "))" }) {
+            SettingsFieldRow(divided: false) {
+                TextField("", text: $model.image, prompt: Text(service.defaults.defaultImage.map { "Default: \($0)" } ?? "registry.example.com/team/image:tag"))
+                    .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Container image")
+                Button("Pull") { service.pull(environment) }.buttonStyle(DSButtonStyle(.outline, size: .small)).disabled(environment.image == nil)
+                Button("Rebuild") { service.rebuild(environment.directory) }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .help("Removes the container and creates it again from the image (the project folder is untouched)")
+            }
+            if let reason = environment.outdatedReason {
+                SettingsRow("Out of date", detail: "\(reason): recreated on next use.") {
+                    DSPillView("Outdated", tone: .warning, symbolName: "exclamationmark.triangle")
+                }
+            }
         }
-        if let inventory = environment.record.inventory {
-            Text("\(inventory.os) · \(inventory.arch) · \(inventory.tools.joined(separator: ", "))").font(.ds(.meta)).foregroundStyle(DSColor.text3)
+        SettingsGroup("Limits and network") {
+            SettingsRow("Resources", divided: false) {
+                HStack(spacing: DS.Space.s6) {
+                    Text("CPUs").font(.ds(.label)).foregroundStyle(DSColor.text2)
+                    TextField("", text: $model.cpus).textFieldStyle(DSTextFieldStyle()).frame(width: 52).accessibilityLabel("CPU limit")
+                    Text("Memory (GB)").font(.ds(.label)).foregroundStyle(DSColor.text2).padding(.leading, DS.Space.s4)
+                    TextField("", text: $model.memoryGB).textFieldStyle(DSTextFieldStyle()).frame(width: 52).accessibilityLabel("Memory limit")
+                }
+            }
+            SettingsRow("Network") {
+                DSSegmentedPicker(options: [(id: WorkspaceSpec.Network.bridge, title: "Online"), (id: .none, title: "Offline")], selection: $model.network)
+                    .fixedSize()
+            }
+            SettingsToggleRow("Forward file changes to watchers in the container", detail: "Edits made on this Mac reach file watchers (vite, jest) inside it.", isOn: $model.fileWatchBridge)
         }
-        if let reason = environment.outdatedReason {
-            Text("Out of date (\(reason)): recreated on next use.").font(.ds(.meta)).foregroundStyle(DSColor.warningText)
+        SettingsGroup("Environment variables", footer: "One NAME=value per line. Visible to every command in the container: use Secrets for tokens.") {
+            VStack(alignment: .trailing, spacing: DS.Space.s8) {
+                TextEditor(text: $model.variables).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                    .frame(height: 64).padding(DS.Space.s4)
+                    .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                    .accessibilityLabel("Environment variables, one NAME=value per line")
+                Button("Save Environment") { Task { await model.save() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+            }
+            .padding(DS.Space.s12)
         }
-
-        SectionLabel("Limits and network")
-        HStack(spacing: DS.Space.s8) {
-            Text("CPUs").font(.ds(.label)).foregroundStyle(DSColor.text2)
-            TextField("", text: $model.cpus).modifier(DSField()).frame(width: 60).accessibilityLabel("CPU limit")
-            Text("Memory (GB)").font(.ds(.label)).foregroundStyle(DSColor.text2)
-            TextField("", text: $model.memoryGB).modifier(DSField()).frame(width: 60).accessibilityLabel("Memory limit")
-            Spacer()
-            DSSegmentedPicker(options: [(id: WorkspaceSpec.Network.bridge, title: "Network"), (id: .none, title: "Offline")], selection: $model.network)
-                .fixedSize()
+        SettingsGroup("Ports") {
+            PortsListView(environment: environment, refresh: { Task { await service.refreshPorts(environment.directory) } },
+                          open: { model.forward($0) }, stop: { service.stopForward(environment.directory, port: $0) })
         }
-        Toggle("Forward file changes from this Mac to watchers in the container", isOn: $model.fileWatchBridge)
-            .toggleStyle(DSToggleStyle(.checkbox)).font(.ds(.body))
-
-        SectionLabel("Environment variables")
-        TextEditor(text: $model.variables).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
-            .frame(height: 64).padding(DS.Space.s4)
-            .background(DSColor.fillSubtle, in: RoundedRectangle(cornerRadius: DS.Radius.sm))
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm).stroke(DSColor.borderStrong, lineWidth: 1))
-            .accessibilityLabel("Environment variables, one NAME=value per line")
-        Text("One NAME=value per line. Visible to every command in the container: use Secrets for tokens.")
-            .font(.ds(.meta)).foregroundStyle(DSColor.text3)
-        HStack {
-            Spacer()
-            Button("Save Environment") { Task { await model.save() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+        SettingsGroup("Container") {
+            SettingsActionsRow(divided: false) {
+                Button("Open Terminal in Container") { model.openTerminal(environment.directory) }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                Spacer(minLength: DS.Space.s8)
+                Button("Logs") { Task { await model.showLogs() } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                Button("Stop") { service.stopContainer(environment.directory) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                Button("Clean Up Processes") { Task { _ = await service.cleanUpProcesses(environment.directory) } }
+                    .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    .help("Ends processes left behind by cancelled commands")
+            }
         }
-
-        SectionLabel("Ports")
-        PortsListView(environment: environment, refresh: { Task { await service.refreshPorts(environment.directory) } },
-                      open: { model.forward($0) }, stop: { service.stopForward(environment.directory, port: $0) })
-
-        SectionLabel("Container")
-        HStack(spacing: DS.Space.s6) {
-            Button("Open Terminal in Container") { model.openTerminal(environment.directory) }.buttonStyle(DSButtonStyle(.outline, size: .small))
-            Button("Logs") { Task { await model.showLogs() } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-            Button("Stop") { service.stopContainer(environment.directory) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-            Button("Clean Up Processes") { Task { _ = await service.cleanUpProcesses(environment.directory) } }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                .help("Ends processes left behind by cancelled commands")
-        }
-        SectionLabel("Isolation")
-        IsolationReportView(report: service.isolation.flatMap { $0.directory == environment.directory ? $0 : nil },
-                            running: service.isVerifyingIsolation) {
-            Task { await service.verifyIsolation(directory: environment.directory, full: true) }
+        SettingsGroup("Isolation") {
+            IsolationReportView(report: service.isolation.flatMap { $0.directory == environment.directory ? $0 : nil },
+                                running: service.isVerifyingIsolation) {
+                Task { await service.verifyIsolation(directory: environment.directory, full: true) }
+            }
         }
         if let logs = model.logs { LogsView(title: environment.containerName, text: logs) { model.logs = nil } }
     }
 }
 
-/// The Ports list: what listens in the project's container, and what is forwarded to this Mac's loopback.
+/// The Ports list: what listens in the project's container, and what is forwarded to this Mac's loopback. Rows of a
+/// `SettingsGroup`: port in mono, process and address in `meta text3`, outline Open, ghost Stop and Refresh.
 struct PortsListView: View {
     let environment: ProjectEnvironment
     let refresh: () -> Void
@@ -563,25 +532,30 @@ struct PortsListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if environment.ports.isEmpty {
-                HStack {
-                    Text("Nothing listens in the container.").font(.ds(.meta)).foregroundStyle(DSColor.text3)
-                    Spacer()
-                    Button("Refresh") { refresh() }.buttonStyle(DSButtonStyle(.ghost, size: .small))
+                SettingsRow("Nothing listens in the container", divided: false) {
+                    Button("Refresh") { refresh() }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                 }
             }
-            ForEach(environment.ports, id: \.port) { port in
+            ForEach(Array(environment.ports.enumerated()), id: \.element.port) { index, port in
                 let forward = environment.forwards.first { $0.containerPort == port.port }
-                Row(":\(port.port)", detail: [port.process, port.address == "0.0.0.0" || port.address == "::" ? "all interfaces" : port.address,
-                                              forward.map { "→ \($0.url.absoluteString)" }].compactMap { $0 }.joined(separator: " · ")) {
-                    Button(forward == nil ? "Open" : "Open Again") { open(port.port) }.buttonStyle(DSButtonStyle(.outline, size: .small))
-                        .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
-                    if forward != nil {
-                        Button("Stop") { stop(port.port) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
+                SettingsRow(":\(port.port)", detail: [port.process, port.address == "0.0.0.0" || port.address == "::" ? "all interfaces" : port.address,
+                                                     forward.map { "→ \($0.url.absoluteString)" }].compactMap { $0 }.joined(separator: " · "),
+                            divided: index > 0) {
+                    HStack(spacing: DS.Space.s4) {
+                        if forward != nil {
+                            DSPillView("Forwarded", tone: .success, symbolName: "arrow.up.right")
+                            Button("Stop") { stop(port.port) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        }
+                        Button(forward == nil ? "Open" : "Open Again") { open(port.port) }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                            .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
                     }
                 }
             }
             if !environment.ports.isEmpty {
-                HStack { Spacer(); Button("Refresh") { refresh() }.buttonStyle(DSButtonStyle(.ghost, size: .small)) }
+                SettingsActionsRow {
+                    Spacer()
+                    Button("Refresh") { refresh() }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                }
             }
         }
     }

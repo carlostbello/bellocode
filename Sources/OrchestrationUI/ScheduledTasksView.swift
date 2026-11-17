@@ -353,9 +353,11 @@ public struct ScheduledTasksView: View {
         if let draft = model.draft {
             let binding = Binding<ScheduleDraft>(get: { model.draft ?? draft }, set: { model.draft = $0 })
             ScrollView {
-                Form {
-                    TextField("Name:", text: binding.name)
-                    LabeledContent("Prompt:") {
+                VStack(alignment: .leading, spacing: DS.Space.s8) {
+                    EditorRow("Name") {
+                        TextField("", text: binding.name, prompt: Text("Morning triage")).textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Name")
+                    }
+                    EditorRow("Prompt", alignment: .top) {
                         TextEditor(text: binding.prompt)
                             .font(.ds(.body))
                             .frame(height: 84)
@@ -365,15 +367,22 @@ public struct ScheduledTasksView: View {
                             .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(SwiftUI.Color.ds.borderStrong))
                             .accessibilityLabel("Prompt")
                     }
-                    LabeledContent("Runs:") {
-                        DSSegmentedPicker(options: ScheduleDraft.Kind.allCases.map { (id: $0, title: $0.title) }, selection: binding.kind)
+                    EditorRow("Runs") {
+                        DSSegmentedPicker(options: ScheduleDraft.Kind.allCases.map { (id: $0, title: $0.title) }, selection: binding.kind).fixedSize()
                     }
                     switch draft.kind {
                     case .interval:
-                        Stepper("Every \(draft.everyMinutes) minutes", value: binding.everyMinutes, in: 1...44_640, step: draft.everyMinutes < 60 ? 5 : 30)
+                        EditorRow("Every") {
+                            DSStepper(
+                                "Every", value: binding.everyMinutes, in: 1...44_640, step: draft.everyMinutes < 60 ? 5 : 30,
+                                format: { "\($0) minutes" })
+                        }
                     case .daily:
-                        DatePicker("Time:", selection: binding.time, displayedComponents: .hourAndMinute)
-                        LabeledContent("Days:") {
+                        EditorRow("Time") {
+                            // Native time field: per-component keyboard entry, locale and VoiceOver (no DS date control).
+                            DatePicker("Time", selection: binding.time, displayedComponents: .hourAndMinute).labelsHidden().fixedSize()
+                        }
+                        EditorRow("Days") {
                             HStack(spacing: 2) {
                                 ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
                                     let symbols = Calendar(identifier: .gregorian).veryShortWeekdaySymbols
@@ -390,46 +399,71 @@ public struct ScheduledTasksView: View {
                             }
                         }
                     case .once:
-                        DatePicker("At:", selection: binding.once)
+                        EditorRow("At") {
+                            DatePicker("At", selection: binding.once).labelsHidden().fixedSize()
+                        }
                     }
-                    TextField("Time zone:", text: binding.timeZoneID)
-                    Picker("Project:", selection: binding.directory) {
-                        ForEach(model.projects(), id: \.directory) { Text($0.name).tag($0.directory) }
+                    EditorRow("Time zone") {
+                        TextField("", text: binding.timeZoneID).textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Time zone")
                     }
-                    Picker("Each run:", selection: binding.threadID) {
-                        Text("Starts a new thread").tag(SessionID?.none)
-                        ForEach(model.threads(draft.directory), id: \.id) { Text("Messages “\($0.title)”").tag(SessionID?.some($0.id)) }
+                    EditorRow("Project") {
+                        DSMenuSelect("Project", options: model.projects().map { ($0.directory, $0.name) }, selection: binding.directory)
                     }
-                    TextField("Agent:", text: binding.agent, prompt: Text("build (default)"))
-                    Picker("Permissions:", selection: binding.permissionMode) {
-                        Text("Project default").tag(PermissionMode?.none)
-                        Text("Ask").tag(PermissionMode?.some(.ask))
-                        Text("Auto-edit").tag(PermissionMode?.some(.autoEdit))
-                        Text("Full access").tag(PermissionMode?.some(.fullAccess))
+                    EditorRow("Each run") {
+                        DSMenuSelect(
+                            "Each run",
+                            options: [(SessionID?.none, "Starts a new thread")]
+                                + model.threads(draft.directory).map { (SessionID?.some($0.id), "Messages “\($0.title)”") },
+                            selection: binding.threadID)
                     }
-                    Toggle("If missed while BelloCode was quit, run once at launch", isOn: binding.catchUp).toggleStyle(DSToggleStyle(.checkbox))
-                    Toggle("Enabled", isOn: binding.enabled).toggleStyle(DSToggleStyle(.checkbox))
-                    if let problem = draft.rule.problem { Text(problem).foregroundStyle(SwiftUI.Color.ds.dangerText) }
+                    EditorRow("Agent") {
+                        TextField("", text: binding.agent, prompt: Text("build (default)")).textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Agent")
+                    }
+                    EditorRow("Permissions") {
+                        DSMenuSelect(
+                            "Permissions",
+                            options: [(PermissionMode?.none, "Project default"), (PermissionMode?.some(.ask), "Ask"),
+                                      (PermissionMode?.some(.autoEdit), "Auto-edit"), (PermissionMode?.some(.fullAccess), "Full access")],
+                            selection: binding.permissionMode)
+                    }
+                    EditorRow("") {
+                        VStack(alignment: .leading, spacing: DS.Space.s6) {
+                            Toggle("If missed while BelloCode was quit, run once at launch", isOn: binding.catchUp).toggleStyle(DSToggleStyle(.checkbox))
+                            Toggle("Enabled", isOn: binding.enabled).toggleStyle(DSToggleStyle(.checkbox))
+                        }
+                    }
+                    if let problem = draft.rule.problem {
+                        EditorRow("") {
+                            Label(problem, systemImage: "exclamationmark.triangle").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.dangerText)
+                        }
+                    }
                     if let message = model.message {
-                        Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
-                            .fixedSize(horizontal: false, vertical: true)
+                        EditorRow("") {
+                            Label(message, systemImage: "exclamationmark.triangle").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.dangerText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    HStack {
+                    HStack(spacing: DS.Space.s6) {
                         if let id = draft.id {
                             Button("Delete") { Task { await model.delete(id) } }.help("Delete this task (Undo is offered)")
+                                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                             Button("Run Now") { Task { await model.runNow(id) } }
+                                .buttonStyle(DSButtonStyle(.outline, size: .small))
                                 .disabled(model.scheduler.task(id)?.approval != .approved || model.scheduler.running.contains(id))
                             if model.scheduler.task(id)?.approval == .pending {
                                 Button("Approve") { Task { await model.approve(id) } }.help("Allow this agent-created task to run")
+                                    .buttonStyle(DSButtonStyle(.outline, size: .small))
                             }
                         }
                         Spacer()
-                        Button("Revert") { model.select(draft.id) }.disabled(draft.id == nil)
-                        Button("Save") { Task { await model.save() } }.keyboardShortcut("s", modifiers: .command).buttonStyle(DSButtonStyle(.primary))
+                        Button("Revert") { model.select(draft.id) }.disabled(draft.id == nil).buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        Button("Save") { Task { await model.save() } }.keyboardShortcut("s", modifiers: .command)
+                            .buttonStyle(DSButtonStyle(.primary, size: .small, hint: "⌘S"))
                             .disabled(!model.canSave)
                     }
+                    .padding(.top, DS.Space.s4)
                 }
-                .padding(DS.Spacing.m)
+                .padding(DS.Space.s12)
             }
         } else {
             VStack(spacing: DS.Spacing.s) {
@@ -523,5 +557,29 @@ public struct SecretsSettingsView: View {
         .toggleStyle(DSToggleStyle(.checkbox))
         .padding(20)
         .frame(width: 520, alignment: .topLeading)
+    }
+}
+
+/// One editor row: a right-aligned `label text2` caption column (88 pt) and the control (the DS form layout; no stock
+/// `Form`).
+private struct EditorRow<Content: View>: View {
+    let title: String
+    var alignment: VerticalAlignment = .center
+    @ViewBuilder let content: Content
+
+    init(_ title: String, alignment: VerticalAlignment = .center, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.alignment = alignment
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: alignment, spacing: DS.Space.s10) {
+            Text(title).font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2)
+                .frame(width: 88, alignment: .trailing)
+                .padding(.top, alignment == .top ? DS.Space.s6 : 0)
+                .accessibilityHidden(true)
+            content.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

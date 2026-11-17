@@ -413,13 +413,21 @@ public struct GitLabSettingsView: View {
                 }
                 SwiftUI.Color.ds.border.frame(height: 1)
             }
-            Form {
-                TextField("Instance URL:", text: Bindable(model).baseURL, prompt: Text("https://gitlab.example.com"))
-                SecureField("Access token:", text: Bindable(model).token, prompt: Text("glpat-…"))
-                    .accessibilityLabel("GitLab access token")
+            VStack(alignment: .leading, spacing: DS.Space.s8) {
+                HStack(spacing: DS.Space.s10) {
+                    Text("Instance URL").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2).frame(width: 96, alignment: .trailing)
+                    TextField("", text: Bindable(model).baseURL, prompt: Text("https://gitlab.example.com")).textFieldStyle(DSTextFieldStyle())
+                        .accessibilityLabel("Instance URL")
+                }
+                HStack(spacing: DS.Space.s10) {
+                    Text("Access token").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2).frame(width: 96, alignment: .trailing)
+                    SecureField("", text: Bindable(model).token, prompt: Text("glpat-…")).textFieldStyle(DSTextFieldStyle())
+                        .accessibilityLabel("GitLab access token")
+                }
                 HStack {
                     Spacer()
                     Button("Add Instance") { Task { await model.save() } }
+                        .buttonStyle(DSButtonStyle(.primary, size: .small))
                         .disabled(model.baseURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
