@@ -1,0 +1,818 @@
+import AppKit
+import DesignSystem
+import Engine
+import os
+
+/// Display options of a diff view.
+public struct DiffViewOptions: Sendable, Hashable, Codable {
+    public var layout: DiffLayout = .unified
+    public var wraps = false
+    public var ignoreWhitespace = false
+    public init() {}
+}
+
+/// A review comment on lines of one side of a file's diff.
+public struct DiffReviewComment: Sendable, Hashable, Identifiable {
+    public var id: UUID
+    public var path: String
+    public var side: DiffSide
+    public var startLine: Int
+    public var endLine: Int
+    /// The commented lines, as shown.
+    public var quoted: String
+    public var text: String
+
+    public init(id: UUID = UUID(), path: String, side: DiffSide, startLine: Int, endLine: Int, quoted: String, text: String) {
+        self.id = id
+        self.path = path
+        self.side = side
+        self.startLine = startLine
+        self.endLine = endLine
+        self.quoted = quoted
+        self.text = text
+    }
+
+    /// "Sources/App.swift:12–14".
+    public var location: String { startLine == endLine ? "\(path):\(startLine)" : "\(path):\(startLine)–\(endLine)" }
+
+    /// The text given to the agent: location, side, the quoted lines, then the comment.
+    public var promptText: String {
+        let sideName = side == .old ? "old (removed) side" : "new side"
+        let fence = quoted.contains("```") ? "~~~" : "```"
+        return "Review comment on \(location) (\(sideName)):\n\(fence)\n\(quoted)\n\(fence)\n\(text)\n"
+    }
+}
+
+/// What the diff view asks its owner to do.
+@MainActor
+public protocol DiffViewControllerDelegate: AnyObject {
+    func diffViewController(_ controller: DiffViewController, revertHunk hunkIndex: Int, in file: DiffFile)
+    func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment)
+    func diffViewController(_ controller: DiffViewController, open file: DiffFile, line: Int?)
+}
+
+/// The diff view: a virtualised AppKit diff (unified or side by side) for a list of files, with a find bar, keyboard
+/// navigation between hunks and files, selection and copy within a side, review comments, and hunk revert buttons
+/// for files the owner allows. Rows and syntax are built off the main actor; the previous content stays visible until
+/// the new rows are ready, and the first visible row keeps its place across rebuilds.
+///
+/// Mounting: `let diff = DiffViewController()`, add `diff.view`, then `diff.display(files)`.
+@MainActor
+public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
+    public weak var delegate: (any DiffViewControllerDelegate)?
+    public var options = DiffViewOptions() {
+        didSet {
+            guard options != oldValue else { return }
+            content.wraps = options.wraps
+            if options.layout != oldValue.layout || options.ignoreWhitespace != oldValue.ignoreWhitespace { rebuild(keepPosition: true) }
+            updateIndicator()
+        }
+    }
+    /// Shown when there is nothing to display ("No changes in this turn").
+    public var emptyText = "No changes" { didSet { updateEmptyState() } }
+    public private(set) var files: [DiffFile] = []
+    public private(set) var isBuilding = false
+    /// Called after new rows are shown (tests, benchmarks, the Changes panel's counts).
+    public var onDisplay: (() -> Void)?
+    /// Called when the file the viewport is in changes (the Changes panel highlights it in the tree).
+    public var onVisibleFileChange: ((String?) -> Void)?
+    public var commentMarks: Set<DiffCommentMark> {
+        get { content.commentMarks }
+        set { content.commentMarks = newValue }
+    }
+
+    let content: DiffContentView
+    private let scrollView = DiffScrollView()
+    private let findBar = NSStackView()
+    private let findField = NSSearchField()
+    private let findCount = NSTextField(labelWithString: "")
+    private let indicator = HorizontalIndicatorView()
+    private let emptyLabel = NSTextField(labelWithString: "")
+    private var findTopConstraint: NSLayoutConstraint?
+    private var revertablePaths: Set<String> = []
+    private var collapsedFiles: Set<String> = []
+    private var expansions: [GapKey: GapExpansion] = [:]
+    private var buildTask: Task<Void, Never>?
+    private var syntaxTask: Task<Void, Never>?
+    private var findTask: Task<Void, Never>?
+    private var generation = 0
+    private var themeAppearance: String?
+    private var lastVisibleFile: String?
+    static let signposter = OSSignposter(subsystem: "dev.bellocode.diffkit", category: .pointsOfInterest)
+
+    public init() {
+        content = DiffContentView(theme: DiffTheme.resolve(appearance: NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)!))
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    isolated deinit {
+        buildTask?.cancel()
+        syntaxTask?.cancel()
+        findTask?.cancel()
+    }
+
+    // MARK: View
+
+    public override func loadView() {
+        let container = DiffContainerView()
+        container.owner = self
+        container.onAppearanceChange = { [weak self] in self?.updateTheme() }
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = true
+        scrollView.borderType = .noBorder
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        content.autoresizingMask = [.width]
+        scrollView.documentView = content
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        content.onToggleFile = { [weak self] index in self?.toggleFile(index) }
+        content.onExpandGap = { [weak self] row, all in self?.expand(row, all: all) }
+        content.onRevertHunk = { [weak self] file, hunk in self?.requestRevert(file: file, hunk: hunk) }
+        content.onSelectionChange = { [weak self] in self?.view.window?.toolbar?.validateVisibleItems() }
+        content.contextMenuProvider = { [weak self] row, _ in self?.contextMenu(row: row) }
+        content.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }
+        NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+
+        buildFindBar()
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.isHidden = true
+        emptyLabel.font = DS.Typography.current.body
+        emptyLabel.textColor = DS.Palette.secondaryText
+        emptyLabel.alignment = .center
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        for subview in [scrollView, findBar, indicator, emptyLabel] as [NSView] { container.addSubview(subview) }
+        let findTop = findBar.topAnchor.constraint(equalTo: container.topAnchor, constant: -40)
+        findTopConstraint = findTop
+        NSLayoutConstraint.activate([
+            findTop,
+            findBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            findBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: findBar.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            indicator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            indicator.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            indicator.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
+            indicator.heightAnchor.constraint(equalToConstant: 5),
+            emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            emptyLabel.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
+        ])
+        findBar.isHidden = true
+        view = container
+        updateEmptyState()
+    }
+
+    private func buildFindBar() {
+        findField.placeholderString = "Find in diff"
+        findField.delegate = self
+        findField.sendsSearchStringImmediately = true
+        findField.controlSize = .small
+        findField.target = self
+        findField.action = #selector(findFieldChanged(_:))
+        findField.setAccessibilityLabel("Find in diff")
+        findCount.font = DS.Typography.current.caption
+        findCount.textColor = DS.Palette.secondaryText
+        func button(_ symbol: String, _ label: String, _ action: Selector) -> NSButton {
+            let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label)!, target: self, action: action)
+            button.bezelStyle = .accessoryBarAction
+            button.controlSize = .small
+            button.toolTip = label
+            return button
+        }
+        let done = NSButton(title: "Done", target: self, action: #selector(closeFind(_:)))
+        done.bezelStyle = .accessoryBarAction
+        done.controlSize = .small
+        for view in [findField, findCount, button("chevron.up", "Previous Match (⇧⌘G)", #selector(findPreviousAction(_:))),
+                     button("chevron.down", "Next Match (⌘G)", #selector(findNextAction(_:))), done] as [NSView] {
+            findBar.addArrangedSubview(view)
+        }
+        findField.widthAnchor.constraint(greaterThanOrEqualToConstant: 140).isActive = true
+        findBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        findBar.spacing = 6
+        findBar.wantsLayer = true
+        findBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        findBar.translatesAutoresizingMaskIntoConstraints = false
+        findBar.heightAnchor.constraint(equalToConstant: 34).isActive = true
+    }
+
+    private func updateTheme() {
+        let appearance = view.effectiveAppearance
+        content.theme = DiffTheme.resolve(appearance: appearance, revision: Int(appearance.name.rawValue.hashValue & 0xFFFF))
+        findBar.layer?.backgroundColor = NSColor.windowBackgroundColor.resolvedCGColor(for: appearance)
+        scrollView.backgroundColor = NSColor.textBackgroundColor
+    }
+
+    private func updateEmptyState() {
+        guard isViewLoaded else { return }
+        emptyLabel.stringValue = emptyText
+        emptyLabel.isHidden = !files.isEmpty || isBuilding
+    }
+
+    // MARK: Content
+
+    /// Shows files. `revertable`: paths whose hunks get a "Revert Hunk" button. `keepPosition` keeps the first visible
+    /// row (by ID) in place, as after a refresh; otherwise the view starts at the top.
+    public func display(_ files: [DiffFile], revertable: Set<String> = [], keepPosition: Bool = false) {
+        let oldPaths = Set(self.files.map(\.path))
+        self.files = files
+        revertablePaths = revertable
+        let newPaths = Set(files.map(\.path))
+        collapsedFiles.formIntersection(newPaths)
+        expansions = expansions.filter { newPaths.contains($0.key.path) }
+        rebuild(keepPosition: keepPosition && !oldPaths.isDisjoint(with: newPaths))
+    }
+
+    private func rebuild(keepPosition: Bool) {
+        _ = view
+        generation += 1
+        let generation = generation
+        buildTask?.cancel()
+        syntaxTask?.cancel()
+        isBuilding = true
+        let anchor = keepPosition ? topAnchorRow() : nil
+        var rowOptions = DiffRowOptions()
+        rowOptions.layout = options.layout
+        rowOptions.collapsedFiles = collapsedFiles
+        rowOptions.expansions = expansions
+        let files = files
+        let ignoreWhitespace = options.ignoreWhitespace
+        updateEmptyState()
+        buildTask = Task { [weak self] in
+            let interval = Self.signposter.beginInterval("diffBuild")
+            let (shown, rows) = await Self.build(files, options: rowOptions, ignoreWhitespace: ignoreWhitespace)
+            Self.signposter.endInterval("diffBuild", interval)
+            guard let self, !Task.isCancelled, self.generation == generation else { return }
+            self.apply(shown, rows: rows, anchor: anchor, layout: rowOptions.layout)
+            self.syntaxTask = Task { [weak self] in
+                let syntax = await Self.syntax(shown)
+                guard let self, !Task.isCancelled, self.generation == generation else { return }
+                self.content.setSyntax(syntax)
+            }
+        }
+    }
+
+    @concurrent
+    static func build(_ files: [DiffFile], options: DiffRowOptions, ignoreWhitespace: Bool) async -> ([DiffFile], DiffRows) {
+        let shown = ignoreWhitespace ? files.map { $0.rediffed(ignoreWhitespace: true) } : files
+        return (shown, DiffRowBuilder.build(shown, options: options))
+    }
+
+    @concurrent
+    static func syntax(_ files: [DiffFile]) async -> [Int: DiffSyntax] {
+        var result: [Int: DiffSyntax] = [:]
+        for (index, file) in files.enumerated() {
+            if Task.isCancelled { break }
+            let syntax = DiffSyntax.compute(for: file)
+            if !syntax.old.isEmpty || !syntax.new.isEmpty { result[index] = syntax }
+        }
+        return result
+    }
+
+    private func apply(_ shown: [DiffFile], rows: DiffRows, anchor: (DiffRowID, CGFloat)?, layout: DiffLayout) {
+        isBuilding = false
+        let revertable = Set(shown.enumerated().filter { revertablePaths.contains($0.element.path) }.map(\.offset))
+        content.revertableFiles = revertable
+        content.setContent(files: shown, rows: rows, syntax: [:], layout: layout)
+        if let (id, offset) = anchor, let index = rows.rows.firstIndex(where: { $0.id >= id }) {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, content.rowRect(index).minY + offset)))
+        } else if anchor == nil {
+            scrollView.contentView.scroll(to: .zero)
+        }
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        updateEmptyState()
+        updateIndicator()
+        if !findField.stringValue.isEmpty, !findBar.isHidden { runFind(scrollToFirst: false) }
+        reportVisibleFile()
+        onDisplay?()
+    }
+
+    /// The first visible row's ID and the viewport's offset from its top.
+    private func topAnchorRow() -> (DiffRowID, CGFloat)? {
+        let y = scrollView.contentView.bounds.minY
+        guard let index = content.rowIndex(atY: y), content.rows.rows.indices.contains(index) else { return nil }
+        return (content.rows.rows[index].id, y - content.rowRect(index).minY)
+    }
+
+    private func toggleFile(_ index: Int) {
+        guard files.indices.contains(index) else { return }
+        let path = files[index].path
+        if collapsedFiles.contains(path) { collapsedFiles.remove(path) } else { collapsedFiles.insert(path) }
+        rebuild(keepPosition: true)
+    }
+
+    private func expand(_ row: DiffRow, all: Bool) {
+        guard files.indices.contains(row.fileIndex) else { return }
+        let key = GapKey(path: files[row.fileIndex].path, beforeHunk: row.hunkIndex)
+        var expansion = expansions[key] ?? GapExpansion()
+        if all {
+            expansion.top += 1_000_000
+        } else if row.hunkIndex == 0 {
+            expansion.bottom += 20
+        } else if row.hunkIndex >= files[row.fileIndex].hunks.count {
+            expansion.top += 20
+        } else {
+            expansion.top += 10
+            expansion.bottom += 10
+        }
+        expansions[key] = expansion
+        rebuild(keepPosition: true)
+    }
+
+    private func requestRevert(file: Int, hunk: Int) {
+        guard content.files.indices.contains(file) else { return }
+        delegate?.diffViewController(self, revertHunk: hunk, in: content.files[file])
+    }
+
+    // MARK: Scrolling and navigation
+
+    @objc private func boundsChanged(_ notification: Notification) {
+        reportVisibleFile()
+    }
+
+    private func reportVisibleFile() {
+        let y = scrollView.contentView.bounds.minY + 4
+        let path = content.rowIndex(atY: y).flatMap { content.rows.rows.indices.contains($0) ? content.files[content.rows.rows[$0].fileIndex].path : nil }
+        if path != lastVisibleFile {
+            lastVisibleFile = path
+            onVisibleFileChange?(path)
+        }
+    }
+
+    private func scroll(toRow index: Int, margin: CGFloat = 0) {
+        let rect = content.rowRect(index)
+        let maxY = max(0, content.frame.height - scrollView.contentView.bounds.height)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, rect.minY - margin), maxY)))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func reveal(row index: Int) {
+        let rect = content.rowRect(index)
+        let visible = scrollView.contentView.bounds
+        if rect.minY < visible.minY || rect.maxY > visible.maxY { scroll(toRow: index, margin: visible.height / 3) }
+    }
+
+    /// Scrolls to a file's header.
+    public func scroll(toFile path: String) {
+        guard let fileIndex = content.files.firstIndex(where: { $0.path == path }), content.rows.fileHeaderRows.indices.contains(fileIndex) else { return }
+        scroll(toRow: content.rows.fileHeaderRows[fileIndex])
+        if let hunk = content.rows.hunkHeaderRows.first(where: { content.rows.rows[$0].fileIndex == fileIndex }) { content.currentHunkRow = hunk }
+    }
+
+    /// The hunk after the current one (or after the viewport's top) becomes current and scrolls to the top.
+    public func nextHunk() { moveHunk(forward: true) }
+    public func previousHunk() { moveHunk(forward: false) }
+
+    private func moveHunk(forward: Bool) {
+        let headers = content.rows.hunkHeaderRows
+        guard !headers.isEmpty else { return NSSound.beep() }
+        let reference = content.currentHunkRow ?? content.rowIndex(atY: scrollView.contentView.bounds.minY + 1) ?? 0
+        let target = forward ? headers.first { $0 > reference } : headers.last { $0 < reference }
+        guard let target else { return NSSound.beep() }
+        content.currentHunkRow = target
+        scroll(toRow: target, margin: content.theme.rowHeight)
+    }
+
+    public func nextFile() { moveFile(forward: true) }
+    public func previousFile() { moveFile(forward: false) }
+
+    private func moveFile(forward: Bool) {
+        let headers = content.rows.fileHeaderRows
+        guard !headers.isEmpty else { return NSSound.beep() }
+        let top = content.rowIndex(atY: scrollView.contentView.bounds.minY + 1) ?? 0
+        let target = forward ? headers.first { $0 > top } : headers.last { $0 < top }
+        guard let target else { return NSSound.beep() }
+        scroll(toRow: target)
+    }
+
+    /// The file and hunk index of the current hunk (for "Revert Hunk" from the menu).
+    public var currentHunk: (file: DiffFile, hunk: Int)? {
+        guard let row = content.currentHunkRow, content.rows.rows.indices.contains(row) else { return nil }
+        let item = content.rows.rows[row]
+        return (content.files[item.fileIndex], item.hunkIndex)
+    }
+
+    public var visibleFilePath: String? { lastVisibleFile }
+
+    /// Vertical scroll (benchmarks): sets the viewport's top.
+    public func scroll(toY y: CGFloat) {
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(y, content.frame.height - scrollView.contentView.bounds.height))))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    public var contentHeight: CGFloat { content.totalHeight }
+    public var lastDrawDuration: Duration { content.lastDrawDuration }
+    public var rowCount: Int { content.rows.rows.count }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control])
+        guard flags.isEmpty else { return false }
+        let page = scrollView.contentView.bounds.height - content.theme.rowHeight * 2
+        let y = scrollView.contentView.bounds.minY
+        switch event.keyCode {
+        case 125: scroll(toY: y + content.theme.rowHeight * 3); return true
+        case 126: scroll(toY: y - content.theme.rowHeight * 3); return true
+        case 121: scroll(toY: y + page); return true
+        case 116: scroll(toY: y - page); return true
+        case 49: scroll(toY: event.modifierFlags.contains(.shift) ? y - page : y + page); return true
+        case 115: scroll(toY: 0); return true
+        case 119: scroll(toY: .greatestFiniteMagnitude); return true
+        case 123: content.horizontalOffset -= content.theme.charWidth * 8; updateIndicator(); return true
+        case 124: content.horizontalOffset += content.theme.charWidth * 8; updateIndicator(); return true
+        case 53:
+            if !findBar.isHidden { closeFind(nil) } else { content.selection = nil }
+            return true
+        default: break
+        }
+        switch event.charactersIgnoringModifiers {
+        case "n", "j": nextHunk(); return true
+        case "p", "k": previousHunk(); return true
+        case "]": nextFile(); return true
+        case "[": previousFile(); return true
+        case "c": beginComment(); return true
+        default: return false
+        }
+    }
+
+    func updateIndicator() {
+        let maximum = content.maxHorizontalOffset
+        indicator.isHidden = maximum <= 0
+        indicator.fraction = maximum > 0 ? content.horizontalOffset / maximum : 0
+        indicator.visibleShare = maximum > 0 ? content.columnWidth / (content.columnWidth + maximum) : 1
+        indicator.leadingInset = options.layout == .unified ? 2 * content.gutterWidth + content.markerWidth : content.gutterWidth + content.markerWidth
+    }
+
+    // MARK: Selection, copy, comments
+
+    public var hasSelection: Bool { content.selectedText != nil }
+    public var selectedText: String? { content.selectedText }
+
+    public func copySelection() {
+        guard let text = content.selectedText else { return NSSound.beep() }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// The selection as a comment target: one file, one side, a line range.
+    public var commentTarget: (file: DiffFile, side: DiffSide, lines: ClosedRange<Int>, quoted: String)? {
+        guard let selection = content.selection else { return nil }
+        var cells: [(Int, DiffCell)] = []
+        for row in selection.start.row...selection.end.row {
+            guard let cell = content.cell(row: row, side: selection.side) else { continue }
+            if row == selection.end.row, selection.end.offset == 0, row != selection.start.row { continue }
+            cells.append((content.rows.rows[row].fileIndex, cell))
+        }
+        guard let first = cells.first, cells.allSatisfy({ $0.0 == first.0 }) else { return nil }
+        let side: DiffSide = selection.side ?? (cells.contains { $0.1.side == .new } ? .new : .old)
+        let numbers = cells.filter { $0.1.side == side }.map(\.1.number)
+        guard let low = numbers.min(), let high = numbers.max() else { return nil }
+        let quoted = cells.filter { $0.1.side == side }.map(\.1.text).joined(separator: "\n")
+        return (content.files[first.0], side, low...high, quoted)
+    }
+
+    /// Opens the comment popover for the selected lines (beeps without a selection).
+    public func beginComment() {
+        guard let target = commentTarget, let selection = content.selection else { return NSSound.beep() }
+        let editor = CommentEditorController(location: "\(target.file.path):\(target.lines.lowerBound)\(target.lines.count > 1 ? "–\(target.lines.upperBound)" : "")")
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = editor
+        editor.onSubmit = { [weak self, weak popover] text in
+            popover?.close()
+            guard let self else { return }
+            let comment = DiffReviewComment(
+                path: target.file.path, side: target.side, startLine: target.lines.lowerBound, endLine: target.lines.upperBound, quoted: target.quoted, text: text)
+            for line in target.lines { self.content.commentMarks.insert(DiffCommentMark(path: comment.path, side: comment.side, line: line)) }
+            self.delegate?.diffViewController(self, addComment: comment)
+        }
+        editor.onCancel = { [weak popover] in popover?.close() }
+        let rect = content.rowRect(selection.end.row)
+        popover.show(relativeTo: NSRect(x: rect.minX + 80, y: rect.minY, width: 40, height: rect.height), of: content, preferredEdge: .maxY)
+        pendingCommentPopover = popover
+    }
+
+    private var pendingCommentPopover: NSPopover?
+
+    private func contextMenu(row: Int?) -> NSMenu? {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "")
+        let comment = menu.addItem(withTitle: "Add Comment…", action: #selector(addCommentAction(_:)), keyEquivalent: "")
+        comment.target = self
+        if let row, content.rows.rows.indices.contains(row) {
+            let item = content.rows.rows[row]
+            let file = content.files[item.fileIndex]
+            if item.hunkIndex >= 0, item.hunkIndex < file.hunks.count, revertablePaths.contains(file.path) {
+                let revert = menu.addItem(withTitle: "Revert This Hunk…", action: #selector(revertHunkAction(_:)), keyEquivalent: "")
+                revert.target = self
+                revert.representedObject = [item.fileIndex, item.hunkIndex]
+            }
+            menu.addItem(.separator())
+            let open = menu.addItem(withTitle: "Open \((file.path as NSString).lastPathComponent)", action: #selector(openFileAction(_:)), keyEquivalent: "")
+            open.target = self
+            open.representedObject = [item.fileIndex, (item.right ?? item.left)?.number ?? 0]
+        }
+        return menu
+    }
+
+    @objc private func addCommentAction(_ sender: Any?) { beginComment() }
+
+    @objc private func revertHunkAction(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
+        requestRevert(file: pair[0], hunk: pair[1])
+    }
+
+    @objc private func openFileAction(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [Int], pair.count == 2, content.files.indices.contains(pair[0]) else { return }
+        delegate?.diffViewController(self, open: content.files[pair[0]], line: pair[1] > 0 ? pair[1] : nil)
+    }
+
+    // MARK: Find
+
+    public var isFindVisible: Bool { !findBar.isHidden }
+
+    public func showFind() {
+        _ = view
+        findBar.isHidden = false
+        findTopConstraint?.constant = 0
+        view.window?.makeFirstResponder(findField)
+        findField.currentEditor()?.selectAll(nil)
+        if !findField.stringValue.isEmpty { runFind(scrollToFirst: false) }
+    }
+
+    @objc public func closeFind(_ sender: Any?) {
+        findBar.isHidden = true
+        findTopConstraint?.constant = -40
+        content.findMatches = []
+        content.currentMatch = nil
+        view.window?.makeFirstResponder(content)
+    }
+
+    public func setFindQuery(_ query: String) {
+        _ = view
+        if findBar.isHidden { showFind() }
+        findField.stringValue = query
+        runFind(scrollToFirst: true)
+    }
+
+    public func useSelectionForFind() {
+        guard let text = content.selectedText?.split(separator: "\n").first.map(String.init), !text.isEmpty else { return NSSound.beep() }
+        setFindQuery(text)
+    }
+
+    public func findNext() { stepMatch(1) }
+    public func findPrevious() { stepMatch(-1) }
+    public var findMatchCount: Int { content.findMatches.count }
+
+    @objc private func findNextAction(_ sender: Any?) { findNext() }
+    @objc private func findPreviousAction(_ sender: Any?) { findPrevious() }
+    @objc private func findFieldChanged(_ sender: Any?) { runFind(scrollToFirst: true) }
+
+    public func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            NSApp.currentEvent?.modifierFlags.contains(.shift) == true ? findPrevious() : findNext()
+            return true
+        }
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            closeFind(nil)
+            return true
+        }
+        return false
+    }
+
+    private func runFind(scrollToFirst: Bool) {
+        let query = findField.stringValue
+        findTask?.cancel()
+        guard !query.isEmpty else {
+            content.findMatches = []
+            content.currentMatch = nil
+            findCount.stringValue = ""
+            return
+        }
+        let rows = content.rows
+        let layout = options.layout
+        let generation = generation
+        findTask = Task { [weak self] in
+            let matches = await Self.search(rows, query: query, layout: layout)
+            guard let self, !Task.isCancelled, self.generation == generation, self.findField.stringValue == query else { return }
+            self.content.findMatches = matches
+            let top = self.content.rowIndex(atY: self.scrollView.contentView.bounds.minY) ?? 0
+            self.content.currentMatch = matches.isEmpty ? nil : (matches.firstIndex { $0.row >= top } ?? 0)
+            self.updateFindCount()
+            if scrollToFirst, let current = self.content.currentMatch { self.reveal(row: matches[current].row) }
+        }
+    }
+
+    @concurrent
+    static func search(_ rows: DiffRows, query: String, layout: DiffLayout) async -> [DiffFindMatch] {
+        var matches: [DiffFindMatch] = []
+        for (index, row) in rows.rows.enumerated() {
+            if index % 4_096 == 0, Task.isCancelled { return [] }
+            guard case .line = row.kind else { continue }
+            let cells: [(DiffCell, DiffSide?)] = layout == .unified ? row.cell.map { [($0, nil)] } ?? [] : [row.left.map { ($0, .old) }, row.right.map { ($0, .new) }].compactMap { $0 }
+            for (cell, side) in cells {
+                let text = cell.text as NSString
+                var range = NSRange(location: 0, length: text.length)
+                while range.length > 0 {
+                    let found = text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: range)
+                    guard found.location != NSNotFound else { break }
+                    matches.append(DiffFindMatch(row: index, side: side, range: found))
+                    if matches.count >= 10_000 { return matches }
+                    range = NSRange(location: found.location + max(1, found.length), length: text.length - found.location - max(1, found.length))
+                }
+            }
+        }
+        return matches
+    }
+
+    private func stepMatch(_ step: Int) {
+        let matches = content.findMatches
+        guard !matches.isEmpty else { return NSSound.beep() }
+        let next = ((content.currentMatch ?? -step) + step + matches.count) % matches.count
+        content.currentMatch = next
+        updateFindCount()
+        reveal(row: matches[next].row)
+        let range = matches[next].range
+        content.horizontalOffset = max(0, CGFloat(range.location) * content.theme.charWidth - content.columnWidth / 2)
+        updateIndicator()
+    }
+
+    private func updateFindCount() {
+        let count = content.findMatches.count
+        findCount.stringValue = count == 0 ? "No matches" : "\((content.currentMatch ?? 0) + 1) of \(count)\(count >= 10_000 ? "+" : "")"
+    }
+
+    /// Focuses the diff (keyboard navigation).
+    public func focus() { view.window?.makeFirstResponder(content) }
+    public var focusView: NSView { content }
+}
+
+/// The diff's root view: tells the controller when the appearance changes.
+@MainActor
+final class DiffContainerView: NSView {
+    weak var owner: DiffViewController?
+    var onAppearanceChange: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onAppearanceChange?()
+    }
+}
+
+/// The diff's scroll view (vertical only; horizontal offset is the content view's).
+@MainActor
+final class DiffScrollView: NSScrollView {}
+
+/// A thin capsule showing the horizontal position of long lines (gutters never scroll).
+@MainActor
+final class HorizontalIndicatorView: NSView {
+    var fraction: CGFloat = 0 { didSet { needsDisplay = true } }
+    var visibleShare: CGFloat = 1 { didSet { needsDisplay = true } }
+    var leadingInset: CGFloat = 0 { didSet { needsDisplay = true } }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = bounds.insetBy(dx: 0, dy: 0).divided(atDistance: leadingInset, from: .minXEdge).remainder
+        guard track.width > 20 else { return }
+        let width = max(24, track.width * min(1, visibleShare))
+        let x = track.minX + (track.width - width) * min(max(fraction, 0), 1)
+        NSColor.tertiaryLabelColor.setFill()
+        NSBezierPath(roundedRect: NSRect(x: x, y: 0, width: width, height: bounds.height), xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// The popover for writing a review comment: ⌘↩ adds, Escape cancels.
+@MainActor
+final class CommentEditorController: NSViewController, NSTextViewDelegate {
+    let location: String
+    var onSubmit: ((String) -> Void)?
+    var onCancel: (() -> Void)?
+    private let textView = NSTextView()
+
+    init(location: String) {
+        self.location = location
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func loadView() {
+        let title = NSTextField(labelWithString: "Comment on \(location)")
+        title.font = DS.Typography.current.bodyEmphasized
+        title.lineBreakMode = .byTruncatingMiddle
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        textView.isRichText = false
+        textView.font = DS.Typography.current.body
+        textView.delegate = self
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.setAccessibilityLabel("Comment")
+        textView.minSize = NSSize(width: 0, height: 60)
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+        let hint = NSTextField(labelWithString: "Added to the composer as context. ⌘↩ to add, Esc to cancel.")
+        hint.font = DS.Typography.current.caption
+        hint.textColor = DS.Palette.secondaryText
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel(_:)))
+        let add = NSButton(title: "Add Comment", target: self, action: #selector(submit(_:)))
+        add.keyEquivalent = "\r"
+        add.keyEquivalentModifierMask = .command
+        add.bezelColor = .controlAccentColor
+        let buttons = NSStackView(views: [hint, NSView(), cancel, add])
+        let stack = NSStackView(views: [title, scroll, buttons])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scroll.widthAnchor.constraint(equalToConstant: 380), scroll.heightAnchor.constraint(equalToConstant: 80),
+            buttons.widthAnchor.constraint(equalTo: scroll.widthAnchor),
+        ])
+        view = stack
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(textView)
+    }
+
+    var text: String {
+        get { textView.string }
+        set { textView.string = newValue }
+    }
+
+    @objc func submit(_ sender: Any?) {
+        let text = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return NSSound.beep() }
+        onSubmit?(text)
+    }
+
+    @objc func cancel(_ sender: Any?) { onCancel?() }
+
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            onCancel?()
+            return true
+        }
+        return false
+    }
+}
+
+extension NSColor {
+    func resolvedCGColor(for appearance: NSAppearance) -> CGColor {
+        var color = cgColor
+        appearance.performAsCurrentDrawingAppearance { color = self.cgColor }
+        return color
+    }
+}
+
+// MARK: - Responder-chain actions of the focused diff
+
+/// Edit, Find and Changes menu commands answered by the focused diff. The Find selectors are the shell's Find menu
+/// actions (`findInTranscript:` …): a focused diff answers them itself, as a focused transcript does, so ⌘F, ⌘G and
+/// ⌘E act on what has focus.
+extension DiffContentView: NSMenuItemValidation {
+    var controller: DiffViewController? { (enclosingScrollView?.superview as? DiffContainerView)?.owner }
+
+    @objc func copy(_ sender: Any?) { controller?.copySelection() }
+
+    @objc override func selectAll(_ sender: Any?) {
+        guard !rows.rows.isEmpty else { return }
+        let side: DiffSide? = layoutMode == .unified ? nil : (selection?.side ?? .new)
+        let last = rows.rows.count - 1
+        selection = DiffTextSelection(side: side, anchor: DiffTextPosition(row: 0, offset: 0), head: DiffTextPosition(row: last, offset: cell(row: last, side: side)?.text.utf16.count ?? 0))
+    }
+
+    @objc func findInTranscript(_ sender: Any?) { controller?.showFind() }
+    @objc func findNextInTranscript(_ sender: Any?) { controller?.findNext() }
+    @objc func findPreviousInTranscript(_ sender: Any?) { controller?.findPrevious() }
+    @objc func useSelectionForTranscriptFind(_ sender: Any?) { controller?.useSelectionForFind() }
+    @objc func nextDiffHunk(_ sender: Any?) { controller?.nextHunk() }
+    @objc func previousDiffHunk(_ sender: Any?) { controller?.previousHunk() }
+    @objc func nextDiffFile(_ sender: Any?) { controller?.nextFile() }
+    @objc func previousDiffFile(_ sender: Any?) { controller?.previousFile() }
+    @objc func addDiffComment(_ sender: Any?) { controller?.beginComment() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)), #selector(useSelectionForTranscriptFind(_:)), #selector(addDiffComment(_:)): selectedText != nil
+        case #selector(findNextInTranscript(_:)), #selector(findPreviousInTranscript(_:)): !findMatches.isEmpty
+        case #selector(nextDiffHunk(_:)), #selector(previousDiffHunk(_:)): !rows.hunkHeaderRows.isEmpty
+        case #selector(nextDiffFile(_:)), #selector(previousDiffFile(_:)): rows.fileHeaderRows.count > 1
+        default: true
+        }
+    }
+}
