@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import Engine
 import SwiftUI
+import DesignSystem
 
 /// Inputs for one integration's sign-in, kept while the user switches providers or methods, retries, or the attempt
 /// fails, so nothing typed is lost. The API key lives only here (in memory) and is cleared after a successful connect.
@@ -49,10 +50,12 @@ public struct ProviderConnectView: View {
         HStack(spacing: 0) {
             providerList
                 .frame(width: 230)
-            Divider()
+            SwiftUI.Color.ds.border.frame(width: 1).accessibilityHidden(true)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .noImplicitAnimation()
         .task {
             if auth.listState == .idle { await auth.refresh() }
@@ -73,11 +76,11 @@ public struct ProviderConnectView: View {
                     .accessibilityLabel("Search providers")
             }
             .padding(style.spacing * 2.5)
-            Divider()
+            DSHairline()
             switch auth.listState {
             case .loading where auth.integrations.isEmpty:
                 VStack(spacing: style.spacing * 2) {
-                    ProgressView().controlSize(.small)
+                    StatusLabel(.running, showsText: false)
                     Text("Loading providers…").font(style.smallFont).foregroundStyle(style.secondaryText)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,27 +93,19 @@ public struct ProviderConnectView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             default:
                 ScrollViewReader { proxy in
-                    List(selection: $selected.value) {
-                        if items.isEmpty {
-                            Text("No provider matches “\(search.value)”.").font(style.smallFont).foregroundStyle(style.secondaryText)
-                        }
-                        ForEach(items) { item in
-                            HStack(spacing: style.spacing * 2) {
-                                Text(item.name).lineLimit(1)
-                                Spacer()
-                                if item.isConnected {
-                                    Label("Connected", systemImage: "checkmark.circle.fill")
-                                        .labelStyle(.iconOnly)
-                                        .foregroundStyle(style.success)
-                                        .help("Connected")
-                                        .accessibilityLabel("Connected")
-                                }
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if items.isEmpty {
+                                Text("No provider matches “\(search.value)”.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
+                                    .padding(DS.Space.s8)
                             }
-                            .tag(Optional(item.id))
-                            .id(item.id)
+                            ForEach(items) { item in
+                                ProviderListRow(item: item, isSelected: selected.value == item.id) { selected.value = item.id }
+                                    .id(item.id)
+                            }
                         }
+                        .padding(DS.Space.s4)
                     }
-                    .listStyle(.sidebar)
                     .onAppear { if let id = selected.value { proxy.scrollTo(id, anchor: .center) } }
                 }
             }
@@ -198,11 +193,11 @@ struct ConnectDetail: View {
             let credentials = auth.credentials(for: item.id)
             if let active = credentials.first(where: \.isActive) {
                 Label("Connected as “\(active.label)”" + (credentials.count > 1 ? " (\(credentials.count) accounts)" : ""),
-                      systemImage: "checkmark.circle.fill")
+                      systemImage: "checkmark")
                     .foregroundStyle(style.success)
                     .font(style.smallFont)
             } else if let problem = item.connections.first(where: { $0.problem != nil })?.problem {
-                Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(style.attention).font(style.smallFont)
+                Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(style.attention).font(style.smallFont)
             } else if item.isConnected {
                 Label("Connected through the environment", systemImage: "checkmark.circle").foregroundStyle(style.success)
                     .font(style.smallFont)
@@ -219,7 +214,13 @@ struct ConnectDetail: View {
             ForEach(methods) { method in Text(method.label).tag(method.id) }
         }
         Group {
-            if methods.count <= 3 { picker.pickerStyle(.segmented) } else { picker.pickerStyle(.menu) }
+            if methods.count <= 3 {
+                DSSegmentedPicker(
+                    options: methods.map { (id: $0.id, title: $0.label) },
+                    selection: Binding(get: { method?.id ?? "" }, set: { inputs.methodID = $0 }))
+            } else {
+                picker.pickerStyle(.menu).menuStyle(.button).buttonStyle(DSButtonStyle(.outline)).fixedSize()
+            }
         }
         .labelsHidden()
         .disabled(flow?.isWaiting == true)
@@ -237,7 +238,7 @@ struct ConnectDetail: View {
                 VStack(alignment: .leading, spacing: style.spacing) {
                     Text("API key").font(style.bodyFont.weight(.medium))
                     SecureField("Paste your \(item.name) API key", text: $inputs.apiKey)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(DSTextFieldStyle())
                         .focused($keyFocused)
                         .onSubmit { connect(method, form) }
                         .accessibilityLabel("\(item.name) API key")
@@ -250,14 +251,14 @@ struct ConnectDetail: View {
                     .font(style.monospacedFont)
                     .padding(style.spacing * 2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(style.inset, in: RoundedRectangle(cornerRadius: 5))
+                    .background(style.inset, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
                     .textSelection(.enabled)
             }
             if !form.visibleFields.isEmpty {
                 FormFieldsView(model: form, disabled: waiting)
             }
             DisclosureGroup("Account name (optional)") {
-                TextField("For example “Work”", text: $inputs.label).textFieldStyle(.roundedBorder)
+                TextField("For example “Work”", text: $inputs.label).textFieldStyle(DSTextFieldStyle())
                     .padding(.top, style.spacing)
             }
             .font(style.smallFont)
@@ -272,9 +273,9 @@ struct ConnectDetail: View {
     private func flowView(_ method: AuthMethod, _ form: QuestionFormModel) -> some View {
         switch flow {
         case .waitingForBrowser(let url, let instructions, let canPaste, let expires):
-            StatusBox(tint: style.accent) {
+            StatusBox(tint: SwiftUI.Color.ds.info) {
                 HStack(spacing: style.spacing * 2) {
-                    ProgressView().controlSize(.small)
+                    StatusLabel(.running, showsText: false)
                     Text("Waiting for you to finish in the browser…").font(style.bodyFont.weight(.medium))
                 }
                 if !instructions.isEmpty { Text(instructions).font(style.smallFont).foregroundStyle(style.secondaryText) }
@@ -287,23 +288,23 @@ struct ConnectDetail: View {
                     Text("If the browser shows a page that cannot be reached, copy its address and paste it here:")
                         .font(style.smallFont).foregroundStyle(style.secondaryText)
                     HStack {
-                        TextField("Redirect URL", text: $inputs.code).textFieldStyle(.roundedBorder)
+                        TextField("Redirect URL", text: $inputs.code).textFieldStyle(DSTextFieldStyle())
                         Button("Submit") { Task { await auth.submitCode(inputs.code) } }
                             .disabled(inputs.code.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
             }
         case .waitingForCode(let url, let instructions, let expires, let error):
-            StatusBox(tint: style.accent) {
+            StatusBox(tint: SwiftUI.Color.ds.info) {
                 Text("Paste the code from your browser").font(style.bodyFont.weight(.medium))
                 if !instructions.isEmpty { Text(instructions).font(style.smallFont).foregroundStyle(style.secondaryText) }
                 if let expires { ExpiryText(expires: expires) }
                 HStack {
                     TextField("Code", text: $inputs.code)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(DSTextFieldStyle())
                         .onSubmit { Task { await auth.submitCode(inputs.code) } }
                     Button("Submit") { Task { await auth.submitCode(inputs.code) } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(DSButtonStyle(.primary))
                         .disabled(inputs.code.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 if let error { Label(error, systemImage: "exclamationmark.circle").foregroundStyle(style.danger).font(style.smallFont) }
@@ -314,13 +315,13 @@ struct ConnectDetail: View {
             }
         case .verifying, .submitting, .starting:
             HStack(spacing: style.spacing * 2) {
-                ProgressView().controlSize(.small)
+                StatusLabel(.running, showsText: false)
                 Text(flow == .verifying ? "Checking the code…" : "Connecting…").font(style.smallFont)
             }
         case .runningCommand(let output):
-            StatusBox(tint: style.accent) {
+            StatusBox(tint: SwiftUI.Color.ds.info) {
                 HStack(spacing: style.spacing * 2) {
-                    ProgressView().controlSize(.small)
+                    StatusLabel(.running, showsText: false)
                     Text("Running the login command…").font(style.bodyFont.weight(.medium))
                 }
                 if let output { Text(output).font(style.monospacedFont).foregroundStyle(style.secondaryText).lineLimit(6) }
@@ -328,31 +329,31 @@ struct ConnectDetail: View {
             }
         case .succeeded:
             StatusBox(tint: style.success) {
-                Label("Connected to \(item.name)", systemImage: "checkmark.circle.fill")
+                Label("Connected to \(item.name)", systemImage: "checkmark")
                     .font(style.bodyFont.weight(.medium)).foregroundStyle(style.success)
                 Text("Its models now appear in the model picker. Manage this account in Settings ▸ Accounts.")
                     .font(style.smallFont).foregroundStyle(style.secondaryText)
                 HStack {
-                    if let onDone { Button("Done", action: onDone).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
+                    if let onDone { Button("Done", action: onDone).buttonStyle(DSButtonStyle(.primary)).keyboardShortcut(.defaultAction) }
                     Button("Add Another Account") { auth.clearFlow() }
                 }
             }
         case .failed(let message):
             StatusBox(tint: style.danger) {
-                Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(style.danger).font(style.bodyFont)
+                Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(style.danger).font(style.bodyFont)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Nothing you typed was lost. Check it and try again.").font(style.smallFont).foregroundStyle(style.secondaryText)
-                Button("Try Again") { connect(method, form) }.buttonStyle(.borderedProminent)
+                Button("Try Again") { connect(method, form) }.buttonStyle(DSButtonStyle(.primary))
             }
         case .expired:
             StatusBox(tint: style.attention) {
                 Label("The sign-in link expired before it was finished.", systemImage: "clock.badge.exclamationmark")
-                Button("Start Again") { connect(method, form) }.buttonStyle(.borderedProminent)
+                Button("Start Again") { connect(method, form) }.buttonStyle(DSButtonStyle(.primary))
             }
         case .cancelled, .idle, nil:
             HStack {
                 Button(primaryTitle(method)) { connect(method, form) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(DSButtonStyle(.primary))
                     .keyboardShortcut(.defaultAction)
                     .disabled(method.kind == .key && inputs.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if flow == .cancelled { Text("Cancelled.").font(style.smallFont).foregroundStyle(style.secondaryText) }
@@ -429,8 +430,8 @@ struct StatusBox<Content: View>: View {
         VStack(alignment: .leading, spacing: style.spacing * 2) { content }
             .padding(style.spacing * 3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: style.cornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: style.cornerRadius).strokeBorder(tint.opacity(0.35), lineWidth: 0.5))
+            .background(tint.opacity(0.045), in: RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg, style: .continuous).strokeBorder(SwiftUI.Color.ds.border, lineWidth: 1))
     }
 }
 
@@ -445,5 +446,37 @@ struct ExpiryText: View {
                 .font(style.smallFont)
                 .foregroundStyle(style.secondaryText)
         }
+    }
+}
+
+/// A provider in the connect list: 28 pt, the DS row recipe (hover / selected wash, never accent), a check for
+/// connected providers (glyph + accessibility word).
+struct ProviderListRow: View {
+    let item: IntegrationItem
+    let isSelected: Bool
+    let select: () -> Void
+    @StateObject private var hover = ViewState(false)
+
+    var body: some View {
+        Button(action: select) {
+            HStack(spacing: DS.Space.s8) {
+                Text(item.name).font(.ds(.body)).foregroundStyle(SwiftUI.Color.ds.text).lineLimit(1)
+                Spacer()
+                if item.isConnected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: DS.Size.iconPointMeta, weight: .semibold))
+                        .foregroundStyle(SwiftUI.Color.ds.successText)
+                        .help("Connected")
+                        .accessibilityLabel("Connected")
+                }
+            }
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Size.sidebarRow)
+            .contentShape(Rectangle())
+            .dsRowBackground(.resolve(hovered: hover.value, selected: false, active: isSelected))
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.value = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

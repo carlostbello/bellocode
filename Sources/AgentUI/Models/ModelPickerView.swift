@@ -2,10 +2,11 @@ import AppKit
 import BelloCore
 import Engine
 import SwiftUI
+import DesignSystem
 
-/// The composer's model button: current model and effort, opening the picker popover (⇧⌘M).
+/// The composer's model button: a ghost select (sparkle glyph, model, effort, chevron) opening the model picker on the
+/// popover glass (⇧⌘M).
 public struct ModelPickerButton: View {
-    @Environment(\.agentUIStyle) private var style
     @Bindable var model: ModelPickerModel
     @StateObject private var isOpen = ViewState(false)
 
@@ -18,21 +19,22 @@ public struct ModelPickerButton: View {
             if !isOpen.value { model.prepareForOpen() }
             isOpen.value.toggle()
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: DS.Space.s6) {
                 if model.pending != nil {
-                    ProgressView().controlSize(.mini).accessibilityLabel("Switching model")
+                    StatusLabel(.running, showsText: false).accessibilityLabel("Switching model")
                 } else if model.error != nil {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(style.danger)
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
+                } else {
+                    Image(systemName: "sparkle").font(.system(size: DS.Size.iconPointRow)).foregroundStyle(SwiftUI.Color.ds.icon)
                 }
                 Text(model.selectedModel?.name ?? model.selection?.modelID ?? "Choose model").lineLimit(1)
                 if let variant = model.selection?.variant {
-                    Text(variant).foregroundStyle(style.secondaryText)
+                    Text(variant).foregroundStyle(SwiftUI.Color.ds.text3)
                 }
-                Image(systemName: "chevron.down").imageScale(.small).foregroundStyle(style.secondaryText)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text4)
             }
-            .font(style.smallFont)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(ComposerSelectStyle(isOpen: isOpen.value))
         .keyboardShortcut(.modelPicker)
         .onChange(of: model.openRequests) {
             if !isOpen.value { model.prepareForOpen() }
@@ -42,18 +44,22 @@ public struct ModelPickerButton: View {
         .accessibilityLabel("Model")
         .accessibilityValue(
             [model.selectedModel?.name ?? model.selection?.modelID, model.selection?.variant].compactMap { $0 }.joined(separator: ", "))
-        .popover(isPresented: $isOpen.value, arrowEdge: .top) {
+        .glassPopover(isPresented: $isOpen.value, width: ModelPickerView.width) {
             ModelPickerView(model: model) { isOpen.value = false }
         }
     }
 }
 
-/// Picker content: search field (focused), grouped list, keyboard hints.
+/// Picker content (model-picker-dark.png): search field (focused), provider sections with a status on the right, rows
+/// with a check / favourite slot, name, context and price, Free in `successText`, providers to connect receding with a
+/// `Connect…` link, and a footer of key caps.
 public struct ModelPickerView: View {
-    @Environment(\.agentUIStyle) private var style
     @Bindable var model: ModelPickerModel
     let close: () -> Void
     @FocusState private var searchFocused: Bool
+
+    static let width: CGFloat = 360
+    static let height: CGFloat = 420
 
     public init(model: ModelPickerModel, close: @escaping () -> Void) {
         self.model = model
@@ -63,23 +69,25 @@ public struct ModelPickerView: View {
     public var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            SwiftUI.Color.ds.border.frame(height: 1)
             list
-            Divider()
             footer
         }
-        .frame(width: 420)
-        .frame(minHeight: 200, maxHeight: 460)
+        .frame(width: Self.width, height: Self.height)
         .noImplicitAnimation()
         .onAppear { searchFocused = true }
     }
 
     private var header: some View {
-        HStack(spacing: style.spacing * 2) {
-            Image(systemName: "magnifyingglass").foregroundStyle(style.secondaryText).accessibilityHidden(true)
+        HStack(spacing: DS.Space.s8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: DS.Size.iconPoint))
+                .foregroundStyle(SwiftUI.Color.ds.text3)
+                .accessibilityHidden(true)
             TextField("Search models", text: $model.query)
                 .textFieldStyle(.plain)
-                .font(style.bodyFont)
+                .font(.ds(.body))
+                .foregroundStyle(SwiftUI.Color.ds.text)
                 .focused($searchFocused)
                 .onKeyPress(.downArrow) { model.moveHighlight(1); return .handled }
                 .onKeyPress(.upArrow) { model.moveHighlight(-1); return .handled }
@@ -101,19 +109,28 @@ public struct ModelPickerView: View {
             Button {
                 Task { await model.refresh() }
             } label: {
-                if model.isRefreshing { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
+                if model.isRefreshing {
+                    StatusLabel(.running, showsText: false)
+                } else {
+                    Image(systemName: "arrow.clockwise").font(.system(size: DS.Size.iconPointRow))
+                }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
             .help("Refresh models")
             .accessibilityLabel("Refresh models")
-            Toggle(isOn: $model.showsHidden) { Image(systemName: "eye") }
-                .toggleStyle(.button)
-                .buttonStyle(.borderless)
-                .help(model.showsHidden ? "Hide hidden models" : "Show hidden models")
-                .accessibilityLabel("Show hidden models")
+            Button {
+                model.showsHidden.toggle()
+            } label: {
+                Image(systemName: model.showsHidden ? "eye" : "eye.slash").font(.system(size: DS.Size.iconPointRow))
+            }
+            .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true, isSelected: model.showsHidden))
+            .help(model.showsHidden ? "Hide hidden models" : "Show hidden models")
+            .accessibilityLabel("Show hidden models")
+            .accessibilityValue(model.showsHidden ? "on" : "off")
+            DSKbdView(AgentShortcut.modelPicker.display)
         }
-        .padding(.horizontal, style.spacing * 3)
-        .padding(.vertical, style.spacing * 2)
+        .padding(.horizontal, DS.Space.s12)
+        .frame(height: 44)
     }
 
     private var list: some View {
@@ -124,17 +141,24 @@ public struct ModelPickerView: View {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: []) {
                     if sections.allSatisfy({ $0.id == "connect" }) && !model.query.isEmpty {
                         Text("No models match “\(model.query)”.")
-                            .font(style.smallFont).foregroundStyle(style.secondaryText)
-                            .padding(.horizontal, style.spacing * 3).padding(.vertical, style.spacing * 2)
+                            .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
+                            .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
                     }
                     ForEach(sections) { section in
-                        Text(section.title)
-                            .font(style.smallFont.weight(.semibold))
-                            .foregroundStyle(style.secondaryText)
-                            .padding(.horizontal, style.spacing * 3)
-                            .padding(.top, style.spacing * 2.5)
-                            .padding(.bottom, style.spacing)
-                            .accessibilityAddTraits(.isHeader)
+                        if section.id == "connect" {
+                            SwiftUI.Color.ds.border.frame(height: 1).padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)
+                        }
+                        HStack {
+                            Text(section.title)
+                            Spacer()
+                            if let status = Self.status(of: section) { Text(status) }
+                        }
+                        .font(.ds(.metaEmph))
+                        .foregroundStyle(SwiftUI.Color.ds.text3)
+                        .padding(.horizontal, DS.Space.s12)
+                        .frame(height: DS.Size.menuGroupHeader)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(.isHeader)
                         ForEach(section.rows) { row in
                             ModelPickerRow(model: model, row: row, isHighlighted: row.id == highlighted) {
                                 if model.choose(row) { close() }
@@ -143,8 +167,9 @@ public struct ModelPickerView: View {
                         }
                     }
                 }
-                .padding(.bottom, style.spacing * 2)
+                .padding(.vertical, DS.Space.s4)
             }
+            .scrollIndicators(.automatic)
             .onChange(of: highlighted) { _, id in
                 if let id { proxy.scrollTo(id) }
             }
@@ -154,28 +179,84 @@ public struct ModelPickerView: View {
         }
     }
 
+    /// A provider section's status word on the right of its header.
+    static func status(of section: ModelPickerModel.Section) -> String? {
+        guard section.id.hasPrefix("provider-") else { return nil }
+        let models = section.rows.compactMap(\.model)
+        return !models.isEmpty && models.allSatisfy(\.isFree) ? "Free models" : "Connected"
+    }
+
     private var footer: some View {
-        HStack(spacing: style.spacing * 3) {
+        HStack(spacing: DS.Space.s10) {
             if let error = model.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(style.danger).lineLimit(1)
+                HStack(spacing: DS.Space.s6) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
+                    Text(error).foregroundStyle(SwiftUI.Color.ds.text).lineLimit(1)
+                }
             } else {
-                Text("↑↓ select").accessibilityHidden(true)
-                Text("⇥ effort").accessibilityHidden(true)
-                Text("⌘D favourite").accessibilityHidden(true)
-                Text("↩ choose").accessibilityHidden(true)
-                Spacer()
-                Text("esc close").accessibilityHidden(true)
+                hint("↑↓", "select")
+                    .padding(.leading, -2)
+                hint("↩", "choose")
+                hint("⇥", "effort")
+                hint("⌘D", "favourite")
+                Spacer(minLength: 0)
+                DSKbdView("esc")
             }
         }
-        .font(style.smallFont)
-        .foregroundStyle(style.secondaryText)
-        .padding(.horizontal, style.spacing * 3)
-        .padding(.vertical, style.spacing * 1.5)
+        .font(.ds(.meta))
+        .foregroundStyle(SwiftUI.Color.ds.text3)
+        .padding(.horizontal, DS.Space.s12)
+        .frame(height: 38)
+        .background(SwiftUI.Color.ds.fillSubtle)
+        .overlay(alignment: .top) { SwiftUI.Color.ds.border.frame(height: 1) }
+        .accessibilityHidden(model.error == nil)
+    }
+
+    private func hint(_ keys: String, _ text: String) -> some View {
+        HStack(spacing: DS.Space.s4) {
+            DSKbdView(keys)
+            Text(text).lineLimit(1)
+        }
+        .fixedSize()
+    }
+}
+
+/// The ghost select look of composer controls (visual-language.md §6 "Composer"): 26 high, `label` 12, `text2`,
+/// hover / open = `fillHover` + `text`; keyboard focus draws the accent ring.
+struct ComposerSelectStyle: ButtonStyle {
+    var isOpen = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        ComposerSelectBody(configuration: configuration, isOpen: isOpen)
+    }
+}
+
+private struct ComposerSelectBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isOpen: Bool
+    @StateObject private var hover = ViewState(false)
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+
+    var body: some View {
+        let active = hover.value || isOpen || configuration.isPressed
+        let shape = RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+        configuration.label
+            .font(.ds(.label))
+            .foregroundStyle(active ? SwiftUI.Color.ds.text : SwiftUI.Color.ds.text2)
+            .padding(.horizontal, DS.Space.s8)
+            .frame(height: DS.Size.composerControl)
+            .background(shape.fill(active ? SwiftUI.Color.ds.fillHover : .clear))
+            .overlay(shape.strokeBorder(isFocused ? SwiftUI.Color.ds.focusRing : .clear, lineWidth: DS.Border.focusRing))
+            .contentShape(shape)
+            .opacity(isEnabled ? 1 : DSControlState.disabledOpacity)
+            .onHover { hover.value = $0 }
+            .focusEffectDisabled()
+            .transaction { $0.animation = nil }
     }
 }
 
 struct ModelPickerRow: View {
-    @Environment(\.agentUIStyle) private var style
     let model: ModelPickerModel
     let row: ModelPickerModel.Row
     let isHighlighted: Bool
@@ -184,13 +265,13 @@ struct ModelPickerRow: View {
     var body: some View {
         Button(action: action) {
             content
-                .padding(.horizontal, style.spacing * 2)
-                .frame(minHeight: style.rowHeight)
+                .padding(.horizontal, DS.Space.s8)
+                .frame(minHeight: 30)
                 .contentShape(Rectangle())
                 .background(
-                    isHighlighted ? style.accent.opacity(0.16) : .clear,
-                    in: RoundedRectangle(cornerRadius: 5))
-                .padding(.horizontal, style.spacing)
+                    isHighlighted ? SwiftUI.Color.ds.highlight : .clear,
+                    in: RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
+                .padding(.horizontal, DS.Space.s4)
         }
         .buttonStyle(.plain)
         .disabled(!row.isEnabled)
@@ -205,23 +286,22 @@ struct ModelPickerRow: View {
         case .model(let entry, let providerName):
             modelContent(entry, providerName: providerName)
         case .connect(_, let name):
-            HStack(spacing: style.spacing * 2) {
-                Image(systemName: "bolt.horizontal.circle").foregroundStyle(style.secondaryText).frame(width: 14)
-                Text(name).foregroundStyle(style.secondaryText)
-                Text("not connected").font(style.smallFont).foregroundStyle(style.secondaryText.opacity(0.8))
+            HStack(spacing: DS.Space.s8) {
+                SwiftUI.Color.clear.frame(width: 14, height: 14)
+                Text(name).foregroundStyle(SwiftUI.Color.ds.text3)
                 Spacer()
-                Text("Connect…").font(style.smallFont.weight(.medium)).foregroundStyle(style.accent)
+                Text("Connect…").font(.ds(.body)).foregroundStyle(SwiftUI.Color.ds.infoText)
             }
-            .font(style.bodyFont)
+            .font(.ds(.body))
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(name), not connected. Connect.")
         case .connectOther:
-            HStack(spacing: style.spacing * 2) {
-                Image(systemName: "plus.circle").foregroundStyle(style.accent).frame(width: 14)
-                Text("Connect another provider…").foregroundStyle(style.accent)
+            HStack(spacing: DS.Space.s8) {
+                Image(systemName: "plus").font(.system(size: DS.Size.iconPointMeta, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text3).frame(width: 14)
+                Text("Connect another provider…").foregroundStyle(SwiftUI.Color.ds.text2)
                 Spacer()
             }
-            .font(style.bodyFont)
+            .font(.ds(.body))
         }
     }
 
@@ -232,43 +312,43 @@ struct ModelPickerRow: View {
         let isHidden = model.preferences.value.hidden.contains(entry.id)
         let variant = model.variant(for: entry)
         return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: style.spacing * 2) {
+            HStack(spacing: DS.Space.s8) {
                 ZStack {
-                    Color.clear
+                    SwiftUI.Color.clear
                     if isSelected {
-                        Image(systemName: "checkmark").foregroundStyle(style.accent)
+                        Image(systemName: "checkmark").foregroundStyle(SwiftUI.Color.ds.accent)
                     } else if isFavourite {
-                        Image(systemName: "star.fill").foregroundStyle(style.attention)
+                        Image(systemName: "star").foregroundStyle(SwiftUI.Color.ds.warningText)
                     }
                 }
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: DS.Size.iconPointMeta, weight: .semibold))
                 .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
                 Text(entry.name)
-                    .foregroundStyle(row.isEnabled ? style.primaryText : style.secondaryText)
+                    .foregroundStyle(row.isEnabled ? SwiftUI.Color.ds.text : SwiftUI.Color.ds.text3)
                     .lineLimit(1)
                     .layoutPriority(1)
                 if model.query.isEmpty == false || isFavouriteSection {
-                    Text(providerName).font(style.smallFont).foregroundStyle(style.secondaryText).lineLimit(1)
+                    Text(providerName).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1)
                 }
                 if entry.status != "active" { Tag(text: entry.status).fixedSize() }
                 if isHidden { Tag(text: "hidden").fixedSize() }
                 if let variant, !isHighlighted { Tag(text: variant).fixedSize() }
-                Spacer(minLength: style.spacing)
+                Spacer(minLength: DS.Space.s4)
                 hints(entry).fixedSize()
             }
             // The effort choices of the highlighted model, on their own line (⇥ cycles them).
             if isHighlighted, !entry.variants.isEmpty {
-                HStack(spacing: style.spacing * 2) {
-                    Color.clear.frame(width: 14, height: 1)
-                    Text("Effort").font(style.smallFont).foregroundStyle(style.secondaryText)
-                    variantChips(entry, selected: variant)
+                HStack(spacing: DS.Space.s8) {
+                    SwiftUI.Color.clear.frame(width: 14, height: 1)
+                    Text("Reasoning").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
                     Spacer(minLength: 0)
+                    variantChips(entry, selected: variant)
                 }
-                .padding(.bottom, 3)
+                .padding(.bottom, DS.Space.s6)
             }
         }
-        .font(style.bodyFont)
+        .font(.ds(.body))
         .help(row.disabledReason ?? help(entry, providerName: providerName))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(entry, providerName: providerName, variant: variant, selected: isSelected))
@@ -276,28 +356,34 @@ struct ModelPickerRow: View {
 
     private var isFavouriteSection: Bool { row.id.hasPrefix("favourites|") || row.id.hasPrefix("recent|") }
 
+    /// The effort choices as a segmented control (`fillSubtle` track, `rowActive` thumb). Not buttons: a button
+    /// inside the row's button breaks the row's layout on macOS.
     private func variantChips(_ entry: ModelEntry, selected: String?) -> some View {
-        HStack(spacing: 2) {
-            // Not buttons: a button inside the row's button breaks the row's layout on macOS.
+        HStack(spacing: 0) {
             ForEach([nil] + entry.variants.map(Optional.some), id: \.self) { variant in
-                Text(variant ?? "default")
-                    .font(.system(size: NSFont.smallSystemFontSize - 1))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
+                let isOn = variant == selected
+                Text((variant ?? "default").capitalized)
+                    .font(.ds(.labelEmph))
+                    .foregroundStyle(isOn ? SwiftUI.Color.ds.text : SwiftUI.Color.ds.text2)
+                    .padding(.horizontal, DS.Space.s8)
+                    .frame(height: 20)
                     .background(
-                        variant == selected ? style.accent.opacity(0.25) : style.separator.opacity(0.25),
-                        in: RoundedRectangle(cornerRadius: 3))
-                    .foregroundStyle(variant == selected ? style.primaryText : style.secondaryText)
+                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                            .fill(isOn ? SwiftUI.Color.ds.rowActive : .clear)
+                            .overlay(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous).strokeBorder(isOn ? SwiftUI.Color.ds.rowRing : .clear)))
                     .contentShape(Rectangle())
                     .onTapGesture { model.setVariant(variant, for: entry) }
                     .help("Effort: \(variant ?? "model default")")
+                    .accessibilityAddTraits(isOn ? .isSelected : [])
             }
         }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).fill(SwiftUI.Color.ds.fillSubtle))
         .fixedSize()
     }
 
     private func hints(_ entry: ModelEntry) -> some View {
-        HStack(spacing: style.spacing * 1.5) {
+        HStack(spacing: DS.Space.s8) {
             if entry.inputModalities.contains("image") {
                 Image(systemName: "photo").help("Accepts images").accessibilityHidden(true)
             }
@@ -309,12 +395,12 @@ struct ModelPickerRow: View {
             }
             if let cost = ModelPickerModel.costLabel(entry) {
                 Text(cost)
-                    .foregroundStyle(entry.isFree ? style.success : style.secondaryText)
+                    .foregroundStyle(entry.isFree ? SwiftUI.Color.ds.successText : SwiftUI.Color.ds.text3)
                     .help(entry.isFree ? "No cost" : "USD per million input / output tokens")
             }
         }
-        .font(style.smallFont.monospacedDigit())
-        .foregroundStyle(style.secondaryText)
+        .font(.ds(.meta).monospacedDigit())
+        .foregroundStyle(SwiftUI.Color.ds.text3)
     }
 
     private func help(_ entry: ModelEntry, providerName: String) -> String {
@@ -345,15 +431,9 @@ struct ModelPickerRow: View {
     }
 }
 
+/// A small status / variant tag: a neutral `DSPillView`.
 struct Tag: View {
-    @Environment(\.agentUIStyle) private var style
     let text: String
 
-    var body: some View {
-        Text(text)
-            .font(.system(size: NSFont.smallSystemFontSize - 1, weight: .medium))
-            .foregroundStyle(style.secondaryText)
-            .padding(.horizontal, 4)
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(style.separator, lineWidth: 0.5))
-    }
+    var body: some View { DSPillView(text) }
 }

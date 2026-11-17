@@ -1,5 +1,6 @@
 import AppKit
 import ComposerKit
+import DesignSystem
 import Foundation
 
 /// Window, composer, fake hosts, input synthesis, checks and snapshots.
@@ -13,7 +14,7 @@ final class Harness {
     /// Window background drawn in `draw(_:)`, so snapshots include it in both appearances.
     final class BackgroundView: NSView {
         override func draw(_ dirtyRect: NSRect) {
-            NSColor.windowBackgroundColor.setFill()
+            DS.Color.canvas.setFill()
             dirtyRect.fill()
         }
     }
@@ -35,8 +36,24 @@ final class Harness {
         window.title = "ComposerDemo"
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
+        // In-process renders cannot capture vibrancy: glass surfaces draw their solid fallback.
+        DSGlassView.forcesSolidFallback = true
         composer = ComposerViewController()
         mount(composer)
+    }
+
+    /// Stand-ins for the shell's pickers (agent, model, effort, permission mode), built from the same DesignSystem
+    /// ghost select buttons, so snapshots show the whole controls bar.
+    static func demoControls() -> (leading: [NSView], trailing: [NSView]) {
+        func select(_ title: String, _ symbol: String) -> DSSelectButton {
+            let button = DSSelectButton(title: title, symbolName: symbol, chevron: .down, size: .small)
+            button.variant = .ghost
+            button.isMuted = true
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.heightAnchor.constraint(equalToConstant: DS.Size.composerControl).isActive = true
+            return button
+        }
+        return ([select("Build", "hammer"), select("Claude Sonnet 4.5", "sparkle"), select("High", "cpu"), select("Ask", "lock")], [])
     }
 
     // MARK: Setup
@@ -79,17 +96,21 @@ final class Harness {
         content.subviews.forEach { $0.removeFromSuperview() }
 
         let transcript = NSTextField(wrappingLabelWithString: "Transcript area. The composer below is the real ComposerKit view with a fake thread.")
-        transcript.textColor = .tertiaryLabelColor
+        transcript.textColor = DS.Color.text3
+        transcript.font = DS.TextRole.body.font
         transcript.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(transcript)
 
-        composer.leadingControls.setViews(
-            [pill("Build", symbol: "hammer"), pill("GPT-5 Codex", symbol: "cpu")], in: .leading)
-        composer.trailingControls.setViews([pill("Ask", symbol: "lock")], in: .leading)
-        let context = NSTextField(labelWithString: "bellocode  ·  main  ·  local checkout")
-        context.font = .systemFont(ofSize: NSFont.smallSystemFontSize - 1)
-        context.textColor = .secondaryLabelColor
-        composer.contextLineView = context
+        let controls = Self.demoControls()
+        composer.leadingControls.spacing = 2
+        composer.leadingControls.setViews(controls.leading, in: .leading)
+        composer.trailingControls.setViews(controls.trailing, in: .leading)
+        composer.contextLineView = ComposerContextStrip(
+            items: [
+                .init(symbolName: "folder", text: "bellocode"), .init(symbolName: "arrow.triangle.branch", text: "main"),
+                .init(symbolName: "square.on.square.dashed", text: "local checkout"),
+            ],
+            hint: "↩ sends · ⇧↩ new line")
 
         let view = composer.view
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -107,18 +128,6 @@ final class Harness {
         ])
         window.makeFirstResponder(composer.textView)
         content.layoutSubtreeIfNeeded()
-    }
-
-    private func pill(_ title: String, symbol: String) -> NSButton {
-        let button = NSButton(title: title, image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage(), target: nil, action: nil)
-        button.bezelStyle = .accessoryBarAction
-        button.showsBorderOnlyWhileMouseInside = true
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        button.imagePosition = .imageLeading
-        button.contentTintColor = .secondaryLabelColor
-        button.setAccessibilityLabel("\(title) (placeholder picker)")
-        return button
     }
 
     func showInteractive() {
@@ -300,7 +309,12 @@ final class Harness {
             content.displayIfNeeded()
             guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { continue }
             appearance.performAsCurrentDrawingAppearance {
-                content.cacheDisplay(in: content.bounds, to: rep)
+                // Without font smoothing: `cacheDisplay` darkens stems (implementation-guide.md, snapshots).
+                if let context = NSGraphicsContext(bitmapImageRep: rep) {
+                    context.cgContext.setAllowsFontSmoothing(false)
+                    context.cgContext.setShouldSmoothFonts(false)
+                    content.displayIgnoringOpacity(content.bounds, in: context)
+                }
                 if let popover = composer.completionView, let panel = popover.window {
                     popover.appearance = appearance
                     let frame = window.convertFromScreen(panel.frame)
@@ -310,7 +324,11 @@ final class Harness {
                         NSColor.clear.set()
                         NSRect(origin: .zero, size: popoverRep.size).fill(using: .copy)
                         NSGraphicsContext.restoreGraphicsState()
-                        popover.cacheDisplay(in: popover.bounds, to: popoverRep)
+                        if let context = NSGraphicsContext(bitmapImageRep: popoverRep) {
+                            context.cgContext.setAllowsFontSmoothing(false)
+                            context.cgContext.setShouldSmoothFonts(false)
+                            popover.displayIgnoringOpacity(popover.bounds, in: context)
+                        }
                         NSGraphicsContext.saveGraphicsState()
                         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
                         let shadow = NSShadow()

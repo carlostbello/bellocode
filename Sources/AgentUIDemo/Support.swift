@@ -6,6 +6,7 @@ import Foundation
 import MockOpenCode
 import OpenCodeKit
 import SwiftUI
+import DesignSystem
 
 /// A failed demo assertion.
 struct DemoFailure: Error, CustomStringConvertible {
@@ -97,6 +98,8 @@ struct Snapshotter {
 
     init(directory: URL) throws {
         self.directory = directory
+        // In-process renders cannot capture vibrancy: glass surfaces draw their solid fallback.
+        DSGlassView.forcesSolidFallback = true
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -106,7 +109,7 @@ struct Snapshotter {
         for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             let root = view()
                 .frame(width: width, height: height, alignment: .topLeading)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(SwiftUI.Color.ds.canvas)
                 .environment(\.agentUIStyle, .standard)
             let hosting = NSHostingView(rootView: root)
             let window = NSWindow(
@@ -125,7 +128,11 @@ struct Snapshotter {
                 throw DemoFailure(description: "could not render \(name)")
             }
             rep.size = hosting.bounds.size
-            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            // Without font smoothing: `cacheDisplay` darkens stems (implementation-guide.md, snapshots).
+            guard let context = NSGraphicsContext(bitmapImageRep: rep) else { throw DemoFailure(description: "no context for \(name)") }
+            context.cgContext.setAllowsFontSmoothing(false)
+            context.cgContext.setShouldSmoothFonts(false)
+            hosting.displayIgnoringOpacity(hosting.bounds, in: context)
             guard let png = rep.representation(using: .png, properties: [:]) else { throw DemoFailure(description: "no PNG for \(name)") }
             let url = directory.appending(path: "\(name)-\(suffix).png")
             try png.write(to: url)

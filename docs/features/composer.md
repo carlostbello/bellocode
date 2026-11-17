@@ -19,6 +19,17 @@ Status: done 2026-11-16. `ComposerKit` (AppKit, TextKit 2) plus the `ComposerDem
   `node_modules`, build folders), `StaticSlashCommandProvider` (`/` at prompt start). Add more through
   `CompletionProvider` (async, cancellable; the session debounces 40 ms and drops stale answers).
 
+## Appearance (restyle 3, visual-language.md §6 "Composer")
+The composer draws from DesignSystem whatever the host passes: `ComposerStyle.resolvedWithDesignTokens()` keeps the host's
+behaviour fields (placeholder, minimum lines, height cap, completion size) and takes colours, fonts and metrics from the
+tokens. Container: `DSGlassView(.composer)` (solid `raised` under Reduce Transparency and in snapshots), r16,
+`composerOutline` + dark inner highlight, `shadow.composer`; focus strengthens the outline to `borderStrong` (accent,
+2 pt, under Increase Contrast). Prompt `composer` 14/21 inset 12/14/4; controls bar 8 pt from the edges, 26 pt controls:
+ghost paperclip (`attachFiles:`), the host's pickers, outline Stop with the red square, 30 pt accent Send (`disabledFill`
+when empty), labelled accent Queue/Steer capsules while running. Chips: `fillHover` r8. Completion: popover glass, 28 pt
+rows, neutral `highlight`. `ComposerContextStrip` is the 26 pt project / branch / worktree / send-key strip for
+`contextLineView` (the shell still installs its own line).
+
 ## `ComposerHost`
 
 `draftKey`, `loadDraft()`, `saveDraft(_:)` (debounced 150 ms while typing; immediate on send, switch, teardown),

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import BelloCore
 import DesignSystem
 
@@ -189,6 +190,16 @@ enum Sheets {
         search.shortcutHint = "⌘K"
         sheet.row("text field (rest, focused)", [field, focusedField], sizes: [NSSize(width: 240, height: 34), NSSize(width: 240, height: 34)])
         sheet.row("search field", [search], sizes: [NSSize(width: 384, height: 34)])
+        let swiftUIField = NSHostingView(rootView: VStack(alignment: .leading, spacing: 8) {
+            TextField("Your answer", text: .constant("")).textFieldStyle(DSTextFieldStyle())
+            SecureField("Value for API key", text: .constant("secret")).textFieldStyle(DSTextFieldStyle())
+        }.padding(3))
+        let hinted = NSHostingView(rootView: HStack(spacing: 8) {
+            Button("Always allow") {}.buttonStyle(DSButtonStyle(.outline, hint: "⇧⌥⌘Y"))
+            Button("Always allow for this project") {}.buttonStyle(DSButtonStyle(.outline, hint: "⇧⌥⌘Y")).frame(width: 200)
+        })
+        sheet.row("SwiftUI field (DSTextFieldStyle), button hint dropped first", [swiftUIField, hinted],
+                  sizes: [NSSize(width: 240, height: 70), NSSize(width: 360, height: 28)])
 
         sheet.heading("Toggles")
         for kind in DSToggle.Kind.allCases {

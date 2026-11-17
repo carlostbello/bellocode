@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
+import DesignSystem
 
-/// Visual parameters for every AgentUI view, injected by the host (DesignSystem maps its tokens onto this). Defaults
-/// are system-semantic, so the views follow light/dark, accent colour, increased contrast and Dynamic Type sizes.
+/// Visual parameters for AgentUI views, injected by the host. Defaults are the DesignSystem tokens
+/// (visual-language.md); the request cards, pickers and composer controls read DesignSystem directly, so they match
+/// the spec whatever a host passes here.
 public struct AgentUIStyle: Sendable {
     public var accent: Color
     /// Card and popover surfaces.
@@ -29,22 +31,22 @@ public struct AgentUIStyle: Sendable {
     public var rowHeight: CGFloat
 
     public init(
-        accent: Color = .accentColor,
-        surface: Color = Color(nsColor: .controlBackgroundColor),
-        inset: Color = Color(nsColor: .textBackgroundColor),
-        separator: Color = Color(nsColor: .separatorColor),
-        primaryText: Color = Color(nsColor: .labelColor),
-        secondaryText: Color = Color(nsColor: .secondaryLabelColor),
-        attention: Color = Color(nsColor: .systemOrange),
-        danger: Color = Color(nsColor: .systemRed),
-        success: Color = Color(nsColor: .systemGreen),
-        bodyFont: Font = .system(size: NSFont.systemFontSize),
-        smallFont: Font = .system(size: NSFont.smallSystemFontSize),
-        titleFont: Font = .system(size: NSFont.systemFontSize, weight: .semibold),
-        monospacedFont: Font = .system(size: NSFont.smallSystemFontSize + 0.5, design: .monospaced),
-        cornerRadius: CGFloat = 8,
-        spacing: CGFloat = 4,
-        rowHeight: CGFloat = 24
+        accent: Color = Color(nsColor: DS.Color.accent),
+        surface: Color = Color(nsColor: DS.Color.raised),
+        inset: Color = Color(nsColor: DS.Color.codeFill),
+        separator: Color = Color(nsColor: DS.Color.border),
+        primaryText: Color = Color(nsColor: DS.Color.text),
+        secondaryText: Color = Color(nsColor: DS.Color.text2),
+        attention: Color = Color(nsColor: DS.Color.warningText),
+        danger: Color = Color(nsColor: DS.Color.dangerText),
+        success: Color = Color(nsColor: DS.Color.successText),
+        bodyFont: Font = DS.TextRole.body.swiftUIFont(base: DS.TextRole.defaultBase),
+        smallFont: Font = DS.TextRole.label.swiftUIFont(base: DS.TextRole.defaultBase),
+        titleFont: Font = DS.TextRole.title.swiftUIFont(base: DS.TextRole.defaultBase),
+        monospacedFont: Font = .system(size: 12, design: .monospaced),
+        cornerRadius: CGFloat = DS.Radius.md,
+        spacing: CGFloat = DS.Space.s4,
+        rowHeight: CGFloat = DS.Size.menuRow
     ) {
         self.accent = accent
         self.surface = surface
@@ -71,7 +73,18 @@ private struct AgentUIStyleKey: EnvironmentKey {
     static let defaultValue = AgentUIStyle.standard
 }
 
+private struct AgentUIAttachedOverlapKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
 extension EnvironmentValues {
+    /// How far the host overlaps the composer onto the request card (T3's attached look, visual-language.md §6); the
+    /// card adds this much room under its content. 0 when the card stands alone above the composer.
+    public var agentUIAttachedOverlap: CGFloat {
+        get { self[AgentUIAttachedOverlapKey.self] }
+        set { self[AgentUIAttachedOverlapKey.self] = newValue }
+    }
+
     /// The style AgentUI views draw with.
     public var agentUIStyle: AgentUIStyle {
         get { self[AgentUIStyleKey.self] }
@@ -155,14 +168,15 @@ private struct OptionalShortcut: ViewModifier {
 
 /// A small key-cap label showing a shortcut next to a button title.
 struct KeyCap: View {
-    @Environment(\.agentUIStyle) private var style
     let shortcut: AgentShortcut
 
+    var body: some View { DSKbdView(shortcut.display) }
+}
+
+/// A 1 pt `border` divider (replaces SwiftUI's `Divider`, which draws the system separator colour).
+struct DSHairline: View {
     var body: some View {
-        Text(shortcut.display)
-            .font(.system(size: NSFont.smallSystemFontSize - 1, weight: .medium, design: .rounded))
-            .foregroundStyle(style.secondaryText)
-            .accessibilityHidden(true)
+        SwiftUI.Color.ds.border.frame(height: 1).frame(maxWidth: .infinity).accessibilityHidden(true)
     }
 }
 

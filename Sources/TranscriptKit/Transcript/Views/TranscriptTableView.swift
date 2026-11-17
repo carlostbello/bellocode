@@ -1,6 +1,7 @@
 import AppKit
 import QuartzCore
 import Synchronization
+import DesignSystem
 
 /// Single-column, view-based table. Row selection is off: text selection is the controller's transcript-level model.
 /// The table owns all mouse handling; rows are passive renderers configured from controller state, so selection,
@@ -204,8 +205,8 @@ final class TranscriptEdgeView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         identifier = Self.identifier
-        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        label.textColor = .secondaryLabelColor
+        label.font = DS.TextRole.meta.font
+        label.textColor = DS.Color.text3
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -241,11 +242,20 @@ final class TranscriptCellView: NSView {
         didSet { if row != oldValue { accessibilityTextCache = nil } }
     }
     var layout: RowLayout? {
-        didSet { if layout !== oldValue { accessibilityTextCache = nil } }
+        didSet {
+            if layout !== oldValue {
+                accessibilityTextCache = nil
+                spinnerRects = layout?.spinnerRects ?? []
+                updateSpinnerSubscription()
+            }
+        }
     }
+    /// Row-local rects of running spinners; redrawn (only these bands) on each step of the shared clock.
+    private(set) var spinnerRects: [CGRect] = []
+    private let spinnerTicker = SpinnerTicker()
     /// The row's accessibility text, built when an assistive client first asks (one per live cell).
     private var accessibilityTextCache: RowAccessibilityText?
-    var drawState = RowLayout.DrawState(selectionColor: NSColor.selectedTextBackgroundColor.cgColor)
+    var drawState = RowLayout.DrawState(selectionColor: DS.Color.textSelection.cgColor)
     private(set) var isHovered = false
     let canvas = TranscriptCanvasView()
     /// Live cell views, including AppKit's reuse queue (cache report).
@@ -257,6 +267,8 @@ final class TranscriptCellView: NSView {
         identifier = Self.identifier
         canvas.owner = self
         addSubview(canvas)
+        spinnerTicker.owner = self
+        addSubview(spinnerTicker)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
     }
@@ -281,6 +293,25 @@ final class TranscriptCellView: NSView {
             && zip(drawState.finds, other.finds).allSatisfy { $0.block == $1.block && $0.range == $1.range && $0.current == $1.current }
             && drawState.scrollOffsets == other.scrollOffsets && drawState.hover?.block == other.hover?.block
             && drawState.hover?.action == other.hover?.action && drawState.selectionColor == other.selectionColor
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateSpinnerSubscription()
+    }
+
+    /// One shared stepped clock for every spinner (DesignSystem): subscribed only while this row shows a spinner in a
+    /// window, never under Reduce Motion (the glyph is then drawn static).
+    func updateSpinnerSubscription() {
+        if !spinnerRects.isEmpty, window != nil, !DS.Motion.reduceMotion {
+            DSStepClock.shared.subscribe(spinnerTicker)
+        } else {
+            DSStepClock.shared.unsubscribe(spinnerTicker)
+        }
+    }
+
+    fileprivate func spinnerStepped() {
+        for rect in spinnerRects { invalidate(rect.insetBy(dx: 0, dy: -1)) }
     }
 
     func setHovered(_ hovered: Bool) {
@@ -545,7 +576,9 @@ final class TranscriptCanvasView: NSView {
         let columnX = TranscriptGeometry.columnX(forTableWidth: owner.bounds.width, contentWidth: layout.width)
         let dirty = dirtyRect.offsetBy(dx: -gutter, dy: originY)
         let controller = owner.controller
-        layout.draw(in: context, dirty: dirty, state: owner.drawState) { controller?.image($0) }
+        var state = owner.drawState
+        if !owner.spinnerRects.isEmpty, !DS.Motion.reduceMotion { state.spinnerStep = DSStepClock.shared.step }
+        layout.draw(in: context, dirty: dirty, state: state) { controller?.image($0) }
         if owner.isHovered, let row = owner.row { drawTimestamp(row, layout: layout, context: context, columnX: columnX) }
     }
 
@@ -556,7 +589,7 @@ final class TranscriptCanvasView: NSView {
         let theme = layout.theme
         let font = NSFont.monospacedDigitSystemFont(ofSize: theme.smallSize, weight: .regular)
         let line = CTLineCreateWithAttributedString(
-            NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor(cgColor: theme.tertiary) ?? .tertiaryLabelColor]))
+            NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor(cgColor: theme.quaternary) ?? DS.Color.text4]))
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
         var x: CGFloat
         var y: CGFloat
@@ -573,4 +606,18 @@ final class TranscriptCanvasView: NSView {
         context.textPosition = CGPoint(x: x, y: y)
         CTLineDraw(line, context)
     }
+}
+
+/// Receives the shared step clock's ticks for a cell (the clock marks it for display) and redraws only the cell's
+/// spinner bands. Zero-sized and never drawn itself.
+final class SpinnerTicker: NSView {
+    weak var owner: TranscriptCellView?
+
+    override var needsDisplay: Bool {
+        get { false }
+        set { if newValue { owner?.spinnerStepped() } }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
 }

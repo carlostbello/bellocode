@@ -29,6 +29,7 @@ extension TranscriptController {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        DSScroller.install(on: scrollView)
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.contentView.postsFrameChangedNotifications = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -41,7 +42,8 @@ extension TranscriptController {
         findBar.onClose = { [weak self] in self?.closeFind() }
 
         emptyLabel.stringValue = "No messages yet. Send a prompt to start."
-        emptyLabel.textColor = DS.Palette.tertiaryText
+        emptyLabel.textColor = DS.Color.text3
+        emptyLabel.font = DS.TextRole.body.font
         emptyLabel.alignment = .center
         emptyLabel.isHidden = true
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false

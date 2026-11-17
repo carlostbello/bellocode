@@ -16,6 +16,16 @@ Status: done 2026-11-16 against opencode 2.3.0 (sandboxed real binary) and MockO
   Protocols `PendingRequestSource` / `AgentModeSource` (ThreadModel conforms) keep views testable. No SwiftUI macro
   plugin ships with Command Line Tools, so `@State` cannot compile: use `@StateObject … ViewState(x)`.
 
+## Appearance (restyle 3, visual-language.md §6)
+Views read DesignSystem directly; `AgentUIStyle` defaults are the tokens. Request cards: the composer surface recipe
+(`raised` + 4.5 % tone tint, r16, `composerOutline`, composer shadow), header with the shield / bubble / key glyph, title,
+one-line reason, "from <child>", age (`text4`) and a ghost 1-of-n navigator; command well `codeFill` mono 12; context line
+with ghost Details and Deny with note; outline Deny / Always allow, primary Allow once with their key hints (dropped
+before a title truncates); risk note with a triangle. `agentUIAttachedOverlap` (environment) adds room when a host
+overlaps the composer onto the card. Forms: DS radios, `DSToggleStyle` checkboxes, `DSTextFieldStyle`. Composer controls
+(model, permission mode, Build/Plan) are ghost selects (`ComposerSelectStyle`); pickers open on `glassPopover` (a
+borderless key panel on `DSGlassView`, no arrow). Model picker per docs/design/mock/model-picker-dark.png.
+
 ## Permission modes (verified with `POST /api/session/{id}/permission`, which evaluates without a prompt)
 
 opencode evaluates agent rules, then session rules, then saved project rules; the last match wins. Session rules

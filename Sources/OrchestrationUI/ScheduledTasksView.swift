@@ -237,12 +237,14 @@ public struct ScheduledTasksView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
                 list.frame(width: 300)
-                Divider()
+                SwiftUI.Color.ds.border.frame(height: 1)
                 editor.frame(minWidth: 360, maxWidth: .infinity)
             }
-            Divider()
+            SwiftUI.Color.ds.border.frame(height: 1)
             footer
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .frame(width: 760, height: 520)
         .transaction { $0.animation = nil }
     }
@@ -252,38 +254,59 @@ public struct ScheduledTasksView: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Scheduled Tasks").font(.headline)
+                Text("Scheduled Tasks").font(.ds(.title))
                 Spacer()
                 Button {
                     model.newTask()
                 } label: {
-                    Label("New Task", systemImage: "plus")
+                    Image(systemName: "plus").font(.system(size: DS.Size.iconPointRow, weight: .medium))
                 }
-                .labelStyle(.iconOnly)
+                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                 .help("New scheduled task")
                 .accessibilityLabel("New scheduled task")
             }
             .padding(DS.Spacing.s)
             if model.tasks.isEmpty {
                 Text("No scheduled tasks yet. Click + to add one, or ask an agent (it uses schedule_task; the first one in a project asks for your approval).")
-                    .font(.callout).foregroundStyle(.secondary).padding(DS.Spacing.s).fixedSize(horizontal: false, vertical: true)
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Spacing.s).fixedSize(horizontal: false, vertical: true)
                 Spacer()
             } else {
-                List(selection: Binding(get: { model.selection }, set: { model.select($0) })) {
-                    ForEach(model.tasks) { task in
-                        row(task).tag(task.id)
+                // DS rows (neutral `rowActive` selection, never accent); ↑/↓ move the selection.
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(model.tasks) { task in
+                            row(task)
+                                .padding(.horizontal, DS.Space.s8)
+                                .padding(.vertical, DS.Space.s6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .dsRowBackground(.resolve(hovered: false, selected: false, active: model.selection == task.id), radius: DS.Radius.md)
+                                .contentShape(Rectangle())
+                                .onTapGesture { model.select(task.id) }
+                                .accessibilityAddTraits(model.selection == task.id ? [.isSelected, .isButton] : .isButton)
+                        }
                     }
+                    .padding(DS.Space.s4)
                 }
-                .listStyle(.inset)
+                .focusable()
+                .focusEffectDisabled()
+                .onKeyPress(.upArrow) { moveSelection(-1) }
+                .onKeyPress(.downArrow) { moveSelection(1) }
             }
             if let deleted = model.lastDeleted {
                 HStack {
-                    Text("Deleted “\(deleted.name)”.").font(.caption).lineLimit(1)
-                    Button("Undo") { Task { await model.undoDelete() } }.buttonStyle(.link).font(.caption)
+                    Text("Deleted “\(deleted.name)”.").font(.ds(.meta)).lineLimit(1)
+                    Button("Undo") { Task { await model.undoDelete() } }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                 }
                 .padding(DS.Spacing.s)
             }
         }
+    }
+
+    private func moveSelection(_ delta: Int) -> KeyPress.Result {
+        guard !model.tasks.isEmpty else { return .ignored }
+        let index = model.tasks.firstIndex { $0.id == model.selection } ?? -1
+        model.select(model.tasks[max(0, min(model.tasks.count - 1, index + delta))].id)
+        return .handled
     }
 
     private func row(_ task: ScheduledTask) -> some View {
@@ -291,24 +314,24 @@ public struct ScheduledTasksView: View {
         let running = model.scheduler.running.contains(task.id)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: DS.Spacing.xs) {
-                Image(systemName: task.approval == .pending ? "hand.raised.fill" : task.isActive ? "calendar.badge.clock" : "pause.circle")
-                    .foregroundStyle(task.approval == .pending ? Color(nsColor: DS.Palette.attention) : .secondary)
+                Image(systemName: task.approval == .pending ? "exclamationmark.shield" : task.isActive ? "calendar.badge.clock" : "pause.circle")
+                    .foregroundStyle(task.approval == .pending ? SwiftUI.Color.ds.warningText : SwiftUI.Color.ds.text3)
                     .accessibilityHidden(true)
                 Text(task.name).fontWeight(.medium).lineLimit(1)
                 Spacer(minLength: 0)
                 Toggle("Enabled", isOn: Binding(get: { task.enabled }, set: { value in Task { await model.setEnabled(task.id, value) } }))
-                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                    .toggleStyle(DSToggleStyle(.switch)).labelsHidden()
                     .disabled(task.approval == .pending)
                     .accessibilityLabel(task.enabled ? "Enabled" : "Paused")
             }
-            Text(task.summary + (task.createdBy != nil ? " · by an agent" : "")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            Text(ScheduleText.state(task, running: running, now: now)).font(.caption)
-                .foregroundStyle(task.approval == .pending ? Color(nsColor: DS.Palette.attention) : .secondary)
+            Text(task.summary + (task.createdBy != nil ? " · by an agent" : "")).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1)
+            Text(ScheduleText.state(task, running: running, now: now)).font(.ds(.meta))
+                .foregroundStyle(task.approval == .pending ? SwiftUI.Color.ds.warningText : SwiftUI.Color.ds.text3)
             if let last = ScheduleText.lastRun(task, now: now) {
                 HStack(spacing: DS.Spacing.xs) {
-                    Text(last).font(.caption).foregroundStyle(task.lastRun?.succeeded == false ? Color(nsColor: DS.Palette.failure) : .secondary).lineLimit(1)
+                    Text(last).font(.ds(.meta)).foregroundStyle(task.lastRun?.succeeded == false ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3).lineLimit(1)
                     if let thread = task.lastRun?.sessionID {
-                        Button("Open Thread") { model.openThread(thread) }.buttonStyle(.link).font(.caption)
+                        Button("Open Thread") { model.openThread(thread) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                     }
                 }
             }
@@ -318,7 +341,7 @@ public struct ScheduledTasksView: View {
         .contextMenu {
             Button("Run Now") { Task { await model.runNow(task.id) } }.disabled(task.approval != .approved)
             Button(task.enabled ? "Pause" : "Resume") { Task { await model.setEnabled(task.id, !task.enabled) } }
-            Divider()
+            SwiftUI.Color.ds.border.frame(height: 1)
             Button("Delete") { Task { await model.delete(task.id) } }
         }
     }
@@ -334,15 +357,17 @@ public struct ScheduledTasksView: View {
                     TextField("Name:", text: binding.name)
                     LabeledContent("Prompt:") {
                         TextEditor(text: binding.prompt)
-                            .font(.body)
+                            .font(.ds(.body))
                             .frame(height: 84)
-                            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .separatorColor)))
+                            .scrollContentBackground(.hidden)
+                            .padding(DS.Space.s4)
+                            .background(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).fill(SwiftUI.Color.ds.canvas))
+                            .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(SwiftUI.Color.ds.borderStrong))
                             .accessibilityLabel("Prompt")
                     }
-                    Picker("Runs:", selection: binding.kind) {
-                        ForEach(ScheduleDraft.Kind.allCases) { Text($0.title).tag($0) }
+                    LabeledContent("Runs:") {
+                        DSSegmentedPicker(options: ScheduleDraft.Kind.allCases.map { (id: $0, title: $0.title) }, selection: binding.kind)
                     }
-                    .pickerStyle(.segmented)
                     switch draft.kind {
                     case .interval:
                         Stepper("Every \(draft.everyMinutes) minutes", value: binding.everyMinutes, in: 1...44_640, step: draft.everyMinutes < 60 ? 5 : 30)
@@ -352,14 +377,14 @@ public struct ScheduledTasksView: View {
                             HStack(spacing: 2) {
                                 ForEach([2, 3, 4, 5, 6, 7, 1], id: \.self) { day in
                                     let symbols = Calendar(identifier: .gregorian).veryShortWeekdaySymbols
-                                    Toggle(symbols[day - 1], isOn: Binding(
-                                        get: { draft.weekdays.contains(day) },
-                                        set: { on in
-                                            var days = model.draft?.weekdays ?? []
-                                            if on { days.insert(day) } else { days.remove(day) }
-                                            model.draft?.weekdays = days
-                                        }))
-                                    .toggleStyle(.button)
+                                    let isOn = draft.weekdays.contains(day)
+                                    Button(symbols[day - 1]) {
+                                        var days = model.draft?.weekdays ?? []
+                                        if isOn { days.remove(day) } else { days.insert(day) }
+                                        model.draft?.weekdays = days
+                                    }
+                                    .buttonStyle(DSButtonStyle(isOn ? .outline : .ghost, size: .small, isSelected: isOn))
+                                    .accessibilityAddTraits(isOn ? .isSelected : [])
                                     .accessibilityLabel(Calendar(identifier: .gregorian).weekdaySymbols[day - 1])
                                 }
                             }
@@ -382,11 +407,11 @@ public struct ScheduledTasksView: View {
                         Text("Auto-edit").tag(PermissionMode?.some(.autoEdit))
                         Text("Full access").tag(PermissionMode?.some(.fullAccess))
                     }
-                    Toggle("If missed while BelloCode was quit, run once at launch", isOn: binding.catchUp)
-                    Toggle("Enabled", isOn: binding.enabled)
-                    if let problem = draft.rule.problem { Text(problem).foregroundStyle(Color(nsColor: DS.Palette.failure)) }
+                    Toggle("If missed while BelloCode was quit, run once at launch", isOn: binding.catchUp).toggleStyle(DSToggleStyle(.checkbox))
+                    Toggle("Enabled", isOn: binding.enabled).toggleStyle(DSToggleStyle(.checkbox))
+                    if let problem = draft.rule.problem { Text(problem).foregroundStyle(SwiftUI.Color.ds.dangerText) }
                     if let message = model.message {
-                        Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(Color(nsColor: DS.Palette.failure))
+                        Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack {
@@ -400,7 +425,7 @@ public struct ScheduledTasksView: View {
                         }
                         Spacer()
                         Button("Revert") { model.select(draft.id) }.disabled(draft.id == nil)
-                        Button("Save") { Task { await model.save() } }.keyboardShortcut("s", modifiers: .command).buttonStyle(.borderedProminent)
+                        Button("Save") { Task { await model.save() } }.keyboardShortcut("s", modifiers: .command).buttonStyle(DSButtonStyle(.primary))
                             .disabled(!model.canSave)
                     }
                 }
@@ -408,8 +433,8 @@ public struct ScheduledTasksView: View {
             }
         } else {
             VStack(spacing: DS.Spacing.s) {
-                Image(systemName: "calendar.badge.clock").font(.largeTitle).foregroundStyle(.tertiary).accessibilityHidden(true)
-                Text("Select a task to edit it, or click + to add one.").foregroundStyle(.secondary)
+                Image(systemName: "calendar.badge.clock").font(.largeTitle).foregroundStyle(SwiftUI.Color.ds.text4).accessibilityHidden(true)
+                Text("Select a task to edit it, or click + to add one.").foregroundStyle(SwiftUI.Color.ds.text3)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -430,10 +455,10 @@ public struct ScheduledTasksView: View {
                     }
                 }
             }
-            if let error = model.scheduler.lastError { Text(error).foregroundStyle(Color(nsColor: DS.Palette.failure)) }
+            if let error = model.scheduler.lastError { Text(error).foregroundStyle(SwiftUI.Color.ds.dangerText) }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .font(.ds(.meta))
+        .foregroundStyle(SwiftUI.Color.ds.text3)
         .padding(DS.Spacing.s)
     }
 }
@@ -454,19 +479,19 @@ public struct SecretsSettingsView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DS.Spacing.m) {
             Text("Secrets agents asked for are kept in your Keychain. Agents only ever get one-use references or one-read files; values are never shown, logged or sent to a model.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             if secrets.labels.isEmpty {
-                Text("No saved secrets.").foregroundStyle(.secondary)
+                Text("No saved secrets.").foregroundStyle(SwiftUI.Color.ds.text3)
             } else {
                 VStack(spacing: 0) {
                     ForEach(secrets.labels) { label in
                         HStack {
-                            Image(systemName: "key.fill").foregroundStyle(.secondary).accessibilityHidden(true)
+                            Image(systemName: "key.fill").foregroundStyle(SwiftUI.Color.ds.text3).accessibilityHidden(true)
                             VStack(alignment: .leading) {
                                 Text(label.label)
                                 Text("Saved \(label.created.formatted(date: .abbreviated, time: .shortened))"
                                     + (label.lastUsed.map { " · used \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
                             }
                             Spacer()
                             Button("Delete…") {
@@ -475,15 +500,15 @@ public struct SecretsSettingsView: View {
                             .accessibilityLabel("Delete \(label.label)")
                         }
                         .padding(.vertical, DS.Spacing.xs)
-                        Divider()
+                        SwiftUI.Color.ds.border.frame(height: 1)
                     }
                 }
             }
-            if let error = secrets.lastError { Text(error).foregroundStyle(Color(nsColor: DS.Palette.failure)) }
-            Divider()
-            Text("Network hosts HTML visuals may load from").font(.headline)
+            if let error = secrets.lastError { Text(error).foregroundStyle(SwiftUI.Color.ds.dangerText) }
+            SwiftUI.Color.ds.border.frame(height: 1)
+            Text("Network hosts HTML visuals may load from").font(.ds(.title))
             if visuals.networkGrants.isEmpty {
-                Text("None. Visuals load nothing from the network unless you allow a host.").font(.callout).foregroundStyle(.secondary)
+                Text("None. Visuals load nothing from the network unless you allow a host.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
             } else {
                 ForEach(visuals.networkGrants, id: \.self) { host in
                     HStack {
@@ -494,6 +519,8 @@ public struct SecretsSettingsView: View {
                 }
             }
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .padding(20)
         .frame(width: 520, alignment: .topLeading)
     }

@@ -1,6 +1,7 @@
 import AppKit
 import BelloCore
 import TranscriptKit
+import DesignSystem
 
 /// Renders transcript states to PNG in light and dark (the shell cannot take screenshots: views render themselves).
 @MainActor
@@ -17,6 +18,8 @@ struct SnapshotScenarios {
     }
 
     func run() async -> Bool {
+        // In-process renders cannot capture vibrancy: draw glass surfaces with their solid fallback.
+        DSGlassView.forcesSolidFallback = true
         try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
         var written = 0
         for item in cases where only.isEmpty || only.contains(item.name) {
@@ -42,8 +45,13 @@ struct SnapshotScenarios {
         await controller.controller.settle()
         controller.view.layoutSubtreeIfNeeded()
         controller.view.displayIfNeeded()
-        guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds),
+            let context = NSGraphicsContext(bitmapImageRep: rep)
+        else { return false }
+        // Without font smoothing: `cacheDisplay` darkens stems so 13 pt regular reads as medium (implementation-guide).
+        context.cgContext.setAllowsFontSmoothing(false)
+        context.cgContext.setShouldSmoothFonts(false)
+        view.displayIgnoringOpacity(view.bounds, in: context)
         let url = Self.directory.appending(path: "transcript-\(item.name)-\(dark ? "dark" : "light").png")
         guard let data = rep.representation(using: .png, properties: [:]) else { return false }
         do { try data.write(to: url) } catch { print("FAIL \(url.path): \(error)"); return false }

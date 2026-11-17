@@ -465,6 +465,14 @@ extension DS {
         public static let infoText = SwiftUI.Color(nsColor: Color.infoText)
         public static let kbdFill = SwiftUI.Color(nsColor: Color.kbdFill)
         public static let disabledFill = SwiftUI.Color(nsColor: Color.disabledFill)
+        public static let focusHalo = SwiftUI.Color(nsColor: Color.focusHalo)
+        public static let placeholder = SwiftUI.Color(nsColor: Color.placeholder)
+        public static let composerOutline = SwiftUI.Color(nsColor: Color.composerOutline)
+        public static let rowSelected = SwiftUI.Color(nsColor: Color.rowSelected)
+        public static let successSurface = SwiftUI.Color(nsColor: Color.successSurface)
+        public static let warningSurface = SwiftUI.Color(nsColor: Color.warningSurface)
+        public static let dangerSurface = SwiftUI.Color(nsColor: Color.dangerSurface)
+        public static let infoSurface = SwiftUI.Color(nsColor: Color.infoSurface)
     }
 }
 

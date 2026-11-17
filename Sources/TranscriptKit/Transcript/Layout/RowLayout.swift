@@ -81,8 +81,8 @@ public final class RowLayout {
     static func spacing(_ previous: BlockLayout, _ next: BlockLayout) -> CGFloat {
         switch (previous.kindTag, next.kindTag) {
         case (.list, .list): TranscriptTheme.listSpacing
-        case (.tool, .tool): 1
-        case (.tool, .toolDetail): 3
+        case (.tool, .tool): 0
+        case (.tool, .toolDetail): 2
         case (.toolDetail, .tool): 6
         default: TranscriptTheme.blockSpacing
         }
@@ -164,6 +164,13 @@ public final class RowLayout {
         var copiedBlock: Int?
         var hover: (block: Int, action: HotspotAction)?
         var selectionColor: CGColor
+        /// Shared step clock value for spinners (0 when static or under Reduce Motion).
+        var spinnerStep = 0
+    }
+
+    /// Row-local rects of the spinners in visible blocks.
+    var spinnerRects: [CGRect] {
+        visibleBlockIndices.flatMap { index in blocks[index].spinnerRects.map { $0.offsetBy(dx: origins[index].x, dy: origins[index].y) } }
     }
 
     func draw(in context: CGContext, dirty: CGRect, state: DrawState, image: (String) -> CGImage?) {
@@ -174,7 +181,7 @@ public final class RowLayout {
             let frame = blockFrame(index)
             guard frame.minY <= dirty.maxY + 1, frame.maxY >= dirty.minY - 1 else { continue }
             let block = blocks[index]
-            var blockState = BlockLayout.DrawState(selectionColor: state.selectionColor)
+            var blockState = BlockLayout.DrawState(selectionColor: state.selectionColor, spinnerStep: state.spinnerStep)
             if let selection = state.selection, let range = selection.range(forBlock: index, length: block.plainLength) {
                 blockState.selection = range.range
                 blockState.selectionExtends = range.extends

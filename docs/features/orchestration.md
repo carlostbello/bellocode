@@ -74,6 +74,11 @@ Transcript: cards show the child's live state; child reports are one-line notes;
 Thread ▸ Agents: Show Agents ⌃⌘A, Select Next/Previous Agent ⌃⌥⌘↓/↑, Open Selected Agent ⌃⌘O, Follow Up Selected
 Agent…, Stop Selected Agent and Its Tasks ⌃⌘., Go to Parent Thread ⌃⌘U (uniqueness tests pass).
 
+Appearance (restyle 3): summary pills, outline status glyphs or the drawn spinner, `bodyEmph` titles, @agent pills,
+`meta text3` state lines (blocked/failed words in their tone), report boxes on `fillSubtle`, 1 pt guides, `rowActive`
+selection, ghost row actions on hover or selection (always in the accessibility tree), per docs/design/mock/agents-dark.png.
+
+
 ## Verification
 `swift test` (OpenCodeKit `ClientMCPTests` 7; Engine `TaskGraphTests` 5 + `OrchestrationServiceTests` 6; TranscriptKit
 `OrchestrationCardTests` 3; OrchestrationUI 1; app shortcut tests), `cd Plugin && bun test` (13), real suite 5/5,

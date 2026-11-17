@@ -123,7 +123,7 @@ public struct MergeRequestPanelView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DS.Spacing.s) {
-                Text("Merge Requests").font(.headline)
+                Text("Merge Requests").font(.ds(.title))
                 Spacer()
                 Button {
                     Task { await model.refresh() }
@@ -131,7 +131,7 @@ public struct MergeRequestPanelView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
+                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                 .help("Check GitLab now")
                 .disabled(model.links.isEmpty)
             }
@@ -140,34 +140,36 @@ public struct MergeRequestPanelView: View {
             if model.service.instances.isEmpty || !model.service.instanceProblems.isEmpty {
                 connectNotice
             }
-            Divider()
+            SwiftUI.Color.ds.border.frame(height: 1)
             if model.threadID == nil {
-                Text("Select a thread to see its merge requests.").font(.callout).foregroundStyle(.secondary).padding(DS.Spacing.m)
+                Text("Select a thread to see its merge requests.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Spacing.m)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Spacing.m) {
                         if model.links.isEmpty {
                             Text("No merge requests linked to this thread. Agents link them with link_merge_requests; an open MR for this thread's branch, or one a git push here prints, is linked automatically.")
-                                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
                         }
                         ForEach(model.links) { link in MergeRequestCard(model: model, link: link) }
                         linkField
                         if let last = model.lastUnlinked {
                             HStack {
-                                Text("Unlinked \(last.link.ref.description).").font(.caption)
-                                Button("Undo") { Task { await model.undoUnlink() } }.buttonStyle(.link).font(.caption)
+                                Text("Unlinked \(last.link.ref.description).").font(.ds(.meta))
+                                Button("Undo") { Task { await model.undoUnlink() } }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                             }
                         }
                         if let message = model.message {
                             Label(message, systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(Color(nsColor: DS.Palette.failure)).fixedSize(horizontal: false, vertical: true)
+                                .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.dangerText).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(DS.Spacing.m)
                 }
             }
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .transaction { $0.animation = nil }
     }
@@ -178,11 +180,11 @@ public struct MergeRequestPanelView: View {
                 Label("Connect GitLab: add your instance and an access token in Settings ▸ GitLab.", systemImage: "link.badge.plus")
             }
             ForEach(model.service.instanceProblems.sorted(by: { $0.key < $1.key }), id: \.key) { _, problem in
-                Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(Color(nsColor: DS.Palette.attention))
+                Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.warningText)
             }
-            Button("Open GitLab Settings…") { model.openSettings() }.buttonStyle(.link)
+            Button("Open GitLab Settings…") { model.openSettings() }.buttonStyle(DSButtonStyle(.ghost, size: .small))
         }
-        .font(.caption)
+        .font(.ds(.meta))
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, DS.Spacing.m)
         .padding(.bottom, DS.Spacing.s)
@@ -191,7 +193,7 @@ public struct MergeRequestPanelView: View {
     private var linkField: some View {
         HStack(spacing: DS.Spacing.s) {
             TextField("MR URL or !123", text: Bindable(model).linkText)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(DSTextFieldStyle())
                 .onSubmit { Task { await model.link() } }
                 .accessibilityLabel("Merge request to link: URL or !number")
             Button("Link") { Task { await model.link() } }
@@ -212,55 +214,55 @@ struct MergeRequestCard: View {
             HStack(alignment: .firstTextBaseline, spacing: DS.Spacing.s) {
                 Image(systemName: snapshot?.state.symbolName ?? "arrow.triangle.pull")
                     .foregroundStyle(stateColor(snapshot)).accessibilityHidden(true)
-                Text("!\(link.ref.iid) ").monospacedDigit().foregroundStyle(.secondary)
+                Text("!\(link.ref.iid) ").monospacedDigit().foregroundStyle(SwiftUI.Color.ds.text3)
                     + Text(snapshot?.title ?? link.ref.description).fontWeight(.semibold)
                 Spacer(minLength: 0)
             }
             .lineLimit(2)
-            Text(detailLine(snapshot)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            Text(detailLine(snapshot)).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1).truncationMode(.middle)
             if let snapshot {
                 HStack(spacing: DS.Spacing.s) {
                     Text(snapshot.stateLabel)
-                    Text("·").foregroundStyle(.tertiary)
+                    Text("·").foregroundStyle(SwiftUI.Color.ds.text4)
                     Text(snapshot.approvals.label)
-                    Text("·").foregroundStyle(.tertiary)
+                    Text("·").foregroundStyle(SwiftUI.Color.ds.text4)
                     Label(snapshot.pipelineSummary.text, systemImage: snapshot.pipelineSummary.symbolName)
                         .foregroundStyle(pipelineColor(snapshot.pipelineSummary))
                     if snapshot.unresolvedDiscussions > 0 {
-                        Text("·").foregroundStyle(.tertiary)
+                        Text("·").foregroundStyle(SwiftUI.Color.ds.text4)
                         Label("\(snapshot.unresolvedDiscussions) unresolved", systemImage: "bubble.left.and.exclamationmark.bubble.right")
                     }
                 }
-                .font(.caption)
+                .font(.ds(.meta))
                 if let pipeline = snapshot.pipeline, !pipeline.jobs.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(pipeline.jobs.prefix(12)) { job in
                             HStack(spacing: DS.Spacing.xs) {
                                 Text(job.status == "success" ? "✓" : job.isFailure ? "✕" : job.status == "running" ? "◌" : "–")
-                                    .foregroundStyle(job.isFailure ? Color(nsColor: DS.Palette.failure) : .secondary).frame(width: 12)
+                                    .foregroundStyle(job.isFailure ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3).frame(width: 12)
                                 Text(job.name).lineLimit(1)
-                                if !job.stage.isEmpty { Text(job.stage).foregroundStyle(.tertiary) }
-                                Text(job.label).foregroundStyle(.secondary)
+                                if !job.stage.isEmpty { Text(job.stage).foregroundStyle(SwiftUI.Color.ds.text4) }
+                                Text(job.label).foregroundStyle(SwiftUI.Color.ds.text3)
                                 Spacer(minLength: 0)
                                 if let url = job.webURL.flatMap(URL.init(string:)) {
-                                    Button("Log") { model.openURL(url, false) }.buttonStyle(.link)
+                                    Button("Log") { model.openURL(url, false) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
                                 }
                             }
-                            .font(.caption)
+                            .font(.ds(.meta))
                             .accessibilityElement(children: .combine)
                         }
-                        if pipeline.jobs.count > 12 { Text("\(pipeline.jobs.count - 12) more jobs").font(.caption).foregroundStyle(.secondary) }
+                        if pipeline.jobs.count > 12 { Text("\(pipeline.jobs.count - 12) more jobs").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3) }
                         if let url = pipeline.webURL.flatMap(URL.init(string:)) {
-                            Button("Pipeline #" + String(pipeline.id)) { model.openURL(url, false) }.buttonStyle(.link).font(.caption)
+                            Button("Pipeline #" + String(pipeline.id)) { model.openURL(url, false) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).font(.ds(.meta))
                         }
                     }
                     .padding(.leading, DS.Spacing.l)
                 }
             } else if let problem = model.service.problems[link.ref.url] {
-                Label(problem, systemImage: "exclamationmark.triangle").font(.caption)
-                    .foregroundStyle(Color(nsColor: DS.Palette.failure)).fixedSize(horizontal: false, vertical: true)
+                Label(problem, systemImage: "exclamationmark.triangle").font(.ds(.meta))
+                    .foregroundStyle(SwiftUI.Color.ds.dangerText).fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("Checking GitLab…").font(.caption).foregroundStyle(.secondary)
+                Text("Checking GitLab…").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
             }
             watchLine(watch)
             HStack(spacing: DS.Spacing.s) {
@@ -275,9 +277,11 @@ struct MergeRequestCard: View {
             }
             .controlSize(.small)
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .padding(DS.Spacing.s)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(SwiftUI.Color.ds.border, lineWidth: 0.5))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(MergeRequestText.accessibility(link, snapshot))
     }
@@ -295,35 +299,35 @@ struct MergeRequestCard: View {
         if link.watching || watch?.stoppedReason != nil {
             VStack(alignment: .leading, spacing: 2) {
                 if let reason = watch?.stoppedReason {
-                    Label("Watch stopped: \(reason)", systemImage: "eye.slash").foregroundStyle(.secondary)
+                    Label("Watch stopped: \(reason)", systemImage: "eye.slash").foregroundStyle(SwiftUI.Color.ds.text3)
                 } else {
                     let next = model.threadID.flatMap { model.service.nextPollDate($0, link.ref.url) }
                     Label(next.map { "Watching · next check \(ExtrasTime.relative($0, now: model.now()))" } ?? "Watching", systemImage: "eye")
-                        .foregroundStyle(Color(nsColor: DS.Palette.running))
+                        .foregroundStyle(SwiftUI.Color.ds.infoText)
                 }
                 if let text = watch?.lastWakeText, let date = watch?.lastWake {
-                    Text("Woke the thread \(ExtrasTime.relative(date, now: model.now())): \(text)").foregroundStyle(.secondary)
+                    Text("Woke the thread \(ExtrasTime.relative(date, now: model.now())): \(text)").foregroundStyle(SwiftUI.Color.ds.text3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .font(.caption)
+            .font(.ds(.meta))
         }
     }
 
     private func stateColor(_ snapshot: MergeRequestSnapshot?) -> Color {
         switch snapshot?.state {
-        case .opened: snapshot?.draft == true ? .secondary : Color(nsColor: DS.Palette.success)
+        case .opened: snapshot?.draft == true ? .secondary : SwiftUI.Color.ds.successText
         case .merged: Color(nsColor: .systemPurple)
-        case .closed, .locked: Color(nsColor: DS.Palette.failure)
+        case .closed, .locked: SwiftUI.Color.ds.dangerText
         case nil: .secondary
         }
     }
 
     private func pipelineColor(_ summary: PipelineSummary) -> Color {
         switch summary {
-        case .passed: Color(nsColor: DS.Palette.success)
-        case .failed: Color(nsColor: DS.Palette.failure)
-        case .running, .manual: Color(nsColor: DS.Palette.running)
+        case .passed: SwiftUI.Color.ds.successText
+        case .failed: SwiftUI.Color.ds.dangerText
+        case .running, .manual: SwiftUI.Color.ds.infoText
         case .none, .canceled: .secondary
         }
     }
@@ -388,15 +392,15 @@ public struct GitLabSettingsView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DS.Spacing.m) {
             Text("Merge requests are read from your GitLab instance with a personal or project access token (read_api scope). The token is kept in your Keychain, sent only to that instance, and never shown again or given to agents.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             if model.service.instances.isEmpty {
-                Text("No GitLab instance yet.").foregroundStyle(.secondary)
+                Text("No GitLab instance yet.").foregroundStyle(SwiftUI.Color.ds.text3)
             }
             ForEach(model.service.instances) { instance in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Image(systemName: model.service.instancesWithToken.contains(instance.baseURL) ? "key.fill" : "key.slash")
-                            .foregroundStyle(.secondary).accessibilityHidden(true)
+                            .foregroundStyle(SwiftUI.Color.ds.text3).accessibilityHidden(true)
                         Text(instance.baseURL).font(.body.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         Spacer()
                         Button("Test") { Task { await model.test(instance) } }.disabled(!model.service.instancesWithToken.contains(instance.baseURL))
@@ -404,10 +408,10 @@ public struct GitLabSettingsView: View {
                             .help("Type the new token in the field below, then click Replace Token")
                         Button("Remove…") { if confirmRemove(instance) { Task { await model.remove(instance) } } }
                     }
-                    Text(status(instance)).font(.caption)
-                        .foregroundStyle(model.service.instanceProblems[instance.baseURL] != nil ? Color(nsColor: DS.Palette.failure) : .secondary)
+                    Text(status(instance)).font(.ds(.meta))
+                        .foregroundStyle(model.service.instanceProblems[instance.baseURL] != nil ? SwiftUI.Color.ds.dangerText : SwiftUI.Color.ds.text3)
                 }
-                Divider()
+                SwiftUI.Color.ds.border.frame(height: 1)
             }
             Form {
                 TextField("Instance URL:", text: Bindable(model).baseURL, prompt: Text("https://gitlab.example.com"))
@@ -419,10 +423,12 @@ public struct GitLabSettingsView: View {
                         .disabled(model.baseURL.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            if let message = model.message { Text(message).foregroundStyle(Color(nsColor: DS.Palette.failure)) }
+            if let message = model.message { Text(message).foregroundStyle(SwiftUI.Color.ds.dangerText) }
             Text("Self-managed instances with a private CA work once that CA is trusted in Keychain Access (System trust store).")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
         }
+        .buttonStyle(DSButtonStyle(.outline))
+        .toggleStyle(DSToggleStyle(.checkbox))
         .padding(20)
         .frame(width: 560, alignment: .topLeading)
     }

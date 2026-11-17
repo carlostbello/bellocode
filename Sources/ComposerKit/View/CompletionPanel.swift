@@ -1,4 +1,5 @@
 import AppKit
+import DesignSystem
 
 /// A borderless child panel that never takes key status, so the text view keeps focus and its keys; the composer
 /// forwards arrows, Return, Tab and Escape. Rows are reused by the table.
@@ -16,6 +17,9 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
     private(set) var message: String?
     private let table = ClickThroughTableView()
     private let scroll = NSScrollView()
+    /// The popover glass (visual-language.md §6 "Menus"): `raised` tint, `borderStrong` ring, `r.lg`; the panel's window
+    /// shadow follows its shape. Solid `raised` under Reduce Transparency and in snapshots.
+    private let glass = DSGlassView(surface: .popover, radius: DS.Radius.lg)
 
     init(style: ComposerStyle) {
         self.style = style
@@ -27,14 +31,21 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        glass.showsShadow = false
+        glass.frame = bounds
+        glass.autoresizingMask = [.width, .height]
+        addSubview(glass)
         let column = NSTableColumn(identifier: .init("item"))
         table.addTableColumn(column)
         table.headerView = nil
         table.style = .plain
+        // Custom: the table must not restyle the cells' fonts.
+        table.rowSizeStyle = .custom
         table.rowHeight = style.completionRowHeight
         table.intercellSpacing = .zero
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .regular
+        table.focusRingType = .none
         table.dataSource = self
         table.delegate = self
         table.target = self
@@ -46,6 +57,7 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
+        DSScroller.install(on: scroll)
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
         NSLayoutConstraint.activate([
@@ -78,21 +90,9 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
         return CGFloat(rows) * style.completionRowHeight + 8
     }
 
-    static let cornerRadius: CGFloat = 8
+    static let cornerRadius: CGFloat = DS.Radius.lg
 
     override var isOpaque: Bool { false }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.clear.set()
-        bounds.fill(using: .copy)
-        let radius = Self.cornerRadius
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-        style.popoverBackgroundColor.setFill()
-        path.fill()
-        (style.increasedContrast ? NSColor.labelColor.withAlphaComponent(0.6) : style.borderColor).setStroke()
-        path.lineWidth = style.borderWidth
-        path.stroke()
-    }
 
     @objc private func clicked() {
         let row = table.clickedRow
@@ -105,7 +105,7 @@ final class CompletionListView: NSView, NSTableViewDataSource, NSTableViewDelega
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView = CompletionRowView()
-        rowView.selectionColor = style.selectionRowColor
+        rowView.selectionColor = DS.Color.highlight
         return rowView
     }
 
@@ -126,8 +126,9 @@ final class ClickThroughTableView: NSTableView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// A 28 pt row with the neutral `highlight` wash (`r.sm`), never the accent.
 final class CompletionRowView: NSTableRowView {
-    var selectionColor: NSColor = .selectedContentBackgroundColor
+    var selectionColor: NSColor = DS.Color.highlight
     // The panel is never key; draw the selection as active anyway.
     override var isEmphasized: Bool {
         get { true }
@@ -136,7 +137,7 @@ final class CompletionRowView: NSTableRowView {
 
     override func drawSelection(in dirtyRect: NSRect) {
         selectionColor.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 1), xRadius: 5, yRadius: 5).fill()
+        DS.Radius.path(bounds, radius: DS.Radius.sm).fill()
     }
 }
 
@@ -149,10 +150,10 @@ final class CompletionCellView: NSTableCellView {
     init(style: ComposerStyle) {
         super.init(frame: .zero)
         identifier = Self.identifier
-        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
-        title.font = .systemFont(ofSize: NSFont.systemFontSize)
+        icon.symbolConfiguration = .init(pointSize: DS.Size.iconPointRow, weight: .regular)
+        title.font = DS.TextRole.body.font
         title.lineBreakMode = .byTruncatingTail
-        subtitle.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        subtitle.font = DS.TextRole.label.font
         subtitle.lineBreakMode = .byTruncatingHead
         subtitle.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -164,10 +165,10 @@ final class CompletionCellView: NSTableCellView {
         imageView = icon
         textField = title
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
             subtitle.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 8),
             subtitle.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
@@ -182,11 +183,11 @@ final class CompletionCellView: NSTableCellView {
         didSet { applyColors() }
     }
 
+    /// The highlight is a neutral wash, so text keeps its colours when selected.
     private func applyColors() {
-        let selected = backgroundStyle == .emphasized
-        title.textColor = selected ? .alternateSelectedControlTextColor : .labelColor
-        subtitle.textColor = selected ? .alternateSelectedControlTextColor.withAlphaComponent(0.8) : .secondaryLabelColor
-        icon.contentTintColor = selected ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        title.textColor = DS.Color.text
+        subtitle.textColor = DS.Color.text3
+        icon.contentTintColor = DS.Color.icon
     }
 
     func configure(_ item: CompletionItem) {
@@ -202,6 +203,6 @@ final class CompletionCellView: NSTableCellView {
         icon.image = nil
         title.stringValue = message
         subtitle.stringValue = ""
-        title.textColor = .secondaryLabelColor
+        title.textColor = DS.Color.text3
     }
 }
