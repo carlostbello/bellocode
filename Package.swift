@@ -68,14 +68,19 @@ let targets: [Target] =
     + library("TranscriptKit", dependencies: uiKitDependencies)
     + library("ComposerKit", dependencies: uiKitDependencies + ["Engine"])
     + library("DiffKit", dependencies: uiKitDependencies)
-    + library("TerminalKit", dependencies: uiKitDependencies + [.product(name: "SwiftTerm", package: "SwiftTerm")])
+    // M2-A: terminals on opencode's persistent PTYs (docs/features/terminal.md). Engine owns the PTY records and streams.
+    + library(
+        "TerminalKit", dependencies: uiKitDependencies + ["Engine", .product(name: "SwiftTerm", package: "SwiftTerm")],
+        testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
     + library("BrowserKit", dependencies: uiKitDependencies + ["OpenCodeKit"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
     + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine"], testDependencies: ["MockOpenCode"])
     + [
-        // G5 spike harness (docs/spikes/G5-terminal.md).
-        .executableTarget(name: "TerminalSpike", dependencies: ["TerminalKit"], swiftSettings: swiftSettings),
+        // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
+        .executableTarget(
+            name: "TerminalDemo", dependencies: ["TerminalKit", "Engine", "OpenCodeKit", "MockOpenCode", "BelloCore", "DesignSystem"],
+            swiftSettings: swiftSettings),
         .executableTarget(
             name: "BelloCodeApp",
             dependencies: [
