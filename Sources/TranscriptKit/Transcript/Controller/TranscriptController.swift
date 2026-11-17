@@ -583,7 +583,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         return index >= 0 && index < rows.count ? index : nil
     }
 
-    func rowRect(_ index: Int) -> CGRect { tableView.rect(ofRow: index + 1) }
+    /// The table rect of a transcript row (model index).
+    public func rowRect(_ index: Int) -> CGRect { tableView.rect(ofRow: index + 1) }
 
     func cellView(_ index: Int) -> TranscriptCellView? {
         tableView.view(atColumn: 0, row: index + 1, makeIfNecessary: false) as? TranscriptCellView
