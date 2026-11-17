@@ -85,7 +85,8 @@ public final class TerminalWorkspace {
         return pane
     }
 
-    func existingPane(_ id: String) -> TerminalPaneController? { panes[id] }
+    /// The cached emulator of a terminal, if it has one.
+    public func existingPane(_ id: String) -> TerminalPaneController? { panes[id] }
 
     /// Panes shown by any surface are never evicted.
     private func evict() {

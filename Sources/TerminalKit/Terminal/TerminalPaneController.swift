@@ -15,7 +15,8 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     public let terminalID: String
     public let terminals: ThreadTerminals
     public let terminalView: TerminalPaneView
-    let stream: TerminalStream
+    /// The PTY attachment feeding this emulator (keystrokes go out through it).
+    public let stream: TerminalStream
     private unowned let workspace: TerminalWorkspace
     let findBar = TerminalFindBar()
     let statusPill = TerminalStatusPill()
