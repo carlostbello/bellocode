@@ -374,8 +374,12 @@ struct TurnTests {
         let b = try await run()
         #expect(a.count > 500)
         #expect(a == b)
-        // About 1,000 deltas at 200 per second would take over 5 s in real time.
-        #expect(elapsed < .seconds(3))
+        // About 1,000 deltas at 200 per second span over 5 s of server time; the virtual clock covers that span in
+        // less real time than it represents. (Compared with the span itself, not a fixed bound, so load cannot fail it.)
+        let created = a.compactMap { $0["created"]?.doubleValue }
+        let span = Duration.milliseconds(Int64((created.max() ?? 0) - (created.min() ?? 0)))
+        #expect(span >= Duration.seconds(4), "server time covered: \(span)")
+        #expect(elapsed < span, "real time \(elapsed) for \(span) of server time")
     }
 
     @Test func turnScriptJSONRoundTrip() throws {

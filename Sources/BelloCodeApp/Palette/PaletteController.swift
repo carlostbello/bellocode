@@ -63,6 +63,10 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
     /// Measured: show() to results on screen, and the last keystroke to results (milliseconds).
     private(set) var lastOpenMilliseconds = 0.0
     private(set) var lastQueryMilliseconds = 0.0
+    /// Work counters (tests assert on these, not on timings): source snapshots built (once per open, never per
+    /// keystroke) and items listed by the last local refresh.
+    private(set) var sourceBuilds = 0
+    private(set) var lastRankedItems = 0
 
     static let width: CGFloat = 640
     static let maxListHeight: CGFloat = 380
@@ -188,6 +192,7 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         self.window = window
         self.mode = mode
         sources = PaletteSourceBuilder.build(window: window)
+        sourceBuilds += 1
         messageGroups = []
         messageQuery = ""
         status = nil
@@ -276,6 +281,7 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
             if (mode == .quickOpen && query.scope == .all) || query.scope == .files { scheduleFileSearch(query.text) }
         }
         rows = sections.flatMap { [Row.header($0.title)] + $0.items.map(Row.item) }
+        lastRankedItems = sections.reduce(0) { $0 + $1.items.count }
         modeLabel.stringValue = mode == .messages ? "Messages" : (query.scope == .all ? (mode == .commands ? "Commands" : "Quick Open") : query.scope.title)
         table.reloadData()
         // Keep the selected item while typing when it is still listed; else the first enabled one.

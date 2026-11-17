@@ -394,7 +394,16 @@ final class RecordingDelivery: NotificationDelivering {
 
 /// Palette open and keystroke-to-results, and sidebar structure and scrolling, with 2,000 threads (budgets: open
 /// under 50 ms, local results under 16 ms). Measured in a debug build with the real controllers.
-@MainActor @Suite(.serialized) struct NavigationPerformanceTests {
+///
+/// Pass/fail rests on the work done (full reloads, row edits, cells configured, source builds, items listed), which
+/// does not depend on how busy the machine is. Timings are always recorded and printed; they are asserted against the
+/// budgets only with `BELLOCODE_STRICT_PERF=1` (a quiet machine), and otherwise against a sanity bound ten times wider.
+@MainActor @Suite(.serialized, .timeLimit(.minutes(5))) struct NavigationPerformanceTests {
+    static let strictTimings = ProcessInfo.processInfo.environment["BELLOCODE_STRICT_PERF"] == "1"
+
+    /// A budget in strict mode; ten times the budget otherwise (catches a pathological regression, not load).
+    static func bound(_ budget: Double) -> Double { strictTimings ? budget : budget * 10 }
+
     static func percentile(_ samples: [Double], _ p: Double) -> Double {
         let sorted = samples.sorted()
         return sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))]
@@ -426,6 +435,7 @@ final class RecordingDelivery: NotificationDelivering {
 
         // Sidebar: structure rebuild and scrolling through every row.
         let sidebar = controller.sidebar
+        let reloadsAfterLoad = sidebar.fullReloads
         var structure: [Double] = []
         for _ in 0..<10 {
             workspace.filterText = "x"
@@ -434,28 +444,35 @@ final class RecordingDelivery: NotificationDelivering {
             await driver.idle(1)
             structure.append(sidebar.lastStructureMilliseconds)
         }
+        let reloadsAfterFilter = sidebar.fullReloads
         // A typical change: one thread pinned and unpinned (moves between two sections).
         var typical: [Double] = []
         var inputs: [Double] = []
+        var rowEdits: [Int] = []
         let someThread = try #require(engine.root.projects.first.flatMap { workspace.projectModel($0)?.sessionIDs.first })
         for round in 0..<10 {
             engine.organise([someThread], round % 2 == 0 ? .pin : .unpin)
             await driver.idle(1)
             typical.append(sidebar.lastStructureMilliseconds)
             inputs.append(sidebar.lastInputMilliseconds)
+            rowEdits.append(sidebar.lastRowEdits)
         }
         let rows = sidebar.outlineView.numberOfRows
         var scroll: [Double] = []
+        var cellsPerStep: [Int] = []
         let clip = sidebar.scrollView.contentView
+        let visibleRows = Int((clip.bounds.height / max(1, sidebar.outlineView.rowHeight)).rounded(.up))
         let step: CGFloat = 240
         var y: CGFloat = 0
         while y < sidebar.outlineView.frame.height {
             let start = ContinuousClock.now
+            let cellsBefore = sidebar.cellsConfigured
             clip.scroll(to: NSPoint(x: 0, y: y))
             sidebar.scrollView.reflectScrolledClipView(clip)
             sidebar.outlineView.displayIfNeeded()
             controller.window?.displayIfNeeded()
             scroll.append(PaletteController.milliseconds(since: start))
+            cellsPerStep.append(sidebar.cellsConfigured - cellsBefore)
             y += step
         }
 
@@ -463,14 +480,20 @@ final class RecordingDelivery: NotificationDelivering {
         let palette = controller.palette
         var opens: [Double] = []
         var keystrokes: [Double] = []
+        var listed: [Int] = []
+        let buildsBefore = palette.sourceBuilds
+        var keystrokeBuilds = 0
         for round in 0..<10 {
             palette.show(round % 2 == 0 ? .commands : .quickOpen, in: controller)
             palette.panel.displayIfNeeded()
             opens.append(palette.lastOpenMilliseconds)
+            let buildsAtOpen = palette.sourceBuilds
             for query in ["@f", "@fi", "@fix", "@fix p", "@fix pa", "@fix par", "re", "ref", "refa"] {
                 palette.setQuery(query)
                 keystrokes.append(palette.lastQueryMilliseconds)
+                listed.append(palette.lastRankedItems)
             }
+            keystrokeBuilds += palette.sourceBuilds - buildsAtOpen
             palette.hide()
         }
         let report = """
@@ -478,13 +501,26 @@ final class RecordingDelivery: NotificationDelivering {
             scroll step p50 \(String(format: "%.2f", Self.percentile(scroll, 0.5))) ms, p95 \(String(format: "%.2f", Self.percentile(scroll, 0.95))) ms over \(scroll.count) steps
             palette: open p50 \(String(format: "%.1f", Self.percentile(opens, 0.5))) ms, max \(String(format: "%.1f", opens.max() ?? 0)) ms; \
             keystroke p50 \(String(format: "%.2f", Self.percentile(keystrokes, 0.5))) ms, p95 \(String(format: "%.2f", Self.percentile(keystrokes, 0.95))) ms, max \(String(format: "%.2f", keystrokes.max() ?? 0)) ms
+            work: full reloads \(reloadsAfterLoad) at load, \(reloadsAfterFilter) after filtering, \(sidebar.fullReloads) at the end; \
+            row edits per one-thread change \(rowEdits); cells per scroll step max \(cellsPerStep.max() ?? 0) (\(visibleRows) rows visible); \
+            palette source builds \(palette.sourceBuilds - buildsBefore) for 10 opens (\(keystrokeBuilds) on keystrokes), items listed max \(listed.max() ?? 0)
+            timings asserted \(Self.strictTimings ? "against the budgets (BELLOCODE_STRICT_PERF=1)" : "against 10x the budgets (sanity)")
             """
         print("NAVIGATION-PERF\n" + report)
         try? report.write(toFile: FileManager.default.temporaryDirectory.appending(path: "bellocode-navigation-perf.txt").path, atomically: true, encoding: .utf8)
-        #expect(Self.percentile(opens, 0.5) < 50, "palette opens within 50 ms")
-        #expect(Self.percentile(keystrokes, 0.95) < 16, "local results within a frame")
-        #expect(Self.percentile(scroll, 0.95) < 16, "sidebar scrolls within a frame")
-        #expect(Self.percentile(typical, 0.5) < 50, "a section move within 50 ms with 2,000 threads (debug build)")
+        // Work: independent of load.
+        #expect(reloadsAfterLoad == 1, "one full reload, at first load")
+        #expect(sidebar.fullReloads == reloadsAfterFilter, "a pin, an unpin and scrolling never reload the outline")
+        #expect(rowEdits.allSatisfy { $0 <= 4 }, "a one-thread change edits a few rows, not the list: \(rowEdits)")
+        #expect((cellsPerStep.max() ?? .max) <= 2 * visibleRows + 4, "a scroll step configures about a screenful of cells: \(cellsPerStep)")
+        #expect(palette.sourceBuilds - buildsBefore == 10, "sources are built once per open")
+        #expect(keystrokeBuilds == 0, "a keystroke ranks the open's sources; it does not rebuild them")
+        #expect((listed.max() ?? .max) < 200, "results are capped, not 2,000 rows: \(listed.max() ?? 0)")
+        // Time: the budgets with BELLOCODE_STRICT_PERF=1, else a sanity bound.
+        #expect(Self.percentile(opens, 0.5) < Self.bound(50), "palette opens within 50 ms")
+        #expect(Self.percentile(keystrokes, 0.95) < Self.bound(16), "local results within a frame")
+        #expect(Self.percentile(scroll, 0.95) < Self.bound(16), "sidebar scrolls within a frame")
+        #expect(Self.percentile(typical, 0.5) < Self.bound(50), "a section move within 50 ms with 2,000 threads (debug build)")
         await engine.stop()
         await server.stop()
     }

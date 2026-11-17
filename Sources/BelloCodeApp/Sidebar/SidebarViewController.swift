@@ -78,6 +78,11 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private(set) var lastStructureMilliseconds = 0.0
     /// The part of it spent reading engine state and deriving sections.
     private(set) var lastInputMilliseconds = 0.0
+    /// Work counters (tests assert on these, not on timings): full reloads of the outline, row insertions and removals
+    /// in the last structure change, and cells configured since launch.
+    private(set) var fullReloads = 0
+    private(set) var lastRowEdits = 0
+    private(set) var cellsConfigured = 0
 
     init(workspace: WorkspaceController) {
         self.workspace = workspace
@@ -305,7 +310,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         rootItems = newRoots.map { materialize($0, reuse: previousItems) }
         sectionCounts = [:]
         countSections(newRoots)
+        lastRowEdits = firstLoad ? 0 : update.removals.count + update.insertions.count
         if firstLoad {
+            fullReloads += 1
             outlineView.reloadData()
             expandDefaults(rootItems)
         } else {
@@ -725,6 +732,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let item = item as? SidebarItem else { return nil }
+        cellsConfigured += 1
         switch item.id {
         case .needsYouHeader, .projectsHeader:
             let cell = outlineView.makeView(withIdentifier: SidebarTextCell.headerIdentifier, owner: nil) as? SidebarTextCell
