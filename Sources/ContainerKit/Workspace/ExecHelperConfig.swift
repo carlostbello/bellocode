@@ -30,13 +30,19 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         public var blocked: Blocked?
         /// The full setting, so the helper can create or start the container on first use (it never pulls).
         public var spec: WorkspaceSpec?
+        /// What the image offers, for the agent's guidance (the plugin reads it); nil until the container first ran.
+        public var image: String?
+        public var inventory: ContainerProbes.ToolInventory?
         /// `spec.mountIdentity()` when the app last ensured the container; a different value now means a mounted folder
         /// was replaced, and the helper recreates the container before running the command.
         public var mountIdentity: String?
 
         public init(roots: [String], container: String, user: String? = nil, shell: String = "/bin/sh", blocked: Blocked? = nil,
-                    spec: WorkspaceSpec? = nil, mountIdentity: String? = nil) {
+                    spec: WorkspaceSpec? = nil, mountIdentity: String? = nil, image: String? = nil,
+                    inventory: ContainerProbes.ToolInventory? = nil) {
             self.mountIdentity = mountIdentity
+            self.image = image
+            self.inventory = inventory
             self.roots = roots
             self.container = container
             self.user = user

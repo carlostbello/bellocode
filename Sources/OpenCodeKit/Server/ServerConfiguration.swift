@@ -23,6 +23,9 @@ public struct ServerConfiguration: Sendable {
     /// The bundled "bellocode" plugin directory (`Contents/Resources/opencode-plugin`). When set, the server is started
     /// with `OPENCODE_CONFIG_CONTENT` listing it (`OrchestrationContract.serverConfig`), so it loads by local path.
     public var pluginDirectory: URL?
+    /// Run every command in workspace containers (docs/features/containers.md). The app always sets it; nil only in
+    /// tests and mock mode.
+    public var containerExecution: ContainerExecution?
 
     /// Limit for the ready line plus a verified `GET /api/info`.
     public var startTimeout: Duration
@@ -96,10 +99,17 @@ public struct ServerConfiguration: Sendable {
             "OPENCODE_DISABLE_CLAUDE_CODE": "1",
         ]
         if let pluginDirectory {
-            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(pluginDirectory: pluginDirectory)
+            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
+                pluginDirectory: pluginDirectory, container: containerExecution)
+        } else if let containerExecution {
+            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(pluginDirectory: nil, container: containerExecution)
         }
+        if let containerExecution { environment.merge(containerExecution.environment) { _, container in container } }
         environment.merge(extraEnvironment) { _, extra in extra }
         environment["OPENCODE_PASSWORD"] = credentials.password
+        for key in environment.keys where Self.forbiddenEnvironmentPrefixes.contains(where: { key.hasPrefix($0) }) {
+            environment[key] = nil
+        }
         return environment
     }
 
