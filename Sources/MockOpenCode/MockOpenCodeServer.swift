@@ -141,6 +141,8 @@ public actor MockOpenCodeServer {
     var queuedSessionScripts: [String: [TurnScript]] = [:]
     /// Persistent PTYs and their WebSocket attachments (PTYRoutes.swift).
     var pty = MockPTYState()
+    /// The simulated `experimental.browser` plugin and session instruction entries (BrowserRoutes.swift).
+    var browser = MockBrowserState()
     /// Observes each streamed text/reasoning delta after it is published (harness latency measurements).
     var deltaObserver: (@Sendable (_ messageID: String, _ utf8Length: Int, _ uptime: Double) -> Void)?
 
@@ -572,9 +574,34 @@ public actor MockOpenCodeServer {
             case let .ptySocket(subscriberID, handshake):
                 await streamPTY(io, parser: parser, subscriberID: subscriberID, handshake: handshake, server: server)
                 return
+            case let .longPoll(id):
+                await serveLongPoll(io, id: id, server: server)
+                return
             }
         }
         io.finish()
+    }
+
+    /// A long-poll request (a plugin RPC `attach`): answers when the server settles it and closes the connection, or
+    /// tells the server the client went away when the peer closes first.
+    @concurrent
+    private static func serveLongPoll(_ io: ConnectionIO, id: Int, server: MockOpenCodeServer) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                while true {
+                    guard let data = try? await io.receive() else { break }
+                    if data.isEmpty { continue }
+                }
+                await server.abandonLongPoll(id)
+            }
+            group.addTask {
+                if let response = await server.longPollResponse(id) {
+                    try? await io.send(response.serialized(keepAlive: false))
+                }
+                io.finish()
+            }
+            await group.waitForAll()
+        }
     }
 
     /// A PTY WebSocket: writes the attachment's frames and reads the client's until either side closes.
@@ -686,6 +713,8 @@ enum ResponsePlan: Sendable {
     case eventStream(subscriberID: Int)
     /// Upgrade to a PTY WebSocket: send `handshake` (101), then frames.
     case ptySocket(subscriberID: Int, handshake: Data)
+    /// Answer later (a pending plugin RPC such as `attach`); see `serveLongPoll`.
+    case longPoll(id: Int)
     case reset
 }
 

@@ -25,6 +25,8 @@ public enum EventFilter: Sendable, Hashable {
     case sessions(Set<String>)
     /// Events whose `location.directory` is this path.
     case directory(String)
+    /// Events of these wire types (such as a plugin RPC's control events).
+    case types(Set<String>)
 
     func matches(_ envelope: OpenCodeEventEnvelope) -> Bool {
         switch self {
@@ -32,6 +34,7 @@ public enum EventFilter: Sendable, Hashable {
         case .session(let id): envelope.sessionID == id
         case .sessions(let ids): envelope.sessionID.map(ids.contains) ?? false
         case .directory(let path): envelope.directory == path
+        case .types(let types): types.contains(envelope.type)
         }
     }
 }
