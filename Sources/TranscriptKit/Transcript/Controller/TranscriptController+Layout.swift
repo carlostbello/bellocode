@@ -383,42 +383,61 @@ extension TranscriptController {
         }
         let start = CACurrentMediaTime()
         let total = inputs.count
-        let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+        // Batches flow from an off-main producer to the main actor through a stream (≤ ~7 commits a second; the
+        // buffer is bounded by the row count). Orchestrating the task group on the main actor throttled it to
+        // whenever the main thread was free.
+        let (stream, continuation) = AsyncStream<[(key: LayoutKey, height: CGFloat)]>.makeStream()
+        let work = inputs
         measureTask = Task(priority: .utility) { [weak self] in
-            await withTaskGroup(of: [(key: LayoutKey, height: CGFloat)].self) { group in
-                var index = 0
-                var running = 0
-                func addChunk() {
-                    let chunk = Array(inputs[index..<min(index + 100, inputs.count)])
-                    group.addTask(priority: .utility) { await LayoutEngine.measure(chunk) }
-                    index += 100
-                    running += 1
-                }
-                while index < inputs.count, running < width { addChunk() }
-                var batch: [(key: LayoutKey, height: CGFloat)] = []
-                var lastApply = CACurrentMediaTime()
-                for await result in group {
-                    running -= 1
-                    guard let self, !Task.isCancelled, self.generation == generation else {
-                        group.cancelAll()
-                        return
-                    }
-                    if index < inputs.count { addChunk() }
-                    batch += result
-                    if CACurrentMediaTime() - lastApply > 0.15 || running == 0 {
-                        self.applyMeasured(batch)
-                        batch.removeAll()
-                        lastApply = CACurrentMediaTime()
-                    }
-                }
-                if !batch.isEmpty { self?.applyMeasured(batch) }
+            async let producer: Void = Self.measureAll(work, into: continuation)
+            for await batch in stream {
+                guard let self, !Task.isCancelled, self.generation == generation else { break }
+                self.applyMeasured(batch)
             }
+            await producer
             guard let self, !Task.isCancelled, self.generation == generation else { return }
             self.metrics.measureAllMilliseconds = (CACurrentMediaTime() - start) * 1000
             self.metrics.measureAllRows = total
             self.measureAllComplete = true
             self.onMeasureAllFinished?()
         }
+    }
+
+    /// Measures `inputs` in chunks of 100 on at most half the cores at utility QoS, yielding batches.
+    @concurrent
+    nonisolated static func measureAll(
+        _ inputs: [RowLayoutInput], into continuation: AsyncStream<[(key: LayoutKey, height: CGFloat)]>.Continuation
+    ) async {
+        let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+        await withTaskGroup(of: [(key: LayoutKey, height: CGFloat)].self) { group in
+            var index = 0
+            var running = 0
+            func addChunk() {
+                let chunk = Array(inputs[index..<min(index + 100, inputs.count)])
+                group.addTask(priority: .utility) { await LayoutEngine.measure(chunk) }
+                index += 100
+                running += 1
+            }
+            while index < inputs.count, running < width { addChunk() }
+            var batch: [(key: LayoutKey, height: CGFloat)] = []
+            var lastYield = CACurrentMediaTime()
+            for await result in group {
+                running -= 1
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+                if index < inputs.count { addChunk() }
+                batch += result
+                if CACurrentMediaTime() - lastYield > 0.15 || running == 0 {
+                    continuation.yield(batch)
+                    batch.removeAll()
+                    lastYield = CACurrentMediaTime()
+                }
+            }
+            if !batch.isEmpty { continuation.yield(batch) }
+        }
+        continuation.finish()
     }
 
     func applyMeasured(_ results: [(key: LayoutKey, height: CGFloat)]) {

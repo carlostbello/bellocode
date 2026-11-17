@@ -309,7 +309,8 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
                 guard let self, self.observationGeneration == generation else { return }
                 self.trackedMessages.remove(id)
                 self.dirtyMessages.insert(id)
-                self.scheduleSync()
+                // Already off the mutation's call stack: sync now (later hops in this turn find nothing dirty).
+                if !self.syncScheduled { self.sync() }
             }
         }
     }
@@ -469,8 +470,12 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
                 tableView.endUpdates()
             }
         }
-        // Rows whose content changed in place: streaming tails update their open block; others re-lay out.
+        // Rows whose content changed in place: streaming tails update their open block; others re-lay out. A new row
+        // that is already streaming starts its tail at once.
         for index in changed { contentChanged(row: index) }
+        for index in inserted where rows[index].isLive {
+            if case .markdown = rows[index].content { contentChanged(row: index) }
+        }
         // Spacing of the row after an insertion or removal may change (its top padding depends on its predecessor).
         if inserted.upperBound < rows.count { refreshKey(row: inserted.upperBound) }
         lastPrefetchRange = 0..<0

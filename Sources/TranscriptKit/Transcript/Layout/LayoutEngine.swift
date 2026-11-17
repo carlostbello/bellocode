@@ -18,6 +18,22 @@ public struct RowLayoutInput: Sendable {
     /// Shared parse cache (finished rows are parsed once).
     public var cache: RenderBlockCache?
 
+    public init(
+        row: TranscriptRow, ui: RowUIState, width: CGFloat, theme: TranscriptTheme, topPadding: CGFloat,
+        imageSizes: [String: CGSize], blocks: [RenderBlock]? = nil, highlighter: any HighlightService,
+        cache: RenderBlockCache? = nil
+    ) {
+        self.row = row
+        self.ui = ui
+        self.width = width
+        self.theme = theme
+        self.topPadding = topPadding
+        self.imageSizes = imageSizes
+        self.blocks = blocks
+        self.highlighter = highlighter
+        self.cache = cache
+    }
+
     public var key: LayoutKey {
         LayoutKey(
             rowID: row.id, version: row.version, uiVersion: ui.version, width: Int(width.rounded()),

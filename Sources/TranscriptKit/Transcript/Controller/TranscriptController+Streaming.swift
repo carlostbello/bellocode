@@ -19,6 +19,8 @@ final class TailState {
     var finished = false
     /// UTF-8 length of the text shown (after line buffering), for delta→visible measurements.
     var displayedLength = 0
+    /// UTF-8 length of the text received and parsed (before line buffering).
+    var appliedLength = 0
 
     init(id: RowID) { self.id = id }
 
@@ -134,6 +136,7 @@ extension TranscriptController {
         tail.blockLayouts = reused + result.layouts
         tail.keyVersion = version
         tail.displayedLength = result.stream.displayed.utf8.count
+        tail.appliedLength = text.utf8.count
         let key = currentKey(row: index)
         let layout = RowLayout(key: key, blocks: tail.blockLayouts, width: contentWidth, topPadding: topPadding(index), theme: theme)
         tail.composed = layout
@@ -170,6 +173,9 @@ extension TranscriptController {
 
     /// The displayed UTF-8 length of a streaming row (harness: delta→visible latency).
     public func displayedTailLength(_ id: RowID) -> Int? { tails[id]?.displayedLength }
+
+    /// The received UTF-8 length of a streaming row's last commit (before line buffering).
+    public func appliedTailLength(_ id: RowID) -> Int? { tails[id]?.appliedLength }
 
     /// The streaming rows.
     public var streamingRowIDs: [RowID] { Array(tails.keys) }

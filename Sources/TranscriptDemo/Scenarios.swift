@@ -201,7 +201,10 @@ extension ScenarioRunner {
 
     struct StreamStats: Codable {
         var frames: FrameStats
+        /// Delta emitted by the mock → its text shown (complete lines and words: the line buffer holds partial ones).
         var deltaToVisible: LatencyStats
+        /// Delta emitted → its text received, parsed and laid out by the transcript (before line buffering).
+        var deltaToApplied: LatencyStats
         var deltasProduced: Int
         var deltasShown: Int
         var finalTextMatches: Bool
@@ -247,26 +250,36 @@ extension ScenarioRunner {
         let rate = 100.0
         let (script, text) = streamingScript(seconds: seconds, rate: rate, chunk: 9)
         let clock = DeltaClock()
-        await server.setDeltaObserver { id, length, time in clock.record(id, length, time) }
+        let appliedClock = DeltaClock()
+        await server.setDeltaObserver { id, length, time in
+            clock.record(id, length, time)
+            appliedClock.record(id, length, time)
+        }
         await server.enqueueScript(script, for: sessionID.rawValue)
         var latencies: [Double] = []
+        var applied: [Double] = []
         controller.onTailCommit = { id in
             guard let messageID = clock.messageID, id.rawValue.contains(messageID), let shown = controller.displayedTailLength(id) else { return }
             let now = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
-            // Visible at the next display refresh (half a frame on average is not added: commits draw that frame).
+            // Drawn at the next display refresh.
             latencies += clock.drain(upTo: shown).map { (now - $0) * 1000 }
+            applied += appliedClock.drain(upTo: controller.appliedTailLength(id) ?? 0).map { (now - $0) * 1000 }
         }
         let cpuStart = ProcessStats.cpuSeconds()
         let wallStart = CACurrentMediaTime()
-        await thread.send("Stream a long benchmark reply")
+        let sent = await thread.send("Stream a long benchmark reply")
+        if sent == nil { log("FAIL send: \(thread.lastError?.userMessage ?? "unknown")") }
+        // Wait for the turn to start (the mock answers the prompt, then plays the script).
+        let waitStart = CACurrentMediaTime()
+        while !thread.isRunning, clock.count == 0, CACurrentMediaTime() - waitStart < 10 { await sleep(0.01) }
         var maxDistance = 0.0
         recorder.start()
-        var finished = false
+        var sawRunning = false
         await perFrame { dt, elapsed in
             during?(dt, elapsed)
             if controller.following { maxDistance = max(maxDistance, Double(controller.distanceFromBottom)) }
-            let done = elapsed > 3 && !thread.isRunning
-            if done { finished = true }
+            if thread.isRunning { sawRunning = true }
+            let finished = sawRunning && !thread.isRunning && controller.streamingRowIDs.isEmpty
             return !finished && elapsed < seconds * 3 + 30
         }
         let intervals = recorder.stop()
@@ -280,10 +293,14 @@ extension ScenarioRunner {
         }.last
         let sorted = latencies.sorted()
         func pct(_ p: Double) -> Double { sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))] }
+        let appliedSorted = applied.sorted()
+        func apct(_ p: Double) -> Double { appliedSorted.isEmpty ? 0 : appliedSorted[min(appliedSorted.count - 1, Int(Double(appliedSorted.count - 1) * p))] }
         let produced = Int(ceil(Double(text.utf8.count) / 9))
         return StreamStats(
             frames: FrameStats(intervals: intervals, nominal: nominal),
             deltaToVisible: LatencyStats(samples: sorted.count, p50Ms: round2(pct(0.5)), p95Ms: round2(pct(0.95)), maxMs: round2(sorted.last ?? 0)),
+            deltaToApplied: LatencyStats(
+                samples: appliedSorted.count, p50Ms: round2(apct(0.5)), p95Ms: round2(apct(0.95)), maxMs: round2(appliedSorted.last ?? 0)),
             deltasProduced: produced, deltasShown: sorted.count, finalTextMatches: shownText == text,
             cpuPercentOfOneCore: round2(cpu), maxDistanceFromBottomWhileFollowing: round2(maxDistance), streamedBytes: text.utf8.count,
             maxTailApplyMs: round2(controller.metrics.maxTailApplyMilliseconds), tailJobs: controller.metrics.tailJobs)

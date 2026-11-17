@@ -47,10 +47,15 @@ final class ScenarioRunner {
         window.contentView = NSView()
         window.orderFrontRegardless()
         recorder = FrameRecorder(view: window.contentView!)
-        await recorder.frames(30)
-        nominal = 1.0 / Double(max(60, window.screen?.maximumFramesPerSecond ?? 120))
+        // The display's refresh interval, measured (NSScreen can report a lower maximum while the session is locked).
+        recorder.start()
+        await recorder.frames(90)
+        let warm = recorder.stop().sorted()
+        nominal = warm.isEmpty ? 1.0 / 120 : warm[warm.count / 2]
         let started = CACurrentMediaTime()
         var scenario = FixtureGenerator(seed: 42).workspace(projectCount: 2, sessionCount: 12, messagesPerSession: 6)
+        // History in the past (the fixture's default clock is a fixed date), so new turns sort after it.
+        scenario.startTime = Int64(Date().timeIntervalSince1970 * 1000) - 2 * 365 * 86_400_000
         let large = FixtureGenerator(seed: 42).addLargeSession(to: &scenario, messageCount: messageCount)
         let server = MockOpenCodeServer(scenario: scenario, options: MockServerOptions(clock: .realTime))
         do {
@@ -210,6 +215,7 @@ final class ScenarioRunner {
             case "S6": await runS6()
             case "S7": await runS7()
             case "S8": await runS8()
+            case "layout": await runLayoutProfile()
             default: log("unknown scenario \(scenario)")
             }
             if scenario != "S8" { unmount() }
@@ -296,4 +302,68 @@ final class ImageGate: TranscriptImageLoading {
         guard let image = context.makeImage() else { return nil }
         return LoadedImage(image: image, pixelSize: CGSize(width: width, height: height))
     }
+}
+
+extension ScenarioRunner {
+    /// Single-threaded cost of parsing and laying out every row (diagnostics for the measure-all pass).
+    func runLayoutProfile() async {
+        await mountFull()
+        guard let controller else { return }
+        let rows = controller.rows
+        let theme = controller.theme
+        let width = controller.contentWidth
+        var start = CACurrentMediaTime()
+        var parsed: [[RenderBlock]] = []
+        for row in rows { parsed.append(RenderBlocks.blocks(for: row)) }
+        let parseMs = (CACurrentMediaTime() - start) * 1000
+        start = CACurrentMediaTime()
+        var inputs: [RowLayoutInput] = []
+        for (index, row) in rows.enumerated() {
+            inputs.append(RowLayoutInput(row: row, ui: RowUIState(), width: width, theme: theme, topPadding: 10, imageSizes: [:], blocks: parsed[index], highlighter: NoHighlight()))
+        }
+        _ = await LayoutEngine.measure(inputs)
+        let layoutNoHighlightMs = (CACurrentMediaTime() - start) * 1000
+        start = CACurrentMediaTime()
+        for index in inputs.indices { inputs[index].highlighter = TokenizerHighlighter(costLimit: 1) }
+        _ = await LayoutEngine.measure(inputs)
+        let layoutMs = (CACurrentMediaTime() - start) * 1000
+        log("rows \(rows.count): parse \(Int(parseMs)) ms; layout without highlight \(Int(layoutNoHighlightMs)) ms; with highlight \(Int(layoutMs)) ms (single thread)")
+        for (label, priority, cached) in [("utility, parsed", TaskPriority.utility, false), ("userInitiated, parsed", .userInitiated, false), ("utility, cache", .utility, true)] {
+            let cache = RenderBlockCache()
+            let chunks = stride(from: 0, to: inputs.count, by: 100).map { start in
+                Array(inputs[start..<min(start + 100, inputs.count)]).map { input -> RowLayoutInput in
+                    var copy = input
+                    if cached { copy.blocks = nil; copy.cache = cache }
+                    return copy
+                }
+            }
+            let begin = CACurrentMediaTime()
+            await withTaskGroup(of: Int.self) { group in
+                var next = 0
+                var running = 0
+                let width = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
+                while next < chunks.count, running < width {
+                    let chunk = chunks[next]
+                    group.addTask(priority: priority) { await LayoutEngine.measure(chunk).count }
+                    next += 1
+                    running += 1
+                }
+                for await _ in group {
+                    running -= 1
+                    if next < chunks.count {
+                        let chunk = chunks[next]
+                        group.addTask(priority: priority) { await LayoutEngine.measure(chunk).count }
+                        next += 1
+                        running += 1
+                    }
+                }
+            }
+            log("parallel (\(label)): \(Int((CACurrentMediaTime() - begin) * 1000)) ms")
+        }
+    }
+}
+
+struct NoHighlight: HighlightService {
+    func tokens(for code: String, language: String?) -> [TokenRun] { [] }
+    func supports(_ language: String?) -> Bool { false }
 }
