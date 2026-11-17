@@ -37,6 +37,20 @@ refuses ("follows the agent"), another project refuses ("Threads stay in their p
 apply as remove/insert of only the moved rows, animated only after a menu action, never after a drop, an engine
 update or under Reduce Motion. Settled and Snoozed are collapsed by default; expansion and scroll restore.
 
+## Appearance (Restyle 2)
+Sidebar: plain `NSOutlineView` (no source list, no system selection): `SidebarRowBackground` draws the neutral row
+recipe (hover `rowHover`, multi-select `rowSelected`, the displayed thread `rowActive`, r6 inset 8), cells are drawn
+with manual layout (`Sidebar/SidebarCells.swift`). Search field (`DSTextField` search style, ⌥⌘F cap), "Needs you"
+label + warning count pill, two-line Needs-you rows (title; status word in its tone · project), project rows (folder
+glyph, `bodyEmph` name, thread count, chevron; New Thread on hover), no "Projects" label, sentence-case section
+labels (`metaEmph text3` + count; click toggles, a chevron marks collapsed), 28 pt thread rows (14 pt status glyph:
+spinner / shield / bubble / triangle / unread dot, regular title, `meta text4` time), Settled rows in `text3`, child
+threads indented 22 with a hairline guide, a trailing chevron on threads with children. Weight changes only for
+unread (dot + medium). Native disclosure triangles are hidden. Palette: 600 pt glass panel 96 pt below the window
+top (opaque fallback in stills), window scrim, 48 pt input with a scope pill, 28 pt group labels, 34 pt rows drawn in
+one pass (match ranges `text` semibold, rest `text2`; shortcuts as key caps), neutral `highlight` selection, 38 pt
+key-cap footer. The snooze popover uses DS menu rows and buttons (the date field stays the system one).
+
 ## Palette (`Palette/`)
 One borderless key `NSPanel` per window, built with the window (no animation). ⌘K actions first; ⌘P threads,
 projects and files of the current project; ⇧⌘F message search. Prefixes `>` actions, `@` threads, `#` projects,

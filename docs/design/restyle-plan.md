@@ -77,3 +77,18 @@ Settings: keep the native window and form; DS controls inside our panes only; fi
 `EmptyStateView` (evidence `nav-settings-notifications-dark` + a first-run scenario to add). Then delete the deprecated aliases and `AppStyle` re-mapping. Grep outside DesignSystem must find no `bezelStyle`,
 `NSSegmentedControl`, `NSPopUpButton`, `.borderedProminent`, `.bordered`, or accent/`selectedContentBackgroundColor`
 row fills. Switch snapshot fixtures to realistic thread titles. Add T3 Code's MIT notice to the acknowledgements.
+
+## Restyle status
+- **Step 1, shell and sidebar: done** (Restyle 2). Transparent title bar + drawn 52 pt header bar, one-line title and
+  crumbs, outline Open / Commit, panel toggles, hairline dividers, plain split items; plain outline sidebar with the
+  row recipe, drawn cells, status glyphs, two-line Needs-you rows, folder project rows, sentence-case sections, child
+  guides, footer with connection state; `DSTabBar` right panel with counts; banners above the composer; snooze
+  popover. 2,000 threads (debug): one-thread change p50 23.4 ms, filter rebuild p50 84 ms, scroll step p95 2.0 ms.
+- **Step 8, palette and toasts: done.** 600 pt glass palette (opaque fallback in stills), scrim, 48 pt input, 34 pt
+  drawn rows, key caps, neutral highlight. Open p50 23.5 ms, keystroke p95 5.8 ms (2,000 threads, debug).
+- **Step 10, settings: done for the shell's panes** (sidebar of panes, grouped rows, DS controls). Pane bodies owned
+  by other modules (Scheduled Tasks, GitLab, Secrets, Accounts) are embedded unchanged. Not done: deleting the
+  deprecated aliases, realistic snapshot fixture titles, the MIT notice.
+- Left stock on purpose: the snooze date field (`DatePicker`, no DS date control), settings sliders (no DS slider),
+  the containers download `ProgressView`, `NSAlert` confirmations, plain `NSMenu` context and "Open" menus.
+- Steps 2–7 and 9 belong to the module agents.

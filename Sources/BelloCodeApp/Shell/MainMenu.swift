@@ -69,6 +69,8 @@ enum MainMenu {
         menu.add(.removeProject)
         menu.addItem(.separator())
         menu.add(.revealInFinder)
+        // The header's "Open ⌄" menu also lists this (UX rule 2: every action is in the menu bar).
+        menu.addItem(title: "Open in Terminal", action: #selector(MainWindowController.openProjectInTerminal(_:)), key: "")
         menu.add(.copyPath)
         menu.addItem(.separator())
         menu.addItem(title: "Close", action: #selector(NSWindow.performClose(_:)), key: "w")

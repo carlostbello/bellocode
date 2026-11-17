@@ -195,8 +195,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         header.runtimeView = runtime
         let menu = NSMenu(title: "Open")
         menu.addItem(withTitle: ShellCommand.revealInFinder.title, action: ShellCommand.revealInFinder.selector, keyEquivalent: "")
-        let terminal = menu.addItem(withTitle: "Open in Terminal", action: #selector(openProjectInTerminal(_:)), keyEquivalent: "")
-        terminal.target = self
+        menu.addItem(withTitle: "Open in Terminal", action: #selector(openProjectInTerminal(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: ShellCommand.copyPath.title, action: ShellCommand.copyPath.selector, keyEquivalent: "")
         header.openButton.popUpMenu = menu
@@ -352,6 +351,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleSidebar(_:)) || menuItem.action == #selector(toggleInspector(_:)) {
             return split.validateUserInterfaceItem(menuItem)
+        }
+        if menuItem.action == #selector(openProjectInTerminal(_:)) {
+            return !(currentProjectDirectory ?? "").isEmpty
         }
         guard let action = menuItem.action, let command = ShellCommand.command(for: action) else { return true }
         let context = commandContext()
