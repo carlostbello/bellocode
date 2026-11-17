@@ -344,24 +344,36 @@ final class DiffContentView: NSView {
             context.setFillColor(theme.focusBar)
             context.fill(CGRect(x: 0, y: rect.minY, width: 3, height: rect.height))
         }
-        let line = uiLine(row.text, font: theme.font, color: theme.hunkText)
-        draw(line, x: (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4, rect: rect, in: context)
+        let textX = (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4
+        var limit = rect.width - textX - 8
         revertButtons[index] = nil
         if revertableFiles.contains(row.fileIndex) {
-            let button = uiLine("Revert Hunk", font: theme.uiFont, color: theme.base.accent)
+            let button = uiLine(rect.width < 420 ? "Revert" : "Revert Hunk", font: theme.uiFont, color: theme.base.accent)
             let width = CTLineGetTypographicBounds(button, nil, nil, nil)
             let frame = CGRect(x: rect.width - width - 14, y: rect.minY, width: width + 10, height: rect.height)
             revertButtons[index] = frame
             draw(button, x: frame.minX + 5, rect: rect, in: context)
+            limit = frame.minX - textX - 8
         }
+        draw(truncated(row.text, font: theme.font, color: theme.hunkText, width: limit), x: textX, rect: rect, in: context)
     }
 
     private func drawGap(hidden: Int, expandable: Bool, rect: CGRect, in context: CGContext) {
         context.setFillColor(theme.gapFill)
         context.fill(rect)
-        let text = "⋯ \(hidden) unchanged line\(hidden == 1 ? "" : "s")" + (expandable ? "  ·  Click to show 20 more, ⌥-click for all" : "")
-        let line = uiLine(text, font: theme.uiFont, color: theme.base.secondary)
-        draw(line, x: (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4, rect: rect, in: context)
+        let x = (layoutMode == .unified ? 2 * gutterWidth : gutterWidth) + 4
+        let base = "⋯ \(hidden) unchanged line\(hidden == 1 ? "" : "s")"
+        let full = base + (expandable ? "  ·  Click to show 20 more, ⌥-click for all" : "")
+        let line = uiLine(full, font: theme.uiFont, color: theme.base.secondary)
+        let fits = CTLineGetTypographicBounds(line, nil, nil, nil) <= rect.width - x - 8
+        draw(fits ? line : truncated(base + (expandable ? " · Click to show" : ""), font: theme.uiFont, color: theme.base.secondary, width: rect.width - x - 8), x: x, rect: rect, in: context)
+    }
+
+    /// A one-line label cut with "…" to `width`.
+    private func truncated(_ text: String, font: CTFont, color: CGColor, width: CGFloat) -> CTLine {
+        let line = uiLine(text, font: font, color: color)
+        guard CTLineGetTypographicBounds(line, nil, nil, nil) > width else { return line }
+        return CTLineCreateTruncatedLine(line, max(20, width), .end, uiLine("…", font: font, color: color)) ?? line
     }
 
     private func drawNotice(_ text: String, rect: CGRect, in context: CGContext) {

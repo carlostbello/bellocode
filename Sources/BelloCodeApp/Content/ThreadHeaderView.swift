@@ -17,6 +17,7 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     private let statusLabel = NSTextField(labelWithString: "")
     /// "⎇ feature/x · Worktree · 3 changed ↑1" (M2-C), refreshed with the repository's status.
     private let gitLabel = NSTextField(labelWithString: "")
+    private let gitDot = NSTextField(labelWithString: "·")
     private var loop: ObservationLoop?
     private var editingOriginal: String?
 
@@ -50,7 +51,7 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         let dot = NSTextField(labelWithString: "·")
         dot.textColor = DS.Palette.tertiaryText
         dot.font = typography.caption
-        let gitDot = NSTextField(labelWithString: "·")
+        gitDot.stringValue = "·"
         gitDot.textColor = DS.Palette.tertiaryText
         gitDot.font = typography.caption
         gitLabel.setContentCompressionResistancePriority(.init(240), for: .horizontal)
@@ -102,6 +103,8 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         }
         let repository = context.engine.git.repository(for: context.directory)
         gitLabel.stringValue = Self.gitText(repository)
+        gitDot.isHidden = gitLabel.stringValue.isEmpty
+        gitLabel.isHidden = gitLabel.stringValue.isEmpty
         gitLabel.toolTip = repository.status.map(\.accessibleSummary)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)

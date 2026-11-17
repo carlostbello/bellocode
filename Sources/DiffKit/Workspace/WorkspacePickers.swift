@@ -25,7 +25,8 @@ public struct WorkspacePickerButton: View {
             .font(.system(size: DS.Typography.current.baseSize - 1))
         }
         .buttonStyle(.borderless)
-        .help("Where the agent works: local checkout or a worktree (⇧⌘E)")
+        .disabled(draft.repository.phase == .notRepository)
+        .help(draft.repository.phase == .notRepository ? "Worktrees need a git repository" : "Where the agent works: local checkout or a worktree (⇧⌘E)")
         .accessibilityLabel("Workspace")
         .accessibilityValue(draft.workspaceLabel)
         .onChange(of: draft.workspaceOpenRequests) { isOpen.value = true }
