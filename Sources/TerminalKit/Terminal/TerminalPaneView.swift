@@ -125,7 +125,7 @@ final class TerminalPaneContainer: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
-        dirtyRect.fill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
     }
 
     /// After any layout the grid may have changed; the stream debounces and sends only a real change.

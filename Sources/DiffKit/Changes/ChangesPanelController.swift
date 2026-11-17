@@ -954,7 +954,7 @@ final class CanvasView: NSView {
     override var isOpaque: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         DS.Color.canvas.setFill()
-        dirtyRect.fill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
     }
 }
 

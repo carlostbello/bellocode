@@ -78,7 +78,7 @@ final class TerminalFindBar: NSView, NSTextFieldDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         DS.Color.canvas.setFill()
-        dirtyRect.fill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
     }
 
     var searchText: String {

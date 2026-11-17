@@ -19,7 +19,7 @@ final class BrowserTabStrip: NSView {
     weak var delegate: (any BrowserTabStripDelegate)?
     private let scroll = NSScrollView()
     private let stack = NSStackView()
-    private let newButton = NSButton()
+    private let newButton = DSButton(icon: "plus", accessibilityTitle: "New Tab", size: .small)
     private var views: [String: BrowserTabView] = [:]
     private var order: [String] = []
     private var dragging: (id: String, startX: CGFloat, moved: Bool)?
@@ -28,7 +28,8 @@ final class BrowserTabStrip: NSView {
         super.init(frame: frame)
         stack.orientation = .horizontal
         stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: DS.Spacing.xs, bottom: 3, right: DS.Spacing.xs)
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: DS.Space.s6, bottom: 4, right: DS.Space.s4)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let document = BrowserFlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
@@ -39,9 +40,6 @@ final class BrowserTabStrip: NSView {
         scroll.hasVerticalScroller = false
         scroll.horizontalScrollElasticity = .none
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        newButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
-        newButton.bezelStyle = .accessoryBarAction
-        newButton.isBordered = false
         newButton.toolTip = "New Tab (⌥⌘T)"
         newButton.target = self
         newButton.action = #selector(newTab)
@@ -51,13 +49,13 @@ final class BrowserTabStrip: NSView {
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: newButton.leadingAnchor, constant: -DS.Spacing.xxs),
-            newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.s),
-            newButton.centerYAnchor.constraint(equalTo: centerYAnchor), newButton.widthAnchor.constraint(equalToConstant: 22),
+            scroll.trailingAnchor.constraint(equalTo: newButton.leadingAnchor, constant: -DS.Space.s2),
+            newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Space.s6),
+            newButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             stack.topAnchor.constraint(equalTo: document.topAnchor), stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor), document.heightAnchor.constraint(equalTo: scroll.heightAnchor),
             document.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            heightAnchor.constraint(equalToConstant: 30),
+            heightAnchor.constraint(equalToConstant: DS.Size.terminalTabStrip),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
@@ -131,8 +129,8 @@ final class BrowserTabView: NSView {
     private let icon = NSImageView()
     private let marker = NSImageView()
     private let title = NSTextField(labelWithString: "")
-    private let close = NSButton()
-    private let spinner = NSProgressIndicator()
+    private let close = DSButton(icon: "xmark", accessibilityTitle: "Close Tab", size: .small)
+    private let spinner = DSSpinner()
     private var width: NSLayoutConstraint!
     private var isSelected = false
     private var hovering = false
@@ -140,39 +138,32 @@ final class BrowserTabView: NSView {
     init(id: String) {
         self.id = id
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = DS.Radius.medium
-        title.font = DS.Typography.current.caption
+        title.font = DS.TextRole.labelEmph.font
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         icon.imageScaling = .scaleProportionallyDown
         marker.imageScaling = .scaleProportionallyDown
-        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")?
-            .withSymbolConfiguration(.init(pointSize: 8, weight: .bold))
-        close.isBordered = false
-        close.bezelStyle = .accessoryBarAction
         close.target = self
         close.action = #selector(closeTab)
         close.toolTip = "Close Tab (⌥⌘W)"
-        spinner.style = .spinning
-        spinner.controlSize = .mini
-        spinner.isDisplayedWhenStopped = false
+        spinner.isHidden = true
         for view in [icon, marker, title, close, spinner] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         width = widthAnchor.constraint(equalToConstant: 160)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 24), width,
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Spacing.s), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: DS.Size.controlSmall), width,
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Space.s8), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 14), icon.heightAnchor.constraint(equalToConstant: 14),
             spinner.centerXAnchor.constraint(equalTo: icon.centerXAnchor), spinner.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
-            marker.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: DS.Spacing.xs), marker.centerYAnchor.constraint(equalTo: centerYAnchor),
+            spinner.widthAnchor.constraint(equalToConstant: 14), spinner.heightAnchor.constraint(equalToConstant: 14),
+            marker.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: DS.Space.s4), marker.centerYAnchor.constraint(equalTo: centerYAnchor),
             marker.widthAnchor.constraint(equalToConstant: 12), marker.heightAnchor.constraint(equalToConstant: 12),
-            title.leadingAnchor.constraint(equalTo: marker.trailingAnchor, constant: DS.Spacing.xxs), title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -DS.Spacing.xxs),
-            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.xs), close.centerYAnchor.constraint(equalTo: centerYAnchor),
-            close.widthAnchor.constraint(equalToConstant: 16), close.heightAnchor.constraint(equalToConstant: 16),
+            title.leadingAnchor.constraint(equalTo: marker.trailingAnchor, constant: DS.Space.s2), title.centerYAnchor.constraint(equalTo: centerYAnchor),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -DS.Space.s2),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Space.s2), close.centerYAnchor.constraint(equalTo: centerYAnchor),
+            close.widthAnchor.constraint(equalToConstant: DS.Size.micro), close.heightAnchor.constraint(equalToConstant: DS.Size.micro),
         ])
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
         setAccessibilityElement(true)
@@ -186,22 +177,24 @@ final class BrowserTabView: NSView {
         self.isSelected = isSelected
         self.width.constant = width
         title.stringValue = tab.displayTitle
-        title.textColor = isSelected ? DS.Palette.text : DS.Palette.secondaryText
+        title.textColor = isSelected ? DS.Color.text : DS.Color.text2
         let loading = tab.isLoading && tab.isLive
-        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        spinner.isHidden = !loading
+        spinner.isAnimating = loading
         icon.isHidden = loading
-        icon.image = tab.favicon ?? NSImage(systemSymbolName: tab.isPrivate ? "eye.slash" : "globe", accessibilityDescription: nil)
-        icon.contentTintColor = tab.favicon == nil ? DS.Palette.secondaryText : nil
+        icon.image = tab.favicon ?? NSImage(systemSymbolName: tab.isPrivate ? "eye.slash" : "globe", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointRow, weight: .regular))
+        icon.contentTintColor = tab.favicon == nil ? DS.Color.icon : nil
         // Ownership marker: agent-driven, agent tab, shared, private. Symbol plus tooltip; never colour alone.
         let (symbol, tint, help): (String?, NSColor, String) =
-            if tab.isPrivate { ("lock.fill", DS.Palette.secondaryText, "Private tab: never shared with the agent; nothing is saved") }
-            else if tab.agentActivity != nil { ("cursorarrow.motionlines", DS.Palette.accent, "The agent is using this tab") }
-            else if tab.isAgentPaused { ("pause.circle.fill", DS.Palette.attention, "You took over: the agent is paused on this tab") }
-            else if tab.owner == .agent { ("sparkle", DS.Palette.accent, "Opened by the agent (shared with this thread's agent)") }
-            else if tab.isShared { ("person.2.fill", DS.Palette.secondaryText, "Shared with this thread's agent") }
-            else { (nil, DS.Palette.secondaryText, "Not shared with the agent") }
+            if tab.isPrivate { ("lock", DS.Color.text3, "Private tab: never shared with the agent; nothing is saved") }
+            else if tab.agentActivity != nil { ("cursorarrow.motionlines", DS.Color.infoText, "The agent is using this tab") }
+            else if tab.isAgentPaused { ("pause.circle", DS.Color.warningText, "You took over: the agent is paused on this tab") }
+            else if tab.owner == .agent { ("sparkle", DS.Color.infoText, "Opened by the agent (shared with this thread's agent)") }
+            else if tab.isShared { ("person.2", DS.Color.text3, "Shared with this thread's agent") }
+            else { (nil, DS.Color.text3, "Not shared with the agent") }
         marker.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: help) }?
-            .withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointMeta, weight: .regular))
         marker.contentTintColor = tint
         marker.isHidden = symbol == nil
         let url = BrowserAddress.display(tab.url ?? tab.pendingURL)
@@ -211,14 +204,16 @@ final class BrowserTabView: NSView {
         refreshAppearance()
     }
 
+    /// Ghost tabs (§6, restyle step 7): selected and hover = `fillHover`, `r.md`; the close glyph shows on hover or
+    /// selection without changing the tab's width.
     private func refreshAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = isSelected
-                ? DS.Palette.cardBackground.cgColor : (hovering ? DS.Palette.groupFill.cgColor : NSColor.clear.cgColor)
-            layer?.borderWidth = isSelected ? 1 : 0
-            layer?.borderColor = DS.Palette.cardBorder.cgColor
-        }
+        needsDisplay = true
         close.isHidden = !(isSelected || hovering)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isSelected || hovering else { return }
+        DSDraw.fill(bounds, radius: DS.Radius.md, color: DS.Color.fillHover)
     }
 
     override func viewDidChangeEffectiveAppearance() {

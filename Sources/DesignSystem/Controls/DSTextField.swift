@@ -17,15 +17,22 @@ public final class DSTextField: NSView {
     /// A trailing key cap, for example "⌘K".
     public var shortcutHint: String? { didSet { kbd.keys = shortcutHint ?? ""; kbd.isHidden = shortcutHint == nil; needsLayout = true } }
     public var showsHalo = true { didSet { needsDisplay = true } }
+    /// A leading glyph (14 pt box, `text3`): the search style's magnifying glass by default; a URL field shows its
+    /// security glyph here. Setting it on a `.standard` field adds the leading glyph slot.
+    public var leadingSymbolName: String? { didSet { needsLayout = true; needsDisplay = true } }
+    public var leadingSymbolTint: NSColor = DS.Color.text3 { didSet { needsDisplay = true } }
     public private(set) var isFocused = false { didSet { if isFocused != oldValue { needsDisplay = true } } }
 
     private let kbd = DSKbd("")
     private let haloInset: CGFloat = DS.Border.fieldFocusHalo
 
-    public init(style: Style = .standard, placeholder: String = "") {
+    /// - Parameter field: a custom editable field (a subclass of `DSBareTextField` with its own behaviour, such as a
+    ///   URL field with completion); nil makes a plain one.
+    public init(style: Style = .standard, placeholder: String = "", field custom: DSBareTextField? = nil) {
         self.style = style
         self.placeholder = placeholder
-        field = DSInnerTextField()
+        field = custom ?? DSBareTextField()
+        leadingSymbolName = style == .search ? "magnifyingglass" : nil
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
@@ -38,7 +45,7 @@ public final class DSTextField: NSView {
         field.lineBreakMode = .byTruncatingTail
         field.cell?.isScrollable = true
         field.cell?.wraps = false
-        (field as? DSInnerTextField)?.onFocusChange = { [weak self] focused in self?.isFocused = focused }
+        (field as? DSBareTextField)?.onFocusChange = { [weak self] focused in self?.isFocused = focused }
         addSubview(field)
         kbd.isHidden = true
         addSubview(kbd)
@@ -65,7 +72,7 @@ public final class DSTextField: NSView {
     public override func layout() {
         super.layout()
         let rect = fieldRect
-        let leading: CGFloat = style == .search ? 30 : 9
+        let leading: CGFloat = leadingSymbolName != nil ? 30 : 9
         var trailing: CGFloat = 8
         if !kbd.isHidden {
             let size = kbd.intrinsicContentSize
@@ -98,9 +105,9 @@ public final class DSTextField: NSView {
         case .search:
             DSDraw.fill(rect, radius: radius, color: dark ? DS.Color.fillSubtle : DS.Color.fillHover)
             if dark || isFocused { DSDraw.ring(rect, radius: radius, color: isFocused ? DS.Color.focusRing : DS.Color.border) }
-            if let image = DSDraw.symbol("magnifyingglass", pointSize: DS.Size.iconPointRow) {
-                DSDraw.draw(template: image, in: NSRect(x: rect.minX + 7, y: rect.minY, width: 16, height: rect.height), color: DS.Color.text3)
-            }
+        }
+        if let name = leadingSymbolName, let image = DSDraw.symbol(name, pointSize: DS.Size.iconPointRow) {
+            DSDraw.draw(template: image, in: NSRect(x: rect.minX + 7, y: rect.minY, width: 16, height: rect.height), color: leadingSymbolTint)
         }
     }
 
@@ -114,18 +121,20 @@ public final class DSTextField: NSView {
     }
 }
 
-/// Reports focus to its container: becomes first responder (field editor takes over) until editing ends.
+/// The editable field inside `DSTextField`: borderless, reports focus to its container (first responder until editing
+/// ends). Subclass it for fields with their own behaviour and pass the instance to `DSTextField(field:)`; overrides of
+/// `becomeFirstResponder` and `textDidEndEditing` must call super.
 @MainActor
-final class DSInnerTextField: NSTextField {
+open class DSBareTextField: NSTextField {
     var onFocusChange: ((Bool) -> Void)?
 
-    override func becomeFirstResponder() -> Bool {
+    open override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { onFocusChange?(true) }
         return accepted
     }
 
-    override func textDidEndEditing(_ notification: Notification) {
+    open override func textDidEndEditing(_ notification: Notification) {
         super.textDidEndEditing(notification)
         onFocusChange?(false)
     }

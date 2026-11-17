@@ -463,7 +463,7 @@ final class TerminalEndedBar: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         DS.Color.canvas.setFill()
-        dirtyRect.fill()
+        bounds.intersection(dirtyRect).fill()  // views do not clip to bounds (macOS 14+)
     }
 
     func show(text: String, symbol: String, primary primaryTitle: String, secondary secondaryTitle: String?) {

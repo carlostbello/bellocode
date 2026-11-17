@@ -253,15 +253,16 @@ final class TerminalTabView: NSView, NSTextFieldDelegate {
             .withSymbolConfiguration(.init(pointSize: DS.Size.iconPointMeta + 1, weight: .regular))
         glyph.contentTintColor = DS.Color.text4
         state.isHidden = true
-        closeButton.alphaValue = 0
         closeButton.isEnabled = false
+        closeButton.alphaValue = 0
         setAccessibilityLabel("Starting terminal")
     }
 
     private func updateChrome() {
         // Hidden by alpha, not `isHidden`, so the tab's width never changes on hover.
-        closeButton.alphaValue = id.isEmpty || !(isSelected || isHovered) ? 0 : 1
+        // `isEnabled` first: DSControl sets its disabled opacity, which the alpha below then overrides.
         closeButton.isEnabled = !id.isEmpty && (isSelected || isHovered)
+        closeButton.alphaValue = id.isEmpty || !(isSelected || isHovered) ? 0 : 1
         if editor == nil, !id.isEmpty { title.textColor = isSelected || isHovered ? DS.Color.text : DS.Color.text2 }
         needsDisplay = true
     }

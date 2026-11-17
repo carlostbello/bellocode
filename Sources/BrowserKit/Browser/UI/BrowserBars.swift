@@ -3,10 +3,23 @@ import DesignSystem
 
 /// A one-line bar above the page: symbol, message, optional fields, buttons. Used for agent control, the paused
 /// state, page dialogs, permission and sign-in prompts, dev-server offers, picked elements and the bridge status.
-/// Status is symbol + text, never colour alone.
+/// The banner recipe (§6, restyle step 7): a tinted row (`r.md`, the tone's surface, no border), 14 pt glyph in the
+/// tone's text colour, message `label text`; actions: the default one primary, otherwise the last one outline and the
+/// rest ghost ("Stop" ghost, "Take Over" outline). Status is symbol + text, never colour alone.
 @MainActor
-final class BrowserBanner: NSView {
-    enum Tone { case accent, attention, neutral, failure }
+final class BrowserBanner: NSView, NSTextFieldDelegate {
+    enum Tone {
+        case accent, attention, neutral, failure
+
+        var ds: DS.Tone {
+            switch self {
+            case .accent: .info
+            case .attention: .warning
+            case .neutral: .neutral
+            case .failure: .danger
+            }
+        }
+    }
 
     struct Action {
         var title: String
@@ -21,14 +34,14 @@ final class BrowserBanner: NSView {
     private let buttons = NSStackView()
     private let stack = NSStackView()
     private var handlers: [@MainActor () -> Void] = []
+    private var defaultIndex: Int?
     private(set) var textFields: [NSTextField] = []
     var identifier_: String = ""
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.cornerRadius = DS.Radius.medium
-        label.font = DS.Typography.current.caption
+        label.font = DS.TextRole.label.font
+        label.textColor = DS.Color.text
         label.maximumNumberOfLines = 2
         label.lineBreakMode = .byWordWrapping
         label.cell?.truncatesLastVisibleLine = true
@@ -36,14 +49,14 @@ final class BrowserBanner: NSView {
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         icon.imageScaling = .scaleProportionallyDown
         icon.setContentHuggingPriority(.required, for: .horizontal)
-        fields.spacing = DS.Spacing.xs
-        buttons.spacing = DS.Spacing.xs
+        fields.spacing = DS.Space.s6
+        buttons.spacing = DS.Space.s6
         buttons.setContentHuggingPriority(.required, for: .horizontal)
         buttons.setContentCompressionResistancePriority(.required, for: .horizontal)
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = DS.Spacing.s
-        stack.edgeInsets = NSEdgeInsets(top: DS.Spacing.xs, left: DS.Spacing.m, bottom: DS.Spacing.xs, right: DS.Spacing.xs)
+        stack.spacing = DS.Space.s8
+        stack.edgeInsets = NSEdgeInsets(top: DS.Space.s4, left: DS.Space.s10, bottom: DS.Space.s4, right: DS.Space.s6)
         stack.detachesHiddenViews = true
         stack.distribution = .fill
         for view in [icon, label, fields, buttons] as [NSView] { stack.addArrangedSubview(view) }
@@ -52,7 +65,7 @@ final class BrowserBanner: NSView {
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16), heightAnchor.constraint(greaterThanOrEqualToConstant: 30),
+            icon.widthAnchor.constraint(equalToConstant: DS.Size.iconBox), heightAnchor.constraint(greaterThanOrEqualToConstant: DS.Size.toolbar),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -68,77 +81,86 @@ final class BrowserBanner: NSView {
         let rebuild = identifier_ != id || textFields.count != fieldSpecs.count || buttons.arrangedSubviews.count != actions.count
         identifier_ = id
         self.tone = tone
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-        icon.contentTintColor = tint
-        refreshColors()
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: DS.Size.iconPointRow + 1, weight: .regular))
+        icon.contentTintColor = DS.Color.tone(tone.ds).text
+        needsDisplay = true
         label.stringValue = message
         label.toolTip = message
         setAccessibilityLabel(message)
+        defaultIndex = actions.firstIndex(where: \.isDefault)
         guard rebuild else {
             handlers = actions.map(\.handler)
-            for (button, action) in zip(buttons.arrangedSubviews.compactMap { $0 as? NSButton }, actions) { button.title = action.title }
+            for (button, action) in zip(buttons.arrangedSubviews.compactMap { $0 as? DSButton }, actions) { button.title = action.title }
             return
         }
         for view in fields.arrangedSubviews { view.removeFromSuperview() }
         textFields = fieldSpecs.map { spec in
-            let field = spec.secure ? NSSecureTextField() : NSTextField()
-            field.placeholderString = spec.placeholder
-            field.stringValue = spec.value
-            field.controlSize = .small
-            field.font = DS.Typography.current.caption
-            field.setAccessibilityLabel(spec.placeholder)
-            field.widthAnchor.constraint(equalToConstant: 140).isActive = true
-            fields.addArrangedSubview(field)
-            return field
+            let box = DSTextField(placeholder: spec.placeholder, field: spec.secure ? DSSecureBareTextField() : nil)
+            box.showsHalo = false
+            box.field.stringValue = spec.value
+            box.field.delegate = self
+            box.field.setAccessibilityLabel(spec.placeholder)
+            box.widthAnchor.constraint(equalToConstant: 150).isActive = true
+            box.heightAnchor.constraint(equalToConstant: DS.Size.controlSmall + 2).isActive = true
+            fields.addArrangedSubview(box)
+            return box.field
         }
         fields.isHidden = textFields.isEmpty
         for view in buttons.arrangedSubviews { view.removeFromSuperview() }
         handlers = actions.map(\.handler)
         for (index, action) in actions.enumerated() {
-            let button = NSButton(title: action.title, target: self, action: #selector(pressed(_:)))
+            let variant: DSButton.Variant = action.isDefault ? .primary : (index == actions.count - 1 ? .outline : .ghost)
+            let button = DSButton(title: action.title, variant: action.isDestructive ? .destructive : variant, size: .small, target: self, action: #selector(pressed(_:)))
             button.tag = index
-            button.controlSize = .small
-            button.bezelStyle = .push
-            if action.isDefault { button.keyEquivalent = "\r" }
-            button.hasDestructiveAction = action.isDestructive
+            if action.isDefault { button.shortcutHint = "↩" }
             buttons.addArrangedSubview(button)
         }
     }
 
     private var tone: Tone = .neutral
 
-    private var tint: NSColor {
-        switch tone {
-        case .accent: DS.Palette.accent
-        case .attention: DS.Palette.attention
-        case .neutral: DS.Palette.secondaryText
-        case .failure: DS.Palette.failure
-        }
-    }
+    override var isFlipped: Bool { true }
 
-    private func refreshColors() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = tint.withAlphaComponent(0.12).cgColor
-            layer?.borderWidth = 1
-            layer?.borderColor = tint.withAlphaComponent(0.35).cgColor
-        }
+    override func draw(_ dirtyRect: NSRect) {
+        let colors = DS.Color.tone(tone.ds)
+        DSDraw.fill(bounds, radius: DS.Radius.md, color: tone == .neutral ? DS.Color.fillSubtle : colors.surface)
+        if tone == .neutral { DSDraw.ring(bounds, radius: DS.Radius.md, color: DS.Color.border) }
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        refreshColors()
+        needsDisplay = true
     }
 
-    @objc private func pressed(_ sender: NSButton) {
-        guard handlers.indices.contains(sender.tag) else { return }
-        handlers[sender.tag]()
+    @objc private func pressed(_ sender: NSView) {
+        let tag = (sender as? DSButton)?.tag ?? -1
+        guard handlers.indices.contains(tag) else { return }
+        handlers[tag]()
+    }
+
+    /// Return in a field runs the default action (the banner's fields replaced the push button's key equivalent).
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.insertNewline(_:)), let defaultIndex, handlers.indices.contains(defaultIndex) else { return false }
+        handlers[defaultIndex]()
+        return true
     }
 }
 
-/// Find in page: field, match count, previous/next, Done. Return and ⌘G go forward, ⇧Return and ⇧⌘G back, Escape closes.
+/// A secure editable field for `DSTextField` (sign-in prompts).
 @MainActor
-final class BrowserFindBar: NSView, NSSearchFieldDelegate {
-    let field = NSSearchField()
+final class DSSecureBareTextField: DSBareTextField {
+    override class var cellClass: AnyClass? {
+        get { NSSecureTextFieldCell.self }
+        set {}
+    }
+}
+
+/// Find in page (§6 find bars): the DS search field, match count (`meta text3`), previous / next icon buttons and a
+/// ghost Done on a 32 pt `canvas` strip. Return and ⌘G go forward, ⇧Return and ⇧⌘G back, Escape closes.
+@MainActor
+final class BrowserFindBar: NSView, NSTextFieldDelegate {
+    private let input = DSTextField(style: .search, placeholder: "Find in page")
+    var field: NSTextField { input.field }
     let count = NSTextField(labelWithString: "")
     var onChange: ((String) -> Void)?
     var onNext: ((Bool) -> Void)?
@@ -146,33 +168,31 @@ final class BrowserFindBar: NSView, NSSearchFieldDelegate {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        field.placeholderString = "Find in page"
-        field.controlSize = .small
-        field.font = DS.Typography.current.caption
+        input.showsHalo = false
         field.delegate = self
-        field.sendsSearchStringImmediately = true
-        field.target = self
-        field.action = #selector(changed)
-        count.font = DS.Typography.current.caption
-        count.textColor = DS.Palette.secondaryText
+        field.setAccessibilityLabel("Find in page")
+        count.font = .monospacedDigitSystemFont(ofSize: DS.TextRole.meta.font.pointSize, weight: .regular)
+        count.textColor = DS.Color.text3
         let previous = BrowserToolbarView.button("chevron.up", "Previous Match (⇧⌘G)")
         previous.target = self
         previous.action = #selector(previousMatch)
         let next = BrowserToolbarView.button("chevron.down", "Next Match (⌘G)")
         next.target = self
         next.action = #selector(nextMatch)
-        let done = NSButton(title: "Done", target: self, action: #selector(close))
-        done.controlSize = .small
-        done.bezelStyle = .push
-        let stack = NSStackView(views: [field, count, previous, next, done])
-        stack.spacing = DS.Spacing.xs
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: DS.Spacing.m, bottom: 3, right: DS.Spacing.m)
+        let done = DSButton(title: "Done", variant: .ghost, size: .small, target: self, action: #selector(close))
+        let stack = NSStackView(views: [input, count, previous, next, done])
+        stack.spacing = DS.Space.s4
+        stack.alignment = .centerY
+        stack.setCustomSpacing(DS.Space.s8, after: input)
+        stack.setCustomSpacing(DS.Space.s8, after: count)
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s8, bottom: 0, right: DS.Space.s8)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            field.widthAnchor.constraint(equalToConstant: 220),
+            input.widthAnchor.constraint(equalToConstant: 220),
+            input.heightAnchor.constraint(equalToConstant: DS.Size.controlSmall),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -181,6 +201,8 @@ final class BrowserFindBar: NSView, NSSearchFieldDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func controlTextDidChange(_ notification: Notification) { changed() }
 
     @objc private func changed() { onChange?(field.stringValue) }
     @objc private func previousMatch() { onNext?(false) }
@@ -205,31 +227,30 @@ final class BrowserFindBar: NSView, NSSearchFieldDelegate {
 @MainActor
 final class DownloadsShelfView: NSView {
     private let stack = NSStackView()
-    private let clear = NSButton(title: "Clear", target: nil, action: nil)
+    private let clear = DSButton(title: "Clear", variant: .ghost, size: .small)
     weak var downloads: BrowserDownloads?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        stack.spacing = DS.Spacing.m
+        stack.spacing = DS.Space.s8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        clear.controlSize = .small
-        clear.bezelStyle = .push
+        clear.isMuted = true
         clear.target = self
         clear.action = #selector(clearFinished)
         clear.translatesAutoresizingMaskIntoConstraints = false
         let title = NSTextField(labelWithString: "Downloads")
-        title.font = DS.Typography.current.sectionHeader
-        title.textColor = DS.Palette.secondaryText
+        title.font = DS.TextRole.labelEmph.font
+        title.textColor = DS.Color.text3
         title.translatesAutoresizingMaskIntoConstraints = false
         addSubview(title)
         addSubview(stack)
         addSubview(clear)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 34),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Spacing.m), title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: DS.Spacing.m), stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: clear.leadingAnchor, constant: -DS.Spacing.m),
-            clear.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Spacing.m), clear.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: DS.Size.toolbar),
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DS.Space.s12), title.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: DS.Space.s12), stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: clear.leadingAnchor, constant: -DS.Space.s12),
+            clear.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DS.Space.s8), clear.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -249,6 +270,8 @@ final class DownloadsShelfView: NSView {
     @objc private func clearFinished() { downloads?.clearFinished() }
 }
 
+/// A download (§6 pills/chips): `fillSubtle` with a `border` ring, `r.md`, file icon, name `label`, state `meta text3`
+/// (a word, plus a thin accent bar while running), and a ghost icon button (Cancel / Show in Finder).
 @MainActor
 private final class DownloadChip: NSView {
     private let item: BrowserDownloads.Item
@@ -258,34 +281,33 @@ private final class DownloadChip: NSView {
         self.item = item
         self.downloads = downloads
         super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = DS.Radius.small
         let icon = NSImageView(image: NSWorkspace.shared.icon(for: .data))
         if let destination = item.destination { icon.image = NSWorkspace.shared.icon(forFile: destination.path) }
         icon.imageScaling = .scaleProportionallyDown
         let name = NSTextField(labelWithString: item.filename)
-        name.font = DS.Typography.current.caption
+        name.font = DS.TextRole.label.font
+        name.textColor = DS.Color.text
         name.lineBreakMode = .byTruncatingMiddle
         let state = NSTextField(labelWithString: "")
-        state.font = DS.Typography.current.caption
-        state.textColor = DS.Palette.secondaryText
-        let action = NSButton()
-        action.isBordered = false
-        action.bezelStyle = .accessoryBarAction
+        state.font = .monospacedDigitSystemFont(ofSize: DS.TextRole.meta.font.pointSize, weight: .regular)
+        state.textColor = DS.Color.text3
+        let action = DSButton(icon: "xmark", accessibilityTitle: "Cancel Download", size: .small)
         action.target = self
         switch item.state {
         case .running(let fraction):
             state.stringValue = fraction.map { "\(Int($0 * 100))%" } ?? ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file)
-            action.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "Cancel Download")
             action.action = #selector(cancel)
             action.toolTip = "Cancel"
+            progress = fraction
         case .finished:
             state.stringValue = ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file)
-            action.image = NSImage(systemSymbolName: "magnifyingglass.circle", accessibilityDescription: "Show in Finder")
+            action.symbolName = "magnifyingglass"
+            action.accessibilityTitle = "Show in Finder"
             action.action = #selector(reveal)
             action.toolTip = "Show in Finder"
         case .failed(let reason):
             state.stringValue = "Failed"
+            state.textColor = DS.Color.dangerText
             state.toolTip = reason
             action.isHidden = true
         case .cancelled:
@@ -293,7 +315,6 @@ private final class DownloadChip: NSView {
             action.isHidden = true
         case .queued:
             state.stringValue = "Queued"
-            action.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "Cancel Download")
             action.action = #selector(cancel)
             action.toolTip = "Cancel"
         case .refused(let reason):
@@ -302,8 +323,9 @@ private final class DownloadChip: NSView {
             action.isHidden = true
         }
         let stack = NSStackView(views: [icon, name, state, action])
-        stack.spacing = DS.Spacing.xs
-        stack.edgeInsets = NSEdgeInsets(top: 2, left: DS.Spacing.xs, bottom: 2, right: DS.Spacing.xs)
+        stack.spacing = DS.Space.s6
+        stack.alignment = .centerY
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: DS.Space.s6, bottom: 0, right: DS.Space.s2)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -311,6 +333,7 @@ private final class DownloadChip: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16), icon.heightAnchor.constraint(equalToConstant: 16),
             name.widthAnchor.constraint(lessThanOrEqualToConstant: 160),
+            heightAnchor.constraint(equalToConstant: DS.Size.control),
         ])
         setAccessibilityElement(true)
         setAccessibilityLabel("\(item.filename), \(state.stringValue)")
@@ -319,11 +342,17 @@ private final class DownloadChip: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override func updateLayer() {
-        layer?.backgroundColor = DS.Palette.groupFill.cgColor
-    }
+    /// The running download's fraction (a 2 pt accent bar along the bottom).
+    private var progress: Double?
 
-    override var wantsUpdateLayer: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        DSDraw.fill(bounds, radius: DS.Radius.md, color: DS.Color.fillSubtle)
+        DSDraw.ring(bounds, radius: DS.Radius.md, color: DS.Color.border)
+        if let progress {
+            let bar = NSRect(x: 6, y: 1, width: max(4, (bounds.width - 12) * progress), height: 2)
+            DSDraw.fill(bar, radius: 1, color: DS.Color.accent)
+        }
+    }
 
     @objc private func cancel() { downloads?.cancel(item) }
     @objc private func reveal() { downloads?.reveal(item) }
