@@ -78,7 +78,7 @@ public struct GitRepository: Sendable {
         self.runner = runner
     }
 
-    func git(_ arguments: [String], input: Data? = nil, timeout: Duration? = nil, limit: Int? = nil, allowFailure: Bool = false) async throws
+    public func git(_ arguments: [String], input: Data? = nil, timeout: Duration? = nil, limit: Int? = nil, allowFailure: Bool = false) async throws
         -> GitOutput
     {
         try await runner.run(arguments, in: directory, input: input, timeout: timeout, outputLimit: limit, allowFailure: allowFailure)

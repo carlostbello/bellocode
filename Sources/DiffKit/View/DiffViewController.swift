@@ -457,6 +457,23 @@ public final class DiffViewController: NSViewController, NSSearchFieldDelegate {
     // MARK: Selection, copy, comments
 
     public var hasSelection: Bool { content.selectedText != nil }
+
+    /// Selects whole lines `first...last` of a file on one side (tests, demos, "select hunk").
+    public func selectLines(path: String, side: DiffSide, _ lines: ClosedRange<Int>) {
+        guard let fileIndex = content.files.firstIndex(where: { $0.path == path }) else { return }
+        let rows = content.rows.rows.indices.filter { index in
+            let row = content.rows.rows[index]
+            guard row.fileIndex == fileIndex, let cell = content.cell(row: index, side: options.layout == .unified ? nil : side), cell.side == side || options.layout == .unified else { return false }
+            let number = options.layout == .unified && cell.side != side ? (cell.kind == .context ? cell.otherNumber ?? 0 : 0) : cell.number
+            return lines.contains(number)
+        }
+        guard let first = rows.first, let last = rows.last else { return }
+        let sideKey: DiffSide? = options.layout == .unified ? nil : side
+        content.selection = DiffTextSelection(
+            side: sideKey, anchor: DiffTextPosition(row: first, offset: 0),
+            head: DiffTextPosition(row: last, offset: content.cell(row: last, side: sideKey)?.text.utf16.count ?? 0))
+        reveal(row: first)
+    }
     public var selectedText: String? { content.selectedText }
 
     public func copySelection() {
@@ -698,13 +715,13 @@ final class HorizontalIndicatorView: NSView {
 
 /// The popover for writing a review comment: ⌘↩ adds, Escape cancels.
 @MainActor
-final class CommentEditorController: NSViewController, NSTextViewDelegate {
+public final class CommentEditorController: NSViewController, NSTextViewDelegate {
     let location: String
-    var onSubmit: ((String) -> Void)?
-    var onCancel: (() -> Void)?
+    public var onSubmit: ((String) -> Void)?
+    public var onCancel: (() -> Void)?
     private let textView = NSTextView()
 
-    init(location: String) {
+    public init(location: String) {
         self.location = location
         super.init(nibName: nil, bundle: nil)
     }
@@ -712,7 +729,7 @@ final class CommentEditorController: NSViewController, NSTextViewDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override func loadView() {
+    public override func loadView() {
         let title = NSTextField(labelWithString: "Comment on \(location)")
         title.font = DS.Typography.current.bodyEmphasized
         title.lineBreakMode = .byTruncatingMiddle
@@ -729,7 +746,7 @@ final class CommentEditorController: NSViewController, NSTextViewDelegate {
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         scroll.documentView = textView
-        let hint = NSTextField(labelWithString: "Added to the composer as context. ⌘↩ to add, Esc to cancel.")
+        let hint = NSTextField(labelWithString: "Goes to the composer as context.")
         hint.font = DS.Typography.current.caption
         hint.textColor = DS.Palette.secondaryText
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel(_:)))
@@ -751,17 +768,17 @@ final class CommentEditorController: NSViewController, NSTextViewDelegate {
         view = stack
     }
 
-    override func viewDidAppear() {
+    public override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(textView)
     }
 
-    var text: String {
+    public var text: String {
         get { textView.string }
         set { textView.string = newValue }
     }
 
-    @objc func submit(_ sender: Any?) {
+    @objc public func submit(_ sender: Any?) {
         let text = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return NSSound.beep() }
         onSubmit?(text)
@@ -769,7 +786,7 @@ final class CommentEditorController: NSViewController, NSTextViewDelegate {
 
     @objc func cancel(_ sender: Any?) { onCancel?() }
 
-    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+    public func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.cancelOperation(_:)) {
             onCancel?()
             return true
