@@ -802,6 +802,10 @@ public final class EnvironmentService {
             roots.append(data.appending(path: "opencode/worktree/\(id.rawValue.prefix(6))").path)
         }
         roots += model.extraWorktrees
+        // Worktrees made by earlier versions in the shared `~/.bellocode/worktrees/<name>` folder: only this project's own,
+        // one by one (never the folder, which same-named projects share).
+        let legacy = WorkspacePreferences.legacyParent(projectDirectory: model.directory)
+        if legacy != roots[1] { roots += WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: model.directory) }
         var seen = Set<String>()
         let standardized = roots.map { ($0 as NSString).standardizingPath }.filter { seen.insert($0).inserted }
         // A root inside another one adds nothing as a mount (the project itself always stays first).

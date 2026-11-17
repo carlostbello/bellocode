@@ -314,3 +314,55 @@ struct ContainerInterceptionTests {
         #expect(launch.environment["BELLOCODE_EXEC_CONFIG"] == "/data/x.json")
     }
 }
+
+/// M5 (docs/reviews/M3-M6-review.md): same-named projects never share a worktree folder or a mount.
+@MainActor
+@Suite("Worktree folders per project", .timeLimit(.minutes(1)))
+struct WorktreeFolderIsolationTests {
+    @Test func sameNamedProjectsGetDifferentFoldersAndMountOnlyTheirOwnLegacyWorktrees() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-m5-\(UUID().uuidString)", directoryHint: .isDirectory).path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let home = root + "/home"
+        let a = try await TempRepo.make("service")
+        let b = try await TempRepo.make("service")
+        defer { a.remove(); b.remove() }
+        let parentA = WorkspacePreferences.defaultParent(projectDirectory: a.path, home: home)
+        let parentB = WorkspacePreferences.defaultParent(projectDirectory: b.path, home: home)
+        #expect(parentA != parentB)
+        #expect((parentA as NSString).lastPathComponent.hasPrefix("service-"))
+        #expect(WorkspacePreferences.defaultParent(projectDirectory: a.path, home: home) == parentA, "stable")
+
+        // Both projects made worktrees in the old shared folder.
+        let legacy = WorkspacePreferences.legacyParent(projectDirectory: a.path, home: home)
+        #expect(legacy == WorkspacePreferences.legacyParent(projectDirectory: b.path, home: home))
+        try FileManager.default.createDirectory(atPath: legacy, withIntermediateDirectories: true)
+        try await a.git("worktree", "add", "-q", "-b", "wa", legacy + "/wa")
+        try await b.git("worktree", "add", "-q", "-b", "wb", legacy + "/wb")
+        // A forged link: B's container points a folder's .git at A's repository; A's own record does not point back.
+        try FileManager.default.createDirectory(atPath: legacy + "/forged", withIntermediateDirectories: true)
+        try Data("gitdir: \(a.path)/.git/worktrees/wa\n".utf8).write(to: URL(filePath: legacy + "/forged/.git"))
+        let ownA = WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: a.path)
+        let ownB = WorkspacePreferences.ownWorktrees(in: legacy, projectDirectory: b.path)
+        #expect(ownA.map { ($0 as NSString).lastPathComponent } == ["wa"])
+        #expect(ownB.map { ($0 as NSString).lastPathComponent } == ["wb"])
+    }
+
+    @Test func aContainerMountsItsOwnFolderNeverTheSharedOne() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-m5s-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projectA = root.appending(path: "team-a/service").path
+        let projectB = root.appending(path: "team-b/service").path
+        for project in [projectA, projectB] { try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true) }
+        let service = EnvironmentService(
+            configuration: ContainerConfiguration(
+                helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"), execConfigURL: root.appending(path: "exec.json"),
+                opencodeDataDirectory: nil, runtime: FakeWorkspaceRuntime(), registryVault: InMemorySecretVault()),
+            store: try ProjectionStore(location: .inMemory))
+        let home = root.appending(path: "home").path
+        service.worktreeParent = { WorkspacePreferences.defaultParent(projectDirectory: $0, home: home) }
+        let rootsA = service.workspaceRoots(service.environment(for: projectA), create: false)
+        let rootsB = service.workspaceRoots(service.environment(for: projectB), create: false)
+        #expect(Set(rootsA).isDisjoint(with: rootsB))
+        #expect(!rootsA.contains { $0.hasSuffix("/worktrees/service") })
+    }
+}
