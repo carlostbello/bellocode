@@ -150,6 +150,8 @@ struct ThreadSectionTests {
         #expect(SnoozePreset.nextWeek.date(from: morning, calendar: calendar) == date(2026, 11, 23, 9))
         // 16:10: 18:00 is sooner than 19:10 and more than an hour away.
         #expect(SnoozePreset.laterToday.date(from: date(2026, 11, 16, 16, 10), calendar: calendar) == date(2026, 11, 16, 18))
+        // 20:30: three hours on is past 22:00, so tomorrow morning (never "later today" at midnight).
+        #expect(SnoozePreset.laterToday.date(from: date(2026, 11, 16, 20, 30), calendar: calendar) == date(2026, 11, 17, 9))
         // Late evening: tomorrow morning.
         #expect(SnoozePreset.laterToday.date(from: date(2026, 11, 16, 22), calendar: calendar) == date(2026, 11, 17, 9))
         // Monday before nine: next week is a week on, not today.

@@ -9,6 +9,8 @@ import Foundation
 struct LaunchOptions: Equatable, Sendable {
     enum MockScenario: String, Equatable, Sendable, CaseIterable {
         case demo, large
+        /// Three projects with 24 threads (navigation snapshots: sections, palette, search).
+        case workspace
     }
 
     enum Mode: Equatable, Sendable {
@@ -44,7 +46,7 @@ struct LaunchOptions: Equatable, Sendable {
             case "--mock":
                 if let name = value(after: argument) {
                     guard let scenario = MockScenario(rawValue: name) else {
-                        throw ParseError(description: "unknown mock scenario '\(name)' (use demo or large)")
+                        throw ParseError(description: "unknown mock scenario '\(name)' (use demo, large or workspace)")
                     }
                     options.mock = scenario
                 } else {
@@ -69,7 +71,7 @@ struct LaunchOptions: Equatable, Sendable {
             }
             index += 1
         }
-        if case .snapshot = options.mode, options.mock == nil { options.mock = .demo }
+        if case .snapshot(let name) = options.mode, options.mock == nil { options.mock = name == "nav" ? .workspace : .demo }
         return options
     }
 }

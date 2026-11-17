@@ -309,16 +309,20 @@ public enum SnoozePreset: String, CaseIterable, Hashable, Sendable {
     }
 
     /// Later today: three hours from now, rounded up to the hour, or 18:00 when that is sooner and at least an hour away;
-    /// from 21:00 it is tomorrow morning. Tomorrow: 09:00 tomorrow. Next week: 09:00 on the coming Monday.
+    /// when that would be 22:00 or later it is tomorrow morning. Tomorrow: 09:00 tomorrow. Next week: 09:00 on the
+    /// coming Monday.
     public func date(from now: Date, calendar: Calendar = .current) -> Date {
         switch self {
         case .laterToday:
-            let hour = calendar.component(.hour, from: now)
-            if hour >= 21 { return Self.tomorrow.date(from: now, calendar: calendar) }
+            // Never past 22:00 or into tomorrow: then it is tomorrow morning.
             let inThree = now.addingTimeInterval(3 * 3600)
             let rounded = calendar.nextDate(after: inThree, matching: DateComponents(minute: 0), matchingPolicy: .nextTime) ?? inThree
             let evening = calendar.date(bySettingHour: 18, minute: 0, second: 0, of: now) ?? rounded
-            return evening > now.addingTimeInterval(3600) && evening < rounded ? evening : rounded
+            let candidate = evening > now.addingTimeInterval(3600) && evening < rounded ? evening : rounded
+            if !calendar.isDate(candidate, inSameDayAs: now) || calendar.component(.hour, from: candidate) >= 22 {
+                return Self.tomorrow.date(from: now, calendar: calendar)
+            }
+            return candidate
         case .tomorrow:
             let start = calendar.startOfDay(for: now)
             let day = calendar.date(byAdding: .day, value: 1, to: start) ?? now

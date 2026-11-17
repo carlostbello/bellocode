@@ -121,6 +121,7 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         table.addTableColumn(column)
         table.headerView = nil
         table.style = .plain
+        table.floatsGroupRows = false
         table.backgroundColor = .clear
         table.intercellSpacing = NSSize(width: 0, height: 0)
         table.selectionHighlightStyle = .regular
@@ -215,6 +216,9 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         }
         previousResponder = nil
     }
+
+    /// Re-centres over the window (after it moved or resized).
+    func reposition() { position(over: window?.window) }
 
     private func position(over window: NSWindow?) {
         let height = panelHeight()
@@ -550,6 +554,9 @@ final class PaletteRowView: NSTableRowView {
         set {}
     }
 
+    /// Section headers draw no band (the palette's material shows through).
+    override func drawBackground(in dirtyRect: NSRect) {}
+
     override func drawSelection(in dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 2, dy: 1)
         NSColor.controlAccentColor.withAlphaComponent(0.9).setFill()
@@ -600,10 +607,16 @@ final class PaletteItemCell: NSTableCellView {
         identifier = Self.identifier
         icon.symbolConfiguration = .init(pointSize: 13, weight: .regular)
         title.lineBreakMode = .byTruncatingTail
+        title.maximumNumberOfLines = 1
+        title.cell?.wraps = false
+        title.cell?.usesSingleLineMode = true
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        subtitle.maximumNumberOfLines = 1
+        subtitle.cell?.wraps = false
         subtitle.font = DS.Typography.current.caption
         subtitle.lineBreakMode = .byTruncatingMiddle
         subtitle.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
+        subtitle.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
         trailing.font = DS.Typography.current.caption
         trailing.alignment = .right
         trailing.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -641,6 +654,8 @@ final class PaletteItemCell: NSTableCellView {
             title.attributedStringValue = MatchHighlight.attributed(item.title, positions: item.titleMatches, font: font, color: primary)
         }
         subtitle.stringValue = item.subtitle ?? ""
+        // A search hit's date never gives way to its snippet.
+        subtitle.setContentCompressionResistancePriority(item.kind == .message ? .required : .defaultLow - 1, for: .horizontal)
         subtitle.textColor = secondary
         subtitle.isHidden = item.subtitle == nil
         trailing.stringValue = item.disabledReason == nil ? (item.shortcut ?? "") : "Unavailable"

@@ -15,6 +15,8 @@ final class ThreadCell: SidebarRowView {
     private weak var workspace: WorkspaceController?
     private var showsProject = false
     private(set) var presentation: ThreadRowPresentation?
+    /// "project · age" never takes more than this from the title.
+    private lazy var detailCap = detail.widthAnchor.constraint(lessThanOrEqualToConstant: 92)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -34,8 +36,9 @@ final class ThreadCell: SidebarRowView {
         self.workspace = workspace
         self.showsProject = showsProject
         // "Needs you" rows: the title wins; the "project · age" detail truncates from its head (keeping the age).
-        detail.setContentCompressionResistancePriority(showsProject ? .defaultLow - 11 : .required, for: .horizontal)
+        detail.setContentCompressionResistancePriority(showsProject ? .defaultLow - 9 : .required, for: .horizontal)
         detail.lineBreakMode = showsProject ? .byTruncatingHead : .byClipping
+        detailCap.isActive = showsProject
         loop = ObservationLoop { [weak self] in self?.render() }
     }
 

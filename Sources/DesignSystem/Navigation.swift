@@ -92,7 +92,10 @@ public enum MatchHighlight {
     public static func attributed(
         _ text: String, positions: [Int], font: NSFont, color: NSColor = DS.Palette.text, highlightColor: NSColor? = nil
     ) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let result = NSMutableAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
         guard !positions.isEmpty else { return result }
         let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         let characters = Array(text)

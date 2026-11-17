@@ -74,7 +74,8 @@ struct NotificationSettingsView: View {
                 Text("Notifications need the signed app bundle (make app). The Dock badge and the sidebar still show what needs you.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Section("Mute projects") {
+            LabeledContent("Mute:") {
+              VStack(alignment: .leading, spacing: 6) {
                 if root.projects.isEmpty {
                     Text("No projects yet.").foregroundStyle(.secondary)
                 }
@@ -93,6 +94,7 @@ struct NotificationSettingsView: View {
                         }
                     }
                 }
+              }
             }
         }
         .padding(20)

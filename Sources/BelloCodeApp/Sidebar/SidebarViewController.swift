@@ -42,7 +42,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     let outlineView = SidebarOutlineView()
     let filterField = NSSearchField()
-    private let optionsButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let optionsButton = NSButton()
     let scrollView = NSScrollView()
     private let emptyState = EmptyStateView(
         symbolName: "folder.badge.plus", title: "No Projects",
@@ -50,6 +50,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         action: #selector(MainWindowController.addProject(_:)))
     let toast = UndoToastView()
     let dropBadge = DropBadgeView()
+    /// Places the badge beside the insertion point.
+    private lazy var dropBadgeCenter = dropBadge.centerYAnchor.constraint(equalTo: scrollView.topAnchor, constant: 40)
     private let addButton = NSButton()
 
     private(set) var roots: [SidebarNode] = []
@@ -133,12 +135,15 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         filterField.translatesAutoresizingMaskIntoConstraints = false
 
         optionsButton.isBordered = false
-        optionsButton.controlSize = .small
-        (optionsButton.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
-        optionsButton.toolTip = "Sidebar options"
+        optionsButton.bezelStyle = .accessoryBarAction
+        optionsButton.imagePosition = .imageOnly
+        optionsButton.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Sidebar options")
+        optionsButton.contentTintColor = DS.Palette.secondaryText
+        optionsButton.target = self
+        optionsButton.action = #selector(showOptions(_:))
+        optionsButton.toolTip = "Group threads, auto-settle"
         optionsButton.setAccessibilityLabel("Sidebar options")
         optionsButton.translatesAutoresizingMaskIntoConstraints = false
-        optionsButton.menu = makeOptionsMenu()
 
         addButton.title = "Add Project"
         addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)
@@ -180,9 +185,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             toast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: DS.Spacing.m),
             toast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Spacing.m),
             toast.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -DS.Spacing.m),
-            dropBadge.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            dropBadge.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: DS.Spacing.m),
-            dropBadge.bottomAnchor.constraint(equalTo: addButton.topAnchor, constant: -DS.Spacing.s),
+            dropBadge.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -DS.Spacing.m),
+            dropBadge.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: DS.Spacing.l),
+            dropBadgeCenter,
         ])
         view = container
     }
@@ -313,7 +318,9 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
 
     private func countSections(_ nodes: [SidebarNode]) {
         for node in nodes {
-            if node.id.section != nil || node.id == .needsYouHeader { sectionCounts[node.id] = node.children.count }
+            if node.id.section != nil || node.id == .needsYouHeader {
+                sectionCounts[node.id] = node.children.count { $0.id != .dropGap }
+            }
             countSections(node.children)
         }
     }
@@ -492,7 +499,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             }
             outlineView.setDropItem(section, dropChildIndex: index)
             let outcome = resolveDrop(section: section.id, index: index)
-            showBadge(outcome)
+            showBadge(outcome, near: insertionRow(section: section, index: index))
             return outcome.isAllowed ? .move : []
         }
         if pasteboard.types?.contains(.sidebarProject) == true, let dragged = draggedProject {
@@ -600,10 +607,24 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         return true
     }
 
-    private func showBadge(_ outcome: SidebarDrop.Outcome) {
+    private func showBadge(_ outcome: SidebarDrop.Outcome, near row: Int? = nil, centred: Bool = false) {
+        if let row, row >= 0 {
+            let rect = outlineView.rect(ofRow: row)
+            let point = scrollView.convert(NSPoint(x: 0, y: centred ? rect.midY : rect.minY), from: outlineView)
+            // Above the insertion line, inside the visible list.
+            let y = min(max(point.y, 14), scrollView.bounds.height - 14)
+            dropBadgeCenter.constant = scrollView.isFlipped ? y : scrollView.bounds.height - y
+        }
         guard outcome != lastDrop else { return }
         lastDrop = outcome
         dropBadge.show(outcome.badge, allowed: outcome.isAllowed)
+    }
+
+    /// The outline row where a drop into `section` before `index` would land.
+    private func insertionRow(section: SidebarItem, index: Int) -> Int {
+        if index < section.children.count { return outlineView.row(forItem: section.children[index]) }
+        if let last = section.children.last { return outlineView.row(forItem: last) + 1 }
+        return outlineView.row(forItem: section) + 1
     }
 
     /// Shows the insertion gap and badge for a drop without a real drag (snapshots; a real drag uses the outline view's
@@ -613,8 +634,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             forcedPreview = (section, index)
             draggedThreads = threads
             updateStructure()
-            showBadge(resolveDrop(section: section, index: index, threads: threads))
-            if let gap = items[.dropGap] { outlineView.scrollRowToVisible(outlineView.row(forItem: gap)) }
+            let row = items[.dropGap].map(outlineView.row(forItem:)) ?? items[section].map { outlineView.row(forItem: $0) + 1 } ?? -1
+            if row >= 0 { outlineView.scrollRowToVisible(row) }
+            view.layoutSubtreeIfNeeded()
+            showBadge(resolveDrop(section: section, index: index, threads: threads), near: row >= 0 ? row : nil, centred: true)
         } else {
             forcedPreview = nil
             draggedThreads = []
@@ -681,7 +704,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         case .section:
             let cell = outlineView.makeView(withIdentifier: SidebarSectionCell.identifier, owner: nil) as? SidebarSectionCell
                 ?? SidebarSectionCell()
-            cell.configure(item.id, count: item.children.count)
+            cell.configure(item.id, count: item.children.count { $0.id != .dropGap })
             return cell
         case .emptyProject, .noResults:
             let cell = outlineView.makeView(withIdentifier: SidebarTextCell.placeholderIdentifier, owner: nil) as? SidebarTextCell
@@ -801,13 +824,16 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         return false
     }
 
+    @objc private func showOptions(_ sender: NSButton) {
+        makeOptionsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
     private func makeOptionsMenu() -> NSMenu {
         let menu = NSMenu()
-        let icon = NSMenuItem()
-        icon.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Sidebar options")
-        menu.addItem(icon)
         for command in [ShellCommand.groupByProject, .showThreadsByState] {
-            menu.addItem(NSMenuItem(title: command.title, action: command.selector, keyEquivalent: ""))
+            let item = NSMenuItem(title: command.title, action: command.selector, keyEquivalent: "")
+            item.state = (command == .groupByProject) == (workspace.grouping == .byProject) ? .on : .off
+            menu.addItem(item)
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Auto-Settle Settings…", action: #selector(openThreadSettings(_:)), keyEquivalent: ""))
