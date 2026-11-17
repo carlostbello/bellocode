@@ -47,6 +47,9 @@ public final class AgentsPanelModel {
     /// The tree containing the displayed thread.
     public var lineage: LineageModel? { threadID.map { orchestration.lineage(containing: $0) } }
 
+    /// Threads the displayed thread created (`create_threads`), shown below its tree.
+    public var createdThreads: [SessionID] { threadID.map { orchestration.createdThreads(by: $0) } ?? [] }
+
     public var selectedNode: TaskNode? { (selection ?? threadID).flatMap { orchestration.node($0)?.node } }
 
     // MARK: Commands (menu items, buttons and keys call these)
@@ -116,7 +119,8 @@ public final class AgentsPanelModel {
 
     /// Moves the selection through the visible rows (↑/↓ in the panel).
     public func moveSelection(by offset: Int) {
-        guard let rows = lineage?.rows, !rows.isEmpty else { return }
+        let rows = (lineage?.rows ?? []) + createdThreads.map { LineageRow(id: $0, depth: 0) }
+        guard !rows.isEmpty else { return }
         let current = rows.firstIndex { $0.id == (selection ?? threadID) } ?? 0
         selection = rows[max(0, min(rows.count - 1, current + offset))].id
     }
@@ -145,8 +149,10 @@ public enum OrchestrationText {
             return ("Child of “\(title)”", true)
         }
         let lineage = orchestration.lineage(containing: id)
-        guard lineage.rootID == id, lineage.aggregate.total > 0 else { return nil }
-        return ("Agents · " + lineage.aggregate.text, false)
+        let created = orchestration.createdThreads(by: id).count
+        let createdText = created == 0 ? nil : (created == 1 ? "created 1 thread" : "created \(created) threads")
+        guard lineage.rootID == id, lineage.aggregate.total > 0 else { return createdText.map { ("Agents · " + $0, false) } }
+        return ("Agents · " + lineage.aggregate.text + (createdText.map { " · " + $0 } ?? ""), false)
     }
 
     /// "4 s", "2 m", "1 h 5 m" (elapsed since a run started).

@@ -147,6 +147,17 @@ final class AppRuntime {
         return await mockServer.issueBrowserCommand(sessionID: sessionID.rawValue, action: value)
     }
 
+    /// Mock mode: children report to their parent and wake it, as opencode does (orchestration snapshots).
+    func setMockChildReports(_ enabled: Bool) async {
+        await mockServer?.setChildReports(enabled)
+    }
+
+    /// Mock mode: what the plugin's `create_threads` does (top-level threads with `metadata.bellocode`, one group).
+    func mockCreateThreads(by creator: SessionID, titles: [String]) async -> [SessionID] {
+        guard let mockServer else { return [] }
+        return await mockServer.simulateCreateThreads(by: creator.rawValue, titles: titles).map { SessionID($0) }
+    }
+
     /// Takes the mock server off the network (snapshots of the offline state). No effect outside mock mode.
     func takeMockOffline() async {
         await mockServer?.stop()

@@ -31,7 +31,7 @@ extension MainWindowController: AgentsShell {
         let node = model.orchestration.node(selected)?.node
         return AgentsCommandState(
             available: true, hasSelection: node != nil, selectionIsOther: selected != threadID,
-            canStopSelection: model.canStop(selected), selectionIsChild: node?.parentID != nil,
+            canStopSelection: model.canStop(selected), selectionIsChild: node?.parentID != nil || (node?.kind == .created && selected != threadID),
             hasParent: model.orchestration.node(threadID)?.node.parentID != nil)
     }
 

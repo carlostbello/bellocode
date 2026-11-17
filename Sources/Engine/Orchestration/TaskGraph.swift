@@ -310,4 +310,9 @@ public struct TaskGraph: Sendable {
 public struct LineageRow: Hashable, Sendable, Identifiable {
     public var id: SessionID
     public var depth: Int
+
+    public init(id: SessionID, depth: Int) {
+        self.id = id
+        self.depth = depth
+    }
 }

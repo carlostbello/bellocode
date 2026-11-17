@@ -216,6 +216,14 @@ public final class OrchestrationService {
     /// Descendant counts, words ready ("2 running · 1 needs you"); empty without children.
     public func aggregate(under id: SessionID) -> LineageAggregate { graph.aggregate(under: id) }
 
+    /// Top-level threads this thread created with `create_threads` (its fan-out), oldest first. Observable through
+    /// `structureRevision`.
+    public func createdThreads(by id: SessionID) -> [SessionID] {
+        _ = structureRevision
+        return graph.nodes.values.filter { $0.createdBy == id && $0.parentID == nil && $0.kind == .created }
+            .sorted { $0.created == $1.created ? $0.id < $1.id : $0.created < $1.created }.map(\.id)
+    }
+
     /// Top-level threads created by one `create_threads` call, oldest first.
     public func groupMembers(_ group: String) -> [SessionID] {
         graph.nodes.values.filter { $0.group == group && $0.parentID == nil }.sorted { $0.created < $1.created }.map(\.id)

@@ -350,6 +350,12 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     }
 
     /// Expands groups, projects and sections unless the user collapsed them (everything while filtering).
+    /// Expands a thread row that has nested children or fan-out threads (snapshots; the person uses the disclosure).
+    func expandThread(_ id: SessionID) {
+        guard let item = items[.thread(id)] else { return }
+        outlineView.expandItem(item)
+    }
+
     private func expandDefaults(_ items: [SidebarItem]) {
         let filtering = !workspace.filterText.isEmpty
         let state = workspace.state

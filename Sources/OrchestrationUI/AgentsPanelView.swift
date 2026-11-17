@@ -55,11 +55,23 @@ public struct AgentsPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            if let lineage = model.lineage, lineage.hasChildren || model.orchestration.node(lineage.rootID)?.node.parentID != nil {
+            let created = model.createdThreads
+            if let lineage = model.lineage, lineage.hasChildren || !created.isEmpty
+                || model.orchestration.node(lineage.rootID)?.node.parentID != nil
+            {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(lineage.rows) { row in
                             AgentRowView(model: model, row: row)
+                        }
+                        if !created.isEmpty {
+                            Text(created.count == 1 ? "Created 1 thread" : "Created \(created.count) threads")
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                                .padding(.horizontal, DS.Spacing.l).padding(.top, DS.Spacing.m).padding(.bottom, DS.Spacing.xxs)
+                                .accessibilityAddTraits(.isHeader)
+                            ForEach(created, id: \.self) { id in
+                                AgentRowView(model: model, row: LineageRow(id: id, depth: 1))
+                            }
                         }
                     }
                     .padding(.vertical, DS.Spacing.xs)
@@ -221,7 +233,7 @@ struct AgentRowView: View {
                 Button("Open") { model.open(node.id) }
                     .help("Show this thread (Back returns)")
             }
-            if node.parentID != nil {
+            if node.parentID != nil || (node.kind == .created && !isCurrent) {
                 Button("Follow Up") { model.beginFollowUp(node.id) }
                     .help("Send this child a follow-up message")
             }
@@ -232,6 +244,8 @@ struct AgentRowView: View {
         }
         .buttonStyle(.link)
         .font(.system(size: 11))
+        .lineLimit(1)
+        .fixedSize()
     }
 
     private func followUpField(_ node: TaskNode) -> some View {

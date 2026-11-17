@@ -21,6 +21,7 @@ struct OrchestrationCardTests {
         #expect(RowBuilder.subagentCard(reference(.failed, live: .running)).status == .failed)
         let card = RowBuilder.subagentCard(reference(.completed, live: .needsAnswer))
         #expect(RenderBlocks.subagentText(card) == "Count files\n@general · Needs you")
+        #expect(card.duration == nil)
     }
 
     @Test func sendToUserBecomesAQuotedCard() {
@@ -33,5 +34,12 @@ struct OrchestrationCardTests {
         call.status = .failed
         #expect(RowBuilder.sendToUserMarkdown(call) == nil)
         #expect(RowBuilder.sendToUserMarkdown(ToolCall(callID: "x", name: "read", status: .completed, input: RawJSON("{}"))) == nil)
+    }
+
+    @Test func childReportsBecomeOneLine() {
+        let report = "<subagent sessionID=\"ses_1\" state=\"completed\" description=\"Write CHANGELOG entry\">\nDrafted the 2.0 entry.\nMore.\n</subagent>"
+        #expect(RowBuilder.subagentReport(report) == "↩ “Write CHANGELOG entry” finished: Drafted the 2.0 entry.")
+        #expect(RowBuilder.subagentReport("<subagent sessionID=\"s\" state=\"error\" description=\"Bench\">\nSubagent failed\n</subagent>") == "↩ “Bench” failed: Subagent failed")
+        #expect(RowBuilder.subagentReport("Hello <subagent>") == nil)
     }
 }

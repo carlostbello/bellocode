@@ -45,4 +45,17 @@ extension MockOpenCodeServer {
         ]
         return .response(.json(["output": output]))
     }
+
+    /// What the plugin's `create_threads` does: top-level sessions in the creator's directory with
+    /// `metadata.bellocode {kind: created, by, group}`. Returns their IDs (demos and snapshots).
+    public func simulateCreateThreads(by creator: String, titles: [String]) -> [String] {
+        guard let owner = state.sessions[creator] else { return [] }
+        let group = "grp_" + makeID("grp")
+        return titles.map { title in
+            makeSession(
+                parentID: nil, directory: owner.directory, title: title,
+                metadata: ["bellocode": ["kind": "created", "by": .string(creator), "group": .string(group), "workspace": "shared", "background": true]]
+            ).id
+        }
+    }
 }
