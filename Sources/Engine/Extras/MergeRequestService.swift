@@ -66,6 +66,8 @@ public final class MergeRequestService {
     @ObservationIgnored private var branchChecked: [SessionID: Date] = [:]
     @ObservationIgnored private var seenOutputParts: Set<String> = []
     @ObservationIgnored private var fetches: [String: Task<Result<MergeRequestSnapshot, ForgeError>, Never>] = [:]
+    @ObservationIgnored private var fetchIDs: [String: Int] = [:]
+    @ObservationIgnored private var nextFetchID = 0
     @ObservationIgnored private var polling: Set<String> = []
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "merge-requests")
@@ -100,6 +102,7 @@ public final class MergeRequestService {
         loop = nil
         for task in fetches.values { task.cancel() }
         fetches.removeAll()
+        fetchIDs.removeAll()
     }
 
     public func ingest(_ sessions: [Session]) {
@@ -295,17 +298,27 @@ public final class MergeRequestService {
     private func startFetch(_ ref: MergeRequestRef) {
         let provider = self.provider
         let now = clock.now()
-        let task = Task { () -> Result<MergeRequestSnapshot, ForgeError> in
-            do { return .success(try await provider.mergeRequest(ref, now: now)) } catch {
-                return .failure(error as? ForgeError ?? .network(error.localizedDescription))
+        nextFetchID += 1
+        let id = nextFetchID
+        // The fetch records its result and leaves `fetches` in the same main-actor turn as it finishes. A separate
+        // cleanup task left a window in which a later poll joined the finished fetch and read its old snapshot.
+        let task = Task { [weak self] () -> Result<MergeRequestSnapshot, ForgeError> in
+            let result: Result<MergeRequestSnapshot, ForgeError>
+            do { result = .success(try await provider.mergeRequest(ref, now: now)) } catch {
+                result = .failure(error as? ForgeError ?? .network(error.localizedDescription))
             }
+            self?.finishFetch(ref, id: id, result)
+            return result
         }
         fetches[ref.url] = task
-        Task { [weak self] in
-            let result = await task.value
-            self?.record(ref, result)
-            if self?.fetches[ref.url] == task { self?.fetches[ref.url] = nil }
-        }
+        fetchIDs[ref.url] = id
+    }
+
+    private func finishFetch(_ ref: MergeRequestRef, id: Int, _ result: Result<MergeRequestSnapshot, ForgeError>) {
+        guard fetchIDs[ref.url] == id else { return }
+        fetches[ref.url] = nil
+        fetchIDs[ref.url] = nil
+        record(ref, result)
     }
 
     /// Fetches one MR (joining a fetch in flight).

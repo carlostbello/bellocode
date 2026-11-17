@@ -304,10 +304,19 @@ struct LogPrivacyTests {
         await engine.refreshCatalog(directory: "/tmp/mock-project")
         await engine.stop()
         await harness.stop()
+        // logd takes entries asynchronously: on a loaded machine a line logged a moment ago may not be readable yet.
+        // Read until the expected line shows (bounded), then check everything read for the sentinel.
         let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let entries = try store.getEntries(at: store.position(date: start))
-            .compactMap { $0 as? OSLogEntryLog }
-            .filter { $0.subsystem.hasPrefix("app.bellocode") }
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(10)
+        var entries: [OSLogEntryLog] = []
+        repeat {
+            entries = try store.getEntries(at: store.position(date: start))
+                .compactMap { $0 as? OSLogEntryLog }
+                .filter { $0.subsystem.hasPrefix("app.bellocode") }
+            if entries.contains(where: { $0.composedMessage.contains("resync attempt") }) { break }
+            try await Task.sleep(for: .milliseconds(100))
+        } while clock.now < deadline
         #expect(entries.contains { $0.composedMessage.contains("resync attempt") }, "the failure was logged")
         let leaked = entries.filter { $0.composedMessage.contains(Self.sentinel) }
         #expect(leaked.isEmpty, "\(leaked.map(\.composedMessage))")
