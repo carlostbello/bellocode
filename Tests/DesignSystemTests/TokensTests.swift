@@ -18,7 +18,7 @@ import Testing
         let large = DS.Typography(baseSize: 17)
         #expect(large.body.pointSize == 17)
         #expect(large.caption.pointSize == 15)
-        #expect(large.title.pointSize == 19)
+        #expect(large.title.pointSize == 17)  // title role: 13 at base 13 (visual-language.md §2)
         #expect(DS.Typography(baseSize: 2).baseSize == 9)
         #expect(DS.Typography(baseSize: 90).baseSize == 32)
     }

@@ -78,8 +78,13 @@ extension DS {
         public var isDark: Bool { self == .dark || self == .darkHighContrast }
         public var isHighContrast: Bool { self == .lightHighContrast || self == .darkHighContrast }
 
+        /// AppKit reports the Increase Contrast variants through `bestMatch` when the system setting is on.
         public init(_ appearance: NSAppearance) {
-            switch appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]) {
+            self.init(matching: appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua]))
+        }
+
+        public init(matching name: NSAppearance.Name?) {
+            switch name {
             case .darkAqua: self = .dark
             case .accessibilityHighContrastAqua: self = .lightHighContrast
             case .accessibilityHighContrastDarkAqua: self = .darkHighContrast
