@@ -94,6 +94,17 @@ final class BrowserSurfaces {
     @discardableResult
     func open(_ url: URL) -> Bool {
         guard let workspace, let context, let sessionID = context.thread?.sessionID, BrowserAddress.isWebScheme(url) else { return false }
+        if let environments = workspace.engine?.environments, environments.isEnabled {
+            // M6-A: a dev server in the project's container is reached through a loopback-only forward on demand.
+            let directory = context.directory.isEmpty ? context.projectDirectory : context.directory
+            Task { [weak workspace] in
+                let mapped = await environments.browserURL(for: url, directory: directory) ?? url
+                workspace?.open(mapped, in: sessionID, projectDirectory: context.projectDirectory)
+            }
+            shell?.showBrowserPanel()
+            display(context)
+            return true
+        }
         workspace.open(url, in: sessionID, projectDirectory: context.projectDirectory)
         shell?.showBrowserPanel()
         display(context)
@@ -103,7 +114,20 @@ final class BrowserSurfaces {
     /// Terminal output: offer dev-server URLs to the displayed thread.
     func terminalPrinted(_ text: String) {
         guard services.settings.offersDevServers, let sessionID = context?.thread?.sessionID else { return }
-        for url in BrowserAddress.devServerURLs(in: text).suffix(1) { workspace?.offerDevServer(url, for: sessionID) }
+        for url in BrowserAddress.devServerURLs(in: text).suffix(1) { offer(url, for: sessionID) }
+    }
+
+    /// Offers a dev server; in a containerised project the offer carries the loopback forward's URL (M6-A).
+    private func offer(_ url: URL, for sessionID: SessionID) {
+        guard let workspace, let environments = workspace.engine?.environments, environments.isEnabled, let context else {
+            workspace?.offerDevServer(url, for: sessionID)
+            return
+        }
+        let directory = context.directory.isEmpty ? context.projectDirectory : context.directory
+        Task { [weak workspace] in
+            let mapped = await environments.browserURL(for: url, directory: directory) ?? url
+            workspace?.offerDevServer(mapped, for: sessionID)
+        }
     }
 
     /// Agent output (tool results and text of the newest messages) can name a dev server too.
@@ -136,7 +160,7 @@ final class BrowserSurfaces {
             default: break
             }
         }
-        if let url = BrowserAddress.devServerURLs(in: text).last { workspace?.offerDevServer(url, for: sessionID) }
+        if let url = BrowserAddress.devServerURLs(in: text).last { offer(url, for: sessionID) }
     }
 
     // MARK: Picked elements

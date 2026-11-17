@@ -80,6 +80,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 SettingsPane(id: "environment", title: "Environment", symbolName: "cube.transparent") {
                     let model = EnvironmentSettingsModel(engine: engine, directory: EnvironmentSettingsModel.preferredDirectory)
                     model.openTerminal = { _ in EnvironmentSettingsModel.openTerminalInFrontWindow() }
+                    model.openBrowser = { url in
+                        // The built-in browser of the front window's thread; the default browser without one.
+                        let front = NSApp.orderedWindows.compactMap { $0.windowController as? MainWindowController }.first
+                        if front?.browser?.open(url) != true { NSWorkspace.shared.open(url) }
+                    }
                     EnvironmentSettingsModel.last = model
                     let controller = NSHostingController(rootView: EnvironmentSettingsView(model: model))
                     controller.sizingOptions = [.preferredContentSize]

@@ -672,6 +672,8 @@ public final class EnvironmentService {
         guard isEnabled, let host = url.host?.lowercased(), ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"].contains(host),
               let port = url.port ?? (url.scheme == "https" ? 443 : 80) as Int? else { return nil }
         let model = environment(for: directory)
+        // Already a forward's own address (opened from the Ports list): nothing to map.
+        if model.forwards.contains(where: { $0.hostPort == port && $0.hostPort != $0.containerPort }) { return url }
         guard model.phase == .ready else { return nil }
         if model.ports.isEmpty { await refreshPorts(directory) }
         guard let forwarded = try? forward(directory, port: port) else { return nil }
