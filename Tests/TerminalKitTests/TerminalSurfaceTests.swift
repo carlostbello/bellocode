@@ -38,7 +38,7 @@ final class RecordingDelegate: TerminalWorkspaceDelegate {
 }
 
 @MainActor
-@Suite("Terminal surfaces (mock PTYs)", .serialized)
+@Suite("Terminal surfaces (mock PTYs)", .serialized, .timeLimit(.minutes(3)))
 struct TerminalSurfaceTests {
     @MainActor
     struct Fixture {

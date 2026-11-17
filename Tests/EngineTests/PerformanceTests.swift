@@ -23,7 +23,7 @@ func milliseconds(_ duration: Duration) -> Double {
     Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
 }
 
-@Suite("Performance", .serialized)
+@Suite("Performance", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct PerformanceTests {
     @Test func tenThousandMessageThread() async throws {

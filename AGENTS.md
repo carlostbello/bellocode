@@ -8,6 +8,8 @@ Read [docs/PLAN.md](docs/PLAN.md) first, then the research file for the area you
 - Command Line Tools only: use `swift build` and `swift test`. There is no `xcodebuild`, no Xcode project.
 - `Scripts/make-app.sh` assembles `build/BelloCode.app`. Do not hand-edit the bundle.
 - Tests use Swift Testing (`import Testing`). XCTest is not available with Command Line Tools.
+- A suite that touches sockets, pipes, processes or web views carries `.timeLimit(.minutes(3))` (10 for real-binary suites;
+  this toolchain accepts whole minutes only). Wait on gates or barriers, not sleeps; assert work done, not wall-clock time.
 - `Scripts/fetch-opencode.sh` puts the pinned opencode in `Vendor/opencode/<version>/opencode` (run it once per
   worktree; it is cached and fast). `make app`, `make run`, `make smoke` are the common commands.
 - The shell cannot take screenshots or drive the UI (no Screen Recording or Automation permission). To check UI,

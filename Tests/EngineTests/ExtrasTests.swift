@@ -14,6 +14,7 @@ import Testing
 
 // MARK: - Merge-request model
 
+@Suite(.timeLimit(.minutes(3)))
 struct MergeRequestModelTests {
     static let root = GitLabInstance(baseURL: "https://gitlab.example.com/")!
     static let prefixed = GitLabInstance(baseURL: "https://code.corp.test:8443/gitlab")!
@@ -142,6 +143,7 @@ enum GitLabFixtures {
     }
 }
 
+@Suite(.timeLimit(.minutes(3)))
 struct GitLabProviderTests {
     @Test func readsAnMRWithPaginationApprovalsAndDiscussions() async throws {
         let transport = FixtureForgeTransport()
@@ -219,6 +221,7 @@ final class FakeMergeRequestHost: MergeRequestHost {
     func checkout(of sessionID: SessionID) async -> (remote: String, branch: String)? { (remote, "feat/checklist") }
 }
 
+@Suite(.timeLimit(.minutes(3)))
 @MainActor
 struct MergeRequestServiceTests {
     let thread = SessionID("ses_mr")
@@ -392,6 +395,7 @@ struct MergeRequestServiceTests {
 
 // MARK: - Secrets
 
+@Suite(.timeLimit(.minutes(3)))
 @MainActor
 struct SecretPipeTests {
     @Test func pipeYieldsTheValueOnceThenDisappears() async throws {
@@ -445,6 +449,7 @@ final class FakeRenderer: HTMLVisualRendering {
     }
 }
 
+@Suite(.timeLimit(.minutes(3)))
 @MainActor
 struct ExtrasToolTests {
     @MainActor struct Fixture {

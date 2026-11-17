@@ -4,7 +4,7 @@ import Testing
 
 @testable import OpenCodeKit
 
-@Suite("PTY wire format")
+@Suite("PTY wire format", .timeLimit(.minutes(3)))
 struct PTYWireTests {
     @Test func inputFrameLayout() {
         let frame = PTYWire.inputFrame(Array("ls\r".utf8), size: PTYSize(cols: 300, rows: 40))
@@ -58,7 +58,7 @@ struct PTYWireTests {
     }
 }
 
-@Suite("PTY stream state (reconnect from cursor)")
+@Suite("PTY stream state (reconnect from cursor)", .timeLimit(.minutes(3)))
 struct PTYStreamStateTests {
     @Test func freshEmulatorReplaysEverything() {
         var state = PTYStreamState()
@@ -119,7 +119,7 @@ struct PTYStreamStateTests {
     }
 }
 
-@Suite("PTY output pipe")
+@Suite("PTY output pipe", .timeLimit(.minutes(3)))
 struct PTYOutputPipeTests {
     @Test func coalescesAdjacentOutputAndKeepsOrder() async {
         let pipe = PTYOutputPipe(capacity: 1 << 20)
@@ -175,7 +175,7 @@ struct PTYOutputPipeTests {
     }
 }
 
-@Suite("PTY client against the mock")
+@Suite("PTY client against the mock", .timeLimit(.minutes(3)))
 struct PTYClientMockTests {
     struct Fixture {
         let server: MockOpenCodeServer

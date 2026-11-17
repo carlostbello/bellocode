@@ -5,7 +5,7 @@ import Testing
 
 @testable import BrowserKit
 
-@Suite("Browser logic")
+@Suite("Browser logic", .timeLimit(.minutes(3)))
 struct BrowserLogicTests {
     @Test func addressesResolveToURLsOrSearches() {
         #expect(BrowserAddress.resolve("localhost:3000")?.absoluteString == "http://localhost:3000")

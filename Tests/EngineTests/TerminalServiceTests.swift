@@ -52,7 +52,7 @@ func waitFor(
 }
 
 @MainActor
-@Suite("Terminal service (mock PTYs)", .serialized)
+@Suite("Terminal service (mock PTYs)", .serialized, .timeLimit(.minutes(3)))
 struct TerminalServiceTests {
     @MainActor
     struct Fixture {

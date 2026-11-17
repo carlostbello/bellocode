@@ -127,6 +127,9 @@ public actor MockOpenCodeServer {
     private var heldEvents: [(type: String, frame: Data)] = []
     /// Answers held at a gate, waiting for `releaseResponses(gate:)`.
     private var heldResponses: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// The last requests received ("METHOD path"), oldest first, for failure diagnostics in tests.
+    private var requestLog: [String] = []
+    private let requestLogLimit = 2_000
     /// Turn runners waiting for subscribers to drain (virtual clock only; see ``sleep(milliseconds:)``).
     private var drainWaiters: [CheckedContinuation<Void, Never>] = []
     private let drainThreshold = 256
@@ -351,6 +354,9 @@ public actor MockOpenCodeServer {
     /// Every event published so far (without heartbeats), oldest first, bounded to the last 50,000.
     public func publishedEvents() -> [JSONValue] { eventLog }
 
+    /// The last 2,000 requests received ("METHOD path", before faults and auth), oldest first.
+    public func recordedRequests() -> [String] { requestLog }
+
     public var subscriberCount: Int { subscribers.count }
 
     /// Returns when `sessionID` has no running or queued turn.
@@ -542,6 +548,8 @@ public actor MockOpenCodeServer {
     func plan(for request: HTTPRequest, connectionID: Int) async -> ResponsePlan {
         let interval = signposter.beginInterval("request")
         defer { signposter.endInterval("request", interval) }
+        if requestLog.count >= requestLogLimit { requestLog.removeFirst(requestLogLimit / 10) }
+        requestLog.append("\(request.method) \(request.path)")
         var delay: Duration?
         var dropResponse = false
         var holdGate: String?

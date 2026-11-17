@@ -61,7 +61,7 @@ func settled(_ model: ChangesModel) async throws {
 }
 
 @MainActor
-@Suite("Changes model", .serialized)
+@Suite("Changes model", .serialized, .timeLimit(.minutes(3)))
 struct ChangesModelTests {
     @Test func turnScopeRebuildsFullTextsForExpansion() async throws {
         let fixture = try await ChangesFixture.make(files: ["a.swift": (1...30).map { "let v\($0) = \($0)" }.joined(separator: "\n") + "\n"])

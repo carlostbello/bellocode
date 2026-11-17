@@ -13,7 +13,7 @@ func signature(_ messages: [Message]) -> [String] {
     }
 }
 
-@Suite("Faults and cold start", .serialized)
+@Suite("Faults and cold start", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct FaultAndColdStartTests {
     static func script(faults: Bool) -> TurnScript {
@@ -74,8 +74,9 @@ struct FaultAndColdStartTests {
 
     @Test func faultyRunEndsIdenticalToFaultFreeRun() async throws {
         let clean = try await run(faults: false)
-        #expect(normalized(clean.shown) == normalized(clean.listed))
-        #expect(normalized(clean.cached) == normalized(clean.listed))
+        let cleanStats = "statistics \(await clean.engine.core.statistics); requests \(await clean.harness.server.recordedRequests().suffix(30))"
+        #expect(normalized(clean.shown) == normalized(clean.listed), "\(cleanStats)")
+        #expect(normalized(clean.cached) == normalized(clean.listed), "\(cleanStats)")
         await clean.engine.stop()
         await clean.harness.stop()
 
@@ -109,6 +110,7 @@ struct FaultAndColdStartTests {
         await harness.server.waitUntilAllIdle()
         try await waitUntil("finished") { thread.status?.status == .finishedUnread }
         await engine.flush()
+        try await threadBarrier(engine, thread)
         let shown = thread.messageIDs.compactMap { thread.message($0)?.message }
         #expect(shown.map(\.kind.typeName) == ["user", "assistant"])
         #expect(normalized(shown) == normalized(try await harness.listedMessages(session.id)))

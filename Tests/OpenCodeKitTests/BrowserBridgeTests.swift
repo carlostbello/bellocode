@@ -7,7 +7,7 @@ import Testing
 
 private typealias JSON = OpenCodeKit.JSONValue
 
-@Suite("Browser contract wire format")
+@Suite("Browser contract wire format", .timeLimit(.minutes(3)))
 struct BrowserContractTests {
     @Test func controlEventsDecode() {
         #expect(BrowserControl(json: ["type": "attached", "connectionID": "c", "version": 4]) == .attached(connectionID: "c", version: 4))
@@ -154,7 +154,7 @@ private let sampleTab = BrowserTabInfo(
     id: "tab_00000000-0000-0000-0000-000000000001", url: "http://127.0.0.1:1/form.html", title: "Form", loading: false,
     canGoBack: false, canGoForward: false, generation: 1)
 
-@Suite("Browser attachment against the mock", .serialized)
+@Suite("Browser attachment against the mock", .serialized, .timeLimit(.minutes(3)))
 struct BrowserAttachmentTests {
     @Test func attachPublishesStateAndRunsCommands() async throws {
         let harness = try await BridgeHarness.start()

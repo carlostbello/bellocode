@@ -6,7 +6,7 @@ import Testing
 
 @testable import Engine
 
-@Suite("Child approval bubbles", .serialized)
+@Suite("Child approval bubbles", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ChildBubbleTests {
     @Test func childApprovalMarksTheParent() async throws {

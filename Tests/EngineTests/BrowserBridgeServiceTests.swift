@@ -33,7 +33,7 @@ final class FakeBrowserHost: BrowserBridgeHost {
 }
 
 @MainActor
-@Suite("Browser bridge service", .serialized)
+@Suite("Browser bridge service", .serialized, .timeLimit(.minutes(3)))
 struct BrowserBridgeServiceTests {
     @MainActor struct Fixture {
         let harness: MockHarness

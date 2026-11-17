@@ -4,7 +4,7 @@ import Testing
 @testable import MockOpenCode
 
 /// m2 (docs/reviews/M1-review.md): a connection burst faster than the mock consumes cannot grow its accept queue.
-@Suite struct ListenerBoundTests {
+@Suite(.timeLimit(.minutes(3))) struct ListenerBoundTests {
     @Test func burstBeyondTheBacklogIsRejected() async throws {
         let queue = DispatchQueue(label: "listener-bound-test")
         let listener = try await LoopbackListener.start(queue: queue, backlog: 4)

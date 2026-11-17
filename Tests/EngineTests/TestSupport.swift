@@ -134,3 +134,45 @@ func threadBarrier(_ engine: Engine, _ thread: ThreadModel) async throws {
     await engine.core.updateThreadUI(id) { $0.scrollOffset = marker }
     try await waitUntil("barrier") { thread.uiState.scrollOffset == marker }
 }
+
+/// A failure report for engine flow tests: the thread model's queue and status, the core's queue, unconfirmed edits
+/// and statistics, and the mock's recent requests and published events. Test data only (no secrets).
+@MainActor
+func engineDiagnostics(_ harness: MockHarness, _ engine: Engine, _ thread: ThreadModel) async -> String {
+    let queue = thread.queue.map { "  \($0.id.rawValue) \($0.delivery) \($0.state) created=\($0.created.milliseconds)" }
+    let users = userMessages(thread).map { "  \($0.id.rawValue) \(String(describing: $0.delivery))" }
+    let core = await engine.core.queueDiagnostics(thread.sessionID)
+    let requests = await harness.server.recordedRequests().suffix(60)
+    let events = await harness.server.publishedEvents().suffix(60).map { event -> String in
+        let text = event.serialized
+        return "  " + (text.count > 240 ? String(text.prefix(240)) + "…" : text)
+    }
+    let held = await harness.server.heldEventCount
+    return """
+        --- diagnostics ---
+        connection: \(engine.root.connection); thread phase \(thread.phase); status \(String(describing: thread.status?.status)); \
+        running \(thread.isRunning); pending \(thread.pendingRequests.count); lastError \(String(describing: thread.lastError))
+        model queue (\(thread.queue.count)):
+        \(queue.joined(separator: "\n"))
+        user messages:
+        \(users.joined(separator: "\n"))
+        \(core)
+        mock held events: \(held)
+        mock requests (last \(requests.count)):
+          \(requests.joined(separator: "\n  "))
+        mock events (last \(events.count)):
+        \(events.joined(separator: "\n"))
+        --- end diagnostics ---
+        """
+}
+
+/// `#expect` that attaches `engineDiagnostics` when it fails.
+@MainActor
+func check(
+    _ condition: Bool, _ comment: String, _ harness: MockHarness, _ engine: Engine, _ thread: ThreadModel,
+    sourceLocation: SourceLocation = #_sourceLocation
+) async {
+    guard !condition else { return }
+    let report = await engineDiagnostics(harness, engine, thread)
+    Issue.record(Comment(rawValue: comment + "\n" + report), sourceLocation: sourceLocation)
+}

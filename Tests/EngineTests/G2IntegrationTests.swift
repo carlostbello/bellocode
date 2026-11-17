@@ -31,7 +31,7 @@ enum EngineRepo {
 /// Run with `BELLOCODE_G2=1 swift test --filter G2`. Uses the vendored binary with isolated XDG and HOME directories in
 /// a temporary directory (never the user's opencode config or data), sends one short prompt to a free built-in model,
 /// and stops every process it started.
-@Suite("G2 real server", .serialized, .enabled(if: EngineRepo.g2Enabled, "set BELLOCODE_G2=1 and run Scripts/fetch-opencode.sh"))
+@Suite("G2 real server", .serialized, .enabled(if: EngineRepo.g2Enabled, "set BELLOCODE_G2=1 and run Scripts/fetch-opencode.sh"), .timeLimit(.minutes(3)))
 @MainActor
 struct G2IntegrationTests {
     @Test func killMidStreamThenResyncMatchesListEndpoints() async throws {

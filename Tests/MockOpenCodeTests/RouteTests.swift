@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MockOpenCode
 
-@Suite("Routes and auth")
+@Suite("Routes and auth", .timeLimit(.minutes(3)))
 struct RouteTests {
     func withServer(
         _ scenario: Scenario = .empty(), _ body: (MockOpenCodeServer, TestClient) async throws -> Void
@@ -187,7 +187,7 @@ struct RouteTests {
     }
 }
 
-@Suite("Standalone")
+@Suite("Standalone", .timeLimit(.minutes(3)))
 struct StandaloneTests {
     @Test func printsURLAndStopsWhenInputCloses() async throws {
         let input = Pipe()

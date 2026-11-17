@@ -4,7 +4,7 @@ import Testing
 @testable import OpenCodeKit
 
 /// M2-C client calls: decoding of payloads recorded from the real 2.3.0 server, and round trips against MockOpenCode.
-@Suite("OpenCodeClient VCS, worktrees, turn diffs and revert")
+@Suite("OpenCodeClient VCS, worktrees, turn diffs and revert", .timeLimit(.minutes(3)))
 struct VCSClientTests {
     private let connection = ServerConnection(baseURL: URL(string: "http://127.0.0.1:4096")!, credentials: ServerCredentials(password: "pw"))
 

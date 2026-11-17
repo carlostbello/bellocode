@@ -569,11 +569,15 @@ extension TranscriptController {
             && tails.values.allSatisfy { !$0.jobInFlight && $0.pendingText == nil }
     }
 
-    /// Waits until `isSettled` (bounded).
-    public func settle(timeout: Duration = .seconds(5)) async {
+    /// Waits until `isSettled` (bounded). A source change reaches the controller through an observation hop (a main-actor
+    /// task) that `isSettled` cannot see until it runs, so after a quiet pause it checks again: on a loaded machine the
+    /// hop can run during the pause and start new work.
+    public func settle(timeout: Duration = .seconds(10)) async {
         let deadline = ContinuousClock.now + timeout
-        while !isSettled, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
-        try? await Task.sleep(for: .milliseconds(30))
+        repeat {
+            while !isSettled, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+            try? await Task.sleep(for: .milliseconds(30))
+        } while !isSettled && ContinuousClock.now < deadline
     }
 
     /// The first row whose content matches.

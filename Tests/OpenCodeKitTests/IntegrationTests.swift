@@ -58,7 +58,7 @@ private func ms(_ duration: Duration) -> Int64 { duration.milliseconds }
 /// Integration tests against the pinned opencode binary in Vendor/. Skipped when it has not been fetched.
 /// Every server runs with isolated XDG and HOME directories in a fresh temporary directory, no model prompt is sent,
 /// and every child is stopped (and checked gone) before the test returns.
-@Suite("opencode integration", .serialized, .enabled(if: Repo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"))
+@Suite("opencode integration", .serialized, .enabled(if: Repo.vendoredOpencode != nil, "run Scripts/fetch-opencode.sh"), .timeLimit(.minutes(3)))
 struct OpencodeIntegrationTests {
     let root = FileManager.default.temporaryDirectory
         .appending(path: "bellocode-it-\(UUID().uuidString)", directoryHint: .isDirectory)

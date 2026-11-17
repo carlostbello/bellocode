@@ -14,7 +14,8 @@ import Testing
     "Orchestration real binary", .serialized,
     .enabled(
         if: ProcessInfo.processInfo.environment["BELLOCODE_ORCH_REAL"] == "1" && EngineRepo.vendoredOpencode != nil,
-        "set BELLOCODE_ORCH_REAL=1 and run Scripts/fetch-opencode.sh"))
+        "set BELLOCODE_ORCH_REAL=1 and run Scripts/fetch-opencode.sh"),
+    .timeLimit(.minutes(10)))
 @MainActor
 struct OrchestrationRealBinaryTests {
     nonisolated static var pluginDirectory: URL {

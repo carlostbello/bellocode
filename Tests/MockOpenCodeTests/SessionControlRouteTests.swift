@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MockOpenCode
 
-@Suite("Session control routes")
+@Suite("Session control routes", .timeLimit(.minutes(3)))
 struct SessionControlRouteTests {
     @Test func viewAgentAndModelUpdateTheSessionAndPublishEvents() async throws {
         let server = MockOpenCodeServer(scenario: .empty(), options: .testing)
@@ -54,7 +54,7 @@ struct SessionControlRouteTests {
     }
 }
 
-@Suite("Cursor paging")
+@Suite("Cursor paging", .timeLimit(.minutes(3)))
 struct CursorPagingTests {
     /// Following `cursor.next` keeps the first page's order (a cursor must not be combined with `order`).
     @Test func ascendingPagesDoNotRepeat() async throws {

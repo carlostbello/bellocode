@@ -16,7 +16,8 @@ import Testing
     "Prompt retry against the real server", .serialized,
     .enabled(
         if: ProcessInfo.processInfo.environment["BELLOCODE_PROMPT_ID"] == "1" && EngineRepo.vendoredOpencode != nil,
-        "set BELLOCODE_PROMPT_ID=1 and run Scripts/fetch-opencode.sh"))
+        "set BELLOCODE_PROMPT_ID=1 and run Scripts/fetch-opencode.sh"),
+    .timeLimit(.minutes(10)))
 @MainActor
 struct PromptRetryRealBinaryTests {
     @Test func samePromptIDIsAdmittedOnce() async throws {

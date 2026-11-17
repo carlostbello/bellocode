@@ -23,7 +23,7 @@ private func attention(_ id: String, _ status: BelloCore.SessionStatus, blocking
         blockingChildID: blockingChild.map { SessionID($0) })
 }
 
-@Suite("Orchestration: task state machine and graph")
+@Suite("Orchestration: task state machine and graph", .timeLimit(.minutes(3)))
 struct TaskGraphTests {
     @Test func ownStatusFromRunStateAndAttention() {
         let running = session("a", busy: 10)
@@ -118,7 +118,7 @@ struct TaskGraphTests {
 }
 
 @MainActor
-@Suite("Orchestration service against the mock", .serialized)
+@Suite("Orchestration service against the mock", .serialized, .timeLimit(.minutes(3)))
 struct OrchestrationServiceTests {
     @MainActor struct Fixture {
         let harness: MockHarness
@@ -248,7 +248,10 @@ struct OrchestrationServiceTests {
         let child = try #require(orchestration.children(of: parent.id).first)
         try await waitUntil("child needs approval") { orchestration.status(of: child) == .needsApproval }
         #expect(orchestration.aggregate(under: parent.id).needsYou == 1)
-        #expect(engine.root.attention.items.contains { $0.sessionID == parent.id && $0.blockingChildID == child })
+        // The root summary is its own subscriber (topic `.attention`); it follows the thread within a main-actor turn.
+        try await waitUntil("root summary names the blocking child") {
+            engine.root.attention.items.contains { $0.sessionID == parent.id && $0.blockingChildID == child }
+        }
         let request = try #require(thread.pendingRequests.first)
         guard case .permission(let permission) = request else { Issue.record("expected a permission"); return }
         try await engine.reply(to: permission.id, .reject)
