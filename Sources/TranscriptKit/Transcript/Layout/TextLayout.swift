@@ -275,8 +275,9 @@ final class Fragment {
         for fill in fills {
             context.setFillColor(fill.color)
             for rect in rects(fill.range, clip: clip, extendsPastEnd: false, toEdge: false) {
-                let padded = rect.insetBy(dx: -2, dy: 1.5)
-                context.addPath(CGPath(roundedRect: padded, cornerWidth: 3.5, cornerHeight: 3.5, transform: nil))
+                // Inline code and mention chips: 3 pt side padding, `r.xs`, centred on the line.
+                let padded = rect.insetBy(dx: -3, dy: max(1.5, (rect.height - 19) / 2))
+                context.addPath(CGPath(roundedRect: padded, cornerWidth: 4, cornerHeight: 4, transform: nil))
                 context.fillPath()
             }
         }
@@ -311,7 +312,7 @@ enum ProseTypesetter {
         _ attributed: NSAttributedString, origin: CGPoint, textStart: Int, width: CGFloat, hangUTF16: Int = 0,
         lineSpacing: CGFloat = 3, scrolls: Bool = false, fills: [(range: Range<Int>, color: CGColor)] = [],
         strikes: [Range<Int>] = [], strikeColor: CGColor? = nil, links: [(range: Range<Int>, url: String)] = [],
-        truncate: Bool = false, fallbackFont: CTFont? = nil
+        truncate: Bool = false, fallbackFont: CTFont? = nil, lineHeight fixedHeight: CGFloat? = nil
     ) -> Fragment {
         let length = attributed.length
         let available = max(24, width)
@@ -326,8 +327,9 @@ enum ProseTypesetter {
             var leading: CGFloat = 0
             CTLineGetTypographicBounds(full, &ascent, &descent, &leading)
             if length == 0, let font = fallbackFont { ascent = CTFontGetAscent(font); descent = CTFontGetDescent(font) }
-            let height = ceil(ascent + descent) + lineSpacing + 1
-            let text = TextLine(line: line, x: 0, top: 0, baseline: ceil(ascent) + lineSpacing / 2, height: height, range: 0..<length)
+            let height = fixedHeight ?? (ceil(ascent + descent) + lineSpacing + 1)
+            let baseline = fixedHeight.map { round(($0 - ascent - descent) / 2 + ascent) } ?? (ceil(ascent) + lineSpacing / 2)
+            let text = TextLine(line: line, x: 0, top: 0, baseline: baseline, height: height, range: 0..<length)
             return Fragment(
                 origin: origin, textStart: textStart, length: length, width: available, height: height,
                 content: .lines([text]), scrolls: scrolls, fills: fills, strikes: strikes, strikeColor: strikeColor,
@@ -351,11 +353,14 @@ enum ProseTypesetter {
                 ascent = fallbackFont.map { CTFontGetAscent($0) } ?? 12
                 descent = fallbackFont.map { CTFontGetDescent($0) } ?? 4
             }
-            let height = ceil(ascent + descent + max(leading, 0)) + lineSpacing
+            let natural = ceil(ascent + descent + max(leading, 0))
+            // A fixed line height (prose 22, etc.) with the glyphs centred; taller inline runs still fit.
+            let height = fixedHeight.map { max($0, natural) + lineSpacing } ?? (natural + lineSpacing)
+            let baselineOffset = fixedHeight != nil ? round((height - lineSpacing - ascent - descent) / 2 + ascent + lineSpacing / 2) : lineSpacing / 2 + ceil(ascent)
             if lines.isEmpty && hangUTF16 > 0 { hang = CTLineGetOffsetForStringIndex(line, hangUTF16, nil) }
             lines.append(
                 TextLine(
-                    line: line, x: lines.isEmpty ? 0 : hang, top: y, baseline: y + lineSpacing / 2 + ceil(ascent),
+                    line: line, x: lines.isEmpty ? 0 : hang, top: y, baseline: y + baselineOffset,
                     height: height, range: start..<(start + count)))
             y += height
             start += count

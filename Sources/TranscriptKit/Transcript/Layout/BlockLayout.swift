@@ -1,6 +1,7 @@
 import AppKit
 import BelloCore
 import CoreText
+import DesignSystem
 
 /// Something clickable inside a block that is not text.
 public enum HotspotAction: Sendable, Hashable {
@@ -28,9 +29,13 @@ struct Decoration {
 
 /// Small vector glyphs (status, chevrons, checkboxes) drawn without fonts.
 enum Glyph: Equatable {
-    case chevronRight, chevronDown, check, cross, running, preparing, warning, arrowUpRight, dot, file
+    case chevronRight, chevronDown, check, cross, running, preparing, warning, arrowUpRight, dot, file, copy
 
-    func draw(in rect: CGRect, color: CGColor, context: CGContext) {
+    /// Whether the glyph animates on the shared step clock (the running spinner).
+    var isSpinner: Bool { self == .running || self == .preparing }
+
+    /// `step`: the shared step clock's value for spinners (0 = static, also under Reduce Motion); `track`: their ring.
+    func draw(in rect: CGRect, color: CGColor, context: CGContext, step: Int = 0, track: CGColor? = nil) {
         context.saveGState()
         context.setStrokeColor(color)
         context.setFillColor(color)
@@ -63,16 +68,39 @@ enum Glyph: Equatable {
             context.move(to: CGPoint(x: inset.maxX, y: inset.minY))
             context.addLine(to: CGPoint(x: inset.minX, y: inset.maxY))
             context.strokePath()
-        case .running:
-            let circle = r.insetBy(dx: r.width * 0.18, dy: r.height * 0.18)
-            context.addArc(
-                center: CGPoint(x: circle.midX, y: circle.midY), radius: circle.width / 2, startAngle: -.pi / 2,
-                endAngle: .pi, clockwise: false)
+        case .running, .preparing:
+            // The drawn arc spinner (visual-language.md §5): 12 pt, 1.5 pt stroke, `borderStrong` track, stepped head.
+            context.setLineWidth(1.5)
+            let diameter = min(12, min(r.width, r.height))
+            let radius = (diameter - 1.5) / 2
+            let center = CGPoint(x: r.midX, y: r.midY)
+            if let track {
+                context.setStrokeColor(track)
+                context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+                context.setStrokeColor(color)
+            }
+            if self == .preparing { context.setLineDash(phase: 0, lengths: [1.5, 2.5]) }
+            let steps = CGFloat(DS.Motion.spinnerSteps)
+            let start = -CGFloat.pi / 2 + CGFloat(step % DS.Motion.spinnerSteps) * (2 * .pi / steps)
+            context.addArc(center: center, radius: radius, startAngle: start, endAngle: start + .pi * 100 / 180, clockwise: false)
             context.strokePath()
-        case .preparing:
-            let circle = r.insetBy(dx: r.width * 0.2, dy: r.height * 0.2)
-            context.setLineDash(phase: 0, lengths: [1.5, 2])
-            context.strokeEllipse(in: circle)
+        case .copy:
+            // `doc.on.doc` as two offset rounded rects.
+            context.setLineWidth(1.2)
+            let unit = min(r.width, r.height)
+            let back = CGRect(x: r.minX + unit * 0.3, y: r.minY + unit * 0.12, width: unit * 0.56, height: unit * 0.6)
+            let front = CGRect(x: r.minX + unit * 0.14, y: r.minY + unit * 0.3, width: unit * 0.56, height: unit * 0.6)
+            context.addPath(CGPath(roundedRect: front, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            context.strokePath()
+            context.move(to: CGPoint(x: back.minX, y: front.minY - 0.5))
+            context.addLine(to: CGPoint(x: back.minX, y: back.minY + 2))
+            context.addArc(tangent1End: CGPoint(x: back.minX, y: back.minY), tangent2End: CGPoint(x: back.minX + 2, y: back.minY), radius: 2)
+            context.addLine(to: CGPoint(x: back.maxX - 2, y: back.minY))
+            context.addArc(tangent1End: CGPoint(x: back.maxX, y: back.minY), tangent2End: CGPoint(x: back.maxX, y: back.minY + 2), radius: 2)
+            context.addLine(to: CGPoint(x: back.maxX, y: back.maxY - 2))
+            context.addArc(tangent1End: CGPoint(x: back.maxX, y: back.maxY), tangent2End: CGPoint(x: back.maxX - 2, y: back.maxY), radius: 2)
+            context.addLine(to: CGPoint(x: front.maxX + 0.5, y: back.maxY))
+            context.strokePath()
         case .warning:
             context.move(to: CGPoint(x: r.midX, y: r.minY + 1))
             context.addLine(to: CGPoint(x: r.maxX - 0.5, y: r.maxY - 1))
@@ -104,7 +132,7 @@ enum Glyph: Equatable {
         case .preparing: .preparing
         case .running: .running
         case .done: .check
-        case .failed: .cross
+        case .failed: .warning
         case .unknown: .dot
         }
     }
@@ -302,7 +330,12 @@ final class BlockLayout {
         var copied = false
         var hoverHotspot: HotspotAction?
         var selectionColor: CGColor
+        /// Shared step clock value for spinners (0 when static).
+        var spinnerStep = 0
     }
+
+    /// Block-local rects of animated glyphs (the cell invalidates only these on each clock step).
+    var spinnerRects: [CGRect] { labels.filter { $0.glyph?.isSpinner == true }.map(\.glyphRect) }
 
     func draw(in context: CGContext, clip: CGRect, state: DrawState, theme: TranscriptTheme, image: (String) -> CGImage?) {
         guard !isHidden else { return }
@@ -311,7 +344,7 @@ final class BlockLayout {
         for decoration in decorations where !decoration.scrolls { draw(decoration, context: context, clip: clip) }
         for hotspot in hotspots where hotspot.action == state.hoverHotspot {
             context.setFillColor(theme.hoverFill)
-            context.addPath(CGPath(roundedRect: hotspot.rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
+            context.addPath(CGPath(roundedRect: hotspot.rect, cornerWidth: DS.Radius.sm, cornerHeight: DS.Radius.sm, transform: nil))
             context.fillPath()
         }
         if let scroll {
@@ -349,7 +382,7 @@ final class BlockLayout {
                 context.fill(item.rect)
             }
         }
-        for label in labels where !label.scrolls { draw(label, context: context, copied: state.copied) }
+        for label in labels where !label.scrolls { draw(label, context: context, copied: state.copied, theme: theme, step: state.spinnerStep) }
         for fragment in fragments where !fragment.scrolls && fragment.frame.intersects(clip.insetBy(dx: -2, dy: -2)) {
             context.saveGState()
             context.translateBy(x: fragment.origin.x, y: fragment.origin.y)
@@ -361,7 +394,7 @@ final class BlockLayout {
             context.clip(to: scroll.viewport)
             context.translateBy(x: -offset.x, y: -offset.y)
             let contentClip = clip.intersection(scroll.viewport).offsetBy(dx: offset.x, dy: offset.y)
-            for label in labels where label.scrolls { draw(label, context: context, copied: state.copied) }
+            for label in labels where label.scrolls { draw(label, context: context, copied: state.copied, theme: theme, step: state.spinnerStep) }
             for fragment in fragments where fragment.scrolls && fragment.frame.intersects(contentClip.insetBy(dx: -2, dy: -2)) {
                 context.saveGState()
                 context.translateBy(x: fragment.origin.x, y: fragment.origin.y)
@@ -391,14 +424,16 @@ final class BlockLayout {
         }
     }
 
-    private func draw(_ label: Label, context: CGContext, copied: Bool) {
+    private func draw(_ label: Label, context: CGContext, copied: Bool, theme: TranscriptTheme, step: Int) {
         switch label.role {
         case .always: break
         case .copyIdle: if copied { return }
         case .copyDone: if !copied { return }
         }
         if let glyph = label.glyph {
-            glyph.draw(in: label.glyphRect, color: label.glyphColor ?? CGColor(gray: 0.5, alpha: 1), context: context)
+            glyph.draw(
+                in: label.glyphRect, color: label.glyphColor ?? theme.secondary, context: context, step: step,
+                track: glyph.isSpinner ? theme.spinnerTrack : nil)
         }
         if let line = label.line {
             context.textPosition = label.point
@@ -409,7 +444,7 @@ final class BlockLayout {
     /// Thin, quiet scroll indicators for inner scrolling (overlay-scroller style; always shown so the overflow is
     /// discoverable without hover).
     private func drawIndicators(_ scroll: ScrollArea, offset: CGPoint, context: CGContext, theme: TranscriptTheme) {
-        let color = theme.tertiary.copy(alpha: 0.35) ?? theme.tertiary
+        let color = theme.quaternary
         context.setFillColor(color)
         let viewport = scroll.viewport
         if scroll.scrollsHorizontally {

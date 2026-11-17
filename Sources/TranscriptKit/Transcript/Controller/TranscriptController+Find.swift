@@ -537,5 +537,5 @@ extension TranscriptController {
 
 extension TranscriptController {
     /// The find bar's field (harness and tests).
-    public var findBarField: NSSearchField { findBar.field }
+    public var findBarField: NSTextField { findBar.field }
 }

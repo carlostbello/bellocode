@@ -9,7 +9,7 @@ public final class TranscriptContainerView: NSView {
     public override var wantsUpdateLayer: Bool { true }
 
     public override func updateLayer() {
-        layer?.backgroundColor = DS.Palette.contentBackground.cgColor
+        layer?.backgroundColor = DS.Color.canvas.cgColor
     }
 
     public override func viewDidMoveToWindow() {
@@ -25,28 +25,15 @@ public final class TranscriptContainerView: NSView {
 }
 
 /// "New output ↓" / "Jump to Latest ↓": shown when the reader is away from the bottom (debounced on show, immediate
-/// on hide). A button: keyboard and VoiceOver reachable.
-final class JumpPillView: NSButton {
+/// on hide). An outline `DSButton` on an opaque `raised` fill with the popover shadow (it floats over text): keyboard
+/// and VoiceOver reachable.
+final class JumpPillView: DSButton {
     var onJump: (() -> Void)?
 
     init() {
-        super.init(frame: .zero)
-        isBordered = false
-        bezelStyle = .regularSquare
-        wantsLayer = true
-        layer?.cornerRadius = 14
-        layer?.borderWidth = 1
-        shadow = {
-            let shadow = NSShadow()
-            shadow.shadowBlurRadius = 8
-            shadow.shadowOffset = NSSize(width: 0, height: -1)
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.18)
-            return shadow
-        }()
-        font = .systemFont(ofSize: NSFont.systemFontSize - 1, weight: .medium)
-        image = NSImage(systemSymbolName: "arrow.down", accessibilityDescription: nil)
-        imagePosition = .imageTrailing
-        imageHugsTitle = true
+        super.init(title: "Jump to Latest", variant: .outline, size: .small)
+        trailingSymbolName = "arrow.down"
+        horizontalPadding = 12
         target = self
         action = #selector(jump(_:))
         isHidden = true
@@ -58,16 +45,29 @@ final class JumpPillView: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override var intrinsicContentSize: NSSize {
-        let size = super.intrinsicContentSize
-        return NSSize(width: size.width + 26, height: 28)
+    override func draw(_ dirtyRect: NSRect) {
+        // Opaque under the outline recipe so prose never shows through.
+        DSDraw.fill(bounds, radius: radius, color: DS.Color.raised)
+        super.draw(dirtyRect)
     }
 
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        layer?.backgroundColor = DS.Palette.cardBackground.cgColor
-        layer?.borderColor = DS.Palette.cardBorder.cgColor
-        contentTintColor = DS.Palette.text
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyShadow()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyShadow()
+    }
+
+    private func applyShadow() {
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 8
+        shadow.shadowOffset = NSSize(width: 0, height: -2)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.6 : 0.12)
+        self.shadow = shadow
     }
 
     func setTitle(newOutput: Bool) {
@@ -78,14 +78,17 @@ final class JumpPillView: NSButton {
     @objc private func jump(_ sender: Any?) { onJump?() }
 }
 
-/// The find bar (⌘F): field, match count, previous/next, done. Floats at the top right of the transcript and never
-/// moves the content under it.
-final class FindBarView: NSView, NSSearchFieldDelegate {
-    let field = NSSearchField()
+/// The find bar (⌘F): a `DSTextField` search field, match count (`meta text3`, tabular), previous / next icon buttons
+/// and a ghost Done, on the popover surface (glass with a solid `raised` fallback). Floats at the top right of the
+/// transcript and never moves the content under it.
+final class FindBarView: NSView, NSTextFieldDelegate {
+    private let search = DSTextField(style: .search, placeholder: "Find in Thread")
+    var field: NSTextField { search.field }
     let count = NSTextField(labelWithString: "")
-    private let previous = NSButton()
-    private let next = NSButton()
-    private let done = NSButton(title: "Done", target: nil, action: nil)
+    private let glass = DSGlassView(surface: .popover, radius: DS.Radius.lg)
+    private let previous = DSButton(icon: "chevron.up", accessibilityTitle: "Previous match", size: .small)
+    private let next = DSButton(icon: "chevron.down", accessibilityTitle: "Next match", size: .small)
+    private let done = DSButton(title: "Done", variant: .ghost, size: .small)
     var onChange: ((String) -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
@@ -94,53 +97,42 @@ final class FindBarView: NSView, NSSearchFieldDelegate {
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 9
-        layer?.borderWidth = 1
-        shadow = {
-            let shadow = NSShadow()
-            shadow.shadowBlurRadius = 10
-            shadow.shadowOffset = NSSize(width: 0, height: -2)
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
-            return shadow
-        }()
-        field.placeholderString = "Find in Thread"
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        search.showsHalo = false
         field.delegate = self
-        field.sendsSearchStringImmediately = true
-        field.controlSize = .regular
         field.setAccessibilityLabel("Find in thread")
-        count.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        count.textColor = .secondaryLabelColor
+        count.font = .monospacedDigitSystemFont(ofSize: DS.TextRole.meta.font.pointSize, weight: .regular)
+        count.textColor = DS.Color.text3
         count.setContentCompressionResistancePriority(.required, for: .horizontal)
-        for (button, symbol, label, selector) in [
-            (previous, "chevron.up", "Previous match", #selector(previousMatch(_:))),
-            (next, "chevron.down", "Next match", #selector(nextMatch(_:))),
-        ] {
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-            button.bezelStyle = .accessoryBarAction
-            button.isBordered = false
+        for (button, selector) in [(previous, #selector(previousMatch(_:))), (next, #selector(nextMatch(_:)))] {
             button.target = self
             button.action = selector
-            button.toolTip = label
         }
         previous.toolTip = "Previous match (⇧⌘G)"
         next.toolTip = "Next match (⌘G)"
-        done.bezelStyle = .push
-        done.controlSize = .small
         done.target = self
         done.action = #selector(close(_:))
-        let stack = NSStackView(views: [field, count, previous, next, done])
+        let stack = NSStackView(views: [search, count, previous, next, done])
         stack.orientation = .horizontal
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        stack.alignment = .centerY
+        stack.spacing = 4
+        stack.setCustomSpacing(8, after: search)
+        stack.setCustomSpacing(6, after: count)
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        glass.contentView.addSubview(stack)
         NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            field.widthAnchor.constraint(equalToConstant: 220),
+            search.widthAnchor.constraint(equalToConstant: 220),
+            search.heightAnchor.constraint(equalToConstant: DS.Size.control),
         ])
         isHidden = true
         setAccessibilityElement(true)
@@ -150,12 +142,6 @@ final class FindBarView: NSView, NSSearchFieldDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        layer?.backgroundColor = DS.Palette.cardBackground.cgColor
-        layer?.borderColor = DS.Palette.cardBorder.cgColor
-    }
 
     func update(count matches: Int, current: Int?, query: String) {
         if query.isEmpty {
