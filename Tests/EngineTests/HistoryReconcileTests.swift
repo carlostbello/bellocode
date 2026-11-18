@@ -45,7 +45,10 @@ struct HistoryReconcileTests {
             try await waitUntil("ready") { thread.phase == .ready }
             #expect(await thread.send("hello there") != nil)
             await harness.server.waitUntilIdle(talked.rawValue)
-            try await waitUntil("reply cached") { thread.messageIDs.count >= 2 }
+            let served = try await harness.listedMessages(talked).map(\.id)
+            #expect(!served.isEmpty)
+            try await waitUntil("history shown", timeout: .seconds(30)) { Set(served).isSubset(of: Set(thread.messageIDs)) }
+            await first.flush()
             thread.close()
             await first.stop()
         }
