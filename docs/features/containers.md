@@ -11,7 +11,13 @@ native host process; nothing falls back to the Mac. Spike and raw measurements: 
   `<data>/opencode/bellocode-exec.json` (written atomically by the app, mode 0600), finds the project for the working
   directory (mapping `/private/var/…` back to the mounted spelling), starts the container if needed (never pulls) and
   relays the command, stdin, window size and signals. Blocked: exit 125 and one `BelloCode: … The command was not run.`
-  line the agent sees as a tool failure.
+  line the agent sees as a tool failure. **Policy currency (S4):** the app writes the configuration through one
+  serialised writer; each write first puts `bellocode-exec.required` (this launch's epoch and the new generation), then
+  the configuration with that epoch and generation. The helper runs a command only if the configuration's epoch equals
+  the requirement's and its generation is at least the required one (it re-reads for up to ~2 s to ride over the gap
+  between the two writes), so a failed, overtaken or earlier-launch file refuses with exit 125. A failed write is shown
+  in Settings ▸ Containers and Environment ("Commands refused") and retried; if the requirement itself cannot be written
+  the configuration is removed.
 - **Server launch** (`ContainerExecution`, always on for the bundled server): `SHELL`/`config.shell` = helper,
   `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `formatter: false`, `lsp: false`, opencode's own git through the `git` shim
   (`<data>/git-shim/git` → `bellocode-exec`, first on PATH; see "Host git"), no `BUN_*` variable ever passed, the bundled plugin's

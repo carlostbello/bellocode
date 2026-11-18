@@ -113,8 +113,22 @@ public final class EnvironmentService {
     @ObservationIgnored private var policyReadFailure: String?
     /// Projects whose saved row could not be decoded: blocked until the person saves the setting again.
     @ObservationIgnored private var unreadablePolicies: Set<String> = []
-    @ObservationIgnored private var configWrite: Task<Void, Never>?
-    @ObservationIgnored private var lastWrittenConfig: ExecHelperConfig?
+    /// Why the helper's configuration could not be saved (commands are refused meanwhile); nil when it is current.
+    public private(set) var helperConfigProblem: String?
+    /// This launch's identity in the helper's files: a configuration from an earlier launch never authorises a command.
+    @ObservationIgnored let configEpoch = UUID().uuidString
+    /// Serialised writes: each queued write awaits the previous one, so files land in generation order (S4).
+    @ObservationIgnored private var writeChain: Task<Void, Never>?
+    @ObservationIgnored private var queuedWrite: Task<Void, Never>?
+    @ObservationIgnored private var configGeneration = 0
+    /// The configuration (without epoch and generation) known to be on disk, and its generation.
+    @ObservationIgnored private var installedConfig: ExecHelperConfig?
+    @ObservationIgnored private(set) var installedGeneration = 0
+    /// Where the helper's files go (atomic, 0600). Tests inject failures and delays.
+    @ObservationIgnored var fileSink: @Sendable (Data, URL) async throws -> Void = { data, url in
+        try await EnvironmentService.writeFile(data, to: url)
+    }
+    @ObservationIgnored var configRetryDelay: Duration = .seconds(2)
     @ObservationIgnored var worktreeParent: @MainActor (String) -> String = { directory in
         (NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees/\((directory as NSString).lastPathComponent)")
     }
@@ -176,7 +190,8 @@ public final class EnvironmentService {
     /// Stops forwards, bridges and loops. Containers keep running (they stop when idle or with Rancher Desktop).
     public func stop() {
         tasks.cancelAll()
-        configWrite?.cancel()
+        queuedWrite?.cancel()
+        writeChain?.cancel()
         for (_, ports) in forwarders { for forwarder in ports.values { forwarder.stop() } }
         forwarders.removeAll()
         for bridge in bridges.values { bridge.stop() }
@@ -928,31 +943,81 @@ public final class EnvironmentService {
         return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
     }
 
-    /// Writes the helper configuration soon (coalesced). Off the main actor, atomically.
+    /// Writes the helper configuration soon (coalesced, serialised). Off the main actor, atomically.
     func scheduleConfigWrite() {
-        guard isEnabled, settingsLoaded, let url = configuration?.execConfigURL else { return }
-        configWrite?.cancel()
-        configWrite = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(30))
+        guard isEnabled, settingsLoaded, configuration?.execConfigURL != nil else { return }
+        _ = enqueueConfigWrite(delay: .milliseconds(30))
+    }
+
+    /// Writes now and waits for the attempt (engine start, before the server launches; tests). A failure is in
+    /// `helperConfigProblem` and retried.
+    public func writeConfigNow() async {
+        guard isEnabled, settingsLoaded, configuration?.execConfigURL != nil else { return }
+        await enqueueConfigWrite(delay: nil).value
+    }
+
+    /// One writer at a time: a new write waits for the one before it, then writes the configuration as it is *then*
+    /// (so the last write always carries the newest state). A write not started yet absorbs later requests.
+    private func enqueueConfigWrite(delay: Duration?) -> Task<Void, Never> {
+        if let queuedWrite { return queuedWrite }
+        let previous = writeChain
+        let task = Task { [weak self] in
+            if let delay { try? await Task.sleep(for: delay) }
+            await previous?.value
             guard let self, !Task.isCancelled else { return }
-            let config = self.helperConfig()
-            guard config != self.lastWrittenConfig else { return }
-            self.lastWrittenConfig = config
-            await Self.write(config, to: url)
+            self.queuedWrite = nil
+            await self.performConfigWrite()
+        }
+        queuedWrite = task
+        writeChain = task
+        return task
+    }
+
+    /// Writes the requirement (this launch, the new generation), then the configuration with that generation. Success
+    /// is recorded only after both are on disk. If the requirement cannot be written the configuration is removed, and
+    /// if the configuration cannot be written the newer requirement already refuses it: either way the helper fails
+    /// closed. The problem is published and the write retried.
+    private func performConfigWrite() async {
+        guard let url = configuration?.execConfigURL else { return }
+        let body = helperConfig()
+        guard body != installedConfig || helperConfigProblem != nil else { return }
+        configGeneration += 1
+        let generation = configGeneration
+        var config = body
+        config.epoch = configEpoch
+        config.generation = generation
+        let requirementURL = ExecHelperConfig.Requirement.url(forConfig: url)
+        let sink = fileSink
+        var requirementWritten = false
+        do {
+            try await sink(try ExecHelperConfig.Requirement(epoch: configEpoch, generation: generation).encoded(), requirementURL)
+            requirementWritten = true
+            try await sink(try config.encoded(), url)
+            installedConfig = body
+            installedGeneration = generation
+            if helperConfigProblem != nil { helperConfigProblem = nil }
+        } catch {
+            Self.log.error("could not write the helper configuration")
+            installedConfig = nil
+            if !requirementWritten { await Self.removeFile(url) }
+            helperConfigProblem = "BelloCode could not save the command policy for its container helper (\(error.localizedDescription)). Commands are refused until it is saved; retrying."
+            let delay = configRetryDelay
+            tasks.set("config-retry", Task { [weak self] in
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+                self?.scheduleConfigWrite()
+            })
         }
     }
 
-    /// Writes now (engine start, before the server launches; tests).
-    public func writeConfigNow() async {
-        guard isEnabled, settingsLoaded, let url = configuration?.execConfigURL else { return }
-        let config = helperConfig()
-        lastWrittenConfig = config
-        await Self.write(config, to: url)
+    @concurrent
+    nonisolated static func writeFile(_ data: Data, to url: URL) async throws {
+        try ExecHelperConfig.writeAtomically(data, to: url)
     }
 
     @concurrent
-    nonisolated static func write(_ config: ExecHelperConfig, to url: URL) async {
-        do { try config.write(to: url) } catch { log.error("could not write the helper configuration") }
+    nonisolated static func removeFile(_ url: URL) async {
+        try? FileManager.default.removeItem(at: url)
     }
 
     nonisolated static func describe(_ error: any Error) -> String {

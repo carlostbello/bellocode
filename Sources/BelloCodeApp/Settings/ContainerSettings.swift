@@ -162,6 +162,9 @@ struct ContainersSettingsView: View {
     var body: some View {
         SettingsPaneBody {
             SettingsNote("Everything the agent or you run executes in a Linux container on Rancher Desktop, with the project at the same path. Nothing falls back to this Mac.")
+            if let problem = service.helperConfigProblem {
+                SettingsRow(problem, divided: false) { DSPillView("Commands refused", tone: .danger, symbolName: "xmark.octagon") }
+            }
             SettingsGroup("Runtime") {
                 SettingsRow(
                     service.isEnabled ? (service.runtime?.userMessage ?? "Checking Rancher Desktop…") : "Container execution is off in this build.",
@@ -489,6 +492,9 @@ struct EnvironmentSettingsView: View {
     @ViewBuilder
     private func content(_ environment: ProjectEnvironment) -> some View {
         let service = model.service
+        if let problem = service.helperConfigProblem {
+            SettingsRow(problem, divided: false) { DSPillView("Commands refused", tone: .danger, symbolName: "xmark.octagon") }
+        }
         if let notice = environment.notice {
             EnvironmentBannerView(notice: notice, progress: { if case .pulling(let p) = environment.phase { p.fraction } else { nil } }(),
                                   fix: { fix in EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { _ in }) },

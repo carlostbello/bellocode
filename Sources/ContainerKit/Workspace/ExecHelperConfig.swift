@@ -4,7 +4,7 @@ import Foundation
 /// project's environment changes; read on every command, so a fix (Rancher started, image chosen) applies to the next
 /// command without restarting anything. Holds no secrets (non-secret environment values only).
 public struct ExecHelperConfig: Codable, Sendable, Equatable {
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     /// Why commands in a workspace cannot run now, and the fix the user sees in the app.
     public struct Blocked: Codable, Sendable, Equatable {
@@ -66,15 +66,21 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
     public var workspaces: [Workspace]
     /// When the whole runtime is unusable (not running, containerd), every command reports this.
     public var runtimeBlocked: Blocked?
+    /// The app launch that wrote this file and its write generation (S4): the helper runs a command only when they
+    /// match the app's `Requirement` (same launch, generation at least the required one).
+    public var epoch: String?
+    public var generation: Int?
 
-    public init(socket: String, workspaces: [Workspace], runtimeBlocked: Blocked? = nil) {
+    public init(socket: String, workspaces: [Workspace], runtimeBlocked: Blocked? = nil, epoch: String? = nil, generation: Int? = nil) {
         version = Self.currentVersion
         self.socket = socket
         self.workspaces = workspaces
         self.runtimeBlocked = runtimeBlocked
+        self.epoch = epoch
+        self.generation = generation
     }
 
-    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked }
+    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked, epoch, generation }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -82,6 +88,51 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         socket = try c.decode(String.self, forKey: .socket)
         workspaces = try c.decode([Workspace].self, forKey: .workspaces)
         runtimeBlocked = try c.decodeIfPresent(Blocked.self, forKey: .runtimeBlocked)
+        epoch = try c.decodeIfPresent(String.self, forKey: .epoch)
+        generation = try c.decodeIfPresent(Int.self, forKey: .generation)
+    }
+
+    /// What the app requires of the installed configuration (S4 in docs/reviews/deep-review-1.md): written *before*
+    /// each configuration with that configuration's generation, so a configuration write that failed, was overtaken or
+    /// is left from an earlier launch never authorises a command. Kept next to the configuration
+    /// (`bellocode-exec.required`).
+    public struct Requirement: Codable, Sendable, Equatable {
+        public var epoch: String
+        public var generation: Int
+
+        public init(epoch: String, generation: Int) {
+            self.epoch = epoch
+            self.generation = generation
+        }
+
+        public static func url(forConfig config: URL) -> URL {
+            config.deletingPathExtension().appendingPathExtension("required")
+        }
+
+        public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+    }
+
+    /// The message the helper reports instead of running, or nil when this configuration may authorise commands.
+    public func refusal(requirement: Requirement?) -> String? {
+        let pending = "BelloCode has not finished saving the current command policy for this launch (or could not save it), so nothing ran under an older one. Retry in a moment; if this persists, open Settings ▸ Containers."
+        guard let requirement, let epoch, let generation else { return pending }
+        guard epoch == requirement.epoch, generation >= requirement.generation else { return pending }
+        return nil
+    }
+
+    /// The configuration's encoded form (sorted keys), as written to disk.
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return try encoder.encode(self)
+    }
+
+    /// Writes `data` atomically with mode 0600, creating the folder (0700) if needed.
+    public static func writeAtomically(_ data: Data, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try data.write(to: url, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     /// The workspace for a working directory: the one with the longest matching root.
@@ -112,13 +163,7 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
 
     /// Writes the file atomically with mode 0600 (no partial file is ever read by a running helper).
     public func write(to url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        let data = try encoder.encode(self)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        try data.write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try Self.writeAtomically(try encoded(), to: url)
     }
 
     /// Host variables that describe the Mac, not the container, or that belong to opencode or BelloCode. Everything
