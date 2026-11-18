@@ -2308,6 +2308,11 @@ extension EngineCore {
     func knownSession(_ id: SessionID) -> Session? { pipeline.state.sessions[id] }
 
     /// A synthetic message (not the person's): opencode admits it durably and starts a run unless `resume` is false.
+    /// Transient text from the session's model and context (`session.generate`); history unchanged.
+    func generate(_ sessionID: SessionID, prompt: String) async throws -> String {
+        try await call { try await $0.generate(sessionID: sessionID.rawValue, prompt: prompt) }
+    }
+
     func postSynthetic(_ sessionID: SessionID, text: String, metadata: JSONValue? = nil, resume: Bool = true) async throws {
         try await call { try await $0.postSynthetic(sessionID: sessionID.rawValue, text: text, metadata: metadata, resume: resume) }
     }

@@ -292,6 +292,8 @@ public final class MergeRequestService {
         instanceStatus[baseURL]?.token?.expiryWarning(now: clock.now())
     }
 
+    func approvalRulesStore(_ url: String, _ rules: [ApprovalRuleDigest]) { approvalRules[url] = rules }
+
     public func settings(for baseURL: String) -> GitLabInstanceSettings { instanceSettings[baseURL] ?? GitLabInstanceSettings() }
 
     public func setSettings(_ settings: GitLabInstanceSettings, for baseURL: String) async {
@@ -712,7 +714,7 @@ public final class MergeRequestService {
     static let excerptBytes = 64 << 10
 
     /// Values never shown to a model even if GitLab echoes them (the instance's token).
-    func knownSecrets(_ baseURL: String) -> [String] {
+    public func knownSecrets(_ baseURL: String) -> [String] {
         guard let token = try? tokens.read(account: baseURL), !token.isEmpty else { return [] }
         return [String(decoding: token.utf8, as: UTF8.self)]
     }

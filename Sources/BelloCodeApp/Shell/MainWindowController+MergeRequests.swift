@@ -17,4 +17,16 @@ extension MainWindowController {
     }
 
     @objc func showMergeRequests(_ sender: Any?) { showMergeRequestsPanel() }
+
+    /// Create Merge Request (Changes panel button and menu item) opens the inline form in the Merge Requests tab when a
+    /// thread is shown and GitLab is configured; otherwise the Changes panel opens GitLab's own page.
+    func wireCreateMergeRequest() {
+        changes?.panel.createMergeRequestHandler = { [weak self] in
+            guard let self, let surfaces = self.mergeRequests, surfaces.context?.thread != nil,
+                self.workspace.engine.extras?.mergeRequests.instances.isEmpty == false
+            else { return false }
+            surfaces.showCreate()
+            return true
+        }
+    }
 }

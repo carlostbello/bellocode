@@ -177,6 +177,7 @@ final class ThreadContainerViewController: NSViewController {
             queuedPrompts = queued
             let unconfirmed = UnconfirmedSendsView(thread: thread)
             unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
+            context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             unconfirmedSends = unconfirmed
             let directory = context.directory
             let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })

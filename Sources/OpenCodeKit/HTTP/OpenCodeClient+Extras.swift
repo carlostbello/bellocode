@@ -18,3 +18,22 @@ extension OpenCodeClient {
         try await sendIgnoringBody("session.synthetic", request)
     }
 }
+
+struct GenerateBody: Encodable, Sendable {
+    var prompt: String
+}
+
+struct GenerateResponse: Decodable, Sendable {
+    struct Payload: Decodable, Sendable { var text: String }
+    var data: Payload
+}
+
+extension OpenCodeClient {
+    /// `POST /api/session/{id}/generate` (session.generate): transient text from the session's context and model,
+    /// without changing its history (its tokens count toward the session). Used to propose a merge request's title and
+    /// description.
+    public func generate(sessionID: String, prompt: String) async throws -> String {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "generate"], body: GenerateBody(prompt: prompt))
+        return try await send("session.generate", request, as: GenerateResponse.self).data.text
+    }
+}

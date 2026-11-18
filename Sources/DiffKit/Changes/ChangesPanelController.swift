@@ -266,7 +266,7 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         mergeRequestButton.accessibilityTitle = "Create Merge Request"
         commitButton.toolTip = "Commit the staged changes (⌘↩ in the message field)"
         pushButton.toolTip = "Push the current branch (publishes it when it has no upstream)"
-        mergeRequestButton.toolTip = "Open GitLab’s new merge request page for this branch in the browser"
+        mergeRequestButton.toolTip = "Create a merge request for this branch (falls back to GitLab’s own page)"
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         let buttons = NSStackView(views: [mergeRequestButton, spacer, pushButton, commitButton])
@@ -536,8 +536,13 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
+    /// Opens BelloCode's own create form (the Merge Requests tab); returns false when it cannot (no GitLab instance,
+    /// no thread), and GitLab's new-MR page opens instead.
+    public var createMergeRequestHandler: (() -> Bool)?
+
     @objc public func createMergeRequest(_ sender: Any?) {
         guard let model else { return }
+        if createMergeRequestHandler?() == true { return }
         Task {
             if let url = await model.newMergeRequestURL() {
                 NSWorkspace.shared.open(url)
