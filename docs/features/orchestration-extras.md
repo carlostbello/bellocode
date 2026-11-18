@@ -49,6 +49,8 @@ keep the approval; Settings' Approve binds to the definition the editor shows. U
 with Open Thread, inline editor, Run Now, Delete with Undo, revoke project grants.
 
 ## 2. GitLab merge requests
+**Superseded in part by [gitlab.md](gitlab.md) (GitLab 1):** capability gating, the MR panel, triage, babysit
+policy, inline Create Merge Request, agent GitLab tools and migration `v9-gitlab`. What follows is the base it extends.
 `ForgeProvider` (protocol) with one implementation, `GitLabProvider`: REST v4 over an ephemeral URLSession, off the main
 actor; `PRIVATE-TOKEN` header from the Keychain (`app.bellocode.gitlab-tokens`, account = instance URL); ETag
 `If-None-Match` (304 reuses the cached body *and* its pagination headers, bounded cache); `X-Next-Page` pagination
