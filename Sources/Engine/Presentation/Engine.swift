@@ -36,6 +36,8 @@ public final class EngineRoot {
     public private(set) var attention: AttentionSummary = .empty
     /// Whether local state reaches disk. Show `storage.message` (with `preferencesUnsaved`) wherever it is not `.ok`.
     public private(set) var storage: StorageStatus = .ok
+    /// Lists the last resync could not read (their last-known rows stay shown; retried). Empty when fully synced.
+    public private(set) var syncGaps = SyncGaps()
     /// Every thread's sidebar organisation (absent = `.none`). Changes only on user action, a wake or auto-settle.
     public internal(set) var organisation: [SessionID: ThreadOrganisation] = [:]
     /// Auto-settle rules (Settings ▸ Threads).
@@ -91,6 +93,10 @@ public final class EngineRoot {
 
     fileprivate func setStorage(_ status: StorageStatus) {
         if status != storage { storage = status }
+    }
+
+    fileprivate func setSyncGaps(_ gaps: SyncGaps) {
+        if gaps != syncGaps { syncGaps = gaps }
     }
 }
 
@@ -448,6 +454,7 @@ public final class Engine {
             if connection.isLive, !wasLive { connectOrchestration() }
         }
         if let storage = change.storage { root.setStorage(storage) }
+        if let gaps = change.syncGaps { root.setSyncGaps(gaps) }
         if let summary = change.attention { root.setAttention(summary) }
         if !change.organisation.isEmpty {
             var next = root.organisation
@@ -486,6 +493,7 @@ public final class Engine {
                     self.environments.projectsChanged(self.root.projects, removed: self.root.hiddenProjects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
+                    self.root.setSyncGaps(snapshot.syncGaps)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }
                 })
         }
