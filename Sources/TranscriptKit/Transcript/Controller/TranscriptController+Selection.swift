@@ -202,11 +202,7 @@ extension TranscriptController {
         if autoscrollSpeed() == 0 { stopAutoscroll(); return }
         guard autoscrollTimer == nil else { return }
         lastAutoscrollTime = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.autoscrollStep() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        autoscrollTimer = timer
+        autoscrollTimer = ContinuousTicker(every: .microseconds(8_333)) { [weak self] in self?.autoscrollStep() }
     }
 
     func autoscrollStep() {
@@ -222,7 +218,7 @@ extension TranscriptController {
     }
 
     func stopAutoscroll() {
-        autoscrollTimer?.invalidate()
+        autoscrollTimer?.stop()
         autoscrollTimer = nil
     }
 

@@ -440,8 +440,8 @@ struct ExpiryText: View {
     let expires: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let remaining = expires.timeIntervalSince(context.date)
+        ContinuousTimeline(every: .seconds(30)) { now in
+            let remaining = expires.timeIntervalSince(now)
             Text(remaining > 60 ? "Expires in \(Int(remaining / 60)) min" : "Expires in less than a minute")
                 .font(style.smallFont)
                 .foregroundStyle(style.secondaryText)

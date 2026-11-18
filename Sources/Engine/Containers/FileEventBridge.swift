@@ -1,3 +1,4 @@
+import BelloCore
 import CoreServices
 import Foundation
 import Synchronization
@@ -129,6 +130,8 @@ public final class FileEventBridge {
         let maxBatch: Int
         private let sink: @Sendable ([String]) async throws -> Void
         private let state = Mutex(State())
+        /// The trailing-edge flush, on ContinuousClock (an uptime-clock `asyncAfter` may not fire in an idle process).
+        private let flushDeadline = ContinuousDeadline()
         private static let signposter = OSSignposter(subsystem: "app.bellocode.engine", category: "file-bridge")
 
         let aliases: [(real: String, root: String)]
@@ -152,6 +155,7 @@ public final class FileEventBridge {
                 return state.running
             }
             running?.cancel()
+            flushDeadline.cancel()
         }
 
         func received(_ events: [(String, FSEventStreamEventFlags)]) {
@@ -172,8 +176,10 @@ public final class FileEventBridge {
         }
 
         private func scheduleFlush() {
-            let nanoseconds = debounce.components.attoseconds / 1_000_000_000 + debounce.components.seconds * 1_000_000_000
-            queue.asyncAfter(deadline: .now() + .nanoseconds(Int(nanoseconds))) { [weak self] in self?.flush() }
+            flushDeadline.schedule(after: debounce) { [weak self] in
+                guard let self else { return }
+                self.queue.async { self.flush() }
+            }
         }
 
         /// Takes the pending batch and runs the sink (one at a time). Called on `queue`.

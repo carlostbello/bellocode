@@ -162,7 +162,9 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
     var didDrag = false
     var clickCandidate: (row: RowID, block: Int, action: HotspotAction)?
     var linkCandidate: String?
-    var autoscrollTimer: Timer?
+    /// Selection autoscroll at 120 Hz on ContinuousClock (run-loop timers may not fire while the app is idle, macOS 27,
+    /// and a pointer held still outside the view sends no events).
+    var autoscrollTimer: ContinuousTicker?
     var lastAutoscrollTime: CFTimeInterval = 0
     var selectionGranularity: SelectionGranularity = .character
     enum SelectionGranularity { case character, word, paragraph }
@@ -293,7 +295,7 @@ public final class TranscriptController: NSObject, NSTableViewDataSource, NSTabl
         pillTask?.cancel()
         anchorTask?.cancel()
         copiedTask?.cancel()
-        autoscrollTimer?.invalidate()
+        autoscrollTimer?.stop()
         autoscrollTimer = nil
         memoryPressureSource?.cancel()
         memoryPressureSource = nil

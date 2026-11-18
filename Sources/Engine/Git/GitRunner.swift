@@ -1,3 +1,4 @@
+import BelloCore
 import ContainerKit
 import Foundation
 import Synchronization
@@ -191,6 +192,8 @@ public struct GitRunner: Sendable {
         process.standardError = stderr
         process.standardInput = input == nil ? FileHandle.nullDevice : stdin
         let collector = Collector(limit: limit)
+        // The timeout sleeps on ContinuousClock (an uptime-clock `asyncAfter` may not fire while the process is idle).
+        defer { collector.deadline.cancel() }
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<GitOutput, any Error>) in
@@ -222,7 +225,7 @@ public struct GitRunner: Sendable {
                         try? writer.close()
                     }
                 }
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout.seconds) {
+                collector.deadline.schedule(after: timeout) {
                     if collector.markTimedOut() { process.terminate() }
                 }
             }
@@ -250,6 +253,8 @@ public struct GitRunner: Sendable {
 
         let limit: Int
         let state = Mutex(State())
+        /// The run's timeout; cancelled when `execute` returns.
+        let deadline = ContinuousDeadline()
 
         init(limit: Int) { self.limit = limit }
 
