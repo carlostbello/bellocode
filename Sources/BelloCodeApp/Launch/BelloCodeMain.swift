@@ -5,6 +5,10 @@ import AppKit
 enum BelloCodeMain {
     @MainActor
     static func main() {
+        // A write to a pipe or socket whose reader has gone (a child that exited, a dropped container stream) must
+        // fail with EPIPE, not kill the app. Sockets also set SO_NOSIGPIPE, but Foundation pipes to child processes
+        // (opencode's stdin lease, git, importers) cannot, so ignore the signal process-wide.
+        signal(SIGPIPE, SIG_IGN)
         let options: LaunchOptions
         do {
             options = try LaunchOptions.parse(CommandLine.arguments)
