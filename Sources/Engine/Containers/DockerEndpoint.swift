@@ -56,6 +56,8 @@ extension EnvironmentService {
                 port: proxy.port, hostDockerBinary: Self.rancherDocker(), hostDockerConfig: Self.prepareHostDockerConfig(next: configuration.execConfigURL),
                 register: { proxy.register($0) })
             tasks.set("docker-endpoint", Task { await proxy.run() })
+            // Enforced egress: running gateways start relaying the endpoint (containers reach it through them).
+            egress?.dockerEndpointStarted()
         } catch {
             Self.log.error("could not start the filtered Docker endpoint")
         }

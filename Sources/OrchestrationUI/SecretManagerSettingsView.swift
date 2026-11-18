@@ -344,7 +344,7 @@ struct SecretEditorForm: View {
                 state.name = ""
                 state.error = nil
             } catch {
-                state.error = (error as? CustomStringConvertible)?.description ?? error.localizedDescription
+                state.error = (error as? any CustomStringConvertible)?.description ?? error.localizedDescription
             }
         }
     }

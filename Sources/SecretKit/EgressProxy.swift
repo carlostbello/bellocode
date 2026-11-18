@@ -143,6 +143,7 @@ public final class EgressProxy: Sendable {
         var connections: [UUID: NWConnection] = [:]
         var dropped = 0
         var stopped = false
+        var dockerEndpointPort: UInt16?
     }
 
     public let authority: CertificateAuthority
@@ -206,6 +207,11 @@ public final class EgressProxy: Sendable {
     }
 
     public func update(_ snapshot: EgressSnapshot) { state.withLock { $0.snapshot = snapshot } }
+
+    /// BelloCode's filtered Docker endpoint on the Mac's loopback (execution modes). Gateways relay workspace `docker`
+    /// connections here (preamble `BCEGRESS <token> docker`), byte for byte: that endpoint authenticates and filters
+    /// every request itself. Nil: such connections are closed.
+    public func setDockerEndpointPort(_ port: UInt16?) { state.withLock { $0.dockerEndpointPort = port } }
 
     /// Live connections (tests check nothing is left).
     public var openConnectionCount: Int { state.withLock { $0.connections.count } }
@@ -294,8 +300,18 @@ public final class EgressProxy: Sendable {
     private func serveFront(_ wire: WireConnection) async throws {
         let preamble = try await wire.readLine(limit: 256)
         let parts = preamble.split(separator: " ")
-        guard parts.count == 2, parts[0] == "BCEGRESS", let scope = state.withLock({ $0.scopes[String(parts[1])] }) else {
+        guard (2...3).contains(parts.count), parts[0] == "BCEGRESS", let scope = state.withLock({ $0.scopes[String(parts[1])] }) else {
             emit(.connectionRefused(reason: "a connection without a valid gateway token"))
+            return
+        }
+        if parts.count == 3 {
+            guard parts[2] == "docker", let port = state.withLock({ $0.dockerEndpointPort }) else { return }
+            let upstream = WireConnection(NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp), queue: queue)
+            try await upstream.start()
+            let early = await wire.takeBuffer()
+            if !early.isEmpty { try await upstream.send(early) }
+            _ = scope
+            await splice(wire, upstream)
             return
         }
         guard let headData = try await wire.readHead() else { return }

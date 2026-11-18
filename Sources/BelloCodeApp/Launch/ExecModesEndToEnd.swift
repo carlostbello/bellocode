@@ -49,7 +49,8 @@ enum ExecModesEndToEnd {
             return environment.phase == .ready
         }
         check("shared workspace ready for repo A", ready && environment.mode == .sharedWorkspace,
-              "\(environment.mode.title), \(environment.phase.label), \(Int((ContinuousClock.now - started).components.seconds)) s")
+              "\(environment.mode.title), \(environment.phase.label), \(Int((ContinuousClock.now - started).components.seconds)) s"
+                + (environment.lastError.map { "; \($0)" } ?? "") + (environment.phase.blocked.map { "; \($0.message)" } ?? ""))
         check("filtered Docker endpoint running", environments.dockerEndpoint != nil)
         guard ready else { return false }
         await environments.writeConfigNow()
@@ -57,7 +58,7 @@ enum ExecModesEndToEnd {
         // The path without a model: a shell job in repo A reads repo B and reaches the filtered endpoint.
         let direct = await shellJob(client, repoA, "pwd; cat ../b/hello.txt; uname -s; docker version --format 'server {{.Server.APIVersion}}' 2>&1 | tail -1")
         check("shell job in repo A reads repo B in the shared workspace", direct.contains("from repo b") && direct.contains("Linux"), String(direct.prefix(300)))
-        check("docker inside reaches the filtered endpoint", direct.contains("server 1."), String(direct.suffix(160)))
+        check("docker inside reaches the filtered endpoint", direct.contains("server 1."), String(direct.split(separator: "\n").last ?? ""))
 
         // The same compose stack and a hostile request through opencode's shell API (the path the agent's shell tool
         // takes: opencode → bellocode-exec → the shared workspace → the filtered endpoint), without a model.
@@ -72,6 +73,10 @@ enum ExecModesEndToEnd {
         _ = await shellJob(client, repoA, "docker compose -p bcsmokeapi down -v -t 1")
         try? FileManager.default.removeItem(atPath: repoA + "/out/ping.txt")
 
+        if ProcessInfo.processInfo.environment["BELLOCODE_EXEC_SKIP_PROMPTS"] == "1" {
+            log("  exec: SKIP agent prompts (BELLOCODE_EXEC_SKIP_PROMPTS=1)")
+            return passed
+        }
         let free = (engine.root.catalog.current?.models ?? []).filter(\.isFree)
         guard !free.isEmpty else {
             log("  exec: SKIP agent prompts: no free model in the catalog")

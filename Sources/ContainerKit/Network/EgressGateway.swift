@@ -19,6 +19,8 @@ public struct EgressAttachment: Codable, Sendable, Equatable, Hashable {
 
     public static let proxyAlias = "bellocode-proxy"
     public static let proxyPort = 3128
+    /// The gateway's raw relay to BelloCode's filtered Docker endpoint (execution modes), when it runs.
+    public static let dockerPort = 2375
     public static var proxyURL: String { "http://\(proxyAlias):\(proxyPort)" }
 
     public init(network: String, caFingerprint: String, noProxy: [String] = []) {
@@ -30,7 +32,7 @@ public struct EgressAttachment: Codable, Sendable, Equatable, Hashable {
     /// Variables every process in the workspace sees (exec environments cannot override these to reach the network:
     /// the network itself has no other way out).
     public var environment: [String: String] {
-        let noProxy = (["localhost", "127.0.0.1", "::1"] + noProxy).joined(separator: ",")
+        let noProxy = (["localhost", "127.0.0.1", "::1", Self.proxyAlias] + noProxy).joined(separator: ",")
         return [
             "HTTP_PROXY": Self.proxyURL, "HTTPS_PROXY": Self.proxyURL, "http_proxy": Self.proxyURL, "https_proxy": Self.proxyURL,
             "NO_PROXY": noProxy, "no_proxy": noProxy,
@@ -98,7 +100,7 @@ public struct EgressGateway: Sendable {
     public static let labelEgress = "app.bellocode.egress"
     public static let labelScope = "app.bellocode.egress-scope"
     public static let labelConfig = "app.bellocode.egress-config"
-    static let relayScriptVersion = "1"
+    static let relayScriptVersion = "3"
 
     public let client: EngineClient
     public init(client: EngineClient) { self.client = client }
@@ -138,6 +140,7 @@ public struct EgressGateway: Sendable {
         body.cmd = []
         body.env = ["BC_HOST=host.docker.internal", "BC_PORT=\(spec.proxyPort)", "BC_TOKEN=\(spec.token)",
                     "BC_LISTEN_PORT=\(EgressAttachment.proxyPort)", "BC_NODE=\(Self.nodeRelay)", "BC_PY=\(Self.pythonRelay)"]
+            + ["BC_DOCKER_LISTEN=\(EgressAttachment.dockerPort)"]
         body.user = "65534:65534"
         body.labels = [Self.labelEgress: "1", Self.labelScope: spec.scopeKey, Self.labelConfig: spec.configHash, WorkspaceSpec.labelWorkspace: "1"]
             .merging(spec.extraLabels) { a, _ in a }
@@ -212,6 +215,8 @@ public struct EgressGateway: Sendable {
         net.createServer(c=>{c.pause();const u=net.connect(P,H,()=>{u.write('BCEGRESS '+T+'\\n');c.pipe(u);u.pipe(c);c.resume()});
         const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)})
         .listen(+process.env.BC_LISTEN_PORT,ip.address,()=>console.log('bellocode-relay ready '+ip.address));
+        net.createServer(c=>{c.pause();const u=net.connect(P,H,()=>{u.write('BCEGRESS '+T+' docker\\n');c.pipe(u);u.pipe(c);c.resume()});
+        const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)}).listen(+process.env.BC_DOCKER_LISTEN,ip.address);
         """
 
     static let pythonRelay = """
@@ -235,16 +240,25 @@ public struct EgressGateway: Sendable {
             for s in (a,b):
                 try:s.close()
                 except Exception:pass
-        def serve(c):
+        def serve(c,preamble):
             try:
-                u=socket.create_connection((H,P));u.sendall(('BCEGRESS '+T+'\\n').encode())
+                u=socket.create_connection((H,P))
+                u.sendall(('BCEGRESS '+T+preamble+'\\n').encode())
             except Exception:
                 c.close();return
             threading.Thread(target=pump,args=(c,u),daemon=True).start();pump(u,c)
-        l=socket.socket();l.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);ip=addr()
-        l.bind((ip,int(os.environ['BC_LISTEN_PORT'])));l.listen(128);print('bellocode-relay ready '+ip,flush=True)
-        while True:
-            c,_=l.accept();threading.Thread(target=serve,args=(c,),daemon=True).start()
+        def listen(port,preamble):
+            l=socket.socket();l.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            l.bind((ip,port));l.listen(128)
+            def loop():
+                while True:
+                    c,_=l.accept();threading.Thread(target=serve,args=(c,preamble),daemon=True).start()
+            return loop
+        ip=addr()
+        main=listen(int(os.environ['BC_LISTEN_PORT']),'')
+        threading.Thread(target=listen(int(os.environ['BC_DOCKER_LISTEN']),' docker'),daemon=True).start()
+        print('bellocode-relay ready '+ip,flush=True)
+        main()
         """
 }
 

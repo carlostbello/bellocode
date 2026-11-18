@@ -105,6 +105,7 @@ public final class SecretManager {
     @ObservationIgnored private(set) var grants: [String: PlaceholderGrant] = [:]
     @ObservationIgnored var proxy: EgressProxy?
     @ObservationIgnored private var scopes: [String: EgressScope] = [:]
+    @ObservationIgnored private var gatewaySetups: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
     @ObservationIgnored private var started = false
@@ -150,6 +151,8 @@ public final class SecretManager {
         started = false
         let keys = Array(scopes.keys)
         scopes = [:]
+        gatewaySetups.values.forEach { $0.cancel() }
+        gatewaySetups = [:]
         guard !keys.isEmpty, let socket = environments?.activeRuntime.socketPath else { return }
         let gateway = EgressGateway(client: EngineClient(socketPath: socket))
         for key in keys { await gateway.remove(scopeKey: key, network: true) }
@@ -465,6 +468,7 @@ extension SecretManager {
             try await writeCertificates(configuration, authority: authority)
             egressStatus = .ready(port: port)
             proxy.setScopes(Array(scopes.values))
+            proxy.setDockerEndpointPort(environments?.dockerEndpointPort.map { UInt16($0) })
             await refreshProxySnapshot()
             let events = proxy.events
             tasks.set("egress-events", Task { [weak self] in
@@ -539,7 +543,8 @@ extension SecretManager {
                 return self.attachment(scopeKey: scopeKey, services: services, certificates: directory)
             },
             preflight: { [weak self] spec in try await self?.preflight(spec) },
-            servicesStarted: { [weak self] model in self?.attachServices(model) })
+            servicesStarted: { [weak self] model in self?.attachServices(model) },
+            dockerEndpointStarted: { [weak self] in self?.refreshGateways() })
         environments.scheduleConfigWrite()
     }
 
@@ -554,12 +559,29 @@ extension SecretManager {
 
     /// Before a workspace container starts: its gateway runs and its scope is registered with the proxy.
     nonisolated func preflight(_ spec: WorkspaceSpec) async throws {
+        guard spec.egress != nil else { return }
+        try await ensureGateway(spec)
+    }
+
+    /// One gateway setup per scope at a time: workspaces sharing a scope (the shared workspace serves several
+    /// repositories) wait for the same setup instead of racing to recreate the gateway.
+    func ensureGateway(_ spec: WorkspaceSpec) async throws {
         guard let egress = spec.egress else { return }
-        guard let (port, token, socket) = await prepareScope(spec) else {
+        if let running = gatewaySetups[egress.scopeKey] { return try await running.value }
+        guard let (port, token, socket) = prepareScope(spec) else {
             throw EgressGatewayError("BelloCode's egress proxy is not running, so this project's container has no network. Open Settings ▸ Secrets.")
         }
-        try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(
-            EgressGatewaySpec(scopeKey: egress.scopeKey, image: spec.image, proxyPort: Int(port), token: token, extraLabels: spec.extraLabels))
+        let gatewaySpec = EgressGatewaySpec(scopeKey: egress.scopeKey, image: spec.image, proxyPort: Int(port), token: token,
+                                            extraLabels: spec.extraLabels)
+        let setup = Task { try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(gatewaySpec) }
+        gatewaySetups[egress.scopeKey] = setup
+        defer { gatewaySetups[egress.scopeKey] = nil }
+        try await setup.value
+    }
+
+    /// The filtered Docker endpoint (execution modes) started: gateways relay workspace `docker` through the proxy to it.
+    func refreshGateways() {
+        proxy?.setDockerEndpointPort(environments?.dockerEndpointPort.map { UInt16($0) })
     }
 
     /// Registers (or reuses) the scope's token; nil when the proxy is not running.

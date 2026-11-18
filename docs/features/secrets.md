@@ -47,8 +47,11 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
   roots: the attachment is part of the spec) join only `bellocode-egress-<scope>` (internal, IPv6 off, no masquerade),
   with `HTTP(S)_PROXY`/`npm_config_*` set and `net.ipv6.conf.all.disable_ipv6=1`. `WorkspaceManager.ensureRunning`
   creates the network if missing, so a container started by `bellocode-exec` without its gateway has **no** way out
-  (fail closed). `EnvironmentService` calls the gateway preflight before starting a container; services join the
+  (fail closed). `EnvironmentService` ensures the gateway right after the container starts; services join the
   internal network under their names.
+- The gateway also answers `bellocode-proxy:2375` for the workspace's `docker` (execution modes): those bytes go through
+  the proxy front (`BCEGRESS <token> docker`) to the filtered Docker endpoint, which authenticates and filters them;
+  `DOCKER_HOST` points there when egress is enforced.
 - The gateway (`EgressGateway`): the workspace image's `node` (else `python3`; else refused with the reason), read-only
   root, user 65534, no capabilities; created per launch with a fresh token (only in its environment; the proxy refuses
   connections without a registered token), removed at quit.
@@ -161,5 +164,7 @@ The shared workspace (execution modes) carries the attachment too (its own gatew
 Containers the agent starts through the filtered Docker endpoint get ordinary networking: they can reach the network
 directly, but never get a substituted value (the endpoint also refuses the gateway and egress network). Services see
 the internal network but keep their own egress (they could relay unsubstituted traffic). Clients that only speak
-HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The CA is per Mac; rotating it recreates
+HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. In the execution-modes end to end the shared workspace is recreated once within its first second (its configuration
+changes as the certificate bundle settles), so a command started in that second sees a reset (`EOF`); to investigate.
+The CA is per Mac; rotating it recreates
 containers. Response bodies above 16 MB from secret-bound destinations are refused.
