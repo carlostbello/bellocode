@@ -35,6 +35,14 @@ public final class SchedulerService {
     /// Tasks whose run is in flight (shown as "Running…"; a second run waits).
     public private(set) var running: Set<String> = []
     public private(set) var lastError: String?
+    /// Due runs may be dispatched. The engine arms this after its first successful reconcile with opencode and disarms
+    /// it while disconnected, so a launch catch-up never runs into a server that is not ready yet.
+    public private(set) var isDispatchArmed = true
+    /// Tasks whose due run could not reach opencode (offline): the occurrence is kept and retried, not recorded.
+    public private(set) var deferred: Set<String> = []
+    /// How long a deferred task waits before it is tried again while still armed.
+    @ObservationIgnored public var deferralRetry: TimeInterval = 30
+    @ObservationIgnored private var deferredUntil: [String: Date] = [:]
 
     @ObservationIgnored public let clock: any WallClock
     @ObservationIgnored private let store: ProjectionStore
@@ -52,10 +60,12 @@ public final class SchedulerService {
 
     // MARK: Lifecycle
 
-    /// Loads the tasks, applies the catch-up policy once, then keeps the timer running.
-    public func start() async {
+    /// Loads the tasks, applies the catch-up policy once (when `armed`), then keeps the timer running. With
+    /// `armed: false` the definitions are shown at once and nothing runs until `setDispatchArmed(true)`.
+    public func start(armed: Bool = true) async {
         guard !started else { return }
         started = true
+        isDispatchArmed = armed
         do {
             tasks = try await store.schedules().sorted(by: Self.order)
             grantedProjects = try await store.grants(.schedule)
@@ -72,6 +82,16 @@ public final class SchedulerService {
         restartLoop()
     }
 
+    /// Arms or disarms dispatch. Arming retries deferred runs at once (their original occurrence) and applies catch-up.
+    public func setDispatchArmed(_ armed: Bool) async {
+        guard armed != isDispatchArmed else { return }
+        isDispatchArmed = armed
+        guard armed, started else { return }
+        deferredUntil.removeAll()
+        await tick()
+        restartLoop()
+    }
+
     public func shutdown() {
         loop?.cancel()
         loop = nil
@@ -84,7 +104,9 @@ public final class SchedulerService {
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let due = self.tasks.filter(\.isActive).compactMap(\.nextRun).min()
+                let due = self.tasks.filter(\.isActive).compactMap { task in
+                    task.nextRun.map { max($0, self.deferredUntil[task.id] ?? .distantPast) }
+                }.min()
                 let wake = min(due ?? .distantFuture, self.clock.now().addingTimeInterval(3_600))
                 do { try await self.clock.sleep(until: wake) } catch { return }
                 await self.tick()
@@ -94,8 +116,10 @@ public final class SchedulerService {
 
     /// Runs whatever is due now (the timer, a wake from sleep, launch). Each task runs at most once per tick.
     public func tick() async {
+        guard isDispatchArmed else { return }
         let now = clock.now()
         for task in tasks where !running.contains(task.id) {
+            if let until = deferredUntil[task.id], until > now { continue }
             guard let decision = ScheduleCalendar.decide(task, now: now), let due = task.nextRun else { continue }
             switch decision {
             case .run(let trigger, let missed):
@@ -267,6 +291,7 @@ public final class SchedulerService {
         defer { running.remove(id) }
         let started = clock.now()
         let outcome: ScheduleRun.Outcome
+        var unreachable = runner == nil
         if let runner {
             let prompt = "[Scheduled task “\(task.name)”]\n" + task.prompt
             do {
@@ -286,11 +311,23 @@ public final class SchedulerService {
                     }
                 }
             } catch {
+                unreachable = Self.isDeferrable(error)
                 outcome = .failed(ExtrasError.message(error))
             }
         } else {
             outcome = .failed("BelloCode is not connected")
         }
+        // Nothing reached opencode: keep this occurrence (nextRun, enabled one-off) and try again later instead of
+        // recording a failure that advances or disables the task. A manual run reports the failure as before.
+        if unreachable, trigger != .manual {
+            log.info("scheduled run \(task.id, privacy: .public) deferred: opencode unreachable")
+            deferred.insert(id)
+            deferredUntil[id] = clock.now().addingTimeInterval(deferralRetry)
+            restartLoop()
+            return
+        }
+        deferred.remove(id)
+        deferredUntil[id] = nil
         log.info("scheduled run \(task.id, privacy: .public): \(trigger.rawValue, privacy: .public)")
         let run = ScheduleRun(scheduleID: task.id, started: started, due: due, trigger: trigger, outcome: outcome, missed: missed)
         await finish(task.id, run: run, advanceFrom: trigger == .manual ? nil : clock.now())
@@ -309,6 +346,15 @@ public final class SchedulerService {
         if case .failed(let reason) = run.outcome, reason == "its thread no longer exists" { task.enabled = false }
         try? await persist(task)
         restartLoop()
+    }
+
+    /// opencode was not reached (no endpoint, connection refused, 503): retrying cannot run the prompt twice. A timeout or
+    /// an unknown delivery may have reached it, and a rejection is permanent, so those are recorded as failures.
+    static func isDeferrable(_ error: any Error) -> Bool {
+        switch EngineError.from(error) {
+        case .offline, .cancelled: true
+        default: false
+        }
     }
 
     private func persist(_ task: ScheduledTask) async throws {

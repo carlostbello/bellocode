@@ -58,6 +58,8 @@ public enum ProjectionChange: Sendable {
     case catalog(Catalog)
     case connection(ConnectionStatus)
     case storage(StorageStatus)
+    /// Parts of the last resync that could not be read (empty once everything was reconciled).
+    case syncGaps(SyncGaps)
 
     /// The topics this change is delivered to.
     var topics: [ChangeTopic] {
@@ -80,8 +82,37 @@ public enum ProjectionChange: Sendable {
         case .threadReset(let id), .threadHistory(let id, _): [.thread(id)]
         case .attention: [.attention]
         case .catalog: [.catalog]
-        case .connection, .storage: [.connection]
+        case .connection, .storage, .syncGaps: [.connection]
         }
+    }
+}
+
+/// Lists a resync could not read (deep review 1, C2). Their last-known rows are kept (never resolved by absence) and the
+/// engine retries just these partitions until they read, so the connection can be live while some state is stale.
+public struct SyncGaps: Hashable, Sendable {
+    /// Directories whose pending permissions could not be listed.
+    public var permissionDirectories: Set<String> = []
+    /// Directories whose pending questions could not be listed.
+    public var questionDirectories: Set<String> = []
+    /// Sessions whose inbox (follow-up queue) could not be read.
+    public var inboxSessions: Set<SessionID> = []
+
+    public init(permissionDirectories: Set<String> = [], questionDirectories: Set<String> = [], inboxSessions: Set<SessionID> = []) {
+        self.permissionDirectories = permissionDirectories
+        self.questionDirectories = questionDirectories
+        self.inboxSessions = inboxSessions
+    }
+
+    public var isEmpty: Bool { permissionDirectories.isEmpty && questionDirectories.isEmpty && inboxSessions.isEmpty }
+
+    /// For the connection indicator; nil when nothing is missing.
+    public var message: String? {
+        var parts: [String] = []
+        let folders = permissionDirectories.union(questionDirectories).count
+        if folders > 0 { parts.append("approvals and questions in \(folders) folder\(folders == 1 ? "" : "s")") }
+        if !inboxSessions.isEmpty { parts.append("the queue of \(inboxSessions.count) thread\(inboxSessions.count == 1 ? "" : "s")") }
+        guard !parts.isEmpty else { return nil }
+        return "Could not read \(parts.joined(separator: " and ")); the last known state is shown. Retrying."
     }
 }
 
@@ -164,6 +195,7 @@ public struct ChangeSet: Sendable {
     public var catalog: Catalog?
     public var connection: ConnectionStatus?
     public var storage: StorageStatus?
+    public var syncGaps: SyncGaps?
     /// Too many changes accumulated; reload the topic.
     public var overflowed = false
 
@@ -178,7 +210,8 @@ public struct ChangeSet: Sendable {
     }
 
     public var isEmpty: Bool {
-        entityCount == 0 && attention == nil && catalog == nil && connection == nil && storage == nil && !overflowed
+        entityCount == 0 && attention == nil && catalog == nil && connection == nil && storage == nil && syncGaps == nil
+            && !overflowed
     }
 
     mutating func merge(_ change: ProjectionChange) {
@@ -247,6 +280,8 @@ public struct ChangeSet: Sendable {
             connection = status
         case .storage(let status):
             storage = status
+        case .syncGaps(let gaps):
+            syncGaps = gaps
         }
     }
 }

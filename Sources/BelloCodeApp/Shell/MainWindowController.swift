@@ -259,7 +259,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private func updateTitle() {
         guard let window else { return }
         let root = workspace.engine.root
-        connectionView.update(root.connection, source: configuration.sourceLabel, storage: workspace.engine.storageNotice)
+        connectionView.update(
+            root.connection, source: configuration.sourceLabel, storage: workspace.engine.storageNotice, partial: root.syncGaps.message)
         updateHeaderActions()
         var title = "BelloCode"
         var subtitle = ""
@@ -775,7 +776,8 @@ final class ConnectionStatusView: NSView {
     }
 
     /// `storage`: a local-saving problem (`Engine.storageNotice`); it takes precedence, as unsaved drafts are at risk.
-    func update(_ status: ConnectionStatus, source: String?, storage: (label: String, detail: String)? = nil) {
+    /// `partial`: live, but some lists could not be read (their last-known state is shown and retried).
+    func update(_ status: ConnectionStatus, source: String?, storage: (label: String, detail: String)? = nil, partial: String? = nil) {
         let newText: String
         if let storage {
             symbolName = "externaldrive.badge.exclamationmark"
@@ -783,6 +785,12 @@ final class ConnectionStatusView: NSView {
             newText = [storage.label, status.label, source].compactMap { $0 }.joined(separator: " · ")
             toolTip = storage.detail
             setAccessibilityLabel("Connection: \(newText). \(storage.detail)")
+        } else if status == .live, let partial {
+            symbolName = "exclamationmark.arrow.triangle.2.circlepath"
+            tone = .warning
+            newText = ["Partly synced", source].compactMap { $0 }.joined(separator: " · ")
+            toolTip = partial
+            setAccessibilityLabel("Connection: \(newText). \(partial)")
         } else {
             (symbolName, tone) = switch status {
             case .live: (nil, .success)

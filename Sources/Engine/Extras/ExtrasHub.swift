@@ -111,7 +111,18 @@ public final class ExtrasHub {
             })
         await mergeRequests.start()
         if engine?.configuration.startsExtras ?? true {
-            await schedules.start()
+            // Definitions load now (shown at once); dispatch is armed by the first successful reconcile (C7).
+            let connection = store.observe(.connection)
+            tasks.set(
+                "schedule-arming",
+                Task { [weak self] in
+                    for await change in connection {
+                        guard let self else { return }
+                        guard let status = change.connection ?? (change.overflowed ? self.engine?.root.connection : nil) else { continue }
+                        await self.schedules.setDispatchArmed(status == .live)
+                    }
+                })
+            await schedules.start(armed: engine?.root.connection == .live)
             // Every agent task waiting for approval has a card (after a relaunch, a migration or a crash in between).
             let cards = Set(await scheduleCards().map(\.subjectID))
             for task in schedules.tasks where task.approval == .pending && task.createdBy != nil && !cards.contains(task.id) {

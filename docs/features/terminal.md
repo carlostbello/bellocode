@@ -11,7 +11,10 @@ SwiftTerm 1.99.3 renders it, so terminals survive app restarts and the agent can
   exit codes, tab order, selection, split, drawer open/height; saved in `app_terminal`, migration `v3-app-terminals`,
   kept by `rebuild()`), reconciles with the server list (vanished → `ended`, the agent's PTYs adopted, offline →
   `isStale`), and makes `TerminalStream`s: connect, replay, live feed off the main actor, keystrokes, 40 ms debounced
-  resizes, observer mode on 4404 with Take Control, backoff reconnect from the cursor. `TerminalIdlePolicy` +
+  resizes, observer mode on 4404 with Take Control, backoff reconnect from the cursor. Input while not attached is held
+  (≤ 64 KiB) and sent on attach; `send` returns sent/held/refused/ignored. An input that does not fit is refused whole
+  and every later one too, and nothing held is replayed, until the person picks Send Held Input or Discard in the pane's
+  bar (a beep per refused keystroke; deep review 1, U3). `TerminalIdlePolicy` +
   `closeIdle` is the settle/archive hook.
 - **TerminalKit** `Terminal/`: `TerminalWorkspace` (bounded cache of 16 emulators so thread switches are instant),
   `TerminalSurfaceController` (drawer: tabs + side-by-side split; panel: tabs), `TerminalPaneController` (SwiftTerm

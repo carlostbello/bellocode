@@ -92,7 +92,10 @@ final class UnconfirmedSendsView: NSView {
         case .notSent:
             let edit = Self.button("Edit in Composer", target: self, action: #selector(edit(_:)))
             edit.identifier = NSUserInterfaceItemIdentifier(send.id.rawValue)
-            views.append(edit)
+            let discard = Self.button("Discard", target: self, action: #selector(discard(_:)))
+            discard.identifier = NSUserInterfaceItemIdentifier(send.id.rawValue)
+            discard.toolTip = "opencode does not have this message; remove it without sending"
+            views.append(contentsOf: [edit, discard])
         }
         let row = NSStackView(views: views)
         row.spacing = DS.Space.s8
@@ -113,6 +116,12 @@ final class UnconfirmedSendsView: NSView {
         guard let raw = sender.identifier?.rawValue else { return }
         let thread = thread
         Task { await thread.retryUnconfirmed(MessageID(raw)) }
+    }
+
+    @objc private func discard(_ sender: NSView) {
+        guard let raw = sender.identifier?.rawValue else { return }
+        let thread = thread
+        Task { await thread.discardUnconfirmed(MessageID(raw)) }
     }
 
     @objc private func edit(_ sender: NSView) {

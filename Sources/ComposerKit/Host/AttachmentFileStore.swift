@@ -76,11 +76,13 @@ public struct AttachmentFileStore: Sendable {
     }
 
     /// Removes expired folders, then the oldest until the total fits (launch). Returns how many folders were removed.
+    /// `keeping`: files that sends not yet settled still reference (the engine's outbox); their folders are never
+    /// removed, however old.
     @discardableResult
     @concurrent
-    public func cleanUp(now: Date = Date()) async -> Int {
+    public func cleanUp(now: Date = Date(), keeping files: Set<URL> = []) async -> Int {
         var removed = 0
-        _ = evict(now: now, protecting: [], removed: &removed)
+        _ = evict(now: now, protecting: folders(of: files), removed: &removed)
         if removed > 0 { AttachmentFileStore.log.info("removed \(removed) attachment folders") }
         return removed
     }
@@ -91,6 +93,15 @@ public struct AttachmentFileStore: Sendable {
     func evict(now: Date, protecting: Set<String>) -> Int {
         var removed = 0
         return evict(now: now, protecting: protecting, removed: &removed)
+    }
+
+    /// The attachment folders (named by attachment ID) that hold `files`.
+    func folders(of files: Set<URL>) -> Set<String> {
+        let root = directory.standardizedFileURL.path
+        return Set(files.compactMap { file in
+            let folder = file.standardizedFileURL.deletingLastPathComponent()
+            return folder.deletingLastPathComponent().path == root ? folder.lastPathComponent : nil
+        })
     }
 
     private func evict(now: Date, protecting: Set<String>, removed: inout Int) -> Int {
@@ -113,8 +124,9 @@ public struct AttachmentFileStore: Sendable {
         for entry in entries {
             let age = now.timeIntervalSince(entry.date)
             let expired = age > maxAgeSeconds
-            let inUse = protecting.contains(entry.url.lastPathComponent) || age < graceSeconds
-            guard expired || (total > maxTotalBytes && !inUse) else { continue }
+            let protected = protecting.contains(entry.url.lastPathComponent)
+            let inUse = protected || age < graceSeconds
+            guard !protected, expired || (total > maxTotalBytes && !inUse) else { continue }
             if (try? manager.removeItem(at: entry.url)) != nil {
                 total -= entry.size
                 removed += 1

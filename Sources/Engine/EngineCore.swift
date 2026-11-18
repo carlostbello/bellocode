@@ -11,6 +11,7 @@ public struct EngineSnapshot: Sendable {
     public var attention: AttentionSummary
     public var catalogs: [Catalog]
     public var connection: ConnectionStatus
+    public var syncGaps = SyncGaps()
     /// Every thread's sidebar organisation (threads without app state are absent: `.none`).
     public var organisation: [SessionID: ThreadOrganisation] = [:]
     public var organisationRules: OrganisationRules = .default
@@ -75,6 +76,8 @@ actor EngineCore {
     private var pipeline: EventPipeline
     private var ids = IdentifierFactory()
     private(set) var connection: ConnectionStatus = .cached
+    /// Lists the last resync (or gap retry) could not read; their last-known rows are kept.
+    private(set) var syncGaps = SyncGaps()
     private var statuses: [SessionID: SessionAttention] = [:]
     private var summary = AttentionSummary.empty
     private var catalogs: [String: Catalog] = [:]
@@ -125,6 +128,12 @@ actor EngineCore {
     private var unconfirmed: [MessageID: (send: UnconfirmedSend, request: PromptRequest, order: Int)] = [:]
     private var unconfirmedOrder = 0
     let unconfirmedLimit = 32
+    /// Sends recorded in the durable outbox (`app_outbox`) and not yet settled: in flight, unknown or not sent.
+    private var outbox: [MessageID: OutboxEntry] = [:]
+    let outboxLimit = 64
+    /// Sessions whose metadata this app is updating, and updates waiting their turn (C9).
+    private var metadataBusy: Set<SessionID> = []
+    private var metadataWaiters: [SessionID: [CheckedContinuation<Void, Never>]] = [:]
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -164,6 +173,7 @@ actor EngineCore {
         async let rules = store.preference(Self.organisationRulesKey, as: OrganisationRules.self)
         let (p, r, s, pe, q, t, c) = try await (projects, registry, sessions, pending, queue, threadUI, catalogs)
         if let stored = try? await rules { organisationRules = stored }
+        restoreOutbox((try? await store.outbox()) ?? [])
         var state = pipeline.state
         state.projects = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         state.registry = Dictionary(r.map { ($0.directory, $0) }, uniquingKeysWith: { $1 })
@@ -182,7 +192,7 @@ actor EngineCore {
         EngineSnapshot(
             projects: Array(pipeline.state.projects.values), registry: Array(pipeline.state.registry.values),
             sessions: Array(pipeline.state.sessions.values), statuses: statuses, attention: summary,
-            catalogs: Array(catalogs.values), connection: connection,
+            catalogs: Array(catalogs.values), connection: connection, syncGaps: syncGaps,
             organisation: pipeline.state.threadUI.compactMapValues { $0.organisation == .none ? nil : $0.organisation },
             organisationRules: organisationRules)
     }
@@ -378,6 +388,104 @@ actor EngineCore {
         resyncRetryTask = nil
         runningResyncRetry?.cancel()
         runningResyncRetry = nil
+        gapRetryTask?.cancel()
+        gapRetryTask = nil
+    }
+
+    // MARK: - Partial resync (deep review 1, C2)
+
+    private var gapRetryTask: Task<Void, Never>?
+    private var gapRetryAttempt = 0
+    /// For tests: gap retries scheduled after a resync that could not read every list.
+    private(set) var gapRetriesScheduled = 0
+
+    private func setSyncGaps(_ gaps: SyncGaps) {
+        guard gaps != syncGaps else { return }
+        syncGaps = gaps
+        bus.publish([.syncGaps(gaps)])
+    }
+
+    /// Some lists could not be read while the rest of the resync succeeded: retry just those, with bounded backoff,
+    /// until they read, a full resync replaces them, or the engine stops. No disconnect is needed.
+    private func scheduleGapRetry() {
+        guard started, gapRetryTask == nil, !syncGaps.isEmpty else { return }
+        gapRetryAttempt += 1
+        gapRetriesScheduled += 1
+        let delay = configuration.resyncRetryBackoff.delay(forAttempt: gapRetryAttempt, random: Double.random(in: 0..<1))
+        gapRetryTask = Task { [weak self, time] in
+            do { try await time.sleep(for: delay) } catch { return }
+            await self?.retryGaps()
+        }
+    }
+
+    private func retryGaps() async {
+        await lockLoop()
+        defer { unlockLoop() }
+        gapRetryTask = nil
+        guard !Task.isCancelled, started, connection.isLive, !syncGaps.isEmpty else { return }
+        let generation = syncGeneration
+        let gaps = syncGaps
+        guard let client = try? await currentClient() else {
+            scheduleGapRetry()
+            return
+        }
+        admittedDuringSync.removeAll()
+        let read = await readPartitions(
+            client, permissionDirectories: gaps.permissionDirectories, questionDirectories: gaps.questionDirectories,
+            inboxSessions: gaps.inboxSessions)
+        // A full resync ran (or the stream reconnected) meanwhile: it decided these lists itself.
+        guard generation == syncGeneration, !Task.isCancelled, connection.isLive else { return }
+        var state = pipeline.state
+        var reduction = Reduction()
+        let now = Timestamp.now
+        applyPending(
+            permissions: read.permissions, forms: read.forms,
+            readPermissionDirectories: gaps.permissionDirectories.subtracting(read.gaps.permissionDirectories),
+            readQuestionDirectories: gaps.questionDirectories.subtracting(read.gaps.questionDirectories),
+            otherGaps: read.gaps, onlyReadDirectories: true, state: &state, into: &reduction, now: now)
+        applyInboxes(read.inbox, state: &state, into: &reduction)
+        pipeline.state = state
+        commit(reduction)
+        setSyncGaps(read.gaps)
+        if read.gaps.isEmpty { gapRetryAttempt = 0 } else { scheduleGapRetry() }
+    }
+
+    private struct PartitionRead: Sendable {
+        var permissions: [OpenCodeKit.PermissionRequest] = []
+        var forms: [FormInfo] = []
+        var inbox: [SessionID: [InboxItem]] = [:]
+        var gaps = SyncGaps()
+    }
+
+    /// Reads pending permissions and questions per directory, and inboxes per session, each on its own: one failed
+    /// list marks only its own partition missing.
+    private func readPartitions(
+        _ client: OpenCodeClient, permissionDirectories: Set<String>, questionDirectories: Set<String>, inboxSessions: Set<SessionID>
+    ) async -> PartitionRead {
+        var result = PartitionRead()
+        let directories = Array(permissionDirectories.union(questionDirectories)).sorted()
+        let requests = (try? await boundedMap(directories) { directory -> (String, [OpenCodeKit.PermissionRequest]?, [FormInfo]?) in
+            async let permissions: [OpenCodeKit.PermissionRequest]? =
+                permissionDirectories.contains(directory) ? Self.notFoundAsEmpty { try await client.pendingPermissions(directory: directory) } : []
+            async let forms: [FormInfo]? =
+                questionDirectories.contains(directory) ? Self.notFoundAsEmpty { try await client.pendingForms(directory: directory) } : []
+            return (directory, await permissions, await forms)
+        }) ?? directories.map { ($0, nil, nil) }
+        for (directory, permissions, forms) in requests {
+            if let permissions { result.permissions += permissions } else { result.gaps.permissionDirectories.insert(directory) }
+            if let forms { result.forms += forms } else { result.gaps.questionDirectories.insert(directory) }
+        }
+        let inboxes = (try? await boundedMap(inboxSessions.sorted()) { id in (id, try? await client.inbox(sessionID: id.rawValue)) })
+            ?? inboxSessions.map { ($0, nil) }
+        for (id, items) in inboxes {
+            if let items { result.inbox[id] = items } else { result.gaps.inboxSessions.insert(id) }
+        }
+        return result
+    }
+
+    /// A list read: a 404 (no such directory on this server) is an empty list; any other failure is nil.
+    private static func notFoundAsEmpty<T: Sendable>(_ read: () async throws -> [T]) async -> [T]? {
+        do { return try await read() } catch let error as OpenCodeError where error.status == 404 { return [] } catch { return nil }
     }
 
     func handle(_ envelope: OpenCodeEventEnvelope) async {
@@ -652,9 +760,13 @@ actor EngineCore {
         var sessionsComplete = true
         var permissions: [OpenCodeKit.PermissionRequest] = []
         var forms: [FormInfo] = []
-        var pendingComplete = true
+        /// Every directory whose pending lists were requested, and the lists that could not be read.
+        var pendingDirectories: Set<String> = []
+        var gaps = SyncGaps()
         var inbox: [SessionID: [InboxItem]] = [:]
         var windows: [SessionID: Page<SessionMessage>] = [:]
+        /// Server time just before the windows were read (newer local admissions are kept by a whole-history reconcile).
+        var windowsReadAt = Timestamp(milliseconds: 0)
         var serverPID: Int?
     }
 
@@ -678,7 +790,11 @@ actor EngineCore {
                 try await reconcile(snapshot, generation: generation)
                 guard generation == syncGeneration, !Task.isCancelled else { return }
                 resyncRetryAttempt = 0
+                setSyncGaps(snapshot.gaps)
                 setConnection(.live)
+                gapRetryTask?.cancel()
+                gapRetryTask = nil
+                if snapshot.gaps.isEmpty { gapRetryAttempt = 0 } else { scheduleGapRetry() }
                 if catalogs[defaultCatalogDirectory()] == nil { enqueue([.refreshCatalog(directory: nil)]) }
                 if !unconfirmed.isEmpty { spawn { await $0.checkUnconfirmed() } }
                 return
@@ -720,38 +836,26 @@ actor EngineCore {
 
         let directories = Set(snapshot.projects.map(\.canonical)).union(snapshot.sessions.map(\.location.directory))
             .union(pipeline.state.registry.keys)
-        let requests = try await boundedMap(Array(directories).sorted()) { directory -> ([OpenCodeKit.PermissionRequest], [FormInfo])? in
-            do {
-                async let permissions = client.pendingPermissions(directory: directory)
-                async let forms = client.pendingForms(directory: directory)
-                return try await (permissions, forms)
-            } catch let error as OpenCodeError where error.status == 404 {
-                return ([], [])
-            } catch {
-                return nil
-            }
-        }
-        for result in requests {
-            guard let (permissions, forms) = result else {
-                snapshot.pendingComplete = false
-                continue
-            }
-            snapshot.permissions += permissions
-            snapshot.forms += forms
-        }
+        snapshot.pendingDirectories = directories
 
         let running = snapshot.sessions.filter { info in
             guard let busy = info.time.busy else { return false }
             return info.time.idle.map { busy > $0 } ?? true
         }.map { SessionID($0.id) }
         let queued = pipeline.state.queue.values.map(\.sessionID)
-        let inboxSessions = Array(Set(running + queued)).sorted()
-        let inboxes = try await boundedMap(inboxSessions) { id in (id, try? await client.inbox(sessionID: id.rawValue)) }
-        for (id, items) in inboxes { if let items { snapshot.inbox[id] = items } }
+        // Pending lists per directory and inboxes per session, each read on its own (one failure is one gap).
+        let read = await readPartitions(
+            client, permissionDirectories: directories, questionDirectories: directories, inboxSessions: Set(running + queued))
+        try Task.checkCancellation()
+        snapshot.permissions = read.permissions
+        snapshot.forms = read.forms
+        snapshot.inbox = read.inbox
+        snapshot.gaps = read.gaps
 
         let known = Set(snapshot.sessions.map { SessionID($0.id) })
         let open = openThreads.keys.filter { known.contains($0) }.sorted()
         let windowSize = configuration.windowSize
+        snapshot.windowsReadAt = serverNow()
         let windows = try await boundedMap(open) { id in
             (id, try await client.messages(sessionID: id.rawValue, MessageListQuery(limit: windowSize, order: .descending)))
         }
@@ -790,7 +894,7 @@ actor EngineCore {
         // Disk reads first (they await); then one synchronous section that changes state.
         var windowInputs: [SessionID: WindowInput] = [:]
         for (id, page) in snapshot.windows {
-            windowInputs[id] = try await windowInput(id, page: page)
+            windowInputs[id] = try await windowInput(id, page: page, readAt: snapshot.windowsReadAt)
         }
         guard generation == syncGeneration, !Task.isCancelled else { return }
         let now = Timestamp.now
@@ -852,21 +956,76 @@ actor EngineCore {
             for session in sessions where session.isRunning { state.orphaned.insert(session.id) }
         }
 
-        // Pending requests.
-        var serverPending: [PendingRequest] = []
-        serverPending += snapshot.permissions.map { .permission(Mapping.permission($0, received: state.pending[$0.id]?.received ?? now)) }
-        serverPending += snapshot.forms.map { .question(Mapping.question($0, received: state.pending[$0.id]?.received ?? now)) }
-        if snapshot.pendingComplete {
-            let keep = Set(serverPending.map(\.id))
-            // App requests are BelloCode's own (never on the server): a resync keeps them.
-            for id in state.pending.keys where !keep.contains(id) && !id.hasPrefix(AppRequest.idPrefix) {
-                state.resolvePending(id, into: &reduction)
-            }
-        }
-        for request in serverPending { state.putPending(request, into: &reduction) }
+        // Pending requests: a request missing from the server's lists is resolved only if every list that could hold
+        // it was read; one that sits in a directory whose list failed keeps its last-known row.
+        applyPending(
+            permissions: snapshot.permissions, forms: snapshot.forms,
+            readPermissionDirectories: snapshot.pendingDirectories.subtracting(snapshot.gaps.permissionDirectories),
+            readQuestionDirectories: snapshot.pendingDirectories.subtracting(snapshot.gaps.questionDirectories),
+            otherGaps: snapshot.gaps, onlyReadDirectories: false, state: &state, into: &reduction, now: now)
 
         // Queues: the inbox of running sessions and of sessions we had queued items for.
-        for (sessionID, items) in snapshot.inbox {
+        applyInboxes(snapshot.inbox, state: &state, into: &reduction)
+        for prompt in state.queue.values
+        where prompt.state == .queued && snapshot.inbox[prompt.sessionID] == nil && !admittedDuringSync.contains(prompt.id)
+            && !snapshot.gaps.inboxSessions.contains(prompt.sessionID)
+        {
+            // The session is idle and its inbox was not read: anything we thought queued has been delivered or
+            // dropped. The transcript window shows which. (An inbox that failed to read keeps its items.)
+            if !(state.sessions[prompt.sessionID]?.isRunning ?? false) { state.removeQueued(prompt.id, into: &reduction) }
+        }
+
+        // Message windows of open threads.
+        for (sessionID, input) in windowInputs {
+            applyWindow(sessionID, input: input, state: &state, into: &reduction, now: now)
+        }
+        for id in state.sessions.keys { reduction.statusDirty.insert(id) }
+        pipeline.state = state
+        commit(reduction)
+    }
+
+    /// Puts the server's pending requests and resolves local ones it no longer lists, partition by partition.
+    /// `onlyReadDirectories`: a gap retry re-read only some directories, so only requests whose own session directory
+    /// was re-read can be resolved by absence.
+    private func applyPending(
+        permissions: [OpenCodeKit.PermissionRequest], forms: [FormInfo], readPermissionDirectories: Set<String>,
+        readQuestionDirectories: Set<String>, otherGaps: SyncGaps, onlyReadDirectories: Bool, state: inout ProjectionState,
+        into reduction: inout Reduction, now: Timestamp
+    ) {
+        var serverPending: [PendingRequest] = []
+        serverPending += permissions.map { .permission(Mapping.permission($0, received: state.pending[$0.id]?.received ?? now)) }
+        serverPending += forms.map { .question(Mapping.question($0, received: state.pending[$0.id]?.received ?? now)) }
+        let keep = Set(serverPending.map(\.id))
+        for (id, request) in state.pending where !keep.contains(id) && !id.hasPrefix(AppRequest.idPrefix) {
+            // App requests are BelloCode's own (never on the server): a resync keeps them.
+            let read: Set<String>
+            let failed: Set<String>
+            switch request {
+            case .permission:
+                read = readPermissionDirectories
+                failed = otherGaps.permissionDirectories
+            case .question:
+                read = readQuestionDirectories
+                failed = otherGaps.questionDirectories
+            case .app: continue
+            }
+            guard let session = state.sessions[request.sessionID] else {
+                // Unknown session: only a full resync with every list read can drop it.
+                if !onlyReadDirectories, failed.isEmpty { state.resolvePending(id, into: &reduction) }
+                continue
+            }
+            let projectDirectory = state.projects[session.projectID]?.directory
+            let relevant = [session.directory, projectDirectory].compactMap { $0 }
+            if relevant.contains(where: failed.contains) { continue }
+            if onlyReadDirectories, !read.contains(session.directory) { continue }
+            state.resolvePending(id, into: &reduction)
+        }
+        for request in serverPending { state.putPending(request, into: &reduction) }
+    }
+
+    /// Applies inbox reads (only sessions whose inbox was read).
+    private func applyInboxes(_ inbox: [SessionID: [InboxItem]], state: inout ProjectionState, into reduction: inout Reduction) {
+        for (sessionID, items) in inbox {
             let server = items.compactMap(Mapping.queued)
             let keep = Set(server.map(\.id))
             for prompt in state.queue.values
@@ -887,20 +1046,6 @@ actor EngineCore {
                 state.putQueued(prompt, into: &reduction)
             }
         }
-        for prompt in state.queue.values
-        where prompt.state == .queued && snapshot.inbox[prompt.sessionID] == nil && !admittedDuringSync.contains(prompt.id) {
-            // The session is idle and its inbox was not read: anything we thought queued has been delivered or
-            // dropped. The transcript window shows which.
-            if !(state.sessions[prompt.sessionID]?.isRunning ?? false) { state.removeQueued(prompt.id, into: &reduction) }
-        }
-
-        // Message windows of open threads.
-        for (sessionID, input) in windowInputs {
-            applyWindow(sessionID, input: input, state: &state, into: &reduction, now: now)
-        }
-        for id in state.sessions.keys { reduction.statusDirty.insert(id) }
-        pipeline.state = state
-        commit(reduction)
     }
 
     /// A fetched newest-first page plus what the cache knows about the same range.
@@ -913,9 +1058,13 @@ actor EngineCore {
         var full: Bool
         var cursor: String?
         var syncState: SessionSyncState?
+        /// Server time just before the page was requested.
+        var readAt: Timestamp
+        /// A short page (the whole history): every cached ID of the session up to `readAt`, in or out of the range.
+        var cachedWhole: [MessageID] = []
     }
 
-    private func windowInput(_ sessionID: SessionID, page: Page<SessionMessage>) async throws -> WindowInput {
+    private func windowInput(_ sessionID: SessionID, page: Page<SessionMessage>, readAt: Timestamp) async throws -> WindowInput {
         let server = page.data.map { Mapping.message($0, sessionID: sessionID) }.sorted { $0.sortKey < $1.sortKey }
         var local: [MessageID: Message] = [:]
         for message in try await store.messages(ids: server.map(\.id)) { local[message.id] = message }
@@ -929,7 +1078,9 @@ actor EngineCore {
             server: server, local: local, cachedInRange: cachedInRange,
             oldestCached: server.first.map { local[$0.id] != nil } ?? false, hasOlderCached: hasOlderCached,
             full: page.data.count >= configuration.windowSize, cursor: page.cursor.next,
-            syncState: try await store.syncState(sessionID))
+            syncState: try await store.syncState(sessionID), readAt: readAt,
+            cachedWhole: page.data.count < configuration.windowSize
+                ? try await store.messageIDs(sessionID: sessionID, createdThrough: readAt) : [])
     }
 
     /// Merges a fetched window into the projection: server copies merged onto local ones, local messages missing from
@@ -951,14 +1102,27 @@ actor EngineCore {
             }
         }
         if !input.full {
-            // The server holds fewer messages than a window: this is the whole history.
+            // The server holds fewer messages than a window: this is the whole history. Every local message is a
+            // candidate: in memory, and on disk outside the returned range (a deleted tail, or all of an empty one).
             for message in state.messages.messages(in: sessionID) where !serverIDs.contains(message.id) {
                 candidates.insert(message.id)
             }
+            candidates.formUnion(input.cachedWhole)
         }
         for id in candidates where !serverIDs.contains(id) {
             if let delivery = state.messages[id]?.delivery, delivery != .delivered { continue }
             state.removeMessage(id, sessionID: sessionID, into: &reduction)
+        }
+        if !input.full {
+            // The whole history, proven: reconcile the cache by session (not just the returned range), in one
+            // transaction with parts and search entries. Local sends not yet listed (still sending, or admitted after
+            // the read) are kept.
+            var keep = serverIDs.union(admittedDuringSync)
+            for message in state.messages.messages(in: sessionID) {
+                if let delivery = message.delivery, delivery != .delivered { keep.insert(message.id) }
+            }
+            keep.formUnion(outbox.keys)
+            reduction.writes.reconciledHistory[sessionID] = StoreBatch.HistoryReconcile(keep: keep, through: input.readAt)
         }
         reduction.changes.append(.threadHistory(sessionID, hasOlder: input.full))
         var sync = input.syncState ?? SessionSyncState(sessionID: sessionID)
@@ -1051,9 +1215,10 @@ actor EngineCore {
         guard let client = try? await currentClient() else { return }
         let generation = syncGeneration
         do {
+            let readAt = serverNow()
             let page = try await client.messages(
                 sessionID: sessionID.rawValue, MessageListQuery(limit: configuration.windowSize, order: .descending))
-            let input = try await windowInput(sessionID, page: page)
+            let input = try await windowInput(sessionID, page: page, readAt: readAt)
             guard generation == syncGeneration, !Task.isCancelled, pipeline.state.sessions[sessionID] != nil else { return }
             var reduction = Reduction()
             var state = pipeline.state
@@ -1295,7 +1460,7 @@ actor EngineCore {
     ) async throws -> MessageID {
         try await awaitConfirmedPolicy(sessionID)
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
-        guard unconfirmed.count < unconfirmedLimit else {
+        guard unconfirmed.count < unconfirmedLimit, outbox.count < outboxLimit else {
             throw EngineError.failed("Too many messages have unknown delivery. Retry them before sending more.")
         }
         let now = serverNow()
@@ -1323,16 +1488,24 @@ actor EngineCore {
         }
         commit(reduction)
 
-        let request = PromptRequest(
-            text: text, id: id.rawValue, files: attachments.files.map(Mapping.promptFile),
-            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
-            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
-            delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        let entry = OutboxEntry(
+            id: id, sessionID: sessionID, text: text, attachments: attachments, delivery: delivery, isFollowUp: busy,
+            state: .dispatching, created: now)
+        let request = Self.promptRequest(entry)
+        // Durable before the first dispatch: if every answer is lost and BelloCode quits, the next launch still has the
+        // ID (to ask opencode) and the payload (for a same-ID retry). A failed write does not block the send; the
+        // storage status already reports that local state is not being saved.
+        outbox[id] = entry
+        do { try await store.saveOutbox(entry) } catch {
+            EngineSignposts.log.error("outbox write failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
         switch await deliver(request, id: id, sessionID: sessionID) {
         case .admitted(let created):
+            await settleOutbox(id)
             acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
             return id
         case .rejected(let error):
+            await settleOutbox(id)
             rollbackSend(id, sessionID: sessionID)
             throw EngineError.from(error)
         case .unknown:
@@ -1340,10 +1513,60 @@ actor EngineCore {
             unconfirmedOrder += 1
             let send = UnconfirmedSend(id: id, sessionID: sessionID, text: text, isFollowUp: busy, state: .unknown)
             unconfirmed[id] = (send, request, unconfirmedOrder)
+            await recordOutbox(id, .unknown)
             bus.publish([.unconfirmed(send)])
             throw EngineError.deliveryUnknown
         }
     }
+
+    /// The opencode request for an outbox entry (the same for the first dispatch and every same-ID retry).
+    static func promptRequest(_ entry: OutboxEntry) -> PromptRequest {
+        let attachments = entry.attachments
+        return PromptRequest(
+            text: entry.text, id: entry.id.rawValue, files: attachments.files.map(Mapping.promptFile),
+            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
+            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
+            delivery: entry.isFollowUp ? InboxDelivery(rawValue: (entry.delivery ?? .queue).rawValue) : nil)
+    }
+
+    // MARK: - Durable outbox (deep review 1, C6)
+
+    /// Restores unsettled sends from the previous run as delivery-unknown cards (never resent on their own: the first
+    /// successful resync asks opencode for each original ID; Retry resends under that ID only if it is absent).
+    private func restoreOutbox(_ entries: [OutboxEntry]) {
+        for entry in entries.prefix(outboxLimit) where unconfirmed[entry.id] == nil {
+            outbox[entry.id] = entry
+            let state: UnconfirmedSend.State
+            switch entry.state {
+            case .dispatching, .unknown: state = .unknown
+            case .notSent(let reason): state = .notSent(reason)
+            }
+            unconfirmedOrder += 1
+            let send = UnconfirmedSend(id: entry.id, sessionID: entry.sessionID, text: entry.text, isFollowUp: entry.isFollowUp, state: state)
+            unconfirmed[entry.id] = (send, Self.promptRequest(entry), unconfirmedOrder)
+        }
+    }
+
+    /// Records an entry's admission state durably.
+    private func recordOutbox(_ id: MessageID, _ state: OutboxEntry.State) async {
+        guard var entry = outbox[id], entry.state != state else { return }
+        entry.state = state
+        outbox[id] = entry
+        do { try await store.saveOutbox(entry) } catch {
+            EngineSignposts.log.error("outbox write failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
+    }
+
+    /// The send is settled (admitted, refused at first dispatch, or discarded): forget it durably.
+    private func settleOutbox(_ id: MessageID) async {
+        guard outbox.removeValue(forKey: id) != nil else { return }
+        do { try await store.deleteOutbox(id) } catch {
+            EngineSignposts.log.error("outbox delete failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
+    }
+
+    /// Attachment files that unsettled sends still reference (the attachment store keeps them).
+    func outboxAttachmentFiles() -> Set<URL> { Set(outbox.values.flatMap(\.attachmentFiles)) }
 
     /// What became of a prompt request.
     enum DeliveryOutcome: Sendable {
@@ -1444,7 +1667,7 @@ actor EngineCore {
         guard let held = unconfirmed[id], held.send.state == .unknown else { return }
         setUnconfirmedState(id, .checking)
         let outcome = await deliver(held.request, id: id, sessionID: held.send.sessionID, attempts: 1)
-        resolveUnconfirmed(id, outcome)
+        await resolveUnconfirmed(id, outcome)
     }
 
     /// Asks the server about every unknown send (after a resync); never resends on its own.
@@ -1454,7 +1677,7 @@ actor EngineCore {
             guard let held = unconfirmed[id], held.send.state == .unknown else { continue }
             setUnconfirmedState(id, .checking)
             switch await lookUpPrompt(id, sessionID: held.send.sessionID) {
-            case .found(let created): resolveUnconfirmed(id, .admitted(created))
+            case .found(let created): await resolveUnconfirmed(id, .admitted(created))
             case .absent, .unreachable: setUnconfirmedState(id, .unknown)
             }
         }
@@ -1462,12 +1685,18 @@ actor EngineCore {
 
     /// Removes a not-sent entry and returns its text (to put back in the composer). Unknown entries stay: dropping
     /// one could invite sending the same instruction twice.
-    func takeUnconfirmed(_ id: MessageID) -> String? {
+    func takeUnconfirmed(_ id: MessageID) async -> String? {
         guard let held = unconfirmed[id], case .notSent = held.send.state else { return nil }
         unconfirmed[id] = nil
+        await settleOutbox(id)
         bus.publish([.unconfirmedRemoved(id, sessionID: held.send.sessionID)])
         return held.send.text
     }
+
+    /// Discards a send opencode definitively does not have (explicit, from the card). Unknown sends cannot be
+    /// discarded: dropping one could invite sending the same instruction twice.
+    @discardableResult
+    func discardUnconfirmed(_ id: MessageID) async -> Bool { await takeUnconfirmed(id) != nil }
 
     private func setUnconfirmedState(_ id: MessageID, _ state: UnconfirmedSend.State) {
         guard var held = unconfirmed[id], held.send.state != state else { return }
@@ -1476,17 +1705,22 @@ actor EngineCore {
         bus.publish([.unconfirmed(held.send)])
     }
 
-    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) {
+    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) async {
         guard let held = unconfirmed[id] else { return }
         let sessionID = held.send.sessionID
         switch outcome {
         case .admitted(let created):
+            // Settled durably first: once the card goes, nothing stale remains to restore.
+            await settleOutbox(id)
+            guard unconfirmed[id] != nil else { return }
             unconfirmed[id] = nil
             bus.publish([.unconfirmedRemoved(id, sessionID: sessionID)])
             acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
         case .rejected(let error):
             rollbackSend(id, sessionID: sessionID)
-            setUnconfirmedState(id, .notSent(EngineError.from(error).userMessage))
+            let reason = EngineError.from(error).userMessage
+            setUnconfirmedState(id, .notSent(reason))
+            await recordOutbox(id, .notSent(reason))
         case .unknown:
             setUnconfirmedState(id, .unknown)
         }
@@ -2079,7 +2313,11 @@ extension EngineCore {
     }
 
     /// Merges top-level keys into a session's metadata (read from the server first, so other writers' keys survive).
+    /// Updates of one session's metadata from this app run one at a time (deep review 1, C9): a second update reads
+    /// what the first wrote, so concurrent link edits never drop each other.
     func mergeSessionMetadata(_ sessionID: SessionID, _ update: @Sendable (RawJSON?) -> [String: Any]) async throws {
+        await lockMetadata(sessionID)
+        defer { unlockMetadata(sessionID) }
         let dto = try await call { try await $0.session(sessionID.rawValue) }
         let current = Mapping.session(dto).metadata
         let object = update(current)
@@ -2090,6 +2328,21 @@ extension EngineCore {
         pipeline.state.updateSession(sessionID, into: &reduction) { $0.metadata = RawJSON(String(decoding: data, as: UTF8.self)) }
         commitAppRequestChange(reduction)
     }
+
+    private func lockMetadata(_ sessionID: SessionID) async {
+        while metadataBusy.contains(sessionID) {
+            await withCheckedContinuation { metadataWaiters[sessionID, default: []].append($0) }
+        }
+        metadataBusy.insert(sessionID)
+    }
+
+    private func unlockMetadata(_ sessionID: SessionID) {
+        metadataBusy.remove(sessionID)
+        for waiter in metadataWaiters.removeValue(forKey: sessionID) ?? [] { waiter.resume() }
+    }
+
+    /// For tests: metadata updates of a session waiting for an earlier one.
+    func metadataWaiterCount(_ sessionID: SessionID) -> Int { metadataWaiters[sessionID]?.count ?? 0 }
 
     private func commitAppRequestChange(_ reduction: Reduction) { commitExternal(reduction) }
 }

@@ -23,8 +23,17 @@ Agents panel; the app mounts it as the "Agents" right-panel tab and adds the hea
 ## Tools (plugin unless noted) and native equivalents
 - `delegate_task` child agent on a self-contained task: agent, model/variant, `workspace: shared|worktree`, `wait` ≤ 45 s.
   Native `subagent` is kept: it lacks worktree, wait and limits. Both render as sub-agent cards (`Mapping.toolContent`).
+  `worktree` (deep review 1, C1): the child is prompted only after `worktree.create` returned an absolute directory and
+  the child's session reads back as located there (moved if needed; real 2.3.0 reports the moved directory verbatim,
+  `WorktreeMoveRealBinaryTests`). Otherwise the call fails and names the thread(s) and worktree(s) it created, so they
+  can be reused or removed; nothing runs in the original checkout. `create_threads` with `worktree` does the same per
+  thread and never falls back to the shared checkout.
 - `task_status` working / waiting_for_children / result_available / failed / cancelled + latest result.
 - `task_cancel` stops a child and everything below. Follow-ups: `thread_send` to the child (native: `subagent` + sessionID).
+  Stops (here and `thread_interrupt`, deep review 1, C10) report what was observed: interrupts requested, acknowledged
+  and failed, sessions read back as settled within 5 s, still stopping, and threads left unexamined. Children are listed
+  page by page (200 per page, ≤ 25 pages per parent, ≤ 2,000 per tree); a walk cut by a limit or a failed list is
+  reported incomplete, and `thread_wait` never reports such a tree as settled.
 - `create_threads` 1–8 top-level threads (optional worktree each, optional first prompt), one fan-out group.
 - `thread_list`, `thread_search` (titles), `project_list`, `thread_read` (bounded: 20 messages, 12,000 chars).
 - `thread_send` (queue|steer, prefixed "[Message from …]"), `thread_wait` (≤ 45 s), `thread_interrupt` (cascades).

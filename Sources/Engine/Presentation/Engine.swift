@@ -36,6 +36,8 @@ public final class EngineRoot {
     public private(set) var attention: AttentionSummary = .empty
     /// Whether local state reaches disk. Show `storage.message` (with `preferencesUnsaved`) wherever it is not `.ok`.
     public private(set) var storage: StorageStatus = .ok
+    /// Lists the last resync could not read (their last-known rows stay shown; retried). Empty when fully synced.
+    public private(set) var syncGaps = SyncGaps()
     /// Every thread's sidebar organisation (absent = `.none`). Changes only on user action, a wake or auto-settle.
     public internal(set) var organisation: [SessionID: ThreadOrganisation] = [:]
     /// Auto-settle rules (Settings ▸ Threads).
@@ -91,6 +93,10 @@ public final class EngineRoot {
 
     fileprivate func setStorage(_ status: StorageStatus) {
         if status != storage { storage = status }
+    }
+
+    fileprivate func setSyncGaps(_ gaps: SyncGaps) {
+        if gaps != syncGaps { syncGaps = gaps }
     }
 }
 
@@ -265,7 +271,7 @@ public final class Engine {
         await browser.shutdown()
         await orchestration.shutdown()
         extras.stop()
-        for thread in Array(openThreads.values) { thread.close() }
+        for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
         trackedTasks.removeAll()
@@ -289,10 +295,15 @@ public final class Engine {
     }
 
     /// Opens a thread: returns its model at once (filled from the cache within milliseconds, then reconciled with the
-    /// server). The same instance is returned while it is open; call `ThreadModel.close()` when done.
+    /// server). The same instance is returned while it is open. Each call takes a lease that the caller releases with
+    /// `ThreadModel.close()`; the model stays live until its last lease is released.
     public func openThread(_ id: SessionID) -> ThreadModel {
-        if let model = openThreads[id] { return model }
+        if let model = openThreads[id] {
+            model.acquireLease()
+            return model
+        }
         let model = ThreadModel(sessionID: id, core: core, store: store, engine: self)
+        model.acquireLease()
         openThreads[id] = model
         let core = self.core
         track(Task { await core.openThread(id) })
@@ -306,6 +317,9 @@ public final class Engine {
         let id = model.sessionID
         track(Task { await core.closeThread(id) })
     }
+
+    /// Attachment files that sends not yet settled still need (pass to `AttachmentFileStore.cleanUp(keeping:)`).
+    public func outboxAttachmentFiles() async -> Set<URL> { await core.outboxAttachmentFiles() }
 
     /// Keeps a short command task alive until it finishes, so `stop()` waits for it.
     func track(_ task: Task<Void, Never>) {
@@ -448,6 +462,7 @@ public final class Engine {
             if connection.isLive, !wasLive { connectOrchestration() }
         }
         if let storage = change.storage { root.setStorage(storage) }
+        if let gaps = change.syncGaps { root.setSyncGaps(gaps) }
         if let summary = change.attention { root.setAttention(summary) }
         if !change.organisation.isEmpty {
             var next = root.organisation
@@ -486,6 +501,7 @@ public final class Engine {
                     self.environments.projectsChanged(self.root.projects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
+                    self.root.setSyncGaps(snapshot.syncGaps)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }
                 })
         }

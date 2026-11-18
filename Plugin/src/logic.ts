@@ -286,3 +286,74 @@ export function guidance(input: { readonly depth: number; readonly limits: Limit
     lines.push("You are a delegated child task: finish with a concise final message, which is reported to your parent.")
   return lines.join("\n")
 }
+
+// MARK: - Worktree placement (deep review 1, C1)
+
+/** An absolute directory as opencode reports it, without a trailing slash; undefined when it is not usable. */
+export function usableDirectory(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("/")) return undefined
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed
+}
+
+/** The session runs in `directory` (compared as opencode reports both; no filesystem resolution). */
+export function isLocatedIn(session: SessionLike, directory: string): boolean {
+  const actual = usableDirectory(session.location?.directory)
+  return actual !== undefined && actual === usableDirectory(directory)
+}
+
+/** Names what a failed placement left behind, so the caller (or the user) can reuse or remove it. Nothing is deleted. */
+export function recoveryNote(created: { readonly threads?: readonly string[]; readonly worktrees?: readonly string[] }): string {
+  const parts: string[] = []
+  if (created.threads?.length) parts.push(`thread(s) ${created.threads.join(", ")}`)
+  if (created.worktrees?.length) parts.push(`worktree(s) ${created.worktrees.join(", ")}`)
+  return parts.length ? ` Created and left for recovery: ${parts.join("; ")}.` : ""
+}
+
+// MARK: - Stop acknowledgement (deep review 1, C10)
+
+/** What a cascade stop did, by outcome. Counts only what was observed; nothing is assumed stopped. */
+export interface StopReport {
+  /** Interrupt calls made (running sessions found below, deepest first, then the target when asked). */
+  readonly requested: readonly string[]
+  /** Interrupts opencode accepted. */
+  readonly acknowledged: readonly string[]
+  /** Interrupts that failed, with the error text. */
+  readonly failed: ReadonlyArray<{ readonly id: string; readonly error: string }>
+  /** Acknowledged and then read back as no longer running. */
+  readonly settled: readonly string[]
+  /** Acknowledged but still running when the confirmation window ended. */
+  readonly stillRunning: readonly string[]
+  /** The tree was not fully listed (the traversal limit, or a list that failed): running tasks may remain there. */
+  readonly unexamined: number
+  readonly complete: boolean
+}
+
+/** One honest sentence for a stop: what stopped, what is still stopping, what failed and what was not examined. */
+export function describeStop(target: string, report: StopReport, includeSelf: boolean): string {
+  const below = report.requested.filter((id) => id !== target || !includeSelf)
+  const settledBelow = report.settled.filter((id) => id !== target || !includeSelf)
+  const parts: string[] = []
+  if (includeSelf) {
+    if (report.failed.some((item) => item.id === target)) parts.push(`Could not stop ${target}`)
+    else if (report.settled.includes(target)) parts.push(`Stopped ${target}`)
+    else if (report.stillRunning.includes(target)) parts.push(`Stop requested for ${target}; it is still stopping`)
+    else parts.push(`Stop requested for ${target}`)
+  }
+  if (below.length) {
+    let text = `${settledBelow.length} of ${below.length} running task(s) below it stopped`
+    const pending = report.stillRunning.filter((id) => id !== target || !includeSelf)
+    if (pending.length) text += `; still stopping: ${pending.join(", ")}`
+    const failed = report.failed.filter((item) => item.id !== target || !includeSelf)
+    if (failed.length) text += `; failed to stop: ${failed.map((item) => item.id).join(", ")}`
+    parts.push(text)
+  } else if (report.complete) {
+    parts.push("no running task below it")
+  }
+  if (!report.complete)
+    parts.push(
+      `the task tree was not fully examined (${report.unexamined} thread(s) not listed), so running tasks may remain; check with thread_list`,
+    )
+  return parts.join("; ") + "."
+}
