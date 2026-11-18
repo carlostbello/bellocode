@@ -29,7 +29,7 @@ struct GlobalMCPTests {
     func makeService(certificates: [TrustedCertificate] = []) async throws -> (EnvironmentService, ProjectionStore) {
         var configuration = ContainerConfiguration(
             helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
-            execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault())
+            execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()).projectContainerDefault()
         configuration.mcpVault = vault
         configuration.mcpLogDirectory = root.appending(path: "mcp-logs")
         configuration.certificateSource = FakeCertificates(certificates: certificates)

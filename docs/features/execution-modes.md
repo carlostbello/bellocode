@@ -77,3 +77,13 @@ checks per mode, trusted roots, dev containers), `HostDockerCommandTests`, `Dock
 launch path with the real opencode; its agent-prompt step was skipped on 2026-11-18 because the provider refused every
 free model (usage limit, deprecations). Snapshots: `--snapshot containers` writes `containers-exec-*`; copies in
 `docs/snapshots/exec-*.png`.
+
+## UX checklist (03-ux-patterns.md §E)
+
+Context: header, context line, terminal strip and pane name the mode, image and state; refusals name the request and
+the folder rule. States: suggested/configured/managed roots, missing/link/system/home/credential/not-shared roots,
+outside-roots, no image, runtime down, refused Docker requests, dev container refused/ignored/needs review; each with
+its fix. Keyboard: Settings ▸ Containers and Window ▸ Project Environment… reach every control (standard buttons, radio
+rows, toggles); Add Folder… uses the open panel. Reversible: mode switches apply at once with Undo; removing a root says
+what changes. Accessibility: glyph + word everywhere, labelled rows. Not exercised: VoiceOver walk-through, two
+windows, 30-session parallelism, a person at the screen.
