@@ -6,8 +6,8 @@ import Testing
 @testable import Engine
 @testable import OpenCodeKit
 
-/// GitLab 1 against the pinned opencode with the bellocode plugin and the app tools (client MCP). Opt-in:
-/// `BELLOCODE_GITLAB_REAL=1 swift test --filter GitLabRealBinary`. At most three short model runs on the zero-cost
+/// GitLab 1 and 2 against the pinned opencode with the bellocode plugin and the app tools (client MCP). Opt-in:
+/// `BELLOCODE_GITLAB_REAL=1 swift test --filter GitLabRealBinary`. At most four short model runs on the zero-cost
 /// default model; HOME and XDG directories in a fresh temporary directory (never the user's opencode data); the GitLab
 /// is the in-process fake (no network); the token lives in an in-memory vault.
 @Suite(
@@ -150,5 +150,54 @@ struct GitLabRealBinaryTests {
         #expect(!transcript.contains(GitLabWorld.token), "the token never reaches the model")
         await engine.flush()
         #expect(!sandbox.serverFilesContain(GitLabWorld.token), "opencode stored no copy of the token")
+    }
+
+    /// GitLab 2: the new tools attach, the model reads the review threads, and an approval-gated draft comment is saved
+    /// as a GitLab draft note (never published) after the person approves the card. Two model runs (prompt, wake).
+    @Test func reviewToolsRegisterAndAnApprovedDraftCommentWorksEndToEnd() async throws {
+        let sandbox = try await Sandbox.start()
+        defer { Task { await sandbox.stop() } }
+        ReviewWorld.configure(sandbox.server)
+        let engine = sandbox.engine
+        let wanted = [GitLabTools.readIssue, GitLabTools.listIssues, GitLabTools.readReviewDiscussions, GitLabTools.createDraftComment]
+            .map { OrchestrationService.appServerName + "_" + $0 }
+        var tools: [String] = []
+        for _ in 0..<100 {
+            tools = (try? await sandbox.appTools()) ?? []
+            if Set(tools).isSuperset(of: wanted) { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        print("GitLab real (2): \(tools.filter { $0.contains("gitlab") }.count) GitLab tools attached")
+        #expect(Set(tools).isSuperset(of: wanted))
+        let thread = try await engine.createThread(in: sandbox.project.path, title: "review")
+        try await waitUntil("graph") { engine.orchestration.node(thread.id) != nil }
+        _ = try await engine.send(
+            """
+            Call these tools once each, in order, then end your turn with: DONE
+            1. bellocode_app_gitlab_read_review_discussions with ref "!42".
+            2. bellocode_app_gitlab_create_draft_comment with ref "!42", path "Sources/Parser.swift", line 3 and body "Please name this constant."
+            """, to: thread.id)
+        try await eventually("turn started", timeout: .seconds(60)) { await engine.core.knownSession(thread.id)?.busySince != nil }
+        try await eventually("turn ended", timeout: .seconds(180)) { !(await engine.core.knownSession(thread.id)?.isRunning ?? true) }
+        let afterTurn = try await sandbox.messageText(thread.id)
+        #expect(afterTurn.contains("bellocode_app_gitlab_read_review_discussions"))
+        #expect(afterTurn.contains("Sources/Parser.swift new line 3"), "the positions reached the model")
+        #expect(!sandbox.server.requests.contains { $0.method == "POST" }, "nothing written before the card")
+        let card = try #require(await engine.extras.pendingAppRequests().first {
+            if case .approval(let approval) = $0.kind { approval.action == .gitlabWrite } else { false }
+        })
+        if case .approval(let approval) = card.kind {
+            #expect(approval.detail.contains("at head 9f2c1ab4e5d6") && approval.detail.contains("File: Sources/Parser.swift") && approval.detail.contains("Line: 3"))
+        }
+        try await engine.extras.respond(to: card.id, .approve(always: false))
+        #expect(sandbox.server.requests.contains { $0.method == "POST" && $0.path.hasSuffix("/draft_notes") && ($0.body ?? "").contains("Please name this constant.") })
+        #expect(!sandbox.server.requests.contains { $0.path.hasSuffix("/bulk_publish") }, "an agent never publishes")
+        try await eventually("wake handled", timeout: .seconds(180)) {
+            let text = (try? await sandbox.messageText(thread.id)) ?? ""
+            let running = await engine.core.knownSession(thread.id)?.isRunning ?? true
+            return text.contains("[BelloCode GitLab] Approved by the user. Saved a GitLab draft note") && !running
+        }
+        let transcript = try await sandbox.messageText(thread.id)
+        #expect(!transcript.contains(GitLabWorld.token), "the token never reaches the model")
     }
 }
