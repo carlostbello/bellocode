@@ -312,7 +312,7 @@ public final class Engine {
         await browser.shutdown()
         await orchestration.shutdown()
         extras.stop()
-        secretManager.stop()
+        await secretManager.stop()
         for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }

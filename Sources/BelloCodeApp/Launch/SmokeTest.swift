@@ -53,6 +53,12 @@ enum SmokeTest {
                 configuration.containers = AppRuntime.containerConfiguration(for: server)
                 // Global MCP secrets of the run stay in memory (never the Keychain).
                 configuration.containers?.mcpVault = InMemorySecretVault()
+                // Enforced egress through the secret manager's proxy (its CA key in memory for the run).
+                configuration.secretManager = AppRuntime.secretManagerConfiguration(
+                    dataRoot: FileManager.default.temporaryDirectory.appending(path: "bellocode-smoke-egress-\(getpid())"),
+                    authorityVault: InMemorySecretVault())
+                configuration.secretManager?.enforceEgress = true
+                configuration.secretVault = InMemorySecretVault()
             }
             engine = try Engine(configuration: configuration)
         } catch {
@@ -254,6 +260,12 @@ enum SmokeTest {
             return false
         }
         log("project container ready in \(milliseconds(ContinuousClock.now - started)) ms (\(image))")
+        // Secret manager: the workspace sits behind the egress boundary (internal network, proxy forced, no DNS out).
+        if let problem = await engine.secretManager.verifyEgress(projectDirectory: project) {
+            log("FAIL egress: \(problem)")
+            return false
+        }
+        log("egress: internal network only, HTTPS_PROXY is BelloCode's proxy, external names do not resolve")
         guard let report = await engine.environments.verifyIsolation(directory: project, full: true) else {
             log("FAIL isolation check did not run")
             return false

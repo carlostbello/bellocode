@@ -21,6 +21,19 @@ public struct SecretManagerConfiguration: Sendable {
     /// The Mac's built-in roots (DER) for the containers' full bundle when the enterprise bundle is off.
     public var systemAnchors: @Sendable () -> [Data]
 
+    /// The administrator's `EgressEnforced` (forced in domain `com.bellocode.app`) wins; otherwise the person's
+    /// `secrets.enforceEgress` (default on).
+    public static func egressEnforced(userDefaults: UserDefaults) -> Bool {
+        let key = "EgressEnforced" as CFString
+        let domain = "com.bellocode.app" as CFString
+        if CFPreferencesAppValueIsForced(key, domain), let forced = CFPreferencesCopyAppValue(key, domain) as? Bool { return forced }
+        return userDefaults.object(forKey: "secrets.enforceEgress") as? Bool ?? true
+    }
+
+    public static var egressForcedByAdministrator: Bool {
+        CFPreferencesAppValueIsForced("EgressEnforced" as CFString, "com.bellocode.app" as CFString)
+    }
+
     public init(directory: URL, authorityVault: any SecretVault = KeychainSecretVault(service: SecretManager.authorityService),
                 enforceEgress: Bool = true, proxy: EgressProxyConfiguration = .init(),
                 systemAnchors: @escaping @Sendable () -> [Data] = { KeychainCertificateSource().systemAnchors() }) {
@@ -127,12 +140,40 @@ public final class SecretManager {
         })
     }
 
-    func stop() {
+    /// Stops the proxy and removes this launch's gateways (their tokens die with the proxy; the next launch makes new
+    /// ones). Internal networks still used by a (stopped) workspace stay; unattached ones go.
+    func stop() async {
         tasks.cancelAll()
         proxy?.stop()
         proxy = nil
         egressStatus = .off
         started = false
+        let keys = Array(scopes.keys)
+        scopes = [:]
+        guard !keys.isEmpty, let socket = environments?.activeRuntime.socketPath else { return }
+        let gateway = EgressGateway(client: EngineClient(socketPath: socket))
+        for key in keys { await gateway.remove(scopeKey: key, network: true) }
+    }
+
+    /// The smoke test's check that a workspace really sits behind the egress boundary: only the internal network, the
+    /// proxy variables set, external names unresolvable. Nil when it holds, else what does not.
+    public func verifyEgress(projectDirectory: String) async -> String? {
+        guard case .ready = egressStatus, let socket = environments?.activeRuntime.socketPath else { return "the egress proxy is not running" }
+        let client = EngineClient(socketPath: socket)
+        let name = WorkspaceSpec.containerName(for: projectDirectory)
+        do {
+            guard let inspect = try await client.inspectContainer(name) else { return "no workspace container" }
+            let network = EgressGateway.networkName(WorkspaceSpec.projectKey(for: projectDirectory))
+            guard inspect.hostConfig?.networkMode == network else { return "the workspace is on \(inspect.hostConfig?.networkMode ?? "?"), not \(network)" }
+            guard try await client.inspectNetwork(network)?.isInternal == true else { return "\(network) is not internal" }
+            let probe = try await ExecSession.run(client: client, container: inspect.id, argv: ["/bin/sh", "-c", "echo \"$HTTPS_PROXY\"; getent hosts example.com >/dev/null 2>&1 && echo resolved || echo unresolved"], timeout: .seconds(20))
+            let text = String(decoding: probe.stdout, as: UTF8.self)
+            guard text.contains(EgressAttachment.proxyURL) else { return "HTTPS_PROXY is not BelloCode's proxy" }
+            guard text.contains("unresolved") else { return "external names resolve inside the workspace" }
+            return nil
+        } catch {
+            return "egress check failed (\(error))"
+        }
     }
 
     /// Loads secrets, placeholders and the recent audit; secrets saved before modes become visible-mode secrets that
