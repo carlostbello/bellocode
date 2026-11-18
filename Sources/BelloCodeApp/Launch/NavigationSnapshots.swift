@@ -177,7 +177,7 @@ extension SnapshotRunner {
             NSApp.appearance = NSAppearance(named: appearanceName)
             window.appearance = NSAppearance(named: appearanceName)
             for _ in 0..<4 {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+                MainRunLoop.run(for: .milliseconds(30))
                 window.contentView?.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
             }

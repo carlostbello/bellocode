@@ -69,7 +69,7 @@ final class VisualOverlay {
     isolated deinit {
         revisionLoop?.cancel()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        for view in live.values { view.webView.removeFromSuperview() }
+        for view in live.values { view.discard() }
     }
 
     /// Makes a visual live (the person clicked it). The oldest live one returns to its snapshot beyond `maxLive`.
@@ -108,7 +108,8 @@ final class VisualOverlay {
     }
 
     private func drop(_ id: String) {
-        live[id]?.webView.removeFromSuperview()
+        // Discard, not only remove: a visual looping in a script keeps its content process spinning otherwise.
+        live[id]?.discard()
         live[id] = nil
         order.removeAll { $0 == id }
     }

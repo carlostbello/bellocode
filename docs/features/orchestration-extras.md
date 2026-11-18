@@ -148,6 +148,11 @@ changed content is a new visual with no grant; "always" is a per-host decision b
 traffic to that host (a data-disclosure decision, see containers.md "For the security team"). Merge-request watches
 are not grants: they read with the person's token what that token can see and wake the thread; linking an MR is not
 approved per MR (policy point).
+Time limits (`HTMLVisualRenderer.Limits`: load 5 s, each script 2 s, snapshot 5 s, 8 waiting): a step past its limit
+fails the render with a message for the agent and discards the view; the next queued render gets a fresh view. The
+limit is a `ContinuousClock` sleep (uptime-clock timers were seen never to fire on macOS 27). Discarding SIGKILLs the
+view's own content process (checked: same user, WebKit WebContent), because `_killWebContentProcess`, closing and
+releasing all go over IPC that a process spinning in a script never reads; dropped live visuals are discarded too.
 Transcript: a `.visual` row draws a cached snapshot through the image loader (virtualised); clicking makes it live (≤ 2
 live web views, dropped off-screen); Open in Browser (built-in browser, data: URL with the same CSP) and Save Image.
 
