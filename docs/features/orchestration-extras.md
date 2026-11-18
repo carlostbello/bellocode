@@ -121,6 +121,9 @@ Settings ▸ Secrets lists labels and deletes (confirmed).
 
 ## 4. HTML visuals
 `html_preview` (height, console, CSP-blocked requests, PNG path for export) and `html_render` (stored, shown inline).
+**File inputs (S6):** `path` must resolve (symlinks and `..` resolved) to a regular file inside the calling thread's
+project or worktree folders; it is opened once (`O_NOFOLLOW`), its real location re-checked on the descriptor
+(`F_GETPATH`) and read with the 2 MB cap applied while reading. Anything else is a tool error; external files go inline.
 Sandbox (`HTMLVisualSandbox`): non-persistent store; no message handlers (`window.webkit` undefined); compiled content
 rules block everything but about:/data:/blob: and approved hosts, plus a CSP meta (`default-src 'none'`, inline script
 only, `frame-src 'none'`); `window.open` refused; every navigation after load cancelled; links open externally only on a

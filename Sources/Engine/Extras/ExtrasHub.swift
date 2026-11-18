@@ -174,7 +174,8 @@ public final class ExtrasHub {
                     text: "Path for “\(label)”: \(path)\nIt yields the value once, to the first process that reads it, then disappears (10 minutes at most). Use it in one command (--token-file \(path) or \"$(cat \(path))\"). Never print, echo or log it.")
             case ExtrasTools.secretExec: return try await secretExec(arguments, caller)
             case ExtrasTools.htmlPreview:
-                let html = try visuals.document(html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory)
+                let html = try visuals.document(
+                    html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory, roots: visualRoots(caller))
                 let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
                 return ClientMCPResult(text: try await visuals.preview(html: html, hosts: hosts))
             case ExtrasTools.htmlRender: return try await htmlRender(arguments, caller)
@@ -428,8 +429,16 @@ public final class ExtrasHub {
 
     // MARK: Visuals
 
+    /// Where a visual may read a file: the calling thread's project and its worktree folders (S6).
+    func visualRoots(_ caller: ExtrasCaller) -> [String] {
+        var roots = [caller.projectDirectory, caller.directory]
+        if let environments { roots += environments.workspaceRoots(environments.environment(for: caller.projectDirectory), create: false) }
+        return roots
+    }
+
     private func htmlRender(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
-        let html = try visuals.document(html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory)
+        let html = try visuals.document(
+                    html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory, roots: visualRoots(caller))
         let title = String((arguments["title"]?.stringValue ?? "Visual").prefix(80))
         let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
         let result = try await visuals.render(html: html, title: title, hosts: hosts, sessionID: caller.sessionID)
@@ -646,15 +655,6 @@ extension ExtrasHub {
         guard let value = try secretVault.read(account: pending.account), !value.isEmpty else {
             throw ExtrasError("“\(pending.label)” is no longer saved. Ask again with request_secret.")
         }
-        await secrets.touch(account: pending.account)
-        let result = try await environments.runWithSecret(
-            directory: pending.directory, command: pending.command, name: pending.name, secret: value, policy: pending.policy)
-        log.info("secret used in one approved container command (value not logged)")
-        let truncated = result.truncated ? " Output was longer than the limit: the middle is omitted (marked)." : ""
-        return "Ran the approved command with $\(pending.name) set to “\(pending.label)” (exit \(result.exitCode)).\(truncated) Output:\n\(result.output)"
-    }
-}
-
         // The container gets exactly the approved mounts: refused if the project's setting no longer allows one as
         // approved (removed, or made read-only since).
         let configured = environments.environment(for: pending.projectDirectory).settings.userMounts
@@ -664,6 +664,15 @@ extension ExtrasHub {
                 throw ExtrasError("The project's extra folders changed since this command was approved (\(mount.path)). Nothing ran; ask again.")
             }
         }
+        await secrets.touch(account: pending.account)
+        let result = try await environments.runWithSecret(
+            directory: pending.directory, command: pending.command, name: pending.name, secret: value, policy: pending.policy)
+        log.info("secret used in one approved container command (value not logged)")
+        let truncated = result.truncated ? " Output was longer than the limit: the middle is omitted (marked)." : ""
+        return "Ran the approved command with $\(pending.name) set to “\(pending.label)” (exit \(result.exitCode)).\(truncated) Output:\n\(result.output)"
+    }
+}
+
 /// Hex SHA-256 of a string.
 enum SHA256Hex {
     static func of(_ text: String) -> String {

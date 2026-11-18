@@ -135,17 +135,52 @@ public final class VisualService {
 
     // MARK: Tools
 
-    /// Resolves `html` or `path` (absolute, or relative to the thread's directory) into a document.
-    func document(html: String?, path: String?, directory base: String) throws -> String {
+    /// Resolves `html` or `path` into a document. A path (absolute, or relative to the thread's directory) must name
+    /// a regular file inside one of `roots` (the calling thread's project and worktree folders) after resolving
+    /// symlinks and `..`; it is opened once and read with a size cap from that descriptor (S6 in
+    /// docs/reviews/deep-review-1.md). Anything else is refused with a tool error.
+    func document(html: String?, path: String?, directory base: String, roots: [String]) throws -> String {
         if let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard html.utf8.count <= Self.maxHTMLBytes else { throw ExtrasError("The HTML is larger than 2 MB.") }
             return html
         }
         guard let path, !path.isEmpty else { throw ExtrasError("Give html (the document) or path (an .html file).") }
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : URL(fileURLWithPath: base).appending(path: path)
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { throw ExtrasError("No file at \(url.path).") }
-        guard size <= Self.maxHTMLBytes else { throw ExtrasError("The file is larger than 2 MB.") }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { throw ExtrasError("The file is not UTF-8 text.") }
+        return try Self.readAuthorisedFile(path, base: base, roots: roots, limit: Self.maxHTMLBytes)
+    }
+
+    /// Reads a UTF-8 file that resolves inside `roots`, at most `limit` bytes, from a single descriptor.
+    nonisolated static func readAuthorisedFile(_ path: String, base: String, roots: [String], limit: Int) throws -> String {
+        let candidate = path.hasPrefix("/") ? path : (base as NSString).appendingPathComponent(path)
+        let realRoots = roots.compactMap(Self.realPath)
+        func inside(_ resolved: String) -> Bool {
+            realRoots.contains { resolved == $0 || resolved.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+        }
+        let outside = ExtrasError("\(path) is outside this thread's project and worktree folders; visuals read files only from there. Pass the HTML inline instead.")
+        guard let resolved = Self.realPath(candidate) else { throw ExtrasError("No file at \(candidate).") }
+        guard inside(resolved) else { throw outside }
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { throw ExtrasError("\(path) could not be opened.") }
+        defer { close(fd) }
+        // The descriptor is what is read: check what it actually is and where it actually lives (a folder swapped for
+        // a symlink after resolving is caught here).
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw ExtrasError("\(path) is not a regular file.") }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { throw ExtrasError("\(path) could not be opened.") }
+        guard let opened = Self.realPath(String(cString: buffer)), inside(opened) else { throw outside }
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 << 10)
+        while true {
+            let count = read(fd, &chunk, chunk.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw ExtrasError("\(path) could not be read.")
+            }
+            if count == 0 { break }
+            data.append(contentsOf: chunk[0..<count])
+            guard data.count <= limit else { throw ExtrasError("The file is larger than \(limit >= 1 << 20 ? "\(limit >> 20) MB" : "\(limit) bytes").") }
+        }
+        guard let text = String(data: data, encoding: .utf8) else { throw ExtrasError("The file is not UTF-8 text.") }
         return text
     }
 
@@ -168,6 +203,12 @@ public final class VisualService {
         lines.append(output.console.isEmpty ? "console: (no errors or warnings)" : "console:\n" + output.console.prefix(20).map { "  " + $0 }.joined(separator: "\n"))
         if !output.blocked.isEmpty {
             lines.append("blocked (no network by default; ask for hosts with allowNetwork in html_render):\n" + output.blocked.prefix(20).map { "  " + $0 }.joined(separator: "\n"))
+    nonisolated static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
         }
         if !hosts.isEmpty, allowed.count < hosts.count {
             lines.append("network: previews load only hosts already approved; html_render asks the user for the others.")
