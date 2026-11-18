@@ -274,6 +274,8 @@ enum Mapping {
 
     static func queued(_ dto: InboxItem) -> QueuedPrompt? {
         guard dto.type == "user" || dto.type == "synthetic" else { return nil }
+        // The plugin's parked interrupt note is not queued work (the thread's banner shows it; it is delivered on Resume).
+        if dto.type == "synthetic", (dto.text ?? "").hasPrefix("[BelloCode interrupt]") { return nil }
         return QueuedPrompt(
             id: MessageID(dto.id), sessionID: SessionID(dto.sessionID), text: dto.text ?? "",
             delivery: PromptDelivery(rawValue: dto.delivery.rawValue) ?? .steer,

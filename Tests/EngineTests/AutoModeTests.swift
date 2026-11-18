@@ -228,3 +228,42 @@ struct AutoModeTests {
 extension AutoModeTests.ScriptedReviewer {
     func setReply(_ text: String) { reply = text }
 }
+
+@Suite("Interrupt hold and Resume", .serialized, .timeLimit(.minutes(3)))
+@MainActor
+struct InterruptResumeTests {
+    @Test func aHeldInterruptShowsAndResumeClearsItAndStartsARun() async throws {
+        let directory = "/tmp/mock-interrupt"
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let harness = try await MockHarness.start(.empty(directory: directory))
+        let engine = try makeEngine(harness)
+        await engine.start()
+        defer { Task { await engine.stop(); await harness.stop() } }
+        try await waitUntil("live") { engine.root.connection == .live }
+        let target = try await engine.createThread(in: directory, title: "target", permissionMode: .fullAccess)
+        let thread = engine.openThread(target.id)
+        defer { thread.close() }
+        // What the plugin's thread_interrupt writes on the stopped thread.
+        let record: OpenCodeKit.JSONValue = ["by": "ses_caller", "byTitle": "Caller", "reason": "it edits the same file", "at": 1, "requested": "stop", "actual": "stopped", "held": true]
+        try await harness.client.updateSession(target.id.rawValue, SessionUpdateRequest(metadata: ["bellocode_interrupt": record]))
+        try await waitUntil("held") { thread.heldInterrupt != nil }
+        #expect(thread.heldInterrupt?.summary == "Stopped by “Caller”: it edits the same file")
+        #expect(await thread.resumeAfterInterrupt())
+        try await waitUntil("released") { thread.heldInterrupt == nil }
+        let requests = await harness.server.recordedRequests()
+        #expect(requests.contains { $0.hasPrefix("POST") && $0.hasSuffix("/synthetic") }, "Resume starts a run with a note")
+        let stored = try await harness.client.session(target.id.rawValue).metadata
+        #expect(stored?["bellocode_interrupt"]?["held"] == false)
+    }
+
+    @Test func transcriptNotesNameWhoInterruptedWhom() {
+        #expect(RowBuilderProbe.wake("[BelloCode interrupt] Stopped by thread “Caller” (ses_1): conflict. Queued work is held until the user resumes this thread.")?.hasPrefix("Interrupted: Stopped by thread “Caller”") == true)
+    }
+}
+
+/// RowBuilder lives in TranscriptKit; the Engine tests only check the wake prefix the plugin writes.
+enum RowBuilderProbe {
+    static func wake(_ text: String) -> String? {
+        text.hasPrefix("[BelloCode interrupt] ") ? "Interrupted: " + text.dropFirst("[BelloCode interrupt] ".count) : nil
+    }
+}

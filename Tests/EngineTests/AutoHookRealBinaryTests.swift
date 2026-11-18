@@ -290,4 +290,98 @@ struct AutoHookRealBinaryTests {
         if case .success = result { Issue.record("a cancelled generation still returned") }
         _ = try await client.info()
     }
+
+    /// One prompt in Auto, through the real engine: an in-project read is approved once by the policy (never shown) and
+    /// the `.env` read is escalated to the existing card (then denied here).
+    @Test func autoApprovesARoutineReadAndEscalatesASecret() async throws {
+        let sandbox = try await Sandbox.start("auto-e2e")
+        defer { Task { await sandbox.stop() } }
+        let engine = sandbox.engine
+        let thread = try await engine.createThread(in: sandbox.project.path, title: "auto e2e", permissionMode: .auto)
+        let model = engine.openThread(thread.id)
+        defer { model.close() }
+        _ = try await engine.send(
+            "Do these steps one at a time, in order. 1. Read the file README.md with your read tool. 2. Run the shell command `mkdir -p out` with your shell tool. "
+                + "3. Read the file .env with your read tool. Then reply with exactly: DONE", to: thread.id)
+        // Act as the person: any escalation that is not the secret is allowed once (and recorded); stop at the secret.
+        var personAllowed: [String] = []
+        var secret: BelloCore.PermissionRequest?
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(180)
+        while secret == nil, clock.now < deadline {
+            for request in model.pendingRequests {
+                guard case .permission(let permission) = request else { continue }
+                if permission.autoEscalation?.findings.contains(where: { $0.category == .secretRead }) == true {
+                    secret = permission
+                } else if !personAllowed.contains(permission.id.rawValue) {
+                    personAllowed.append(permission.id.rawValue)
+                    print("AUTO e2e escalated to the person: \(permission.action) \(permission.resources) \(permission.autoEscalation?.reasonCode ?? "-"): \(permission.autoEscalation?.explanation ?? "-")")
+                    try? await engine.reply(to: permission.id, .once)
+                }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        defer {
+            let audit = engine.auto.audit[thread.id] ?? []
+            print("AUTO e2e audit (final): \(audit.map { "\($0.kind.rawValue):\($0.action):\($0.source?.rawValue ?? "-"):\($0.reasonCode):\($0.model ?? "-"):\($0.latencyMilliseconds ?? -1)ms" })")
+            // A provider refusal (the free tier's usage limit) ends the turn before any tool runs: say so.
+            print("AUTO e2e turn error: \(model.session?.lastError?.message ?? "none")")
+        }
+        #expect(secret != nil, "the .env read was escalated")
+        try? await waitUntil("README approved", timeout: .seconds(60)) {
+            engine.auto.audit[thread.id]?.contains { $0.kind == .autoApproved && $0.action == "read" } == true
+        }
+        let audit = engine.auto.audit[thread.id] ?? []
+        print("AUTO e2e audit: \(audit.map { "\($0.kind.rawValue):\($0.action):\($0.source?.rawValue ?? "-"):\($0.reasonCode):\($0.model ?? "-"):\($0.latencyMilliseconds ?? -1)ms" })")
+        print("AUTO e2e reviewer model: \(engine.auto.reviewerModel.map { "\($0.providerID)/\($0.id)" } ?? "server default")")
+        #expect(audit.contains { $0.kind == .autoApproved && $0.action == "read" })
+        guard let request = secret else { return }
+        try await engine.reply(to: request.id, .reject, message: "Not the secrets, please.")
+        _ = try? await sandbox.client().interrupt(sessionID: thread.id.rawValue)
+    }
+
+    /// Two prompts: one thread runs long, another stops it with thread_interrupt (same project, no approval).
+    @Test func sameProjectInterruptIsAttributedAndHeld() async throws {
+        let sandbox = try await Sandbox.start("interrupt")
+        defer { Task { await sandbox.stop() } }
+        let engine = sandbox.engine
+        let target = try await engine.createThread(in: sandbox.project.path, title: "long runner", permissionMode: .fullAccess)
+        let caller = try await engine.createThread(in: sandbox.project.path, title: "supervisor", permissionMode: .fullAccess)
+        let model = engine.openThread(target.id)
+        defer { model.close() }
+        _ = try await engine.send("Write the numbers from 1 to 400 in words, one per line. Do not use tools.", to: target.id)
+        try await waitUntil("target running", timeout: .seconds(60)) { engine.orchestration.status(of: target.id)?.isActive == true }
+        _ = try await engine.send(
+            "Call the thread_interrupt tool exactly once with threadID \(target.id.rawValue) and reason 'contract test of interrupts'. Then reply with exactly: STOPPED",
+            to: caller.id)
+        try await waitUntil("held", timeout: .seconds(180)) { model.heldInterrupt != nil }
+        let record = try #require(model.heldInterrupt)
+        print("AUTO e2e interrupt: \(record)")
+        #expect(record.by == caller.id.rawValue)
+        #expect(record.reason == "contract test of interrupts")
+        #expect(record.actual == "stopped" || record.actual == "still_running")
+        let client = try await sandbox.client()
+        // Nobody approved anything: no permission request was raised in the caller.
+        #expect(try await client.permissions(sessionID: caller.id.rawValue).isEmpty)
+        // The stopped thread's attributed note is parked in its inbox (non-waking input waits for the next run, verified
+        // by probeSyntheticWithoutResume) and it is not running again.
+        let inbox = try await client.inbox(sessionID: target.id.rawValue)
+        #expect(inbox.contains { ($0.text ?? "").hasPrefix("[BelloCode interrupt]") && ($0.text ?? "").contains("supervisor") })
+        #expect(engine.orchestration.status(of: target.id)?.isActive != true)
+    }
+
+    /// No prompt: where a non-waking synthetic note lands (message list or inbox) on an idle session.
+    @Test func probeSyntheticWithoutResume() async throws {
+        let sandbox = try await Sandbox.start("synthetic")
+        defer { Task { await sandbox.stop() } }
+        let client = try await sandbox.client()
+        let id = try await session(sandbox, "probe", rules: [PermissionRule(action: "*", resource: "*", effect: .allow)])
+        try await client.postSynthetic(sessionID: id, text: "[BelloCode interrupt] probe", resume: false)
+        try await Task.sleep(for: .seconds(1))
+        let messages = try await client.messages(sessionID: id, MessageListQuery(limit: 20)).data
+        let inbox = try await client.inbox(sessionID: id)
+        print("AUTO probe synthetic: messages \(messages.map(\.type)) inbox \(inbox.count)")
+        let busy = try await client.session(id).time.busy
+        print("AUTO probe synthetic: busy \(busy ?? -1)")
+    }
 }
