@@ -37,6 +37,10 @@ public struct ExtrasCaller: Sendable, Hashable {
 public final class ExtrasHub {
     public let schedules: SchedulerService
     public let mergeRequests: MergeRequestService
+    /// GitLab 2: inline review of MR diffs (versions, positioned discussions, drafts).
+    public let reviews: MergeRequestReviewService
+    /// GitLab 2: issues, to-dos, approval explanations, dependencies, Code Owners.
+    public let gitLabWork: GitLabWorkService
     public let secrets: SecretService
     public let visuals: VisualService
 
@@ -71,12 +75,15 @@ public final class ExtrasHub {
         mergeRequests = MergeRequestService(
             store: store, clock: configuration.wallClock, transport: configuration.forgeTransport, tokens: configuration.forgeTokens,
             baseInterval: configuration.mergeRequestPoll.seconds, maxBackoff: configuration.mergeRequestMaxBackoff.seconds)
+        reviews = MergeRequestReviewService(mergeRequests: mergeRequests, store: store)
+        gitLabWork = GitLabWorkService(mergeRequests: mergeRequests)
         secrets = SecretService(vault: configuration.secretVault, store: store, clock: configuration.wallClock)
         secretVault = configuration.secretVault
         wallClock = configuration.wallClock
         visuals = VisualService(store: store, directory: configuration.visualsDirectory)
         schedules.runner = self
         mergeRequests.host = self
+        gitLabWork.host = self
         schedules.needsApproval = { [weak self] task in await self?.raiseScheduleCard(task, requestedBy: nil) }
     }
 
@@ -98,7 +105,11 @@ public final class ExtrasHub {
                         if session.isArchived { self.archived.insert(session.id) } else { self.archived.remove(session.id) }
                     }
                     self.mergeRequests.ingest(sessions)
-                    if !change.removedSessions.isEmpty { self.mergeRequests.removed(change.removedSessions) }
+                    self.gitLabWork.ingest(sessions)
+                    if !change.removedSessions.isEmpty {
+                        self.mergeRequests.removed(change.removedSessions)
+                        self.gitLabWork.removed(change.removedSessions)
+                    }
                 }
             })
         let outputs = store.observe(.commandOutputs)
@@ -773,6 +784,24 @@ extension ExtrasHub: MergeRequestHost {
         else { return nil }
         return (remote.text.trimmingCharacters(in: .whitespacesAndNewlines), head.text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+}
+
+extension ExtrasHub: GitLabWorkHost {
+    public func writeIssueLinks(_ sessionID: SessionID, _ transform: @escaping @Sendable ([LinkedIssue]) -> [LinkedIssue]) async throws -> [LinkedIssue] {
+        let box = IssueLinksBox()
+        try await core.mergeSessionMetadata(sessionID) { raw in
+            let updated = transform(LinkedIssue.decode(fromMetadata: raw))
+            box.set(updated)
+            return LinkedIssue.encode(updated, intoMetadata: raw)
+        }
+        return box.value
+    }
+}
+
+private final class IssueLinksBox: Sendable {
+    private let stored = Mutex<[LinkedIssue]>([])
+    func set(_ value: [LinkedIssue]) { stored.withLock { $0 = value } }
+    var value: [LinkedIssue] { stored.withLock { $0 } }
 }
 
 /// Carries the links written inside the metadata transform back out.

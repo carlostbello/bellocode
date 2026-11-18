@@ -55,6 +55,14 @@ public enum GitLabFeature: String, CaseIterable, Sendable, Codable {
     case approvalRules
     /// Byte ranges on job logs (`Range: bytes=-N` answered 206): never documented, probed per instance.
     case jobLogRange
+    /// Draft notes on merge requests (`M/draft_notes`, `bulk_publish`): a review sent as one. Probed (GitLab 2).
+    case draftNotes
+    /// Merge request dependencies (`M/blocks`): Premium/Ultimate. Probed; CE is unavailable.
+    case mergeRequestDependencies
+    /// Project approval settings (`/projects/:P/approvals`: reset on push, author approval): Premium/Ultimate.
+    case approvalSettings
+    /// Merge requests related to an issue (`issues/:iid/related_merge_requests`).
+    case relatedMergeRequests
 
     public var minimum: GitLabVersion? {
         switch self {
@@ -62,7 +70,7 @@ public enum GitLabFeature: String, CaseIterable, Sendable, Codable {
         case .detailedMergeStatus: GitLabVersion(major: 15, minor: 6)
         case .reviewers: GitLabVersion(major: 13, minor: 8)
         case .draftField: GitLabVersion(major: 14, minor: 0)
-        case .approvalRules, .jobLogRange: nil
+        case .approvalRules, .jobLogRange, .draftNotes, .mergeRequestDependencies, .approvalSettings, .relatedMergeRequests: nil
         }
     }
 
@@ -74,6 +82,10 @@ public enum GitLabFeature: String, CaseIterable, Sendable, Codable {
         case .draftField: "Draft field"
         case .approvalRules: "Required approval rules and Code Owners"
         case .jobLogRange: "Partial job log loading"
+        case .draftNotes: "Draft review comments"
+        case .mergeRequestDependencies: "Merge request dependencies"
+        case .approvalSettings: "Project approval settings"
+        case .relatedMergeRequests: "Related merge requests of issues"
         }
     }
 }
@@ -113,6 +125,9 @@ public struct GitLabCapabilities: Hashable, Sendable, Codable {
         }
         if feature == .approvalRules, enterprise == false {
             return .unavailable("Required approval rules need GitLab Premium; this instance is Community Edition (approvals are optional).")
+        }
+        if feature == .mergeRequestDependencies || feature == .approvalSettings, enterprise == false {
+            return .unavailable("\(feature.title) need GitLab Premium; this instance is Community Edition.")
         }
         return .unknown
     }
