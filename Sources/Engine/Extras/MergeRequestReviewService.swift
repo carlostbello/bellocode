@@ -62,6 +62,8 @@ public final class MergeRequestReviewService {
     @discardableResult
     public func load(_ ref: MergeRequestRef) async -> ReviewState? {
         let key = ref.url
+        let interval = EngineSignposts.gitLab.beginInterval("reviewLoad")
+        defer { EngineSignposts.gitLab.endInterval("reviewLoad", interval) }
         let generation = (generations[key] ?? 0) + 1
         generations[key] = generation
         phases[key] = .loading
@@ -247,6 +249,8 @@ public final class MergeRequestReviewService {
     public func submit(_ ref: MergeRequestRef) async throws -> String {
         try mergeRequests.requireWrites(ref.instance)
         guard !busy.contains(ref.url) else { throw ExtrasError("A submit is already running.") }
+        let interval = EngineSignposts.gitLab.beginInterval("reviewSubmit")
+        defer { EngineSignposts.gitLab.endInterval("reviewSubmit", interval) }
         busy.insert(ref.url)
         defer { busy.remove(ref.url) }
         try await checkNotMoved(ref)
