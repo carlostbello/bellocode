@@ -246,6 +246,7 @@ struct HostGitIsolationTests {
         let repository = try HostileRepository.make()
         defer { repository.remove() }
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: HostGit.realGit() ?? "/usr/bin/git")
         process.arguments = ["add", "-A"]
         process.currentDirectoryURL = URL(filePath: repository.root)

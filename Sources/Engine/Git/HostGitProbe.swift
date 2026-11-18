@@ -139,6 +139,7 @@ public struct HostileRepository: Sendable {
     /// Plain, unconfined git for building the fixture (before anything hostile exists): no user configuration.
     func plain(_ arguments: [String], in directory: String) throws {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: HostGit.realGit() ?? "/usr/bin/git")
         process.arguments = ["-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=always"] + arguments
         process.currentDirectoryURL = URL(filePath: directory, directoryHint: .isDirectory)
