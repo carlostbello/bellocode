@@ -106,17 +106,24 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
     public var generation: Int?
     /// The developer's code roots (canonical): the policy layer treats paths inside them as in scope (`TrustedRoots`).
     public var trustedRoots: [String]?
+    /// Global image-based MCP servers (`bellocode-exec --stdio --mcp <id>`), by id. Secret variable names only.
+    public var mcpServers: [ImageMCPSpec]?
+    /// Where the helper keeps the last part of each image server's error output (`<id>.log`, bounded).
+    public var mcpLogDirectory: String?
 
-    public init(socket: String, workspaces: [Workspace], runtimeBlocked: Blocked? = nil, epoch: String? = nil, generation: Int? = nil) {
+    public init(socket: String, workspaces: [Workspace], runtimeBlocked: Blocked? = nil, epoch: String? = nil, generation: Int? = nil,
+                mcpServers: [ImageMCPSpec]? = nil, mcpLogDirectory: String? = nil) {
         version = Self.currentVersion
         self.socket = socket
         self.workspaces = workspaces
         self.runtimeBlocked = runtimeBlocked
         self.epoch = epoch
         self.generation = generation
+        self.mcpServers = mcpServers
+        self.mcpLogDirectory = mcpLogDirectory
     }
 
-    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked, epoch, generation, trustedRoots }
+    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked, epoch, generation, mcpServers, mcpLogDirectory, trustedRoots }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -127,6 +134,8 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         epoch = try c.decodeIfPresent(String.self, forKey: .epoch)
         generation = try c.decodeIfPresent(Int.self, forKey: .generation)
         trustedRoots = try c.decodeIfPresent([String].self, forKey: .trustedRoots)
+        mcpServers = try c.decodeIfPresent([ImageMCPSpec].self, forKey: .mcpServers)
+        mcpLogDirectory = try c.decodeIfPresent(String.self, forKey: .mcpLogDirectory)
     }
 
     /// What the app requires of the installed configuration (S4 in docs/reviews/deep-review-1.md): written *before*
@@ -212,6 +221,10 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         // The Mac's docker settings never reach a command: BelloCode sets its own filtered endpoint.
         "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_TLS",
         "DOCKER_BUILDKIT", "COMPOSE_BAKE",
+        // The Mac's certificate and proxy settings (opencode's): containers get their own at creation (CorporateNetwork),
+        // which a host path or a Mac-loopback proxy here would override.
+        "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO", "CURL_CA_BUNDLE",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     ]
     public static let hostOnlyPrefixes = ["XDG_", "__CF", "DYLD_", "OPENCODE_PASSWORD", "OPENCODE_SERVER", "OPENCODE_DISABLE",
                                           "OPENCODE_CONFIG", "OPENCODE_PTY", "OPENCODE_EXPERIMENTAL", "BUN_", "Apple_",

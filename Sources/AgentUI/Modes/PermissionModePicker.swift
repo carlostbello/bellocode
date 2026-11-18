@@ -28,9 +28,13 @@ public struct PermissionModeOption: Hashable, Sendable, Identifiable {
             allows: "File edits and reads inside the project run without asking.",
             asks: "Asks before every command and anything outside the project; .env files ask."),
         PermissionModeOption(
+            mode: .auto, title: "Auto", shortTitle: "Auto", symbolName: "checkmark.shield",
+            allows: "Routine work inside the project runs; anything else is reviewed by a fast model and runs once if it is routine.",
+            asks: "Always asks for secrets, paths outside the project, destructive git, deletes, installs, publishing and MCP servers."),
+        PermissionModeOption(
             mode: .fullAccess, title: "Full access", shortTitle: "Full access", symbolName: "lock.open",
             allows: "Edits, commands, folders outside the project, .env files and web access run without asking.",
-            asks: "Nothing asks. The plan agent still cannot edit files."),
+            asks: "Nothing asks; risky actions are noted in the thread and in Needs You. The plan agent still cannot edit files."),
     ]
 
     public static func option(_ mode: PermissionMode) -> PermissionModeOption { all.first { $0.mode == mode }! }

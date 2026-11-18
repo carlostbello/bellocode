@@ -15,6 +15,8 @@ enum EngineSignposts {
     static let sync = OSSignposter(subsystem: subsystem, category: "Sync")
     /// GitLab 2: review loads (versions, diff, discussions) and submits.
     static let gitLab = OSSignposter(subsystem: subsystem, category: "GitLab")
+    /// Auto mode: one interval per request decision (policy, review, reply).
+    static let auto = OSSignposter(subsystem: subsystem, category: "Auto")
     static let log = Logger(subsystem: subsystem, category: "Engine")
 }
 

@@ -128,6 +128,9 @@ public enum PermissionMode: String, Hashable, Sendable, Codable, CaseIterable {
     case ask
     /// Allow edits; ask before shell commands.
     case autoEdit
+    /// T3-style Auto (docs/features/auto-mode.md): every request goes to BelloCode's policy; routine work runs, risky
+    /// work asks, the rest is reviewed by an isolated model. Never replies "always".
+    case auto
     /// Allow everything.
     case fullAccess
 }

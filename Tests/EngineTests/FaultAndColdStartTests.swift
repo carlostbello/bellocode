@@ -134,6 +134,10 @@ struct FaultAndColdStartTests {
         await thread.send("hello #script:greeting")
         await harness.server.waitUntilAllIdle()
         try await waitUntil("reply") { thread.status?.status == .finishedUnread }
+        // The status can publish before the thread model has applied the turn's messages (it failed once under
+        // full-suite load with no messages shown): wait for the thread to catch up, as the test above does.
+        await first.flush()
+        try await threadBarrier(first, thread)
         thread.draft = "unsent words"
         let expected = thread.messageIDs
         #expect(expected.compactMap { thread.message($0)?.message.kind.typeName } == ["user", "assistant"])

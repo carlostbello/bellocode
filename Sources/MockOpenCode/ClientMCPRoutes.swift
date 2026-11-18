@@ -61,7 +61,7 @@ extension MockOpenCodeServer {
                 "jsonrpc": "2.0", "id": .int(id), "method": "initialize",
                 "params": [
                     "protocolVersion": .string(MockClientMCPState.protocolVersion), "capabilities": [:],
-                    "clientInfo": ["name": "opencode", "version": "2.3.0"],
+                    "clientInfo": ["name": "opencode", "version": .string(options.version)],
                 ],
             ], to: subscriberID)
         return .ptySocket(subscriberID: subscriberID, handshake: WebSocket.handshake(key: key))

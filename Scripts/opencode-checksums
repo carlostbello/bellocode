@@ -2,7 +2,12 @@
 # Archive SHA-256 values come from the anomalyco/homebrew-tap formula `opencode-v2.rb`.
 # Binary SHA-256 is the `opencode` file inside the archive (also used to verify a local fallback copy). Both are
 # required: Scripts/make-app.sh bundles only an opencode whose SHA-256 equals the binary column (D2).
+# Source: `homebrew` when the archive digest matched the tap's formula for that version, `first-seen` when only the
+# observed digest is recorded (no published one); a human confirms a first-seen line before the pin moves to it.
+# Lines are written by Scripts/opencode-upgrade.sh (docs/features/opencode-upgrades.md).
 #
-# version  platform              archive-sha256                                                    binary-sha256
-2.3.0      darwin-arm64          7907df2b12720a840fbb49c5b978b9b82925b6bf75479a5fd216afa8932b6702  9f3147cae4ca323827d3ca39451b0d3431b2906e79a08e9b09d1eb34bb703f52
-2.3.0      darwin-x64-baseline   b4985f65e2e4d624ebe5a490df66cbbce06a4146b8ddfab86473f73c2cc57ea2  e3d8af509109b820369a3782f5062867f10b29edc5e7b0bd20ddfb34a1e867fb
+# version  platform              archive-sha256                                                    binary-sha256                                                     source
+2.3.0      darwin-arm64          7907df2b12720a840fbb49c5b978b9b82925b6bf75479a5fd216afa8932b6702  9f3147cae4ca323827d3ca39451b0d3431b2906e79a08e9b09d1eb34bb703f52  homebrew
+2.3.0      darwin-x64-baseline   b4985f65e2e4d624ebe5a490df66cbbce06a4146b8ddfab86473f73c2cc57ea2  e3d8af509109b820369a3782f5062867f10b29edc5e7b0bd20ddfb34a1e867fb  homebrew
+2.3.2      darwin-arm64          31ab5a06a29edc7e49b895f35c2b64ebfe7c7f0437b0f2581b006efcd79fee1a  635c523002b6eaf897597facba703729794cb07bdb59044d5e173b07b77ff934  homebrew
+2.3.2      darwin-x64-baseline   6dc5deb4554df035d27dbb3a4663d96954969a33079aeb6b01dd9de2d9092545  5d188d68f808570aa1f8826c9d6bd7d9ade18e9bac8961aa3c0079f41e2850e8  homebrew

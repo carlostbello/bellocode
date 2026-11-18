@@ -1,0 +1,12 @@
+{"label": "idle: static page, no viewer", "container": "bellocode-g7-browser", "seconds": 15.0, "cpu_percent_of_one_core": 0.4, "memory_current_mib": 374, "anon_mib": 327, "per_process_cpu_percent": {}}
+{"label": "moving page, no viewer", "container": "bellocode-g7-browser", "seconds": 15.0, "cpu_percent_of_one_core": 56.7, "memory_current_mib": 377, "anon_mib": 328, "per_process_cpu_percent": {"Xvnc": 33.3, "chromium": 13.3}}
+{"label": "moving page, noVNC viewer connected (browser side)", "container": "bellocode-g7-browser", "seconds": 15.0, "cpu_percent_of_one_core": 58.6, "memory_current_mib": 385, "anon_mib": 336, "per_process_cpu_percent": {"Xvnc": 33.3, "chromium": 20.0}}
+{"label": "moving page: the noVNC viewer (headless Chromium client) itself", "container": "bellocode-g7-viewer", "seconds": 15.0, "cpu_percent_of_one_core": 129.9, "memory_current_mib": 1531, "anon_mib": 803, "per_process_cpu_percent": {"chromium": 120.0}}
+{"label": "moving page: noVNC viewer only rendering (headless Chromium client, no sampling)", "container": "bellocode-g7-viewer", "seconds": 15.0, "cpu_percent_of_one_core": 19.8, "memory_current_mib": 426, "anon_mib": 248, "per_process_cpu_percent": {"chromium": 13.3}}
+{"label": "agent browsing loop: navigate+snapshot+screenshot+close (fixture, example.com, wikipedia)", "container": "bellocode-g7-browser", "seconds": 15.0, "cpu_percent_of_one_core": 28.9, "memory_current_mib": 789, "anon_mib": 677, "per_process_cpu_percent": {"chromium": 6.7}}
+peak_mib 914
+{"note": "the agent-browsing sample above had 15 agent tabs open (the loop did not close them), so 789 MiB is ~15 tabs incl. 5 Wikipedia pages; peak 914 MiB"}
+{"label": "fresh start, about:blank + 1 agent tab, no viewer (idle)", "container": "bellocode-g7-browser", "seconds": 15.0, "cpu_percent_of_one_core": 0.3, "memory_current_mib": 311, "anon_mib": 274, "per_process_cpu_percent": {}}
+{"image":"bellocode-g7-browser:spike","size_bytes":1768968739}
+{"image":"node:22-bookworm-slim (base)","size_bytes":346174729}
+{"chromium_installed_kib": 276658, "browse_binary_bytes": 6148936, "crx_bytes": 186839}

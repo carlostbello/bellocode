@@ -18,7 +18,7 @@ struct DockerFilterTests {
     let token: String
 
     init() throws {
-        base = (CodeRoots.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-dfilter-\(UUID().uuidString.prefix(8))"
+        base = (CodeRootPaths.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-dfilter-\(UUID().uuidString.prefix(8))"
         root = base + "/Repos"
         try FileManager.default.createDirectory(atPath: root + "/app/data", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: base + "/outside", withIntermediateDirectories: true)

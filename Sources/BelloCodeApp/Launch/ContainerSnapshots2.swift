@@ -89,7 +89,7 @@ extension SnapshotRunner {
                 .init("PTY ($SHELL)", .container("PTY ($SHELL): container Linux")),
                 .init("MCP server (stdio)", .container("MCP server (stdio): container Linux")),
                 .init("Command template (!`…`)", .container("command template: container Linux")),
-                .init("Schedule condition", .off("opencode schedules are disabled in this configuration")),
+                .init("Automations", .off("opencode automations are disabled in this configuration")),
                 .init("Terminal (persistent PTY)", .container("terminal: container Linux")),
             ])
             written += await renderComponent(state: "isolation-mcp") {

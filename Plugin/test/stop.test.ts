@@ -73,7 +73,7 @@ describe("task_cancel and thread_interrupt", () => {
     plugin.add({ id: "ses_task", parentID: "ses_caller", time: running })
     plugin.add({ id: "ses_a", parentID: "ses_task", time: running })
     plugin.add({ id: "ses_hidden", parentID: "ses_a", time: running })
-    const result = await plugin.run("thread_interrupt", { threadID: "ses_task" })
+    const result = await plugin.run("thread_interrupt", { threadID: "ses_task", reason: "test" })
     expect(result.metadata.stop.complete).toBe(false)
     expect(result.metadata.stop.unexamined).toBe(1)
     expect(result.content).toContain("not fully examined")

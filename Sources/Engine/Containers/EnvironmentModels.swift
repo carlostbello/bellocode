@@ -29,11 +29,17 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var useDevContainer: Bool
     /// The dev container's lifecycle commands the person approved (`DevContainerPlan.lifecycleDigest`).
     public var approvedDevLifecycle: String?
+    /// Register the global MCP servers (Settings ▸ MCP Servers) for this project.
+    public var useGlobalMCP: Bool
+    /// Global MCP servers (ids) this project turned off.
+    public var globalMCPOptOut: [String]
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
                 idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = [],
-                executionMode: ExecutionMode? = nil, useDevContainer: Bool = false) {
+                executionMode: ExecutionMode? = nil, useDevContainer: Bool = false, useGlobalMCP: Bool = true, globalMCPOptOut: [String] = []) {
+        self.useGlobalMCP = useGlobalMCP
+        self.globalMCPOptOut = globalMCPOptOut
         self.caches = caches
         self.executionMode = executionMode
         self.useDevContainer = useDevContainer
@@ -50,8 +56,9 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches
-        case executionMode, useDevContainer, approvedDevLifecycle
+    enum CodingKeys: String, CodingKey {
+        case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches, useGlobalMCP,
+             globalMCPOptOut, executionMode, useDevContainer, approvedDevLifecycle
     }
 
     public init(from decoder: any Decoder) throws {
@@ -70,6 +77,8 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         executionMode = (try? c.decodeIfPresent(String.self, forKey: .executionMode)).flatMap { $0 }.flatMap(ExecutionMode.init(rawValue:))
         useDevContainer = try c.decodeIfPresent(Bool.self, forKey: .useDevContainer) ?? false
         approvedDevLifecycle = try c.decodeIfPresent(String.self, forKey: .approvedDevLifecycle)
+        useGlobalMCP = try c.decodeIfPresent(Bool.self, forKey: .useGlobalMCP) ?? true
+        globalMCPOptOut = try c.decodeIfPresent([String].self, forKey: .globalMCPOptOut) ?? []
     }
 
     /// The cache mounts for this project: its own choices plus what the image declares (`PackageCache.declared`),

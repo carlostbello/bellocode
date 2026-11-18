@@ -22,42 +22,95 @@ extension EnvironmentService {
         return configs
     }
 
-    /// Registers the project's servers now (the container is ready, the setting changed, or the server reconnected).
-    /// Idempotent: a server already registered with the same config and connected is left alone.
+    /// Registers the project's servers now (the container is ready, the setting changed, or the server reconnected) and
+    /// the global servers when the project is in use (`GlobalMCPService`). Idempotent: a server already registered with
+    /// the same config and connected is left alone. Project servers are added only while the project's container is
+    /// ready (those already registered stay meanwhile). One sync per location at a time: a request while one runs is
+    /// coalesced into one more pass after it (never cancelled half-way, which would forget what it registered).
     func syncMCPServers(_ model: ProjectEnvironment) {
         guard isEnabled, let context = isolationContext else { return }
-        let desired = desiredMCPConfigs(model)
-        let registered = registeredMCP[model.directory] ?? [:]
-        guard !desired.isEmpty || !registered.isEmpty else { return }
         let directory = model.directory
+        if mcpSyncRunning.contains(directory) {
+            mcpSyncPending.insert(directory)
+            return
+        }
+        let registered = registeredMCP[directory] ?? [:]
+        var projectConfigs = desiredMCPConfigs(model)
+        if model.phase != .ready {
+            projectConfigs = projectConfigs.filter { registered[$0.key] == $0.value }
+        }
+        let globals = globalRegistrations(model)
+        guard !projectConfigs.isEmpty || !globals.isEmpty || !registered.isEmpty || !(mcpEverRegistered[directory] ?? []).isEmpty else { return }
+        let vault = configuration?.mcpVault
+        mcpSyncRunning.insert(directory)
         tasks.set("mcp-\(model.projectKey)", Task { [weak self] in
-            guard let client = try? await context.client() else { return }
-            let statuses = (try? await client.mcpServers(directory: directory)) ?? []
-            var current = registered
-            for name in registered.keys where desired[name] == nil {
-                try? await client.removeMCPServer(name, directory: directory)
-                current[name] = nil
-            }
-            for (name, config) in desired.sorted(by: { $0.key < $1.key }) {
-                let status = statuses.first { $0.name == name }?.status
-                if current[name] == config, status == "connected" || status == "pending" { continue }
-                do {
-                    try await client.addMCPServer(name, config: config, directory: directory)
-                    current[name] = config
-                } catch {
-                    Self.log.error("could not register a project MCP server")
-                }
-            }
-            guard let self, !Task.isCancelled else { return }
-            self.registeredMCP[directory] = current
-            model.mcpStatus = (try? await client.mcpServers(directory: directory)) ?? statuses
+            await self?.performMCPSync(model, context: context, projectConfigs: projectConfigs, globals: globals, vault: vault)
+            guard let self else { return }
+            self.mcpSyncRunning.remove(directory)
+            if self.mcpSyncPending.remove(directory) != nil, !Task.isCancelled { self.syncMCPServers(model) }
         })
+    }
+
+    private func performMCPSync(_ model: ProjectEnvironment, context: IsolationCheck.Context, projectConfigs: [String: JSONValue],
+                                globals: [GlobalRegistration], vault: (any SecretVault)?) async {
+        let directory = model.directory
+        let (globalConfigs, missing) = await Self.resolveOffMain(globals, vault: vault)
+        var desired = globalConfigs
+        desired.merge(projectConfigs) { _, project in project }
+        for (id, problem) in missing where globalMCPStates[id]?.problem != problem { globalMCPStates[id]?.problem = problem }
+        // An image server's helper reads its definition from the helper configuration: it must be on disk first.
+        if globals.contains(where: { $0.kind == .image }) { await writeConfigNow() }
+        guard let client = try? await context.client() else { return }
+        let statuses = (try? await client.mcpServers(directory: directory)) ?? []
+        let registered = registeredMCP[directory] ?? [:]
+        var endedConnection = false
+        // What BelloCode registered here that opencode still lists and that is no longer wanted.
+        let ours = (mcpEverRegistered[directory] ?? []).intersection(statuses.map(\.name))
+        for name in Set(registered.keys).union(ours) where desired[name] == nil {
+            try? await client.removeMCPServer(name, directory: directory)
+            registeredMCP[directory]?[name] = nil
+            // Any removal may end an image server's connection: its container is checked for afterwards (cheap).
+            endedConnection = true
+        }
+        for (name, config) in desired.sorted(by: { $0.key < $1.key }) {
+            let status = statuses.first { $0.name == name }?.status
+            if registeredMCP[directory]?[name] == config, status == "connected" || status == "pending" { continue }
+            mcpEverRegistered[directory, default: []].insert(name)
+            do {
+                try await client.addMCPServer(name, config: config, directory: directory)
+                registeredMCP[directory, default: [:]][name] = config
+            } catch {
+                Self.log.error("could not register an MCP server")
+            }
+        }
+        model.mcpStatus = (try? await client.mcpServers(directory: directory)) ?? statuses
+        refreshGlobalStates()
+        if endedConnection { scheduleMCPLeftoverCleanup() }
+    }
+
+    /// opencode ends a removed server's helper, which removes its container; a helper killed outright cannot, so the
+    /// connection's container (stopped once its input closed) or that of a server no longer configured is removed here.
+    func scheduleMCPLeftoverCleanup() {
+        guard runtime?.isReady == true else { return }
+        let runtimeRef = activeRuntime
+        tasks.set("mcp-leftovers-after-remove", Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            let known = Set(self.imageServerSpecs().map(\.id))
+            await runtimeRef.removeMCPLeftovers(knownIDs: known)
+        })
+    }
+
+    @concurrent
+    nonisolated static func resolveOffMain(_ registrations: [GlobalRegistration], vault: (any SecretVault)?) async
+        -> (configs: [String: JSONValue], missing: [String: String]) {
+        resolve(registrations, vault: vault)
     }
 
     /// The server (re)connected: runtime registrations are gone. Re-register for projects whose container is ready.
     public func serverConnected() {
         registeredMCP.removeAll()
-        for model in models.values where model.phase == .ready { syncMCPServers(model) }
+        for model in models.values where model.phase == .ready || projectsInUse.contains(model.directory) { syncMCPServers(model) }
     }
 
     /// Reads the project's MCP servers and their status (Environment pane).
@@ -65,6 +118,7 @@ extension EnvironmentService {
         let model = environment(for: directory)
         guard let context = isolationContext, let client = try? await context.client() else { return }
         if let statuses = try? await client.mcpServers(directory: model.directory) { model.mcpStatus = statuses }
+        refreshGlobalStates()
     }
 
     /// Names BelloCode registered for a location (the isolation self-check accounts for them).

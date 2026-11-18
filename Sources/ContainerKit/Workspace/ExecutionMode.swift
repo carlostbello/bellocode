@@ -91,7 +91,7 @@ public struct CodeRootIssue: Sendable, Equatable, Hashable {
 
 /// The folders a developer keeps their repositories in (docs/features/containers.md, "Code roots"). The shared
 /// workspace mounts each at the same path; the policy layer treats them as trusted (inside them is "in scope").
-public enum CodeRoots {
+public enum CodeRootPaths {
     /// System locations a root may neither be, nor contain, nor sit inside (apart from the temporary folders, which
     /// Rancher Desktop shares and tests use).
     public static let systemLocations = [
@@ -329,7 +329,7 @@ public enum ManagedExecutionPolicy {
 
     static func managed(from value: (String) -> Any?, source: String, home: String) -> Managed {
         let roots = ((value(codeRootsKey) as? [String]) ?? (value(codeRootsKey) as? String).map { [$0] })?
-            .map { CodeRoots.standardize($0, home: home) }
+            .map { CodeRootPaths.standardize($0, home: home) }
         let allowed = (value(allowedModesKey) as? [String]).map { Set($0.compactMap(ExecutionMode.init(rawValue:))) }
         return Managed(codeRoots: roots, codeRootsLocked: (value(codeRootsLockedKey) as? Bool) ?? false,
                        defaultMode: (value(defaultModeKey) as? String).flatMap(ExecutionMode.init(rawValue:)),

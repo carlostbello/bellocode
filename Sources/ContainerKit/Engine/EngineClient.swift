@@ -282,12 +282,18 @@ public struct EngineClient: Sendable {
         }
     }
 
-    /// `POST /build` with an in-memory tar context (see `TarArchive`). Returns the image ID.
+    /// `POST /build` with an in-memory tar context (see `TarArchive`). Returns the image ID. `buildArgs` are sent as
+    /// `buildargs` (proxies: `ImageBuildNetwork.buildArgs()`), `dockerfile` names the Dockerfile in the context, and
+    /// `networkMode` the network `RUN` steps use.
     public func buildImage(context: Data, tag: String, labels: [String: String] = [:], pull: Bool = false,
+                           buildArgs: [String: String] = [:], dockerfile: String? = nil, networkMode: String? = nil,
                            progress: @Sendable (ProgressMessage) -> Void = { _ in }) async throws -> String? {
         var query: [(String, String)] = [("t", tag), ("rm", "1"), ("forcerm", "1")]
         if !labels.isEmpty { query.append(("labels", Self.filtersObject(labels))) }
         if pull { query.append(("pull", "1")) }
+        if !buildArgs.isEmpty { query.append(("buildargs", Self.filtersObject(buildArgs))) }
+        if let dockerfile { query.append(("dockerfile", dockerfile)) }
+        if let networkMode { query.append(("networkmode", networkMode)) }
         let (connection, head) = try await open("POST", "/build", query: query, body: context,
                                                 headers: [("Content-Type", "application/x-tar")])
         if head.status != 200 {

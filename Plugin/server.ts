@@ -11,6 +11,7 @@
 
 import * as L from "./src/logic.ts"
 import * as C from "./src/container.ts"
+import * as A from "./src/auto.ts"
 import { readFileSync } from "fs"
 
 type Ctx = any
@@ -87,12 +88,16 @@ export default {
     // opencode's shell is already BelloCode's helper (config `shell` and $SHELL); this hook forces it for every shell
     // job (agent tool, /api/shell, terminals through the Shell service), whatever a session or plugin asked for.
     const container = C.containerOptions(ctx.options)
+    const trace = new A.Trace()
     let guardInstalled = false
     if (container) {
       await ctx.shell.hook("create.before", (event: any) => {
         event.shell = container.helper
+        trace.add({ hook: "shell.create.before" })
       })
       guardInstalled = true
+    } else if (ctx.shell?.hook) {
+      await ctx.shell.hook("create.before", () => trace.add({ hook: "shell.create.before" }))
     }
     const readExecConfig = (): C.ExecConfig | undefined => {
       if (!container) return undefined
@@ -328,6 +333,73 @@ export default {
           .put({ sessionID: session.id, key: C.CONTAINER_GUIDANCE_KEY, value: text })
           .catch(() => undefined)
       }
+    }
+
+    // MARK: Auto mode and risk instrumentation (docs/features/auto-mode.md)
+    // `permission.evaluate` runs after the rules and saved grants and before the request is created (verified on 2.3.0
+    // and 2.3.2). In an Auto session every `allow` becomes `ask`, so a saved "always" grant cannot skip BelloCode's
+    // policy (mandatory gates) and the app decides each request (it replies `once`, never `always`). Other modes are
+    // only recorded: each call's evaluations are stamped onto its result for the app's risk notices.
+    const callPermissions = new A.CallPermissions()
+    const hooks = { evaluate: false, executeBefore: false, executeAfter: false }
+    const modeOfSession = async (sessionID: string): Promise<A.Mode> => {
+      try {
+        return A.modeOf((await get(sessionID)).permissions as A.Rule[] | undefined)
+      } catch {
+        return "other"
+      }
+    }
+    if (ctx.permission?.hook) {
+      await ctx.permission.hook("evaluate", async (event: any) => {
+        const callID = event?.source?.id as string | undefined
+        const effectIn = event.effect as A.Effect
+        if (event.action === A.PROBE_ACTION) {
+          // Contract probe: proves the hook is awaited (the create call returns only after this sleep).
+          await sleep(Math.min(2_000, Math.max(0, Number(event.metadata?.delayMs ?? 300))))
+          const wanted = event.metadata?.effect
+          if (wanted === "allow" || wanted === "ask" || wanted === "deny") event.effect = wanted
+          trace.add({ hook: "evaluate", sessionID: event.sessionID, action: event.action, effectIn, effectOut: event.effect })
+          return
+        }
+        const mode = await modeOfSession(event.sessionID)
+        const decided = A.autoEffect(mode, effectIn)
+        if (decided.changed) {
+          event.effect = decided.effect
+          event.message = A.AUTO_MESSAGE
+        }
+        callPermissions.record(callID, { action: String(event.action), resources: list<string>(event.resources), effect: event.effect })
+        trace.add({
+          hook: "evaluate", sessionID: event.sessionID, callID, action: event.action,
+          resources: list<string>(event.resources).length, effectIn, effectOut: event.effect, mode,
+        })
+      })
+      hooks.evaluate = true
+    }
+    if (ctx.tool?.hook) {
+      await ctx.tool.hook("execute.before", (event: any) => {
+        trace.add({ hook: "execute.before", sessionID: event.sessionID, callID: event.id, tool: event.tool })
+      })
+      await ctx.tool.hook("execute.after", (event: any) => {
+        const evaluated = callPermissions.take(event.id)
+        trace.add({ hook: "execute.after", sessionID: event.sessionID, callID: event.id, tool: event.tool, status: event.status })
+        if (evaluated?.length && event.status === "completed" && event.result && typeof event.result === "object") {
+          event.result.metadata = { ...(event.result.metadata ?? {}), [A.PERMISSIONS_METADATA_KEY]: evaluated }
+        }
+      })
+      hooks.executeBefore = true
+      hooks.executeAfter = true
+    }
+
+    // Agent-initiated interrupts: rate limits, cascade cap, de-duplication (in this server process).
+    const interruptGuard = new A.InterruptGuard()
+    const interrupting = new Map<string, Promise<any>>()
+
+    const writeInterrupt = async (sessionID: string, record: A.InterruptRecord | null) => {
+      const fresh = await get(sessionID)
+      const metadata = { ...(fresh.metadata ?? {}) } as Record<string, unknown>
+      if (record) metadata.bellocode_interrupt = record
+      else delete metadata.bellocode_interrupt
+      await ctx.session.update({ sessionID, metadata })
     }
 
     // MARK: Tools
@@ -642,13 +714,18 @@ export default {
           const { caller, target, scope } = await reach(tool, String(input.threadID), "thread_send")
           if (scope === "self") fail("That is this thread. Answer directly instead.")
           const from = scope === "descendant" ? "your parent thread" : `thread "${caller.title ?? caller.id}" (${caller.id})`
-          const delivery = input.delivery === "steer" ? "steer" : "queue"
+          // A thread another agent stopped stays stopped until the user resumes it: steering is turned into queueing.
+          const held = Boolean((target.metadata as any)?.bellocode_interrupt?.held)
+          const delivery = input.delivery === "steer" && !held ? "steer" : "queue"
           await ctx.session.prompt({
             sessionID: target.id,
             text: `[Message from ${from}]\n${String(input.message)}`,
             delivery,
           })
-          return { content: `Sent to ${target.id} (${delivery}).`, metadata: { threadID: target.id } }
+          return {
+            content: `Sent to ${target.id} (${delivery}).${held ? " That thread was stopped by an interrupt; your message waits until the user resumes it." : ""}`,
+            metadata: { threadID: target.id },
+          }
         },
       },
       {
@@ -679,20 +756,74 @@ export default {
       },
       {
         name: "thread_interrupt",
-        description: "Stop another thread's current run and its child tasks. Needs the user's approval unless it is your own child task.",
-        input: obj({ threadID: str("Thread to stop.") }, ["threadID"]),
+        description: [
+          "Stop another thread's current run and its child tasks, with a reason. In this project it runs without asking:",
+          "it is attributed to you and shown in both threads, and the stopped thread's queued work is held until the user resumes it.",
+          "A thread in another project needs the user's approval. Rate-limited; use it only when that thread is doing harmful or conflicting work.",
+        ].join(" "),
+        input: obj(
+          { threadID: str("Thread to stop."), reason: str("Why, in one sentence. Shown to the user in both threads.") },
+          ["threadID", "reason"],
+        ),
         execute: async (input: any, tool: ToolContext) => {
-          const { target, scope } = await reach(tool, String(input.threadID), "thread_interrupt")
+          const reason = A.cleanReason(input.reason)
+          if (!reason) fail("Give a reason: the user sees who stopped the thread and why.")
+          if (!tool.sessionID) fail("Unattributed interrupt refused: no calling thread.")
+          const { caller, target, scope } = await reach(tool, String(input.threadID), "thread_interrupt")
           if (scope === "self") fail("Use your own final message to stop; you cannot interrupt yourself.")
-          if (scope === "same_project")
-            await ctx.permission.assert({
-              ...invocation(tool),
-              action: "bellocode_interrupt",
-              resources: [target.id],
-              metadata: { title: target.title ?? target.id },
-            })
-          const report = await cascadeStop(target.id, true, tool.signal)
-          return { content: L.describeStop(target.id, report, true), metadata: { stop: report } }
+          if ((target.time as any)?.archived) fail(`Thread ${target.id} is archived, so it was not interrupted.`)
+          const running = L.isRunning(target) || (await descendants(target.id)).some(L.isRunning)
+          if (!running) {
+            return {
+              content: `${target.id} is not running, so nothing was stopped.`,
+              metadata: { threadID: target.id, interrupt: { requested: "stop", actual: "not_running" } },
+            }
+          }
+          const inflight = interrupting.get(target.id)
+          if (inflight) {
+            const earlier = await inflight.catch(() => undefined)
+            return {
+              content: `${target.id} was already being stopped by another request; not repeated.${earlier?.content ? `\n${earlier.content}` : ""}`,
+              metadata: { threadID: target.id, deduplicated: true },
+            }
+          }
+          if (scope !== "descendant") {
+            const refusal = interruptGuard.check(caller.id, target.id)
+            if (refusal) fail(refusal)
+            interruptGuard.record(caller.id, target.id)
+          }
+          const work = (async () => {
+            const report = await cascadeStop(target.id, true, tool.signal)
+            const actual: A.InterruptRecord["actual"] = report.failed.some((item) => item.id === target.id)
+              ? "failed"
+              : report.stillRunning.includes(target.id)
+                ? "still_running"
+                : "stopped"
+            const record: A.InterruptRecord = {
+              by: caller.id,
+              byTitle: caller.title ?? undefined,
+              reason,
+              at: Date.now(),
+              requested: "stop",
+              actual,
+              held: true,
+            }
+            await writeInterrupt(target.id, record).catch(() => undefined)
+            // A note in the stopped thread (no run is started), so its transcript and model context say who and why.
+            await ctx.session
+              .synthetic({ sessionID: target.id, text: A.interruptNote(record), resume: false })
+              .catch(() => undefined)
+            return {
+              content: `${L.describeStop(target.id, report, true)}\nRequested: stop. Actual: ${actual}. Attributed to this thread; the user sees it in both threads, and ${target.id}'s queued work is held until they resume it.`,
+              metadata: { stop: report, interrupt: record, threadID: target.id, title: target.title ?? null },
+            }
+          })()
+          interrupting.set(target.id, work)
+          try {
+            return await work
+          } finally {
+            interrupting.delete(target.id)
+          }
         },
       },
       {
@@ -767,6 +898,7 @@ export default {
         id: "bellocode",
         methods: {
           info: { input: { type: "object" }, output: { type: "object" } },
+          trace: { input: { type: "object" }, output: { type: "object" } },
         },
         events: {},
       },
@@ -780,10 +912,21 @@ export default {
             .map((tool) => tool.id ?? tool.name)
             .filter((name: string) => tools.some((item) => item.name === name)),
           container: container ? { guard: guardInstalled, helper: container.helper } : null,
+          auto: { hooks, evaluations: trace.count },
           appTools: list<any>(await ctx.tool.list())
             .filter(L.isAppTool)
             .map((tool) => ({ id: tool.id ?? tool.name, codemode: tool.options?.codemode !== false })),
         }),
+        // Hook order and coverage for the contract tests and diagnostics: names, effects and counts, never content.
+        trace: async (input: any) => {
+          try {
+            const entries = trace.list(typeof input?.sessionID === "string" ? input.sessionID : undefined)
+            if (input?.clear === true) trace.clear()
+            return { entries: JSON.parse(JSON.stringify(entries)), count: trace.count, hooks: { ...hooks } }
+          } catch (error) {
+            return { entries: [], count: -1, error: String((error as any)?.message ?? error) }
+          }
+        },
       },
     )
 
@@ -822,6 +965,11 @@ export default {
           await putGuidance(await get(sessionID))
           return
         case "session.execution.started": {
+          // A run started (the user resumed or sent): the interrupt hold is over.
+          const started = await get(sessionID).catch(() => undefined)
+          const record = (started?.metadata as any)?.bellocode_interrupt as A.InterruptRecord | undefined
+          const cut = cascading.get(sessionID)
+          if (record?.held && !(cut && cut > Date.now())) await writeInterrupt(sessionID, { ...record, held: false }).catch(() => undefined)
           // Sessions created before the plugin (or while it reloaded) get their guidance at their next run; with
           // containers, every run refreshes it (image, tools, blocked state).
           if (!guided.has(sessionID) || container) await putGuidance(await get(sessionID)).catch(() => undefined)

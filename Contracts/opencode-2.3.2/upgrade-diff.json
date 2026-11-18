@@ -1,0 +1,799 @@
+{
+ "bridge": {
+  "acceptedFrom": [
+   4
+  ],
+  "acceptedTo": [
+   4
+  ],
+  "browserFrom": 4,
+  "browserTo": 4,
+  "grantedRulesChanged": false,
+  "pluginContractFrom": 1,
+  "pluginContractTo": 1,
+  "pluginLoaded": true,
+  "pluginToolsChanged": false
+ },
+ "builtins": {
+  "agents": {
+   "added": [],
+   "permissionsChanged": [],
+   "removed": []
+  },
+  "commands": {
+   "added": [],
+   "removed": []
+  },
+  "plugins": {
+   "added": [
+    "opencode.tool.automation"
+   ],
+   "removed": [
+    "opencode.tool.schedule"
+   ]
+  },
+  "promptFiles": {
+   "added": [
+    "automation.txt"
+   ],
+   "removed": [
+    "schedule.txt"
+   ]
+  },
+  "skills": {
+   "added": [],
+   "removed": []
+  },
+  "tools": {
+   "added": [],
+   "removed": []
+  }
+ },
+ "catalog": {
+  "anthropic": {
+   "added": [],
+   "removed": []
+  },
+  "anthropic:nonchat": {
+   "added": [],
+   "removed": []
+  },
+  "free": {
+   "added": [
+    "opencode/hy4-flash-free"
+   ],
+   "removed": [
+    "opencode/minimax-m3.1-flash-free"
+   ]
+  },
+  "google": {
+   "added": [],
+   "removed": []
+  },
+  "google:nonchat": {
+   "added": [],
+   "removed": []
+  },
+  "openai": {
+   "added": [
+    "gpt-5.4-flex",
+    "gpt-5.5-flex",
+    "gpt-5.6-luna-flex",
+    "gpt-5.6-sol-flex",
+    "gpt-5.6-terra-flex",
+    "gpt-6-astra-flex",
+    "gpt-6-cyber",
+    "gpt-6-luna-flex",
+    "gpt-6-sol-flex",
+    "gpt-6.1-sol-flex",
+    "gpt-6.1-terra-flex",
+    "gpt-6.2-astra",
+    "gpt-6.2-astra-fast",
+    "gpt-6.2-astra-pro",
+    "gpt-6.2-astra-ultrafast",
+    "gpt-6.2-sol",
+    "gpt-6.2-sol-fast",
+    "gpt-6.2-sol-pro",
+    "gpt-6.2-sol-ultrafast"
+   ],
+   "removed": []
+  },
+  "openai:nonchat": {
+   "added": [],
+   "removed": []
+  }
+ },
+ "endpoints": [
+  {
+   "change": "removed",
+   "endpoint": "DELETE /api/experimental/schedule/{scheduleID}",
+   "experimental": true,
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ]
+  },
+  {
+   "change": "removed",
+   "endpoint": "GET /api/experimental/schedule",
+   "experimental": true
+  },
+  {
+   "change": "removed",
+   "endpoint": "GET /api/experimental/schedule/{scheduleID}",
+   "experimental": true,
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ]
+  },
+  {
+   "change": "removed",
+   "endpoint": "POST /api/experimental/schedule",
+   "experimental": true,
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ]
+  },
+  {
+   "change": "removed",
+   "endpoint": "POST /api/experimental/schedule/{scheduleID}/pause",
+   "experimental": true
+  },
+  {
+   "change": "removed",
+   "endpoint": "POST /api/experimental/schedule/{scheduleID}/resume",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "DELETE /api/experimental/automation/{automationID}",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "GET /api/experimental/automation",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "GET /api/experimental/automation/{automationID}",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "GET /api/experimental/blob/{id}",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "GET /api/experimental/generate/video/{id}",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "POST /api/experimental/automation",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "POST /api/experimental/automation/{automationID}/pause",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "POST /api/experimental/automation/{automationID}/resume",
+   "experimental": true
+  },
+  {
+   "change": "added",
+   "endpoint": "POST /api/experimental/generate/video",
+   "experimental": true
+  },
+  {
+   "change": "changed",
+   "endpoint": "GET /api/config",
+   "experimental": false,
+   "notes": [
+    "schemas changed: Config.InfoEncoded, Model.Type"
+   ],
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ]
+  },
+  {
+   "change": "changed",
+   "endpoint": "GET /api/experimental/job",
+   "experimental": true,
+   "notes": [
+    "schemas changed: Job.Info, Job.Kind",
+    "schemas now referenced: Job.CodeMode"
+   ]
+  },
+  {
+   "change": "changed",
+   "endpoint": "GET /api/model",
+   "experimental": false,
+   "notes": [
+    "schemas changed: Model.Type"
+   ],
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ]
+  },
+  {
+   "change": "changed",
+   "endpoint": "GET /api/model/default",
+   "experimental": false,
+   "notes": [
+    "schemas changed: Model.Type"
+   ],
+   "usedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ]
+  }
+ ],
+ "events": {
+  "handledButRemoved": [],
+  "recordedAdded": [
+   "artifact.updated"
+  ],
+  "recordedRemoved": [
+   "vcs.branch.updated",
+   "worktree.resolved"
+  ],
+  "schemaAdded": [],
+  "schemaRemoved": []
+ },
+ "from": "opencode-2.3.0",
+ "impact": [
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "what": "DELETE /api/experimental/schedule/{scheduleID}"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "what": "GET /api/experimental/schedule/{scheduleID}"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "what": "POST /api/experimental/schedule"
+  },
+  {
+   "change": "changed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "what": "GET /api/config"
+  },
+  {
+   "change": "changed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ],
+   "what": "GET /api/model"
+  },
+  {
+   "change": "changed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ],
+   "what": "GET /api/model/default"
+  },
+  {
+   "change": "changed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": [
+    "properties changed: compaction, experimental"
+   ],
+   "what": "schema Config.InfoEncoded"
+  },
+  {
+   "change": "changed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift",
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ],
+   "notes": [
+    "enum added: video"
+   ],
+   "what": "schema Model.Type"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Action"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Action.Prompt"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Condition"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Condition.Code"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Condition.Shell"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.ConditionInput"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.CreatePayload"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Duration"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Ends"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.ID"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Info"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Outcome"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.Status"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.When"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.When.At"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.When.Cron"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.When.Every"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.When.In"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema Schedule.WhenInput"
+  },
+  {
+   "change": "removed",
+   "consumers": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": null,
+   "what": "schema ScheduleNotFoundErrorEncoded"
+  }
+ ],
+ "permissions": [],
+ "schemas": [
+  {
+   "change": "added",
+   "schema": "Automation.Action"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Action.Code"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Action.Prompt"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.ActionInput"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.CodeActionInput"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.CreatePayload"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Duration"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.ID"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Info"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Outcome"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.PromptActionInput"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Status"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Target"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger.At"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger.Cron"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger.Event"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger.Every"
+  },
+  {
+   "change": "added",
+   "schema": "Automation.Trigger_1"
+  },
+  {
+   "change": "added",
+   "schema": "AutomationNotFoundErrorEncoded"
+  },
+  {
+   "change": "added",
+   "schema": "Blob.ID"
+  },
+  {
+   "change": "added",
+   "schema": "Blob.Info"
+  },
+  {
+   "change": "added",
+   "schema": "BlobNotFoundErrorEncoded"
+  },
+  {
+   "change": "changed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "notes": [
+    "properties changed: compaction, experimental"
+   ],
+   "schema": "Config.InfoEncoded"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.ImageFile"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoAspect"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoCompleted"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoError"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoErrorReason"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoID"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoJob"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoRequest"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoResolution"
+  },
+  {
+   "change": "added",
+   "schema": "Generate.VideoRunning"
+  },
+  {
+   "change": "added",
+   "schema": "GenerateVideoCreateResponse"
+  },
+  {
+   "change": "added",
+   "schema": "GenerateVideoGetResponse"
+  },
+  {
+   "change": "added",
+   "schema": "Job.CodeMode"
+  },
+  {
+   "change": "changed",
+   "notes": [
+    "changed (structure)"
+   ],
+   "schema": "Job.Info"
+  },
+  {
+   "change": "changed",
+   "notes": [
+    "enum added: codemode"
+   ],
+   "schema": "Job.Kind"
+  },
+  {
+   "change": "changed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift",
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient.swift"
+   ],
+   "notes": [
+    "enum added: video"
+   ],
+   "schema": "Model.Type"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Action"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Action.Prompt"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Condition"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Condition.Code"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Condition.Shell"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.ConditionInput"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.CreatePayload"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Duration"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Ends"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.ID"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Info"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Outcome"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.Status"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.When"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.When.At"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.When.Cron"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.When.Every"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.When.In"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "Schedule.WhenInput"
+  },
+  {
+   "change": "removed",
+   "decodedBy": [
+    "Sources/OpenCodeKit/HTTP/OpenCodeClient+Isolation.swift"
+   ],
+   "schema": "ScheduleNotFoundErrorEncoded"
+  },
+  {
+   "change": "added",
+   "schema": "VideoNotFoundErrorEncoded"
+  }
+ ],
+ "to": "opencode-2.3.2"
+}

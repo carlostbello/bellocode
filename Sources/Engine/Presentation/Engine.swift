@@ -133,6 +133,29 @@ public final class Engine {
     /// Orchestration: the task graph, Agents panel models, cascade stop and app-hosted agent tools
     /// (docs/features/orchestration.md). Created in `init`, started by `start()`.
     public private(set) var orchestration: OrchestrationService!
+    /// Auto mode decisions, Full-access risk notices and their audit log (docs/features/auto-mode.md).
+    public private(set) var auto: AutoModeService!
+    /// Folders the developer works across, in scope for Auto and Full-access notices (docs/features/auto-mode.md).
+    /// Default: none (only each thread's project and worktrees). Set by the code-roots settings, or via `codeRootsProvider`.
+    public var codeRoots: CodeRoots = .none {
+        didSet {
+            guard codeRoots != oldValue else { return }
+            // Each push sends the latest value, so quick successive changes cannot land out of order.
+            Task { [weak self, core] in
+                guard let roots = self?.codeRoots else { return }
+                await core.setCodeRoots(roots)
+            }
+        }
+    }
+    /// Optional source of `codeRoots`; read when set and by `refreshCodeRoots()`.
+    public weak var codeRootsProvider: (any CodeRootsProvider)? {
+        didSet { refreshCodeRoots() }
+    }
+
+    /// Re-reads `codeRootsProvider` (call when its roots change).
+    public func refreshCodeRoots() {
+        if let provider = codeRootsProvider { codeRoots = provider.codeRoots }
+    }
     /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
     public private(set) var extras: ExtrasHub!
     /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
@@ -198,6 +221,14 @@ public final class Engine {
             environments.worktreeParent = { directory in git.cachedPreferences(projectDirectory: directory).parentDirectory(projectDirectory: directory) }
         }
         orchestration = OrchestrationService(core: core, store: store, engine: self)
+        auto = AutoModeService(core: core, store: store, engine: self, reviewerModel: configuration.autoReviewerModel)
+        codeRoots = configuration.codeRoots
+        // Containerised execution owns the developer's code roots (Settings ▸ Containers ▸ Code roots): it provides them
+        // to Auto and Full-access notices and says when they change.
+        if configuration.containers != nil {
+            environments.onCodeRootsChanged = { [weak self] in self?.refreshCodeRoots() }
+            codeRootsProvider = environments
+        }
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
@@ -266,6 +297,8 @@ public final class Engine {
         // The helper's configuration exists before the server (and its shell) starts.
         await environments.writeConfigNow()
         orchestration.start()
+        await core.setCodeRoots(codeRoots)
+        auto.start()
         await extras.start(store: store)
         await modelPreferences.load()
         await frecency.load()
@@ -294,6 +327,7 @@ public final class Engine {
         git.shutdown()
         await browser.shutdown()
         await orchestration.shutdown()
+        auto.shutdown()
         extras.stop()
         for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
@@ -390,7 +424,10 @@ public final class Engine {
     public func stop(_ id: SessionID) async throws { try await core.interrupt(id) }
 
     public func reply(to request: PermissionRequestID, _ reply: PermissionReply, message: String? = nil) async throws {
+        let project = reply == .always ? await core.pendingSessionProject(request) : nil
         try await core.replyPermission(request, reply: reply, message: message)
+        // A new saved scope: Auto re-reads the project's grants before its next decision.
+        if let project { auto.grantsChanged(project) }
     }
 
     public func answer(_ question: QuestionID, _ answers: [String: QuestionAnswer]) async throws {

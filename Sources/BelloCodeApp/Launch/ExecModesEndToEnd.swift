@@ -21,7 +21,7 @@ enum ExecModesEndToEnd {
             passed = passed && ok
         }
         let environments = engine.environments
-        let codeRoot = (CodeRoots.canonical(root.path) ?? root.path) + "/Repos"
+        let codeRoot = (CodeRootPaths.canonical(root.path) ?? root.path) + "/Repos"
         let repoA = codeRoot + "/a", repoB = codeRoot + "/b"
         for path in [repoA + "/out", repoB] { try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true) }
         try? "from repo b\n".write(toFile: repoB + "/hello.txt", atomically: true, encoding: .utf8)

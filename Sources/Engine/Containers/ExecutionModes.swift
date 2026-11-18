@@ -2,7 +2,12 @@ import BelloCore
 import ContainerKit
 import Foundation
 
-// Code roots and execution modes (docs/features/containers.md, "Execution modes" and "Code roots").
+// Code roots and execution modes (docs/features/execution-modes.md).
+
+/// The validated code roots are what Auto mode and Full-access notices treat as in scope (`Engine.codeRootsProvider`).
+extension EnvironmentService: CodeRootsProvider {
+    public var codeRoots: CodeRoots { CodeRoots(codeRootsValidation.roots) }
+}
 
 extension EnvironmentService {
     nonisolated static let modesMigratedKey = "containers.executionModesMigrated"
@@ -36,10 +41,13 @@ extension EnvironmentService {
         return trustedRoots.scope(projectRoots: workspaceRoots(model, create: false))
     }
 
-    /// Re-validates the roots (file-system checks: a handful of `stat`/`realpath` calls).
+    /// Re-validates the roots (file-system checks: a handful of `stat`/`realpath` calls) and tells the engine.
     func recomputeCodeRoots() {
-        let validation = CodeRoots.validate(configuredCodeRoots)
-        if validation != codeRootsValidation { codeRootsValidation = validation }
+        let validation = CodeRootPaths.validate(configuredCodeRoots)
+        if validation != codeRootsValidation {
+            codeRootsValidation = validation
+            onCodeRootsChanged?()
+        }
     }
 
     /// Saves the developer's roots (ignored while an administrator locks them). The shared workspace is recreated with
@@ -47,7 +55,7 @@ extension EnvironmentService {
     public func setCodeRoots(_ paths: [String]) async {
         guard !codeRootsLocked else { return }
         var value = defaults
-        value.codeRoots = paths.map { CodeRoots.standardize($0) }
+        value.codeRoots = paths.map { CodeRootPaths.standardize($0) }
         value.codeRootsSource = .configured
         await setDefaults(value)
         recomputeCodeRoots()
@@ -60,7 +68,7 @@ extension EnvironmentService {
     func suggestCodeRootsIfNeeded() {
         guard defaults.codeRoots == nil, managedExecution?.codeRoots == nil else { return }
         let projects = projectDirectories.sorted()
-        let suggestion = CodeRoots.suggestion(projectDirectories: projects)
+        let suggestion = CodeRootPaths.suggestion(projectDirectories: projects)
         guard !suggestion.isEmpty else { return }
         var value = defaults
         value.codeRoots = suggestion
@@ -138,9 +146,9 @@ extension EnvironmentService {
         if roots.isEmpty {
             return "This project uses the shared workspace, but no code roots are set. Add the folder your repositories are in under Settings ▸ Containers ▸ Code roots, or switch the project to Project container in Project Settings ▸ Environment."
         }
-        guard CodeRoots.root(containing: model.directory, in: roots) == nil else { return nil }
-        let parent = CodeRoots.display((model.directory as NSString).deletingLastPathComponent)
-        return "\(CodeRoots.display(model.directory)) is outside your code roots (\(roots.map { CodeRoots.display($0) }.joined(separator: ", "))), so the shared workspace cannot see it. Add \(parent) under Settings ▸ Containers ▸ Code roots, or switch the project to Project container in Project Settings ▸ Environment."
+        guard CodeRootPaths.root(containing: model.directory, in: roots) == nil else { return nil }
+        let parent = CodeRootPaths.display((model.directory as NSString).deletingLastPathComponent)
+        return "\(CodeRootPaths.display(model.directory)) is outside your code roots (\(roots.map { CodeRootPaths.display($0) }.joined(separator: ", "))), so the shared workspace cannot see it. Add \(parent) under Settings ▸ Containers ▸ Code roots, or switch the project to Project container in Project Settings ▸ Environment."
     }
 
     /// The folders the shared workspace mounts besides the code roots: BelloCode's and opencode's worktree folders
@@ -152,14 +160,14 @@ extension EnvironmentService {
         var mounts = [(worktreeParent("/shared") as NSString).deletingLastPathComponent]
         if let data = configuration?.opencodeDataDirectory { mounts.append(data.appending(path: "opencode/worktree").path) }
         for model in models.values.sorted(by: { $0.directory < $1.directory })
-        where mode(for: model) == .sharedWorkspace && CodeRoots.root(containing: model.directory, in: roots) != nil {
+        where mode(for: model) == .sharedWorkspace && CodeRootPaths.root(containing: model.directory, in: roots) != nil {
             mounts.append(worktreeParent(model.directory))
             mounts += model.extraWorktrees
         }
         var seen = Set<String>()
-        let standardized = mounts.map { CodeRoots.lexicallyNormalized($0) }.filter { seen.insert($0).inserted }
+        let standardized = mounts.map { CodeRootPaths.lexicallyNormalized($0) }.filter { seen.insert($0).inserted }
         let outer = standardized.filter { path in
-            !(roots + standardized).contains { $0 != path && CodeRoots.inside(path, $0) }
+            !(roots + standardized).contains { $0 != path && CodeRootPaths.inside(path, $0) }
         }
         for path in outer where !FileManager.default.fileExists(atPath: path) {
             try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
@@ -174,6 +182,8 @@ extension EnvironmentService {
         guard !roots.isEmpty, let image = defaultImage, imageRefusal(image) == nil else { return nil }
         var spec = WorkspaceSpec.shared(roots: roots, extraMounts: sharedExtraMounts(), image: image)
         spec.sharedKeySeed = sharedKeySeed
+        // The company CA and proxy apply to the shared workspace as to every project container.
+        if !network.corporate.isEmpty { spec.corporateNetwork = network.corporate }
         return spec
     }
 

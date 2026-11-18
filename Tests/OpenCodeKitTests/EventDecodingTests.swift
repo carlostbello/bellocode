@@ -4,21 +4,64 @@ import Testing
 
 @Suite("Event decoding")
 struct EventDecodingTests {
-    private func sampleEnvelopes() throws -> [OpenCodeEventEnvelope] {
+    private func envelopes(_ sample: Data) throws -> [OpenCodeEventEnvelope] {
         var parser = SSEParser()
         let decoder = OpenCodeEventDecoder()
-        return try parser.feed(Array(try Repo.eventsSample)).map { decoder.decode(Data($0.data.utf8)) }
+        return try parser.feed(Array(sample)).map { decoder.decode(Data($0.data.utf8)) }
     }
 
+    private func sampleEnvelopes() throws -> [OpenCodeEventEnvelope] { try envelopes(Repo.eventsSample) }
+
+    /// The pinned (or candidate) contract's recorded turn: every frame is a known case.
     @Test func everyRecordedEventDecodesToAKnownCase() throws {
-        let envelopes = try sampleEnvelopes()
-        #expect(envelopes.count == 50)
-        let unknown = envelopes.filter(\.event.isUnknown).map(\.type)
-        #expect(unknown.isEmpty, "unknown: \(unknown)")
+        for sample in [try Repo.eventsSample, try Repo.fixtureSample] {
+            let envelopes = try envelopes(sample)
+            #expect(envelopes.count == Repo.naiveCounts(sample).frames && !envelopes.isEmpty)
+            let unknown = envelopes.filter(\.event.isUnknown).map(\.type)
+            #expect(unknown.isEmpty, "unknown: \(unknown)")
+        }
     }
 
-    @Test func recordedTurnHasTheExpectedShape() throws {
+    /// The pinned contract's recorded turn (one shell tool call approved once, then a text reply), structurally:
+    /// one session, every session frame routed to it, the permission round trip, the tool state machine in order,
+    /// text deltas reassembling into the ended text, and the execution boundaries.
+    @Test func pinnedRecordedTurnHasTheExpectedStructure() throws {
         let envelopes = try sampleEnvelopes()
+        guard case .serverConnected = envelopes.first?.event else {
+            Issue.record("first frame is not server.connected")
+            return
+        }
+        let created = envelopes.compactMap { envelope -> EventPayload.SessionCreated? in
+            if case .sessionCreated(let payload) = envelope.event { payload } else { nil }
+        }
+        #expect(created.count == 1)
+        let session = try #require(created.first?.sessionID)
+        let sessionFrames = envelopes.filter { $0.type.hasPrefix("session.") || $0.type.hasPrefix("permission.") }
+        #expect(sessionFrames.allSatisfy { $0.sessionID == session })
+        #expect(envelopes.contains { if case .permissionAsked = $0.event { true } else { false } })
+        #expect(envelopes.contains { if case .permissionReplied = $0.event { true } else { false } })
+        var order: [String] = []
+        var text = ""
+        var ended: String?
+        for envelope in envelopes {
+            switch envelope.event {
+            case .toolInputStarted: order.append("input.started")
+            case .toolCalled: order.append("called")
+            case .toolSucceeded: order.append("success")
+            case .executionStarted: order.append("execution.started")
+            case .executionSucceeded: order.append("execution.succeeded")
+            case .textDelta(let delta): text += delta.delta
+            case .textEnded(let end): ended = (ended ?? "") + end.text
+            default: break
+            }
+        }
+        #expect(order == ["execution.started", "input.started", "called", "success", "execution.succeeded"])
+        #expect(ended != nil && text == ended)
+    }
+
+    /// The 2.3.0 fixture's exact content.
+    @Test func recordedTurnHasTheExpectedShape() throws {
+        let envelopes = try envelopes(Repo.fixtureSample)
         let session = "ses_e1a4aec0fffeSv6rQPV7c8C5Fl"
 
         guard case .serverConnected = envelopes[0].event else {
@@ -82,8 +125,13 @@ struct EventDecodingTests {
         #expect(envelopes.first { $0.type == "session.text.delta" }?.durable == nil)
     }
 
+    /// The 2.3.0 fixture's trailing permission round trip.
     @Test func permissionAskedAndReplied() throws {
-        let envelopes = try sampleEnvelopes()
+        let envelopes = try envelopes(Repo.fixtureSample)
+        guard envelopes.count >= 50 else {
+            Issue.record("the 2.3.0 fixture has \(envelopes.count) frames")
+            return
+        }
         guard case .permissionAsked(let request) = envelopes[48].event,
             case .permissionReplied(let reply) = envelopes[49].event
         else {

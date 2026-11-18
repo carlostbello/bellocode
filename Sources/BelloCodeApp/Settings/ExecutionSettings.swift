@@ -23,10 +23,10 @@ struct CodeRootsSettingsView: View {
             }
         }
         ForEach(Array(roots.enumerated()), id: \.element) { index, path in
-            let standardized = CodeRoots.standardize(path)
-            let issues = validation.issues.filter { $0.path == standardized || $0.path == (CodeRoots.canonical(standardized) ?? standardized) }
+            let standardized = CodeRootPaths.standardize(path)
+            let issues = validation.issues.filter { $0.path == standardized || $0.path == (CodeRootPaths.canonical(standardized) ?? standardized) }
             let blocking = issues.first(where: \.isBlocking)
-            SettingsRow(CodeRoots.display(standardized), detail: (blocking ?? issues.first)?.message, divided: index > 0) {
+            SettingsRow(CodeRootPaths.display(standardized), detail: (blocking ?? issues.first)?.message, divided: index > 0) {
                 HStack(spacing: DS.Space.s6) {
                     if let blocking {
                         DSPillView(Self.label(blocking.kind), tone: .danger, symbolName: "xmark.octagon")
@@ -34,7 +34,7 @@ struct CodeRootsSettingsView: View {
                             Button("Use Real Path") { replace(path, with: suggestion) }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         }
                     } else if let link = issues.first(where: { $0.kind == .notCanonical }), let real = link.suggestion {
-                        DSPillView("Uses \(CodeRoots.display(real))", tone: .info, symbolName: "arrow.turn.down.right")
+                        DSPillView("Uses \(CodeRootPaths.display(real))", tone: .info, symbolName: "arrow.turn.down.right")
                     } else if issues.contains(where: { $0.kind == .overlaps }) {
                         DSPillView("Inside another root", tone: .neutral, symbolName: "arrow.turn.down.right")
                     } else {
@@ -42,7 +42,7 @@ struct CodeRootsSettingsView: View {
                     }
                     if !service.codeRootsLocked {
                         Button("Remove") { remove(path) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
-                            .accessibilityLabel("Remove code root \(CodeRoots.display(standardized))")
+                            .accessibilityLabel("Remove code root \(CodeRootPaths.display(standardized))")
                     }
                 }
             }
@@ -56,7 +56,7 @@ struct CodeRootsSettingsView: View {
                 Button("Add Folder…") { addFolder() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                 let suggestion = suggestion
                 if !suggestion.isEmpty, Set(suggestion) != Set(service.codeRootsValidation.roots) {
-                    Button("Use Suggestion: \(suggestion.map { CodeRoots.display($0) }.joined(separator: ", "))") {
+                    Button("Use Suggestion: \(suggestion.map { CodeRootPaths.display($0) }.joined(separator: ", "))") {
                         Task { await service.setCodeRoots(suggestion) }
                     }
                     .buttonStyle(DSButtonStyle(.ghost, size: .small))
@@ -70,7 +70,7 @@ struct CodeRootsSettingsView: View {
     }
 
     private var suggestion: [String] {
-        CodeRoots.suggestion(projectDirectories: service.environments.map(\.directory))
+        CodeRootPaths.suggestion(projectDirectories: service.environments.map(\.directory))
     }
 
     static func label(_ kind: CodeRootIssue.Kind) -> String {
@@ -96,7 +96,7 @@ struct CodeRootsSettingsView: View {
         panel.message = "Choose the folder your repositories are in. The shared workspace mounts it read-write at the same path."
         guard panel.runModal() == .OK else { return }
         let added = panel.urls.map(\.path)
-        let issues = added.flatMap { CodeRoots.issues(for: $0) }.filter(\.isBlocking)
+        let issues = added.flatMap { CodeRootPaths.issues(for: $0) }.filter(\.isBlocking)
         box.message = issues.isEmpty ? nil : issues.map(\.message).joined(separator: " ")
         Task { await service.setCodeRoots(service.configuredCodeRoots + added) }
     }
@@ -104,7 +104,7 @@ struct CodeRootsSettingsView: View {
     private func remove(_ path: String) {
         let previous = service.configuredCodeRoots
         Task { await service.setCodeRoots(previous.filter { $0 != path }) }
-        box.message = "Removed \(CodeRoots.display(CodeRoots.standardize(path))). The shared workspace is recreated without it on its next use."
+        box.message = "Removed \(CodeRootPaths.display(CodeRootPaths.standardize(path))). The shared workspace is recreated without it on its next use."
     }
 
     private func replace(_ path: String, with canonical: String) {
@@ -199,7 +199,7 @@ struct ExecutionModePickerView: View {
             ExecutionModeRow(mode: mode, selected: chosen == mode, recommended: false) { choose(mode) }
         }
         if environment.mode == .sharedWorkspace {
-            SettingsRow("Code roots", detail: service.codeRootsValidation.roots.map { CodeRoots.display($0) }.joined(separator: ", "), divided: true) {
+            SettingsRow("Code roots", detail: service.codeRootsValidation.roots.map { CodeRootPaths.display($0) }.joined(separator: ", "), divided: true) {
                 DSPillView(environment.phase.label, tone: environment.phase.tone.ds, symbolName: environment.phase.symbolName)
             }
         }
@@ -263,7 +263,7 @@ struct DevContainerSectionView: View {
 
     var body: some View {
         let using = environment.settings.useDevContainer
-        SettingsToggleRow("Use \(CodeRoots.display(plan.file.replacingOccurrences(of: environment.directory + "/", with: "")))",
+        SettingsToggleRow("Use \(CodeRootPaths.display(plan.file.replacingOccurrences(of: environment.directory + "/", with: "")))",
                           detail: plan.isUsable ? (plan.image.map { "Image \($0)" } ?? "Built from \((plan.build?.dockerfile ?? "") .replacingOccurrences(of: environment.directory + "/", with: "")) with Rancher Desktop's docker buildx")
                               : "Cannot be used until the refused settings below are removed; the project's own image is used meanwhile.",
                           divided: false,

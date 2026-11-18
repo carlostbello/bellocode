@@ -12,7 +12,7 @@ struct CodeRootsTests {
 
     init() throws {
         // Canonical (`/private/var/…`): a URL would shorten it to the `/var` link.
-        base = (CodeRoots.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-roots-\(UUID().uuidString.prefix(8))"
+        base = (CodeRootPaths.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-roots-\(UUID().uuidString.prefix(8))"
         home = base + "/home"
         for folder in ["Documents/Repos/a", "Documents/Repos/b", "work/x", "Documents/solo", ".ssh", "Library/Keys", "plain"] {
             try FileManager.default.createDirectory(atPath: home + "/" + folder, withIntermediateDirectories: true)
@@ -26,11 +26,11 @@ struct CodeRootsTests {
     var shared: [String] { [home] }
 
     func kinds(_ path: String) -> Set<CodeRootIssue.Kind> {
-        Set(CodeRoots.issues(for: path, home: home, sharedPrefixes: shared).map(\.kind))
+        Set(CodeRootPaths.issues(for: path, home: home, sharedPrefixes: shared).map(\.kind))
     }
 
     @Test func aRepositoriesFolderIsValid() {
-        #expect(kinds(home + "/Documents/Repos").isEmpty, "\(CodeRoots.issues(for: home + "/Documents/Repos", home: home, sharedPrefixes: shared))")
+        #expect(kinds(home + "/Documents/Repos").isEmpty, "\(CodeRootPaths.issues(for: home + "/Documents/Repos", home: home, sharedPrefixes: shared))")
         #expect(kinds("~/Documents/Repos").isEmpty, "~ expands to the home folder")
         #expect(kinds(home + "/Documents/Repos/").isEmpty, "a trailing slash is ignored")
     }
@@ -52,56 +52,56 @@ struct CodeRootsTests {
         #expect(kinds(home + "/nope") == [.missing])
         #expect(kinds(home + "/file.txt") == [.notDirectory])
         #expect(kinds("Documents/Repos") == [.notAbsolute])
-        let link = CodeRoots.issues(for: home + "/repos-link", home: home, sharedPrefixes: shared)
+        let link = CodeRootPaths.issues(for: home + "/repos-link", home: home, sharedPrefixes: shared)
         #expect(link.first?.kind == .notCanonical)
         #expect(link.first?.suggestion == home + "/Documents/Repos", "the fix is the real folder")
         #expect(link.first?.isBlocking == false)
-        #expect(CodeRoots.validate([home + "/repos-link"], home: home, sharedPrefixes: shared).roots == [home + "/Documents/Repos"], "a link is replaced by its target")
+        #expect(CodeRootPaths.validate([home + "/repos-link"], home: home, sharedPrefixes: shared).roots == [home + "/Documents/Repos"], "a link is replaced by its target")
         // A link that leads to a system location is refused for where it leads.
         #expect(kinds(home + "/Documents/Repos/evil").contains(.systemLocation))
     }
 
     @Test func foldersRancherDoesNotShareSayHowToAddThem() {
-        let issues = CodeRoots.issues(for: home + "/plain", home: home, sharedPrefixes: ["/somewhere-else"])
+        let issues = CodeRootPaths.issues(for: home + "/plain", home: home, sharedPrefixes: ["/somewhere-else"])
         let notShared = try? #require(issues.first { $0.kind == .notShared })
         #expect(notShared?.message.contains("override.yaml") == true)
         #expect(notShared?.message.contains("restart Rancher Desktop") == true)
     }
 
     @Test func overlappingRootsKeepTheOutermostAndAreSorted() {
-        let validation = CodeRoots.validate([home + "/work", home + "/Documents/Repos/a", home + "/Documents/Repos", home + "/work"],
+        let validation = CodeRootPaths.validate([home + "/work", home + "/Documents/Repos/a", home + "/Documents/Repos", home + "/work"],
                                             home: home, sharedPrefixes: shared)
         #expect(validation.roots == [home + "/Documents/Repos", home + "/work"])
         #expect(validation.issues.map(\.kind) == [.overlaps])
         #expect(validation.isValid, "an overlap is dropped, not an error")
-        let bad = CodeRoots.validate([home, home + "/work"], home: home, sharedPrefixes: shared)
+        let bad = CodeRootPaths.validate([home, home + "/work"], home: home, sharedPrefixes: shared)
         #expect(bad.roots == [home + "/work"])
         #expect(!bad.isValid)
     }
 
     @Test func suggestionIsTheFolderHoldingTheProjects() {
-        let suggestion = CodeRoots.suggestion(projectDirectories: [home + "/Documents/Repos/a", home + "/Documents/Repos/b"],
+        let suggestion = CodeRootPaths.suggestion(projectDirectories: [home + "/Documents/Repos/a", home + "/Documents/Repos/b"],
                                               home: home, sharedPrefixes: shared)
         #expect(suggestion == [home + "/Documents/Repos"])
-        let two = CodeRoots.suggestion(projectDirectories: [home + "/Documents/Repos/a", home + "/work/x"], home: home, sharedPrefixes: shared)
+        let two = CodeRootPaths.suggestion(projectDirectories: [home + "/Documents/Repos/a", home + "/work/x"], home: home, sharedPrefixes: shared)
         #expect(two == [home + "/Documents/Repos", home + "/work"])
     }
 
     @Test func suggestionNeverHomeRootOrABroadFolder() {
         // A project directly in the home folder or in ~/Documents suggests itself, not its parent.
-        let suggestion = CodeRoots.suggestion(projectDirectories: [home + "/plain", home + "/Documents/solo"], home: home, sharedPrefixes: shared)
+        let suggestion = CodeRootPaths.suggestion(projectDirectories: [home + "/plain", home + "/Documents/solo"], home: home, sharedPrefixes: shared)
         #expect(suggestion == [home + "/Documents/solo", home + "/plain"])
         #expect(!suggestion.contains(home))
-        #expect(CodeRoots.suggestion(projectDirectories: [], home: home, sharedPrefixes: shared).isEmpty)
+        #expect(CodeRootPaths.suggestion(projectDirectories: [], home: home, sharedPrefixes: shared).isEmpty)
         // A project in a system location suggests nothing.
-        #expect(CodeRoots.suggestion(projectDirectories: ["/usr/local/src"], home: home, sharedPrefixes: shared).isEmpty)
+        #expect(CodeRootPaths.suggestion(projectDirectories: ["/usr/local/src"], home: home, sharedPrefixes: shared).isEmpty)
     }
 
     @Test func rootContainingResolvesLinksAndPicksTheLongest() {
         let roots = [home + "/Documents/Repos", home + "/Documents/Repos/a"]
-        #expect(CodeRoots.root(containing: home + "/Documents/Repos/a/src", in: roots) == home + "/Documents/Repos/a")
-        #expect(CodeRoots.root(containing: home + "/repos-link/b", in: roots) == home + "/Documents/Repos")
-        #expect(CodeRoots.root(containing: home + "/work", in: roots) == nil)
+        #expect(CodeRootPaths.root(containing: home + "/Documents/Repos/a/src", in: roots) == home + "/Documents/Repos/a")
+        #expect(CodeRootPaths.root(containing: home + "/repos-link/b", in: roots) == home + "/Documents/Repos")
+        #expect(CodeRootPaths.root(containing: home + "/work", in: roots) == nil)
     }
 
     @Test func managedPolicyReadsRootsLockAndModes() {

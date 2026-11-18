@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>G7 fixture: sign up</title>
+<style>body{font:16px system-ui,sans-serif;margin:2rem;max-width:36rem}label{display:block;margin:.6rem 0}#result{margin-top:1rem;font-weight:600}</style>
+</head><body>
+<h1>Create your account</h1>
+<form id="f">
+  <label>Full name <input name="name" id="name" required></label>
+  <label>Email <input name="email" id="email" type="email" required></label>
+  <label>Plan <select name="plan" id="plan"><option value="free">Free</option><option value="pro">Pro</option><option value="team">Team</option></select></label>
+  <label><input type="checkbox" id="terms" required> I accept the terms</label>
+  <button type="submit">Create account</button>
+</form>
+<p id="result" role="status"></p>
+<p><a href="report.txt" download>Download report</a> · <textarea id="paste" aria-label="Paste here" rows="2" cols="30"></textarea></p>
+<script>
+document.getElementById('f').addEventListener('submit', e => {
+  e.preventDefault();
+  const n = document.getElementById('name').value, p = document.getElementById('plan').value;
+  document.getElementById('result').textContent = `Confirmation G7-${p.toUpperCase()}-${n.length}: welcome, ${n}.`;
+});
+</script>
+</body></html>

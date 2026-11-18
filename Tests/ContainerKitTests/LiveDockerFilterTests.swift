@@ -24,7 +24,7 @@ struct LiveDockerFilterTests {
     }
 
     func makeFixture() throws -> Fixture {
-        let base = (CodeRoots.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-live-\(UUID().uuidString.prefix(8))"
+        let base = (CodeRootPaths.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-live-\(UUID().uuidString.prefix(8))"
         let fixture = Fixture(base: base, root: base + "/Repos", repoA: base + "/Repos/a", repoB: base + "/Repos/b", elsewhere: base + "/elsewhere/c")
         for path in [fixture.repoA, fixture.repoB, fixture.elsewhere] { try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true) }
         try "from repo b\n".write(toFile: fixture.repoB + "/hello.txt", atomically: true, encoding: .utf8)

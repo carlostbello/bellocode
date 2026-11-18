@@ -43,7 +43,7 @@ every frame in `events-sample.sse` decodes to a known case, identically byte by 
 - There is no abort endpoint. `POST …/interrupt` returns `{interrupted: Bool}` (false when idle).
 - `prompt` only admits the prompt to the inbox; the turn runs async. Idempotency is keyed on the client `id`.
 - A non-git directory got a hash project ID, not `global` as research 05 says. Group by the server's `projectID`.
-- `Model.Ref.id` is `Model.Info.modelID`; `ModelInfo.ref` builds it. Model, provider and agent responses contain
+- `Model.Ref.id` is `Model.Info.id` (the catalog entry; corrected on 2.3.2, where tiers such as `gpt-6.2-astra-fast` share `modelID` `gpt-6.2-astra`); `ModelInfo.ref` builds it. Model, provider and agent responses contain
   `headers`/`body`/`request`, which can carry credentials. They are deliberately not decoded.
 - `permission.replied` uses `reply`, while the reply body uses `decision`. `form.created` wraps `{form}`.
 - Numbers may be the strings `"NaN"`/`"Infinity"`. Errors are `{_tag, message, …}`; `/api/info` is 503 while

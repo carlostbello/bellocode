@@ -31,6 +31,10 @@ public struct ServiceSpec: Sendable, Equatable {
     public var network: String
     public var resources: ResourceLimits
     public var extraLabels: [String: String]
+    /// Enterprise certificates and proxy variables (Corporate network); the stack's or project's service names are
+    /// added to `NO_PROXY` (`siblings`).
+    public var corporateNetwork: CorporateNetwork?
+    public var siblings: [String] = []
 
     public static let defaultResources = ResourceLimits(cpus: 1, memoryBytes: 1 << 30, pidsLimit: 1024)
 
@@ -79,6 +83,7 @@ public struct ServiceSpec: Sendable, Equatable {
         host.mounts = definition.volumes.map { Mount(type: .volume, source: volumeName($0.name), target: $0.target, readOnly: $0.readOnly ? true : nil) }
         body.hostConfig = host
         body.networkingConfig = NetworkingConfig(endpointsConfig: [network: .init(aliases: [name])])
+        corporateNetwork?.apply(to: &body, noProxyExtra: siblings)
         return body
     }
 

@@ -192,7 +192,7 @@ public struct DevContainerPlan: Sendable, Equatable {
             for extra in build.keys.sorted() where !["dockerfile", "context", "args", "target"].contains(extra) {
                 plan.refused.append(Refusal(key: "build.\(extra)", reason: "not supported (cache, options and secrets are BelloCode's to set)"))
             }
-            if !CodeRoots.inside(context, projectRoot) || !CodeRoots.inside(file, projectRoot) {
+            if !CodeRootPaths.inside(context, projectRoot) || !CodeRootPaths.inside(file, projectRoot) {
                 plan.refused.append(Refusal(key: "build.context", reason: "the build context and Dockerfile must be inside the project"))
             }
             plan.build = Build(dockerfile: file, context: context, args: args, target: build["target"] as? String)

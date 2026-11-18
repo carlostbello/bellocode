@@ -20,6 +20,9 @@ public struct ServerConfiguration: Sendable {
     public var expectedVersion: String?
     /// Added last, overriding the defaults. Never put credentials here.
     public var extraEnvironment: [String: String]
+    /// Computed at each launch and added before `extraEnvironment`: the corporate network's certificate bundle
+    /// (`NODE_EXTRA_CA_CERTS`) and proxies, which can change while the app runs.
+    public var launchEnvironment: (@Sendable () -> [String: String])?
     /// The bundled "bellocode" plugin directory (`Contents/Resources/opencode-plugin`). When set, the server is started
     /// with `OPENCODE_CONFIG_CONTENT` listing it (`OrchestrationContract.serverConfig`), so it loads by local path.
     public var pluginDirectory: URL?
@@ -113,6 +116,7 @@ public struct ServerConfiguration: Sendable {
             environment.merge(containerExecution.environment) { _, container in container }
             if let shim = containerExecution.gitShimDirectory { environment["PATH"] = "\(shim.path):\(environment["PATH"] ?? basePath)" }
         }
+        if let launchEnvironment { environment.merge(launchEnvironment()) { _, launch in launch } }
         environment.merge(extraEnvironment) { _, extra in extra }
         environment["OPENCODE_PASSWORD"] = credentials.password
         for key in environment.keys where Self.forbiddenEnvironmentPrefixes.contains(where: { key.hasPrefix($0) }) {

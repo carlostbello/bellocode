@@ -190,13 +190,19 @@ public struct PermissionCreateRequest: Encodable, Sendable, Hashable {
     public var resources: [String]
     public var save: [String]?
     public var agent: String?
+    /// Free-form request metadata (shown to plugins' `permission.evaluate` hook; BelloCode's contract probe uses it).
+    public var metadata: JSONValue?
 
-    public init(id: String? = nil, action: String, resources: [String], save: [String]? = nil, agent: String? = nil) {
+    public init(
+        id: String? = nil, action: String, resources: [String], save: [String]? = nil, agent: String? = nil,
+        metadata: JSONValue? = nil
+    ) {
         self.id = id
         self.action = action
         self.resources = resources
         self.save = save
         self.agent = agent
+        self.metadata = metadata
     }
 }
 

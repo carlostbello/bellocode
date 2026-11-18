@@ -9,13 +9,14 @@ import GRDB
 /// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`, `app_environment`,
 /// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them), `app_outbox` (sends not yet settled),
 /// `app_gitlab_instance`, `app_mr_snapshot`, `app_mr_wake` (GitLab, migration `v9-gitlab`), `app_review_draft` (GitLab 2
-/// review drafts, migration `v10-gitlab-review`).
+/// review drafts, migration `v10-gitlab-review`), `app_auto_audit` (Auto decisions and Full-access notices, migration
+/// `v11-auto-audit`; no content or secrets).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 10
+    static let currentVersion = 11
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -254,6 +255,21 @@ enum ProjectionSchema {
                     json BLOB NOT NULL
                 );
                 CREATE INDEX app_review_draft_by_mr ON app_review_draft(mr_url, created);
+                """)
+        }
+        // Auto mode (docs/features/auto-mode.md): one row per Auto decision, escalation, Full-access risk notice and
+        // agent interrupt, per thread (bounded: `ProjectionStore.autoAuditPerThread` rows, 30 days). Labels and codes
+        // only, never file contents, command output or secret values. Named distinctly (concurrent branches may add an
+        // eleventh migration; GRDB applies by name, so only `currentVersion` needs reconciling on merge).
+        migrator.registerMigration("v11-auto-audit") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_auto_audit (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    session_id TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE INDEX app_auto_audit_by_session ON app_auto_audit(session_id, at DESC);
                 """)
         }
         return migrator

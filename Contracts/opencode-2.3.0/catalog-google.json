@@ -1,0 +1,1731 @@
+[
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text",
+    "image"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 0
+    },
+    "input": 2,
+    "output": 12
+   },
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 0
+    },
+    "input": 4,
+    "output": 18,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "deep-research-max-preview-04-2026",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "deep-research-max-preview-04-2026",
+  "name": "Deep Research Max Preview (Apr-21-2026)",
+  "package": "@opencode/ai/providers/google/interactions",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1776729600000
+  },
+  "type": "chat",
+  "variants": []
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text",
+    "image"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 0
+    },
+    "input": 2,
+    "output": 12
+   },
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 0
+    },
+    "input": 4,
+    "output": 18,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "deep-research-preview-04-2026",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "deep-research-preview-04-2026",
+  "name": "Deep Research Preview (Apr-21-2026)",
+  "package": "@opencode/ai/providers/google/interactions",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1776729600000
+  },
+  "type": "chat",
+  "variants": []
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0,
+     "write": 0
+    },
+    "input": 1.25,
+    "output": 10
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "gemini-2.5-computer-use-preview-10-2025",
+  "limit": {
+   "context": 128000,
+   "output": 64000
+  },
+  "modelID": "gemini-2.5-computer-use-preview-10-2025",
+  "name": "Gemini 2.5 Computer Use Preview 10-2025",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1759795200000
+  },
+  "type": "chat",
+  "variants": []
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "audio",
+    "video",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.03,
+     "write": 0
+    },
+    "input": 0.3,
+    "output": 2.5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-2.5-flash",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-2.5-flash",
+  "name": "Gemini 2.5 Flash",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1750118400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": false,
+      "thinkingBudget": 0
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 12288
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 24576
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "audio",
+    "video",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.01,
+     "write": 0
+    },
+    "input": 0.1,
+    "output": 0.4
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash-lite",
+  "id": "gemini-2.5-flash-lite",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-2.5-flash-lite",
+  "name": "Gemini 2.5 Flash-Lite",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1750118400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": false,
+      "thinkingBudget": 0
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 12288
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 24576
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "audio",
+    "video",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.125,
+     "write": 0
+    },
+    "input": 1.25,
+    "output": 10
+   },
+   {
+    "cache": {
+     "read": 0.25,
+     "write": 0
+    },
+    "input": 2.5,
+    "output": 15,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "gemini-2.5-pro",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-2.5-pro",
+  "name": "Gemini 2.5 Pro",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1750118400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 16384
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": 32768
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.05,
+     "write": 0
+    },
+    "input": 0.5,
+    "output": 3
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-3-flash-preview",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3-flash-preview",
+  "name": "Gemini 3 Flash Preview",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1765929600000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.025,
+     "write": 0
+    },
+    "input": 0.25,
+    "output": 1.5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash-lite",
+  "id": "gemini-3.1-flash-lite",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.1-flash-lite",
+  "name": "Gemini 3.1 Flash Lite",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1778112000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 0
+    },
+    "input": 2,
+    "output": 12
+   },
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 0
+    },
+    "input": 4,
+    "output": 18,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "gemini-3.1-pro-preview",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.1-pro-preview",
+  "name": "Gemini 3.1 Pro Preview",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1771459200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 0
+    },
+    "input": 2,
+    "output": 12
+   },
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 0
+    },
+    "input": 4,
+    "output": 18,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "gemini-3.1-pro-preview-customtools",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.1-pro-preview-customtools",
+  "name": "Gemini 3.1 Pro Preview Custom Tools",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1771459200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.15,
+     "write": 0
+    },
+    "input": 1.5,
+    "output": 9
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-3.5-flash",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.5-flash",
+  "name": "Gemini 3.5 Flash",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1779148800000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.03,
+     "write": 0
+    },
+    "input": 0.3,
+    "output": 2.5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash-lite",
+  "id": "gemini-3.5-flash-lite",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.5-flash-lite",
+  "name": "Gemini 3.5 Flash Lite",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1784592000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.075,
+     "write": 0
+    },
+    "input": 0.75,
+    "output": 3.75
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-3.6-flash",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.6-flash",
+  "name": "Gemini 3.6 Flash",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1784592000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.075,
+     "write": 0
+    },
+    "input": 0.75,
+    "output": 3.75
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-3.7-flash",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.7-flash",
+  "name": "Gemini 3.7 Flash",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1786579200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.075,
+     "write": 0
+    },
+    "input": 0.75,
+    "output": 3.75
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-3.8-flash",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-3.8-flash",
+  "name": "Gemini 3.8 Flash",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1788307200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 0
+    },
+    "input": 2,
+    "output": 10
+   }
+  ],
+  "enabled": true,
+  "family": "gemini",
+  "id": "gemini-4-argon",
+  "limit": {
+   "context": 1048576,
+   "output": 32768
+  },
+  "modelID": "gemini-4-argon",
+  "name": "Gemini 4 Argon",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1791849600000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 0
+    },
+    "input": 2,
+    "output": 10
+   }
+  ],
+  "enabled": true,
+  "family": "gemini",
+  "id": "gemini-4-carbon",
+  "limit": {
+   "context": 1048576,
+   "output": 32768
+  },
+  "modelID": "gemini-4-carbon",
+  "name": "Gemini 4 Carbon",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1794268800000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.075,
+     "write": 0
+    },
+    "input": 1.5,
+    "output": 7.5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini",
+  "id": "gemini-4-hydrogen",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-4-hydrogen",
+  "name": "Gemini 4 Hydrogen",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1794441600000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "xhigh"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.075,
+     "write": 0
+    },
+    "input": 0.75,
+    "output": 3.75
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash",
+  "id": "gemini-flash-latest",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-flash-latest",
+  "name": "Gemini Flash Latest",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1786579200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.03,
+     "write": 0
+    },
+    "input": 0.3,
+    "output": 2.5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-flash-lite",
+  "id": "gemini-flash-lite-latest",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-flash-lite-latest",
+  "name": "Gemini Flash-Lite Latest",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1784592000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 0
+    },
+    "input": 2,
+    "output": 12
+   },
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 0
+    },
+    "input": 4,
+    "output": 18,
+    "tier": {
+     "size": 200000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "gemini-pro",
+  "id": "gemini-pro-latest",
+  "limit": {
+   "context": 1048576,
+   "output": 65536
+  },
+  "modelID": "gemini-pro-latest",
+  "name": "Gemini Pro Latest",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1771459200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "video",
+    "audio"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 0
+    },
+    "input": 1,
+    "output": 5
+   }
+  ],
+  "enabled": true,
+  "family": "gemini",
+  "id": "gemini-robotics-er-2-preview",
+  "limit": {
+   "context": 131072,
+   "output": 65536
+  },
+  "modelID": "gemini-robotics-er-2-preview",
+  "name": "Gemini Robotics-ER 2 Preview",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1785369600000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "minimal",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "minimal"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "low"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "medium"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingLevel": "high"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0,
+     "write": 0
+    },
+    "input": 0,
+    "output": 0
+   }
+  ],
+  "enabled": true,
+  "family": "gemma",
+  "id": "gemma-4-26b-a4b-it",
+  "limit": {
+   "context": 262144,
+   "output": 32768
+  },
+  "modelID": "gemma-4-26b-a4b-it",
+  "name": "Gemma 4 26B A4B IT",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1775088000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": false,
+      "thinkingBudget": 0
+     }
+    }
+   },
+   {
+    "id": "thinking",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": -1
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0,
+     "write": 0
+    },
+    "input": 0,
+    "output": 0
+   }
+  ],
+  "enabled": true,
+  "family": "gemma",
+  "id": "gemma-4-31b-it",
+  "limit": {
+   "context": 262144,
+   "output": 32768
+  },
+  "modelID": "gemma-4-31b-it",
+  "name": "Gemma 4 31B IT",
+  "package": "@opencode/ai/providers/google",
+  "providerID": "google",
+  "status": "active",
+  "time": {
+   "released": 1775088000000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": false,
+      "thinkingBudget": 0
+     }
+    }
+   },
+   {
+    "id": "thinking",
+    "settings": {
+     "thinkingConfig": {
+      "includeThoughts": true,
+      "thinkingBudget": -1
+     }
+    }
+   }
+  ]
+ }
+]

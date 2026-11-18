@@ -40,6 +40,9 @@ public final class PortForwarder: Sendable {
     let afterSpawn: (@Sendable () async -> Void)?
     /// Test hook run by a relay task after its connection was unregistered.
     let onEnded: (@Sendable () async -> Void)?
+    /// Run before each connection is relayed (a compose-stack MCP endpoint starts its stack on first use); false closes
+    /// the connection at once.
+    let prepare: (@Sendable () async -> Bool)?
     private let served = Mutex(0)
     private let acceptQueue = DispatchQueue(label: "bellocode.forward.accept")
 
@@ -47,15 +50,17 @@ public final class PortForwarder: Sendable {
     ///   - containerHost: where the relay connects inside the container (`127.0.0.1`, or `::1` for an IPv6 listener).
     ///   - hostPort: 0 picks a free port; otherwise the same port number is tried (keeps URLs stable).
     public convenience init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
-                            hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64) throws {
+                            hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64,
+                            prepare: (@Sendable () async -> Bool)? = nil) throws {
         try self.init(client: client, container: container, containerPort: containerPort, containerHost: containerHost, hostPort: hostPort,
-                      user: user, maxConnections: maxConnections, relay: nil, afterSpawn: nil, onEnded: nil)
+                      user: user, maxConnections: maxConnections, relay: nil, afterSpawn: nil, onEnded: nil, prepare: prepare)
     }
 
     init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
          hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64,
          relay: (@Sendable (PortForwarder, FileStream) async -> Void)?, afterSpawn: (@Sendable () async -> Void)?,
-         onEnded: (@Sendable () async -> Void)? = nil) throws {
+         onEnded: (@Sendable () async -> Void)? = nil, prepare: (@Sendable () async -> Bool)? = nil) throws {
+        self.prepare = prepare
         self.relay = relay
         self.afterSpawn = afterSpawn
         self.onEnded = onEnded
@@ -116,7 +121,9 @@ public final class PortForwarder: Sendable {
                     continue
                 }
                 let task = Task { [self] in
-                    if let relay { await relay(self, peer) } else { await relayConnection(peer) }
+                    if let prepare, !(await prepare()) {
+                        // Nothing to relay to: the browser or client sees the connection close.
+                    } else if let relay { await relay(self, peer) } else { await relayConnection(peer) }
                     peer.cancel()
                     _ = slots.withLock { $0.removeValue(forKey: id) }
                     await onEnded?()

@@ -1,0 +1,13 @@
+# G7 startup, 2026-11-18T19:47:33Z, image bellocode-g7-browser:spike, limits 2 CPU / 2 GiB
+# cold: new volume (first pairing)
+connected 2391 ms after docker run
+19:47:34.015 display ready +61ms
+19:47:34.027 relay ready +72ms
+19:47:36.055 pairing: one-time code handed to the extension's setup page +2097ms
+Extension: connected
+Browser:   Chromium on 0b82a79ce679 (chromium-0b82a79ce679), default
+# warm: container recreated, same volume (already paired)
+connected 847 ms after docker run
+# stop (idle stop) then start
+stop took 158 ms
+connected 585 ms after docker start

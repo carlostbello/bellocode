@@ -124,6 +124,10 @@ public struct PermissionPresentation: Hashable, Sendable {
             title = "Use “\(Self.humanize(action))”"
             targets = resources
         }
+        // Auto escalated this one (docs/features/auto-mode.md): its reason leads, the generic caution follows.
+        if let escalation = request.autoEscalation {
+            caution = [escalation.summary, caution].compactMap { $0 }.joined(separator: " ")
+        }
         self.caution = caution
         targetsAreCommands = commands
         let shownTargets = targets.filter { !$0.isEmpty && $0 != "*" }
@@ -147,13 +151,15 @@ public struct PermissionPresentation: Hashable, Sendable {
             allowAlways = Choice(
                 title: "Always allow",
                 detail: "Saves a rule for \(project): \(Self.verb(kind)) matching \(patterns) without asking, in every "
-                    + "thread of the project, until you remove the rule.",
+                    + "thread of the project, until you remove the rule."
+                    + (request.autoEscalation?.findings.isEmpty == false
+                        ? " In Auto, secrets, outside paths and other mandatory risks still ask." : ""),
                 isAvailable: true)
         }
         deny = Choice(
             title: "Deny", detail: "The \(noun) does not happen. The agent is told and decides what to do next.",
             isAvailable: true)
-        announcement = "Approval needed: \(title). \(summary)"
+        announcement = "Approval needed: \(title). \(summary)" + (request.autoEscalation.map { ". \($0.summary)" } ?? "")
     }
 
     // MARK: Helpers

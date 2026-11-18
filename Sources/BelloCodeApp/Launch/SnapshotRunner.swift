@@ -32,11 +32,13 @@ struct SnapshotRunner {
     func run() async -> Bool {
         if name == "nav" { return await runNavigation() }
         if name == "orch" { return await runOrchestration() }
+        if name == "auto" { return await runAuto() }
         if name == "extras" { return await runExtras() }
         if name == "gitlab" { return await runGitLab() }
         if name == "gitlab2" { return await runGitLab2() }
         if name == "git" { return await runGit() }
         if name == "containers" { return await runContainers() }
+        if name == "containers3" { return await runContainers3() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

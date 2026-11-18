@@ -12,7 +12,9 @@ import OpenCodeKit
 ///    built-in browser uses;
 /// 4. one prompt on a free built-in model makes the agent run a shell command, which lands in the container;
 /// 5. a project MCP server (a Node echo server over stdio) is started inside the container through
-///    `bellocode-exec --stdio`, and one more prompt makes the agent call its tool.
+///    `bellocode-exec --stdio`, and one more prompt makes the agent call its tool;
+/// 6. a global image MCP server (Settings ▸ MCP Servers; the same image, the echo server as its entrypoint, a Keychain
+///    secret) runs in its own container with no project folder mounted, and a third prompt makes the agent call it.
 /// Prints derived results only (never command output or environment).
 enum ContainerEndToEnd {
     @MainActor
@@ -122,8 +124,97 @@ enum ContainerEndToEnd {
             check("agent prompt", false, "\(error)")
         }
         passed = await mcpServer(engine: engine, client: client, project: project, model: model, check: check) && passed
+        passed = await globalImageServer(engine: engine, client: client, project: project, model: model, check: check) && passed
         return passed
     }
+
+    /// 6. A global image MCP server in its own container (no project mount), used by the agent. Its stderr (the helper's
+    /// bounded log) reports where it runs, whether the project folder exists there and whether the secret arrived (never
+    /// the value).
+    @MainActor
+    private static func globalImageServer(engine: Engine, client: OpenCodeClient, project: String, model: ModelEntry,
+                                          check: (String, Bool, String) -> Void) async -> Bool {
+        let environments = engine.environments
+        guard let image = environments.environment(for: project).settings.image else {
+            check("global image MCP server", false, "the project has no image")
+            return false
+        }
+        let id = "e2eglobal01"
+        let server = GlobalMCPServer(id: id, name: "globecho", kind: .image, image: ImageMCPSetting(
+            image: image, entrypoint: ["node", "-e", globalEchoMCPServer],
+            environment: [MCPKeyValue(name: "PROBE_PROJECT", value: project), MCPKeyValue(name: "GLOBAL_ECHO_TOKEN", secret: true)]))
+        do {
+            try await environments.saveGlobalMCP(environments.globalMCP.servers + [server], secrets: [
+                GlobalMCPSecrets.account(server: id, variable: "GLOBAL_ECHO_TOKEN"): SecretValue("e2e-\(UUID().uuidString)")])
+        } catch {
+            check("global image MCP server saved", false, "\(error)")
+            return false
+        }
+        environments.projectInUse(project)
+        let environment = environments.environment(for: project)
+        var status = ""
+        var log = ""
+        for _ in 0..<120 {
+            await environments.refreshMCPStatus(project)
+            status = environment.mcpStatus.first { $0.name == "globecho" }?.status ?? ""
+            log = await environments.globalMCPLogs(id)
+            if status == "connected", log.contains("bellocode-started") { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        let started = log.split(separator: "\n").first { $0.hasPrefix("bellocode-started") }.map(String.init) ?? ""
+        check("global image MCP server runs in its own container with no project mount",
+              status == "connected" && started == "bellocode-started Linux docker project-absent token-present",
+              "status \(status.isEmpty ? "none" : status), reported \(started.isEmpty ? "nothing" : started)")
+        var called = ""
+        do {
+            let session = try await client.createSession(SessionCreateRequest(
+                directory: project, title: "BelloCode global MCP e2e", model: ModelRef(id: model.modelID, providerID: model.providerID),
+                permissions: [PermissionRule(action: "*", resource: "*", effect: .allow)]))
+            _ = try await client.prompt(sessionID: session.id, PromptRequest(
+                text: "Call the echo tool of the globecho MCP server once with the text bellocode-global-ok, then reply with the single word done."))
+            for _ in 0..<240 {
+                try? await Task.sleep(for: .milliseconds(500))
+                called = (await environments.globalMCPLogs(id)).split(separator: "\n").first { $0.hasPrefix("bellocode-called") }.map(String.init) ?? ""
+                if !called.isEmpty { break }
+            }
+            try? await client.interrupt(sessionID: session.id)
+            try? await client.deleteSession(session.id)
+        } catch {
+            check("global MCP prompt", false, "\(error)")
+        }
+        check("agent used the global image server's tool from its own container",
+              called == "bellocode-called bellocode-global-ok Linux docker project-absent token-present", called.isEmpty ? "no call within 120 s" : called)
+        _ = await environments.removeGlobalMCP(id)
+        return status == "connected" && called.contains("project-absent")
+    }
+
+    /// The global image server's program (Node, no dependencies, given to `node -e`): an echo MCP server that reports on
+    /// stderr where it runs, whether `PROBE_PROJECT` exists there and whether `GLOBAL_ECHO_TOKEN` arrived.
+    static let globalEchoMCPServer = #"""
+    const fs = require('fs'), os = require('os');
+    const where = os.type() + (fs.existsSync('/.dockerenv') ? ' docker' : '') + (fs.existsSync(process.env.PROBE_PROJECT || '/nonexistent') ? ' project-visible' : ' project-absent') + (process.env.GLOBAL_ECHO_TOKEN ? ' token-present' : ' token-missing');
+    process.stderr.write('bellocode-started ' + where + '\n');
+    let buffer = '';
+    const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (d) => {
+      buffer += d;
+      let i;
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+        if (line.trim()) handle(JSON.parse(line));
+      }
+    });
+    process.stdin.on('end', () => process.exit(0));
+    function handle(m) {
+      if (m.id === undefined) return;
+      if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: (m.params && m.params.protocolVersion) || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'globecho', version: '1.0.0' } } });
+      else if (m.method === 'tools/list') send({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'echo', description: 'Echoes the text back and says where it ran.', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }] } });
+      else if (m.method === 'tools/call') { const t = ((m.params || {}).arguments || {}).text || ''; process.stderr.write('bellocode-called ' + t + ' ' + where + '\n'); send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'echo: ' + t + ' (' + where + ')' }] } }); }
+      else if (m.method === 'ping') send({ jsonrpc: '2.0', id: m.id, result: {} });
+      else send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no such method' } });
+    }
+    """#
 
     /// 5. A project MCP server in the container, used by the agent.
     @MainActor

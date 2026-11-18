@@ -9,6 +9,7 @@
 // All modes open a visible window and exit when done; a watchdog ends a hung run.
 
 import AppKit
+import BelloCore
 import Foundation
 
 @testable import BrowserKit
@@ -80,8 +81,7 @@ func runDemo() async -> Int32 {
 }
 
 func pinnedVersion(_ root: URL) -> String {
-    (try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8))?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "2.3.0"
+    OpenCodePin.repositoryVersion(root: root) ?? "unknown"
 }
 
 // Watchdog: the demo never outlives a hung run (an opencode child is cleaned up by its stdin lease closing). Wall

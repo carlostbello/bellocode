@@ -3,7 +3,7 @@
 // The plugin works on opencode's own session JSON (the shape `GET /api/session/{id}` returns): child sessions have a
 // `parentID`, `time.busy`/`time.idle` give the run state, and `metadata.bellocode` holds what BelloCode adds.
 
-export const CONTRACT_VERSION = 1
+export const CONTRACT_VERSION = 2
 
 export interface Limits {
   /** Deepest delegation below a top-level thread (a child of a top-level thread has depth 1). */
@@ -277,7 +277,7 @@ export function guidance(input: { readonly depth: number; readonly limits: Limit
       ? "- delegate_task starts a child agent on a self-contained task (give it all context). You are woken with a <subagent> report when it finishes: do not poll, sleep or wait in a loop. task_status / task_cancel manage it; thread_send to the child sends a follow-up."
       : "- You cannot delegate further (depth limit). Do the work yourself.",
     "- create_threads fans work out into new top-level threads the user sees in the sidebar.",
-    "- thread_list, thread_search, thread_read, thread_send, thread_wait, thread_interrupt work with other threads of this project; other projects need the user's approval.",
+    "- thread_list, thread_search, thread_read, thread_send, thread_wait, thread_interrupt work with other threads of this project; other projects need the user's approval. thread_interrupt needs a reason, is shown to the user in both threads and is rate-limited.",
     "- send_to_user shows the user something they must read now (a draft, a decision, a summary).",
     "Use these only when parallel or separate work clearly helps; small tasks are faster done directly.",
     ...extrasGuidance,

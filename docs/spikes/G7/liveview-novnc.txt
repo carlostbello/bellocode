@@ -1,0 +1,7 @@
+# noVNC RFB client (headless Chromium in a sibling container on the same network) -> websockify -> TigerVNC Xvnc 1.12
+# Chromium showing fixture toggle.html; latency = input sent -> flip visible in the client's canvas (rAF). 2026-11-18T20:37:30Z
+{"connect_ms":1011,"key_ms":{"n":30,"failed":0,"p50":27.6,"p90":30.5,"min":16,"max":33.8},"click_ms":{"n":30,"failed":0,"p50":28.4,"p90":31.4,"min":15.1,"max":32.4},"key_raw":[28.9,28,28.5,27.8,30.3,25.5,17.3,29.5,16.6,27.8,23.9,27.9,18.6,23.6,28.3,17.5,22.8,23.7,26.4,31.6,29.2,33.8,19.6,27.6,26.3,28.1,16,24.6,30.5,17.2],"click_raw":[28.7,27.1,30.3,30.7,16.9,23.3,27.2,15.1,29.6,28.4,29,16.4,28.4,23,31.4,20.1,25,30.7,29,23.2,24.4,26.6,31.7,32.4,30.5,26.2,31,29,25.1,27.6]}
+{"clip_received_from_container":"g7-from-container"}
+# container X clipboard after the viewer's clipboardPasteFrom('g7-from-viewer'):
+g7-from-container
+# (previous run, same session: container X clipboard read 'g7-from-viewer' after the viewer pasted; this run's container copy overwrote it)

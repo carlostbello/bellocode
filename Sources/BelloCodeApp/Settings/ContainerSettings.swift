@@ -124,9 +124,13 @@ final class ContainersSettingsModel: ObservableObject {
 
     /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
     static weak var last: ContainersSettingsModel?
+    /// Corporate network and diagnostics (Containers 3).
+    let network: NetworkSettingsModel
 
     init(engine: Engine) {
         self.engine = engine
+        network = NetworkSettingsModel(engine: engine)
+        NetworkSettingsModel.last = network
         engine.environments.reloadManagedPolicy()
         defaultImage = engine.environments.defaultImage ?? ""
         let policy = engine.environments.imagePolicy
@@ -141,9 +145,10 @@ final class ContainersSettingsModel: ObservableObject {
         guard service.managedPolicy == nil else { return }
         var defaults = service.defaults
         let prefixes = allowlist.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: requireSignature)
+        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: false)
         await service.setDefaults(defaults)
-        message = prefixes.isEmpty && !requireDigest && !requireSignature
+        requireSignature = false
+        message = prefixes.isEmpty && !requireDigest
             ? "Image policy saved: any image may run." : "Image policy saved. Projects outside it are refused until their image is changed."
     }
 
@@ -298,8 +303,8 @@ struct ContainersSettingsView: View {
                 }
             }
             SettingsGroup("Image policy", footer: model.service.managedPolicy == nil
-                ? "Applies to every project's image and its services. One registry (registry.acme.internal) or repository prefix (registry.acme.internal/dev/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
-                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Images outside it are refused for the workspace and every service.") {
+                ? "Applies to the images BelloCode pulls: base images of the projects' own Dockerfiles, and the workspace and service images that are pulled rather than built. One registry (docker.io) or repository prefix (docker.io/library/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
+                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Applies to base images and pulled workspace and service images; others are refused.") {
                 ImagePolicySettingsView(model: model)
             }
             SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
@@ -311,6 +316,12 @@ struct ContainersSettingsView: View {
                     Button("Sign In") { model.signIn() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         .disabled(model.registry.isEmpty || model.username.isEmpty || model.password.isEmpty)
                 }
+            }
+            SettingsGroup("Corporate network", footer: "A transparent proxy needs no settings. If it inspects TLS with your organisation's root certificate, the Mac trusts it but containers do not until it is added here. Applies to new containers (existing ones are recreated on next use).") {
+                CorporateNetworkSettingsView(model: model.network, service: service)
+            }
+            SettingsGroup("Network diagnostics", footer: "Fetches each URL from inside a running project container and from this Mac, as opencode would (its built-in roots plus the selected enterprise roots), and shows the certificate issuer and any proxy headers.") {
+                NetworkDiagnosticsView(model: model.network, service: service)
             }
             SettingsGroup("Isolation") {
                 IsolationReportView(report: service.isolation, running: service.isVerifyingIsolation) {
@@ -335,7 +346,10 @@ struct ContainersSettingsView: View {
             if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
             if let message = model.message { SettingsNote(message) }
         }
-        .task { await model.reload() }
+        .task {
+            await model.reload()
+            await service.refreshCorporateNetwork()
+        }
     }
 
     private var runtimeDetail: String? {
@@ -447,14 +461,16 @@ struct ImagePolicySettingsView: View {
         let service = model.service
         if let managed = service.managedPolicy {
             let policy = managed.policy
-            SettingsRow("Allowed images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
+            SettingsRow("Allowed base and pulled images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
                 DSPillView("Managed", tone: .info, symbolName: "building.2")
             }
             SettingsRow("Pinned by digest", detail: policy.requireDigest ? "Required" : "Not required") { EmptyView() }
             SettingsRow("Pulling", detail: Self.pullText(policy.pullPolicy)) { EmptyView() }
-            SettingsRow("Verified signatures", detail: policy.requireSignature
-                ? "Required: BelloCode cannot verify signatures yet, so every image is refused" : "Not required") {
-                if policy.requireSignature { DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised") } else { EmptyView() }
+            // Images are not signed (owner, 2026-11-18): shown only if an administrator still requires signatures.
+            if policy.requireSignature {
+                SettingsRow("Verified signatures", detail: "Required by your organisation; BelloCode cannot verify signatures, so every image is refused") {
+                    DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised")
+                }
             }
         } else {
             VStack(alignment: .trailing, spacing: DS.Space.s8) {
@@ -470,8 +486,12 @@ struct ImagePolicySettingsView: View {
                 DSSegmentedPicker(options: [(id: ImagePolicy.PullPolicy.missing, title: "When missing"), (id: .always, title: "Always"), (id: .never, title: "Never")],
                                   selection: $model.pullPolicy).fixedSize()
             }
-            SettingsToggleRow("Require verified signatures", detail: "BelloCode cannot verify signatures yet: turning this on refuses every image.",
-                              isOn: $model.requireSignature)
+            if model.requireSignature {
+                // A policy saved before images were known to be unsigned (owner, 2026-11-18): it refuses every image.
+                SettingsRow("Verified signatures are required", detail: "BelloCode cannot verify signatures, so every image is refused. Saving the policy turns this off.") {
+                    DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised")
+                }
+            }
             SettingsActionsRow {
                 Spacer()
                 Button("Save Policy") { Task { await model.savePolicy() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
@@ -797,6 +817,23 @@ final class EnvironmentSettingsModel: ObservableObject {
         await service.update(directory, settings: settings)
     }
 
+    /// Whether this project uses the MCP servers set up for all projects (Settings ▸ MCP Servers).
+    func setUseGlobalMCP(_ value: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.useGlobalMCP = value
+        await service.update(directory, settings: settings)
+    }
+
+    /// Turns one global server on or off for this project only.
+    func setGlobalMCP(_ id: String, inProject enabled: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.globalMCPOptOut.removeAll { $0 == id }
+        if !enabled { settings.globalMCPOptOut.append(id) }
+        await service.update(directory, settings: settings)
+    }
+
     func showLogs() async {
         guard let id = environment?.record.containerID else { logs = "No container yet."; return }
         logs = await service.logs(containerID: id)
@@ -948,7 +985,10 @@ struct EnvironmentSettingsView: View {
         SettingsGroup("Caches", footer: "Named volumes for package-manager caches, kept when the container is rebuilt. “Shared” uses one volume for every project that also shares it; otherwise the cache is this project's own.") {
             ProjectCachesView(model: model, environment: environment)
         }
-        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
+        SettingsGroup("MCP servers for all projects", footer: "Set up in Settings ▸ MCP Servers. Turn them off here for this project only; a project server of the same name wins.") {
+            GlobalMCPOptOutView(model: model, environment: environment, service: model.service)
+        }
+        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. A command configured for all projects in opencode's own files is refused unless it is a docker run of an image.") {
             MCPServersListView(model: model, environment: environment)
         }
         SettingsGroup("Ports") {

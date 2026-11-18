@@ -78,6 +78,10 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     /// container (and home volume) serves every project under the code roots. `projectRoot` is then the first code
     /// root and `extraMounts` the other roots and the worktree folders.
     public var sharedKeySeed: String?
+    /// Enterprise certificates and proxy variables (Corporate network).
+    public var corporateNetwork: CorporateNetwork?
+    /// The project's service names (added to `NO_PROXY`).
+    public var serviceNames: [String]?
 
     public init(projectRoot: String, extraMounts: [String] = [], userMounts: [UserMount] = [], image: String,
                 user: String = "\(getuid()):\(getgid())", network: Network = .bridge, publishedPorts: [Int] = [],
@@ -207,6 +211,7 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
             })
         }
         body.hostConfig = host
+        corporateNetwork?.apply(to: &body, noProxyExtra: serviceNames ?? [])
         return body
     }
 
