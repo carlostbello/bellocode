@@ -64,7 +64,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             // M6-A containerised execution (docs/features/containers.md).
             panes.append(
                 SettingsPane(id: "containers", title: "Containers", symbolName: "shippingbox") {
-                    let view = ContainersSettingsView(model: ContainersSettingsModel(engine: engine), service: engine.environments) { container in
+                    let containersModel = ContainersSettingsModel(engine: engine)
+                    ContainersSettingsModel.last = containersModel
+                    let view = ContainersSettingsView(model: containersModel, service: engine.environments) { container in
                         let alert = NSAlert()
                         alert.messageText = "Remove the container \(container.name)?"
                         alert.informativeText = "Processes in it stop. Project files are on this Mac and are not touched; the container is created again on next use."

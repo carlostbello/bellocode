@@ -146,6 +146,11 @@ public final class Engine {
     private var nextTrackedID = 0
     private var defaultDirectory: String?
     private var started = false
+    /// Service restarts waiting for the person's approval (`ServiceTools.swift`), and projects where agents may restart
+    /// services without asking (`app_grant` kind serviceRestart).
+    var pendingServiceRestarts: [String: PendingServiceRestart] = [:]
+    var serviceRestartGrants: Set<String> = []
+    var serviceRestartGrantsLoaded = false
 
     /// Opens the store on the calling thread. Prefer `make(configuration:)` from the main actor: opening and migrating
     /// SQLite can take a while on a slow disk.
@@ -435,6 +440,8 @@ public final class Engine {
                 if let first = directories.first ?? self.configuration.defaultDirectory { await orchestration.checkPlugin(directory: first) }
                 await orchestration.hostAppTools(directories: directories)
             })
+        // Project MCP servers are runtime registrations: a (re)connected server has none.
+        environments.serverConnected()
     }
 
     private func subscribeRoot() {

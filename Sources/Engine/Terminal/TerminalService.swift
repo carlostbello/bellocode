@@ -206,7 +206,7 @@ public final class ThreadTerminals {
     /// Starts a new terminal in `directory` (the thread's directory or worktree) and selects it.
     @discardableResult
     public func create(
-        directory: String, placement: TerminalPlacement = .drawer, size: PTYSize? = nil, title: String? = nil
+        directory: String, placement: TerminalPlacement = .drawer, size: PTYSize? = nil, title: String? = nil, extraArgs: [String] = []
     ) async -> TerminalRecord? {
         await waitUntilLoaded()
         creatingCount += 1
@@ -218,10 +218,11 @@ public final class ThreadTerminals {
             let info = try await client().createTerminal(
                 sessionID: sessionID.rawValue,
                 PTYCreateRequest(
-                    command: launch.command, args: launch.args, cwd: directory, title: title, env: launch.environment,
+                    command: launch.command, args: launch.args + extraArgs, cwd: directory, title: title, env: launch.environment,
                     size: size?.clamped))
-            let record = TerminalRecord(
+            var record = TerminalRecord(
                 id: info.id, sessionID: sessionID, title: info.title, startDirectory: directory, placement: placement)
+            if !extraArgs.isEmpty { record.launchArgs = extraArgs }
             set.records.append(record)
             select(record.id, in: placement)
             set.trim()
@@ -244,12 +245,13 @@ public final class ThreadTerminals {
             let info = try await client().createTerminal(
                 sessionID: sessionID.rawValue,
                 PTYCreateRequest(
-                    command: launch.command, args: launch.args, cwd: old.startDirectory, title: old.title,
+                    command: launch.command, args: launch.args + (old.launchArgs ?? []), cwd: old.startDirectory, title: old.title,
                     env: launch.environment, size: size?.clamped))
             guard let index = set.records.firstIndex(where: { $0.id == id }) else { return nil }
             var record = TerminalRecord(
                 id: info.id, sessionID: sessionID, title: info.title, userTitle: old.userTitle,
                 startDirectory: old.startDirectory, placement: old.placement)
+            record.launchArgs = old.launchArgs
             record.created = Date()
             set.records[index] = record
             if set.selectedDrawer == id { set.selectedDrawer = record.id }

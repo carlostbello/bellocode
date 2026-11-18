@@ -171,6 +171,9 @@ public struct ContainerCreate: Codable, Sendable, Equatable {
     public var stopSignal: String?
     public var stopTimeout: Int?
     public var hostConfig: HostConfig?
+    public var healthcheck: HealthConfig?
+    public var hostname: String?
+    public var networkingConfig: NetworkingConfig?
 
     public init(image: String) { self.image = image }
 
@@ -179,7 +182,101 @@ public struct ContainerCreate: Codable, Sendable, Equatable {
         case workingDir = "WorkingDir", labels = "Labels", exposedPorts = "ExposedPorts", tty = "Tty"
         case openStdin = "OpenStdin", attachStdin = "AttachStdin", attachStdout = "AttachStdout"
         case attachStderr = "AttachStderr", stopSignal = "StopSignal", stopTimeout = "StopTimeout"
-        case hostConfig = "HostConfig"
+        case hostConfig = "HostConfig", healthcheck = "Healthcheck", hostname = "Hostname", networkingConfig = "NetworkingConfig"
+    }
+}
+
+/// A container's healthcheck (durations in nanoseconds).
+public struct HealthConfig: Codable, Sendable, Equatable, Hashable {
+    public var test: [String]
+    public var interval: Int64?
+    public var timeout: Int64?
+    public var startPeriod: Int64?
+    public var retries: Int?
+    public init(test: [String], interval: Int64? = nil, timeout: Int64? = nil, startPeriod: Int64? = nil, retries: Int? = nil) {
+        self.test = test
+        self.interval = interval
+        self.timeout = timeout
+        self.startPeriod = startPeriod
+        self.retries = retries
+    }
+    enum CodingKeys: String, CodingKey { case test = "Test", interval = "Interval", timeout = "Timeout", startPeriod = "StartPeriod", retries = "Retries" }
+}
+
+/// Networks a container joins at create, with its DNS aliases there.
+public struct NetworkingConfig: Codable, Sendable, Equatable {
+    public struct Endpoint: Codable, Sendable, Equatable {
+        public var aliases: [String]?
+        public init(aliases: [String]?) { self.aliases = aliases }
+        enum CodingKeys: String, CodingKey { case aliases = "Aliases" }
+    }
+    public var endpointsConfig: [String: Endpoint]
+    public init(endpointsConfig: [String: Endpoint]) { self.endpointsConfig = endpointsConfig }
+    enum CodingKeys: String, CodingKey { case endpointsConfig = "EndpointsConfig" }
+}
+
+/// One network (`GET /networks/{id}`): attached containers are listed only by inspect.
+public struct NetworkInfo: Decodable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    public var labels: [String: String]
+    public var isInternal: Bool
+    public var containers: [String]
+    enum CodingKeys: String, CodingKey { case id = "Id", name = "Name", labels = "Labels", isInternal = "Internal", containers = "Containers" }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        labels = (try? c.decodeIfPresent([String: String].self, forKey: .labels)) ?? [:]
+        isInternal = (try? c.decodeIfPresent(Bool.self, forKey: .isInternal)) ?? false
+        containers = Array(((try? c.decodeIfPresent([String: EmptyObject].self, forKey: .containers)) ?? [:]).keys)
+    }
+    public init(id: String, name: String, labels: [String: String], isInternal: Bool, containers: [String]) {
+        self.id = id
+        self.name = name
+        self.labels = labels
+        self.isInternal = isInternal
+        self.containers = containers
+    }
+}
+
+/// One volume with its labels and, from `GET /system/df`, its size and how many containers use it.
+public struct VolumeInfo: Decodable, Sendable, Equatable, Hashable {
+    public var name: String
+    public var labels: [String: String]
+    public var size: Int64?
+    public var refCount: Int?
+    enum CodingKeys: String, CodingKey { case name = "Name", labels = "Labels", usageData = "UsageData" }
+    struct Usage: Decodable { var Size: Int64?; var RefCount: Int? }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        labels = (try? c.decodeIfPresent([String: String].self, forKey: .labels)) ?? [:]
+        let usage = try? c.decodeIfPresent(Usage.self, forKey: .usageData)
+        size = usage?.Size.flatMap { $0 >= 0 ? $0 : nil }
+        refCount = usage?.RefCount.flatMap { $0 >= 0 ? $0 : nil }
+    }
+    public init(name: String, labels: [String: String], size: Int64? = nil, refCount: Int? = nil) {
+        self.name = name
+        self.labels = labels
+        self.size = size
+        self.refCount = refCount
+    }
+}
+
+/// One local image (`GET /images/json`).
+public struct ImageListItem: Decodable, Sendable, Equatable, Hashable {
+    public var id: String
+    public var repoTags: [String]
+    public var size: Int64?
+    public var containers: Int?
+    enum CodingKeys: String, CodingKey { case id = "Id", repoTags = "RepoTags", size = "Size", containers = "Containers" }
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        repoTags = (try? c.decodeIfPresent([String].self, forKey: .repoTags)) ?? []
+        size = try? c.decodeIfPresent(Int64.self, forKey: .size)
+        containers = try? c.decodeIfPresent(Int.self, forKey: .containers)
     }
 }
 
@@ -197,6 +294,8 @@ public struct ContainerSummary: Decodable, Sendable, Equatable {
     public var labels: [String: String]
     /// Creation time, seconds since 1970.
     public var created: Int64?
+    /// The image the container runs (`sha256:…`).
+    public var imageID: String?
 
     public init(id: String, names: [String], image: String, state: String, status: String? = nil, labels: [String: String],
                 created: Int64? = nil) {
@@ -214,7 +313,7 @@ public struct ContainerSummary: Decodable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id = "Id", names = "Names", image = "Image", state = "State", status = "Status", labels = "Labels"
-        case created = "Created"
+        case created = "Created", imageID = "ImageID"
     }
 }
 
@@ -235,7 +334,13 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
         public var running: Bool
         public var exitCode: Int?
         public var pid: Int?
-        enum CodingKeys: String, CodingKey { case status = "Status", running = "Running", exitCode = "ExitCode", pid = "Pid" }
+        public var health: Health?
+        public struct Health: Decodable, Sendable, Equatable {
+            /// `starting`, `healthy` or `unhealthy`.
+            public var status: String
+            enum CodingKeys: String, CodingKey { case status = "Status" }
+        }
+        enum CodingKeys: String, CodingKey { case status = "Status", running = "Running", exitCode = "ExitCode", pid = "Pid", health = "Health" }
     }
     public struct Config: Decodable, Sendable, Equatable {
         public var labels: [String: String]?
@@ -298,7 +403,23 @@ public struct ExecInspect: Decodable, Sendable, Equatable {
     public var running: Bool
     public var exitCode: Int?
     public var pid: Int?
-    enum CodingKeys: String, CodingKey { case id = "ID", running = "Running", exitCode = "ExitCode", pid = "Pid" }
+    /// The exec's arguments after its entrypoint (`ProcessConfig.arguments`).
+    public var arguments: [String]?
+    enum CodingKeys: String, CodingKey { case id = "ID", running = "Running", exitCode = "ExitCode", pid = "Pid", processConfig = "ProcessConfig" }
+    struct ProcessConfig: Decodable { var arguments: [String]?; enum CodingKeys: String, CodingKey { case arguments } }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        running = try c.decode(Bool.self, forKey: .running)
+        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+        pid = try c.decodeIfPresent(Int.self, forKey: .pid)
+        arguments = (try? c.decodeIfPresent(ProcessConfig.self, forKey: .processConfig))?.arguments
+    }
+
+    /// A long-lived relayed program (`StdioRelay`, a local MCP server): not a command, so it neither keeps the
+    /// container from idling nor holds back the stray-process reaper.
+    public var isRelayedProgram: Bool { (arguments?.count ?? 0) >= 3 && arguments?[2] == StdioRelay.processName }
 }
 
 public struct EngineEvent: Decodable, Sendable, Equatable {

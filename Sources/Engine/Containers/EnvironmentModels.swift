@@ -16,10 +16,19 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var fileWatchBridge: Bool
     /// Stop the container after this many minutes without commands, terminals or forwarded ports (0 = never).
     public var idleStopMinutes: Int
+    /// Local (stdio) MCP servers of this project: they run in its container (`bellocode-exec --stdio`).
+    public var mcpServers: [MCPServerSetting]
+    /// Services defined in the Environment pane (compose subset), used when the project has no compose file.
+    public var servicesYAML: String?
+    /// Package-manager caches chosen for this project (an image's declared caches apply unless turned off here).
+    public var caches: [CacheSelection]
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
-                idleStopMinutes: Int = 30) {
+                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = []) {
+        self.caches = caches
+        self.mcpServers = mcpServers
+        self.servicesYAML = servicesYAML
         self.image = image
         self.environment = environment
         self.resources = resources
@@ -31,7 +40,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes }
+    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,6 +51,25 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         network = try c.decodeIfPresent(WorkspaceSpec.Network.self, forKey: .network) ?? .bridge
         fileWatchBridge = try c.decodeIfPresent(Bool.self, forKey: .fileWatchBridge) ?? true
         idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 30
+        mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
+        servicesYAML = try c.decodeIfPresent(String.self, forKey: .servicesYAML)
+        caches = try c.decodeIfPresent([CacheSelection].self, forKey: .caches) ?? []
+    }
+
+    /// The cache mounts for this project: its own choices plus what the image declares (`PackageCache.declared`),
+    /// at the image's path when it names one; per project unless shared was chosen for that cache.
+    public func cacheMounts(imageDeclared: [PackageCache: String]) -> [CacheMount] {
+        var mounts: [PackageCache: CacheMount] = [:]
+        for (cache, path) in imageDeclared { mounts[cache] = CacheMount(cache: cache, path: path) }
+        for selection in caches {
+            if selection.enabled {
+                mounts[selection.cache] = CacheMount(cache: selection.cache, path: imageDeclared[selection.cache] ?? selection.cache.defaultPath,
+                                                     shared: selection.shared)
+            } else {
+                mounts[selection.cache] = nil
+            }
+        }
+        return mounts.values.sorted { $0.cache.rawValue < $1.cache.rawValue }
     }
 
     /// Names that may not be set as plain variables: they are the container's own or BelloCode's.
@@ -58,10 +86,84 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         if resources.cpus <= 0 || resources.memoryBytes < 256 << 20 || resources.pidsLimit < 64 {
             errors.append("Resource limits are too small (at least 0.1 CPU, 256 MB memory, 64 processes).")
         }
+        var names = Set<String>()
+        for server in mcpServers {
+            errors += server.validationErrors()
+            if !names.insert(server.name).inserted { errors.append("Two MCP servers are named “\(server.name)”.") }
+        }
         for mount in userMounts where !RancherFileSharing.isShared(mount.path) {
             errors.append("\(mount.path) is not shared with Rancher Desktop (only your home folder, /Volumes and temporary folders are).")
         }
         return errors
+    }
+}
+
+/// One package-manager cache choice of a project.
+public struct CacheSelection: Codable, Sendable, Equatable, Hashable {
+    public var cache: PackageCache
+    /// Off turns off a cache the image declares.
+    public var enabled: Bool
+    /// One volume for every project that also opts in (off: the project's own volume).
+    public var shared: Bool
+
+    public init(cache: PackageCache, enabled: Bool = true, shared: Bool = false) {
+        self.cache = cache
+        self.enabled = enabled
+        self.shared = shared
+    }
+}
+
+/// A local (stdio) MCP server of one project. It runs in the project's workspace container: BelloCode registers it with
+/// opencode for the project's location with the command rewritten to `bellocode-exec --stdio` (`MCPRouting`).
+public struct MCPServerSetting: Codable, Sendable, Equatable, Hashable, Identifiable {
+    /// The server's name (its tools appear to the agent as `<name>_<tool>`).
+    public var name: String
+    /// The program and its arguments, as run inside the container (e.g. `["node", "tools/mcp.js"]`).
+    public var command: [String]
+    /// Non-secret variables for the server (visible to it in the container).
+    public var environment: [String: String]
+    public var enabled: Bool
+    public var id: String { name }
+
+    public init(name: String, command: [String], environment: [String: String] = [:], enabled: Bool = true) {
+        self.name = name
+        self.command = command
+        self.environment = environment
+        self.enabled = enabled
+    }
+
+    enum CodingKeys: String, CodingKey { case name, command, environment, enabled }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        command = try c.decode([String].self, forKey: .command)
+        environment = try c.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
+
+    public func validationErrors() -> [String] {
+        var errors: [String] = []
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        if name.isEmpty || name.unicodeScalars.contains(where: { !allowed.contains($0) }) || name.count > 48 {
+            errors.append("MCP server name “\(name)”: use letters, digits, - and _ (at most 48).")
+        }
+        if command.first?.trimmingCharacters(in: .whitespaces).isEmpty ?? true { errors.append("MCP server “\(name)” has no command.") }
+        for key in environment.keys where key.isEmpty || key.contains("=") || key.hasPrefix("BUN_") || key.hasPrefix("BELLOCODE_") {
+            errors.append("MCP server “\(name)”: \(key) cannot be set.")
+        }
+        return errors
+    }
+
+    /// Splits a command line the way a shell would for plain words and quotes (no expansion): `node "my tool.js" -v`.
+    public static func split(commandLine: String) -> [String] { ShellWords.split(commandLine) }
+
+    /// The command as one line (for the pane), quoting words with spaces or quotes.
+    public var commandLine: String {
+        command.map { word in
+            word.isEmpty || word.contains(where: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "\\" })
+                ? "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" : word
+        }.joined(separator: " ")
     }
 }
 
@@ -71,10 +173,13 @@ public struct EnvironmentDefaults: Codable, Sendable, Equatable {
     public var defaultImage: String?
     /// Another Engine API socket than Rancher Desktop's `~/.rd/docker.sock`.
     public var socketOverride: String?
+    /// The image policy set in Settings (an administrator's managed policy wins over it).
+    public var imagePolicy: ImagePolicy?
 
-    public init(defaultImage: String? = nil, socketOverride: String? = nil) {
+    public init(defaultImage: String? = nil, socketOverride: String? = nil, imagePolicy: ImagePolicy? = nil) {
         self.defaultImage = defaultImage
         self.socketOverride = socketOverride
+        self.imagePolicy = imagePolicy
     }
 
     public static let preferenceKey = "containers.defaults"
@@ -88,6 +193,8 @@ public struct EnvironmentRecord: Codable, Sendable, Equatable {
     public var mountIdentity: String?
     public var inventory: ContainerProbes.ToolInventory?
     public var lastUsed: Date?
+    /// The caches the image declares (its labels), learned when the image was inspected.
+    public var imageCaches: [PackageCache: String]?
 
     public init(imageID: String? = nil, imageDigest: String? = nil, containerID: String? = nil, mountIdentity: String? = nil,
                 inventory: ContainerProbes.ToolInventory? = nil, lastUsed: Date? = nil) {
@@ -144,6 +251,8 @@ public enum EnvironmentPhase: Sendable, Equatable {
     /// The project's saved execution policy is not in force yet (still loading) or could not be read: nothing may run
     /// under a guessed (default) policy (S3 in docs/reviews/deep-review-1.md).
     case policyUnavailable(String)
+    /// The image is outside the image policy (allowlist, digest, signature, pull policy): nothing is pulled or run.
+    case imageRefused(String)
 
     public var isBlocking: Bool { blocked != nil }
 
@@ -168,6 +277,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
                   fix: EnvironmentFix.openSettings.title)
         case .failed(let message): .init(message: "The project's container failed: \(message)", fix: EnvironmentFix.retry.title)
         case .policyUnavailable(let message): .init(message: message, fix: EnvironmentFix.openSettings.title)
+        case .imageRefused(let message): .init(message: message, fix: EnvironmentFix.chooseImage.title)
         }
     }
 
@@ -185,6 +295,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle: "Stopped"
         case .failed: "Failed"
         case .policyUnavailable: "Settings unavailable"
+        case .imageRefused: "Image not allowed"
         }
     }
 
@@ -196,6 +307,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle: "shippingbox"
         case .noImage, .unmountable: "exclamationmark.triangle"
         case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: "xmark.octagon"
+        case .imageRefused: "hand.raised"
         }
     }
 
@@ -205,7 +317,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle, .unknown: .neutral
         case .starting, .pulling: .info
         case .noImage, .unmountable: .warning
-        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: .danger
+        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable, .imageRefused: .danger
         }
     }
 }
@@ -275,11 +387,12 @@ public struct EnvironmentNotice: Sendable, Equatable {
         case .pullFailed: "Commands cannot run: the image could not be pulled"
         case .unmountable: "Commands cannot run: a folder cannot be mounted"
         case .policyUnavailable: "Commands cannot run: the environment settings are unavailable"
+        case .imageRefused: "Commands cannot run: the image is not allowed"
         default: "Commands cannot run"
         }
         let fix: EnvironmentFix? = switch phase {
         case .runtimeUnavailable(let state): EnvironmentFix(state.fix)
-        case .noImage: .chooseImage
+        case .noImage, .imageRefused: .chooseImage
         case .pullFailed(_, let signIn): signIn ? .signIn : .retry
         case .unmountable, .policyUnavailable: .openSettings
         case .failed: .retry
@@ -307,9 +420,18 @@ public struct ManagedContainer: Sendable, Equatable, Identifiable {
     public var status: String
     public var projectDirectory: String?
     public var created: Date?
+    /// The service name for a project service container; nil for a workspace.
+    public var service: String?
     public var isRunning: Bool { state == "running" }
+    /// `healthy`, `unhealthy` or `starting` from Docker's status text, when the container has a healthcheck.
+    public var health: String? {
+        for word in ["unhealthy", "healthy", "health: starting"] where status.contains("(\(word))") { return word == "health: starting" ? "starting" : word }
+        return nil
+    }
 
-    public init(id: String, name: String, image: String, state: String, status: String, projectDirectory: String?, created: Date?) {
+    public init(id: String, name: String, image: String, state: String, status: String, projectDirectory: String?, created: Date?,
+                service: String? = nil) {
+        self.service = service
         self.id = id
         self.name = name
         self.image = image

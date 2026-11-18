@@ -545,6 +545,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
         case .showContainers, .showEnvironment, .verifyIsolation:
             NSApp.sendAction(command.selector, to: nil, from: nil)
+        case .pruneContainerResources:
+            NSApp.sendAction(command.selector, to: nil, from: nil)
         }
     }
 

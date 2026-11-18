@@ -10,7 +10,9 @@ import OpenCodeKit
 ///    passes in the container;
 /// 3. a dev server listening on the container's loopback is reached through the per-project loopback forward the
 ///    built-in browser uses;
-/// 4. one prompt on a free built-in model makes the agent run a shell command, which lands in the container.
+/// 4. one prompt on a free built-in model makes the agent run a shell command, which lands in the container;
+/// 5. a project MCP server (a Node echo server over stdio) is started inside the container through
+///    `bellocode-exec --stdio`, and one more prompt makes the agent call its tool.
 /// Prints derived results only (never command output or environment).
 enum ContainerEndToEnd {
     @MainActor
@@ -119,8 +121,83 @@ enum ContainerEndToEnd {
         } catch {
             check("agent prompt", false, "\(error)")
         }
+        passed = await mcpServer(engine: engine, client: client, project: project, model: model, check: check) && passed
         return passed
     }
+
+    /// 5. A project MCP server in the container, used by the agent.
+    @MainActor
+    private static func mcpServer(engine: Engine, client: OpenCodeClient, project: String, model: ModelEntry,
+                                  check: (String, Bool, String) -> Void) async -> Bool {
+        let environments = engine.environments
+        try? Data(echoMCPServer.utf8).write(to: URL(filePath: project).appending(path: "echo-mcp.js"))
+        var settings = environments.environment(for: project).settings
+        settings.mcpServers = [MCPServerSetting(name: "echo", command: ["node", "echo-mcp.js"])]
+        await environments.update(project, settings: settings)
+        environments.activate(project)
+        let model0 = environments.environment(for: project)
+        var status = ""
+        for _ in 0..<120 {
+            await environments.refreshMCPStatus(project)
+            status = model0.mcpStatus.first { $0.name == "echo" }?.status ?? ""
+            if status == "connected" { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        let started = (try? String(contentsOf: URL(filePath: project).appending(path: "mcp-started.txt"), encoding: .utf8)) ?? ""
+        check("project MCP server started inside the container", status == "connected" && started.hasPrefix("Linux docker"),
+              "status \(status.isEmpty ? "none" : status), process reported \(started.trimmingCharacters(in: .whitespacesAndNewlines))")
+        let called = URL(filePath: project).appending(path: "mcp-called.txt")
+        var text = ""
+        do {
+            let session = try await client.createSession(SessionCreateRequest(
+                directory: project, title: "BelloCode MCP e2e", model: ModelRef(id: model.modelID, providerID: model.providerID),
+                permissions: [PermissionRule(action: "*", resource: "*", effect: .allow)]))
+            _ = try await client.prompt(sessionID: session.id, PromptRequest(
+                text: "Call the echo tool of the echo MCP server once with the text bellocode-mcp-ok, then reply with the single word done."))
+            for _ in 0..<240 {
+                try? await Task.sleep(for: .milliseconds(500))
+                text = (try? String(contentsOf: called, encoding: .utf8)) ?? ""
+                if !text.isEmpty { break }
+            }
+            try? await client.interrupt(sessionID: session.id)
+            try? await client.deleteSession(session.id)
+        } catch {
+            check("MCP prompt", false, "\(error)")
+            return false
+        }
+        check("agent used the MCP server's tool in the container", text.contains("bellocode-mcp-ok") && text.contains("Linux"),
+              text.isEmpty ? "no call within 120 s" : "")
+        settings.mcpServers = []
+        await environments.update(project, settings: settings)
+        return status == "connected" && text.contains("Linux")
+    }
+
+    /// A tiny MCP server over stdio (newline-delimited JSON-RPC, Node, no dependencies): `echo` answers with the text
+    /// and records the call in `mcp-called.txt`; start-up records where it runs in `mcp-started.txt`.
+    static let echoMCPServer = #"""
+    const fs = require('fs'), os = require('os');
+    fs.writeFileSync('mcp-started.txt', os.type() + (fs.existsSync('/.dockerenv') ? ' docker' : '') + '\n');
+    let buffer = '';
+    const send = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (d) => {
+      buffer += d;
+      let i;
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+        if (line.trim()) handle(JSON.parse(line));
+      }
+    });
+    process.stdin.on('end', () => process.exit(0));
+    function handle(m) {
+      if (m.id === undefined) return;
+      if (m.method === 'initialize') send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: (m.params && m.params.protocolVersion) || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'echo', version: '1.0.0' } } });
+      else if (m.method === 'tools/list') send({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'echo', description: 'Echoes the text back and says which operating system it ran on.', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }] } });
+      else if (m.method === 'tools/call') { const t = ((m.params || {}).arguments || {}).text || ''; fs.writeFileSync('mcp-called.txt', t + ' ' + os.type() + '\n'); send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'echo: ' + t + ' (from ' + os.type() + ')' }] } }); }
+      else if (m.method === 'ping') send({ jsonrpc: '2.0', id: m.id, result: {} });
+      else send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no such method' } });
+    }
+    """#
 
     private static func job(_ client: OpenCodeClient, _ directory: String, _ command: String) async -> String {
         guard let job = try? await client.createShellJob(command: command, cwd: directory, timeout: 60_000) else { return "" }

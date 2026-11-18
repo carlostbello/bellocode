@@ -1,245 +1,191 @@
-# Containerised execution (M6-A)
+# Containerised execution (M6-A, Containers 2)
 
 Everything the agent or the user **runs** executes in a Linux container on Rancher Desktop (dockerd); opencode stays a
-native host process; nothing falls back to the Mac. Spike and raw measurements: [G6-containers.md](../spikes/G6-containers.md).
+native host process; nothing falls back to the Mac. Spike: [G6-containers.md](../spikes/G6-containers.md).
+
+> **Database: no migration.** Containers 2 adds no table: new project fields (MCP servers, services, caches) live in
+> the `app_environment` JSON (`v6`, decoded with defaults), the image policy and pulled-image list in `app_preference`,
+> the restart grant in `app_grant` (kind `serviceRestart`). The schema stays at `v8-app-outbox`.
 
 ## Architecture
 
-- **ContainerKit**: Docker Engine API over `~/.rd/docker.sock` (no CLI), runtime discovery (`RuntimeState` with the fix
-  to show), `WorkspaceManager` (create on first use, recreate on change, reaper, probes, touch), `PortForwarder`.
-- **bellocode-exec** (`Contents/Helpers`, signed): opencode's `SHELL`, `config.shell` and BelloCode's PTY command. It reads
-  `<data>/opencode/bellocode-exec.json` (written atomically by the app, mode 0600), finds the project for the working
-  directory (mapping `/private/var/…` back to the mounted spelling), starts the container if needed (never pulls) and
-  relays the command, stdin, window size and signals. Blocked: exit 125 and one `BelloCode: … The command was not run.`
-  line the agent sees as a tool failure. **Policy currency (S4):** the app writes the configuration through one
-  serialised writer; each write first puts `bellocode-exec.required` (this launch's epoch and the new generation), then
-  the configuration with that epoch and generation. The helper runs a command only if the configuration's epoch equals
-  the requirement's and its generation is at least the required one (it re-reads for up to ~2 s to ride over the gap
-  between the two writes), so a failed, overtaken or earlier-launch file refuses with exit 125. A failed write is shown
-  in Settings ▸ Containers and Environment ("Commands refused") and retried; if the requirement itself cannot be written
-  the configuration is removed.
-- **Server launch** (`ContainerExecution`, always on for the bundled server): `SHELL`/`config.shell` = helper,
-  `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `formatter: false`, `lsp: false`, opencode's own git through the `git` shim
-  (`<data>/git-shim/git` → `bellocode-exec`, first on PATH; see "Host git"), no `BUN_*` variable ever passed, the bundled plugin's
-  `shell.create.before` guard forcing the helper, and a per-session guidance entry (Linux container, same paths, host
-  tools unavailable, image and tools).
-- **EnvironmentService** (Engine, `@MainActor`, tasks owned and cancelled with it): runtime polling and events, one
-  `ProjectEnvironment` per project, helper configuration, idle stop, reaper, Ports and forwards, file-watch bridge,
-  secrets and setup scripts in the container, the isolation self-check. Generation-checked async results.
+- **ContainerKit**: Docker Engine API over `~/.rd/docker.sock` (no CLI), `RuntimeState`, `WorkspaceManager` (create,
+  recreate on change, reaper, probes, caches, prune), `ServiceManager`, `PortForwarder`, `StdioRelay`, `ImagePolicy`.
+- **bellocode-exec** (`Contents/Helpers`): opencode's `SHELL`/`config.shell` and the PTY command. It reads
+  `<data>/opencode/bellocode-exec.json` (atomic, 0600), finds the project, starts the container if needed (never
+  pulls) and relays command, stdin, window size and signals. Modes: `-c cmd`, interactive, `--stdio [--project DIR] --
+  argv…` (local MCP servers), `--stdio --refuse NAME`, `--service NAME` (a shell in a service). Blocked: exit 125 and
+  one `BelloCode: … The command was not run.` line. **Policy currency (S4):** each write puts `bellocode-exec.required`
+  (launch epoch, generation) first; the helper runs only a configuration of this launch at least that generation
+  (re-reads ~2 s), else refuses; a failed write shows "Commands refused" in Settings and is retried.
+- **Server launch** (`ContainerExecution`): helper as shell, `OPENCODE_DISABLE_PROJECT_CONFIG=1`, formatter and LSP
+  off, opencode's git through the `git` shim, no `BUN_*`, the plugin's `shell.create.before` guard, and refusals for
+  local MCP servers in the isolated configuration files (`MCPRouting`).
+- **EnvironmentService** (Engine, `@MainActor`, owned tasks, generation-checked): runtime polling and events, one
+  `ProjectEnvironment` per project, helper configuration, idle stop, reaper, ports, file-watch bridge, secrets, setup
+  scripts, MCP registration, services, caches, policy, prune, the isolation self-check.
 
-## Coverage as shipped
+## Coverage
 
 | Path | Where it runs | Proof |
 | --- | --- | --- |
-| Agent shell tool, `/api/shell` | container | self-check (smoke) + e2e prompt on `opencode/big-pickle` |
-| PTY with `$SHELL`; BelloCode terminals | container | self-check; smoke terminal round trip in the container |
-| `!`cmd`` command templates | container | self-check (internal command, model that does not exist: never prompts) |
-| opencode schedule conditions | off (opencode schedules disabled) | self-check reports Off; same shell when enabled |
-| Worktree setup scripts | container, in the worktree | unit test; refused outside the mounted roots |
-| Worktree `commands.start` (opencode) | never set; flagged HOST if present | self-check configuration scan |
-| Formatters, LSP | off | configuration scan |
-| Local MCP servers | none configured; repo config ignored; flagged HOST if present | configuration scan |
+| Agent shell tool, `/api/shell`; PTY with `$SHELL`; BelloCode terminals | container | self-check (smoke); terminal round trip |
+| `!`cmd`` command templates | container | self-check (full) |
+| opencode schedule conditions | off (schedules disabled) | self-check reports Off |
+| Worktree setup scripts | container, in the worktree | unit test; refused outside the mounts |
+| Worktree `commands.start`, formatters, LSP | never set / off; flagged HOST if present | configuration scan |
+| **Local MCP servers, per project** | **container** (`bellocode-exec --stdio`) | scan + scratch-server probe (smoke); live test; e2e tool call |
+| **Local MCP servers configured for all projects** | **refused** (helper prints why) | unit test; scan reports "refused" |
+| MCP servers added at runtime by another client | flagged (command unknown) | self-check "MCP servers added at runtime" |
+| **Project services** | sibling containers, project network | live test (two services, health gate) |
 | Repository plugins/agents/commands, `"shell"` | ignored (`OPENCODE_DISABLE_PROJECT_CONFIG`) | spike e2e |
-| BelloCode's host git (status, diffs, add, commit, worktrees, fetch/push) | host, sandboxed (`HostGit`): runs no program a repository configures | hostile-repository matrix (unit) + self-check "Host git" (smoke) |
-| opencode's host git (snapshots, VCS diffs, revert, worktrees, fetch) | host, sandboxed through the `git` shim | same matrix through the shim; real-binary VCS test through the shim |
-| Commands that receive a secret (`secret_exec`) | one-shot sibling container, no network, project read-only (unless approved) | fake-runtime end to end + live Rancher test |
+| BelloCode's and opencode's host git | host, sandboxed (`HostGit`, shim) | hostile-repository matrix + "Host git" check |
+| Commands receiving a secret (`secret_exec`) | one-shot sibling container, no network | fake-runtime e2e + live test |
 | File tools, ripgrep | host (no project code runs) | n/a |
 
-The self-check runs once the server is live (quick: host git, configuration, shell job, PTY) and on demand ("Verify
-Isolation", Window menu and Settings; full adds a command template, schedule condition and terminal in a scratch
-thread). Each probe writes a marker under `/tmp`: found in the container proves the path, found on the Mac proves an
-escape. The **Host git** probe builds a scratch repository whose configuration names a marker-writing program at every
-git extension point and runs BelloCode's and opencode's (shim) git against it: "Confined" when nothing ran. The verdict
-(M6-B) is **Isolated** only when every applicable check ran and held; any skipped check (no project with an image,
-server offline, runtime refusing commands, plugin silent) gives **Not verified** (amber, never shown as a pass); an
-escape or failure gives **Problem**. `make smoke` fails unless the verdict is Isolated, and prints `SKIP …` when Rancher
-Desktop or the test image is missing.
+The self-check runs at launch (quick: host git, configuration, shell job, PTY, a scratch MCP server) and on demand
+("Verify Isolation", full adds a command template, schedule condition and terminal). Each probe writes a marker under
+`/tmp`: found in the container proves the path, found on the Mac proves an escape. **Isolated** only when every
+applicable check ran and held; a skipped check gives **Not verified**, an escape or failure **Problem**. `make smoke`
+fails unless Isolated.
 
-## Failure behaviour
+## MCP servers
 
-**Shipped configuration (S1).** A release build runs only the bundled, supervised opencode with `bellocode-exec`; a
-bundle missing either does not start ("The app bundle is incomplete"). Attaching to another server
-(`BELLOCODE_SERVER_URL`) and the mock/snapshot modes are compiled only into debug builds (`BELLOCODE_DEVELOPMENT`,
-set for the debug configuration of the BelloCodeApp target); attach uses its own store, defaults suite and in-memory
-secrets under `Application Support/BelloCode/Development/attached`. Without a container runner a worktree setup script
-is refused before anything is created (`WorktreeError.setupNeedsContainer`); it never runs on the host.
+opencode spawns a local server's `command` on the Mac, so BelloCode never gives it one that runs there. **Project
+servers** (Project Settings ▸ Environment ▸ MCP servers: name, command run *in the container*, non-secret variables)
+are registered per location with `PUT /api/experimental/mcp/{name}?location[directory]=…` (2.3.0: scoped to that
+location, connects at once, spawn cwd = the location) as `bellocode-exec --stdio --project <dir> -- <command>`; the
+helper runs it in a non-TTY exec under a wrapper that gives it the exec's real stdin, records its process group, passes
+TERM/INT/HUP on and stops leftovers on exit. Bytes pass unchanged; one 64 KiB input chunk in flight; end of input is
+passed on; the exit code is kept. Registration happens when the project's container is ready, after a reconnect and on
+every change (removed servers are removed); relayed execs do not keep a container from idling (an idle stop ends them
+and the next activation reconnects them). **Rule for servers configured for all projects** (a `mcp.servers` entry in
+BelloCode's isolated configuration files): **refused**. They have no project, so no container, mounts or image, and a
+shared "tools" container would be a cross-project sandbox with its own policy surface; `OPENCODE_CONFIG_CONTENT`
+replaces each such entry (it wins and replaces whole entries on 2.3.0) with `bellocode-exec --stdio --refuse <name>`,
+whose message opencode shows as the server's failure. Interception of runtime adds is not possible (BelloCode is the
+API's only client); the self-check flags any server it cannot account for.
 
-Runtime not installed / not running / containerd / too old, no image, pull failed (sign-in needed), folder not shared,
-container failed: each is a phase with a message and a fix ("Install/Start Rancher Desktop", "Switch the container
-engine to dockerd", "Choose an image", "Sign in to the registry", Retry). It is written into the helper configuration
-(the agent gets it as a tool failure), shown as a banner above the composer and over the terminals, in the toolbar
-status item and the thread context line. Retry and fixes take effect without restarting a thread: the helper reads the
-configuration on every command. Setup scripts and secret commands throw the same message (`EnvironmentBlockedError`).
+## Services ("Rancher workloads")
 
-## Workspace model
+Source: the project's checked-in `compose.yaml` / `compose.yml` / `docker-compose.y(a)ml`, else services defined in
+the Environment pane (same format). YAML is read by BelloCode's own subset parser (**no dependency**; block maps and
+lists, quoted and plain scalars, flow lists/maps, `|`/`>` blocks; anchors, merge keys, tags and multiple documents are
+refused with the line). **Supported per service:** `image`, `environment` (map or list), `ports` (container ports),
+`volumes` (named only), `depends_on` (list, or `condition: service_started | service_healthy |
+service_completed_successfully`), `healthcheck` (`test`, `interval`, `timeout`, `start_period`, `retries`, `disable`),
+`command`. **Refused** (service not started, listed): `build`, bind mounts/host paths, `privileged`, `cap_add`,
+`devices`, `network_mode`, `pid`, `ipc`, `security_opt`, `userns_mode`, `volumes_from`, `sysctls`, `runtime`,
+`extra_hosts`, `cgroup_parent`. **Ignored** (listed): everything else, `KEY` without a value, `${…}` (no interpolation).
 
-Per project setting (`app_environment`, migration `v6-container-environments`, kept by `rebuild()`). **Saved policy
-first (S3):** at launch every project's saved setting is loaded and in force before the cached project list is applied
-or any container is created, the helper configuration is written or a command runs; until then, and for a row that
-cannot be read (or a table read failure), the project is "Settings unavailable" and blocked (never run under
-defaults; saving the setting again replaces an unreadable row). Fields: image (else the
-app default; **no public default**), variables (reserved names refused), limits (CPU, memory, pids), user mounts (off;
-read-only by default), network (bridge / none), file-watch bridge, idle minutes. Registry passwords: Keychain
-(`app.bellocode.registry`), sent only in the pull's `X-Registry-Auth` header. One container per project
-(`bellocode-ws-<key>`), project folder, BelloCode's and opencode's worktree folders mounted at the same absolute paths,
-host uid:gid, no capabilities, `no-new-privileges`, `init`. Recreated when the image, the setting or the folder identity
-(device:inode) changes; an outdated container keeps running until the next activation. Stopped when idle. **Archiving a
-project only hides it** (container, volumes and settings untouched; Undo and relaunch are safe). The persistent home and
-cache volumes are deleted only by Settings ▸ Environment ▸ **Delete Container and Data…**, which lists the containers
-and volumes it will delete and asks once (it cannot be undone); no other path deletes a volume. Stray processes (`setsid` leftovers) reaped after cancelled commands and on demand.
+Each service is `bellocode-svc-<key>-<name>` on the project network `bellocode-net-<key>` (internal `-offline` when the
+project is offline), DNS alias = its name; the workspace joins that network. Image user and default capabilities,
+`no-new-privileges`, no extra capabilities or devices, limits (1 CPU, 1 GiB, 1024 pids), **nothing published**: a port
+opens on demand through a relay in the workspace container to `127.0.0.1` on the Mac. Lifecycle: start with the
+workspace in dependency order, a dependant waits for `service_healthy` (bounded by the healthcheck's own timing, at
+most 5 min; unhealthy, exited or no healthcheck blocks it with the reason); stop on idle with the workspace; recreated
+when the definition changes; removed when no longer defined (volumes kept); logs; **Delete Service Data…** lists the
+volumes and asks once. UI: Environment ▸ Services (state glyph + word with health, Open per port into the built-in
+browser, Terminal = `bellocode-exec --service` tab, Logs, Restart, Delete Data, refused/ignored keys, editor or Reload)
+and the Containers view. Agent tools: `list_services`, `service_logs` (≤ 500 lines, 16 KB, cut marked),
+`restart_service` (approval card the first time per project, "Always in This Project" grant). No tool removes data.
 
-## Dev servers
+## Image policy (workspace and services)
 
-No ports published. A listener in the container is forwarded on demand to `127.0.0.1` on the Mac (same port when free)
-through an exec relay; per project; stopped with the project, the runtime or from the Ports list (Settings ▸
-Environment: port, process, address, Open in the built-in browser, Stop). Links and dev-server offers in a
-containerised project's thread are mapped to the forward. A server bound to `0.0.0.0` in the container is still only
-reachable from the Mac's loopback: the relay connects inside the container and nothing is published (live test).
+Allowlist of registries (`registry.acme.internal`) or repository prefixes (`registry.acme.internal/dev/`,
+`docker.io/library/postgres`; Docker normalisation, boundary matching), optional digest pins (`@sha256:` + 64 hex), pull
+policy (`missing` default, `always` = pull before every create/recreate, `never`). A refused image is never pulled or
+run: phase "Image not allowed" with the specific message in the banner, the helper's refusal, the Services section.
+**For administrators** (managed preferences win over Settings, shown read-only): keys forced by a configuration profile
+in domain `com.bellocode.app`, or a root-owned, non-writable `/Library/Preferences/app.bellocode.policy.plist`:
+`ContainerImageAllowlist` (array), `ContainerImageRequireDigest` (bool), `ContainerImagePullPolicy` (string),
+`ContainerImageRequireSignature` (bool), `ContainerImageSignaturePublicKey` (PEM), `ContainerDefaultImage` (string).
+Images BelloCode pulled that were absent before are recorded (for Prune).
 
-## File-watch bridge
+**Image signatures: not verified (seam).** Key-based cosign verification is feasible natively (registry v2 API with
+the Keychain credentials and Bearer token flow, the `sha256-<digest>.sig` tag or OCI referrers, ECDSA P-256 over the
+simple-signing payload with CryptoKit, payload digest = the pinned digest = the daemon's `RepoDigests`). It was not
+shipped because it could not be validated soundly here: no cosign-signed test image, no way to create real signatures
+without a host CLI, and cosign 2.4+ bundles, keyless (Fulcio, Rekor, TUF roots) and Notary v2 (X.509 trust policies)
+each need their own verifier. `ImageSignatureVerifier` is the seam; `ContainerImageRequireSignature` without a
+verifier **refuses every image** (never "unverified").
 
-Rancher's file sharing does not raise inotify for host edits. FSEvents (file-level, off the main actor) → debounced
-150 ms, bounded batches (2 000 paths, overflow collapses to folders) → `touch -c -m -r f f` in the container (mtime
-unchanged; metadata-only events never loop). Excludes `.git`, dependency and build folders. Measured: a Node `fs.watch`
-in the container fires **61 ms** after a host edit; a batch costs 15–28 ms (one exec).
+## Caches
 
-## Host git
+npm `~/.npm`, pnpm `~/.local/share/pnpm/store`, pip `~/.cache/pip`, Cargo `~/.cargo/registry`, Go `~/go/pkg/mod`,
+Gradle `~/.gradle/caches`, Maven `~/.m2/repository` (home = `/home/bellocode`), or the path an image declares
+(`app.bellocode.caches=npm,pip`, `app.bellocode.cache.<kind>=/path`). Each is a named volume nested in the home
+volume, owned by the user; the project's own (`bellocode-<key>-cache-<kind>`, deleted with the project) unless the
+person shares that cache (`bellocode-shared-cache-<kind>`, no project label). Project Settings ▸ Environment ▸ Caches
+turns caches on or off and shares them; Settings ▸ Containers ▸ Caches lists sizes and empties one after confirming
+(refused while a running container uses it; stopped users are recreated on next use).
 
-Git runs on the Mac for BelloCode (Changes panel, worktrees, push) and for opencode (snapshots in its own git dir,
-VCS diffs, revert, worktrees). The project folder is mounted read-write into the container, so anything the agent runs
-there can rewrite `.git/config`, `.gitattributes`, `.git/info/attributes`, hooks or a worktree's `.git` link, and git
-turns configuration into program execution in many places: `core.fsmonitor`, clean/smudge/process filters, textconv and
-`diff.<driver>.command`, `diff.external`, merge drivers, hooks and `core.hooksPath`, pagers (`core.pager`, `pager.*`),
-editors, `core.askPass`, `core.sshCommand`, credential helpers (also URL-scoped), `url.*.insteadOf` to `ext::`,
-`remote.*.vcs`, `remote.*.uploadpack/receivepack`, `core.gitProxy`, `core.alternateRefsCommand`, `gpg.program` with
-signing or `log.showSignature`, `include`/`includeIf`, submodules with their own configuration, `core.worktree`
-(checkout writes elsewhere).
+## Housekeeping
 
-**Decision (M6-B):** keep git on the host and confine every invocation at one choke point (`ContainerKit/HostGit`),
-rather than move working-tree git into the container: opencode's own git is on the host regardless (its snapshot git
-dir is outside the mounts, and it resolves `git` on PATH), so a container route would leave its calls exposed, while the
-shim confines both the same way; and the Changes panel keeps working without depending on git in every image. A scan
-of the repository's configuration was rejected: driver names come from the repository, so keys cannot be listed in
-advance, and any scan races the container.
+**Prune BelloCode Resources…** (Settings ▸ Containers, Window menu) lists exactly: stopped BelloCode containers
+(workspaces, services, one-shot secret commands), unused BelloCode volumes of projects BelloCode no longer has (never a
+known project's home or data, never a shared cache), BelloCode networks with nothing attached, unused images BelloCode
+pulled. One confirmation; then it removes only items that still qualify (anything started or used since is kept and
+named). Anything without BelloCode's labels is never listed.
 
-1. **Sandbox** (`/usr/bin/sandbox-exec`, profile parameters by `-D`, inherited by children): local operations may
-   execute only the real git binary (Command Line Tools or Xcode, never the `/usr/bin/git` stub or a PATH entry) and
-   its `libexec/git-core`; no network; writes only under the working directory, its discovered `.git` directories
-   (only paths with a `.git` component), `TMPDIR`, `/dev` and roots the caller names. fetch/push/pull/clone/ls-remote may
-   also execute `/usr/bin/ssh` and the system shells (credential helpers run through `sh`), reach the network and write
-   `~/.ssh`; `git-remote-ext` and `git-remote-fd` stay blocked.
-2. **Overrides** (`GIT_CONFIG_COUNT`, read after every file): `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
-   pagers `cat`, editors `true`, empty `core.askPass`, signing and `log.showSignature` off, `gc.auto=0`,
-   `maintenance.auto=false`, `safe.bareRepository=explicit`, no submodule recursion, `protocol.allow=never` with only
-   `https` and `ssh` allowed, `core.sshCommand` and credential helpers only from the user's own (system, global, Apple
-   default) configuration: the helper list is reset (repository and URL-scoped ones included) and the user's re-added.
-3. **Environment**: allowlist (HOME, identity, `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`, `GIT_CONFIG_GLOBAL`…),
-   fixed PATH, `GIT_EXEC_PATH` pinned, `GIT_ASKPASS` empty, `GIT_NO_LAZY_FETCH=1`; `SSH_AUTH_SOCK` only for network
-   operations; inherited `GIT_SSH*`, `GIT_EXTERNAL_DIFF`, pager and editor variables dropped.
+## Workspace, failures, ports, file watching
 
-Without the sandbox or git, BelloCode refuses (git errors say so; the shim exits 126); nothing runs unconfined.
-Effects: repository-defined filters do not run on the host (files are read unfiltered; git-lfs content appears as
-pointers there; run LFS in the container), textconv/external diffs are not used, local-path remotes are refused for
-fetch/push, a user's custom `core.sshCommand`/credential helper still works only if it is in their global or system
-configuration.
+One container per project (`bellocode-ws-<key>`), project and worktree folders at the same paths, host uid:gid, no
+capabilities, `no-new-privileges`, `init`; saved policy in force before anything runs (S3). Recreated when image,
+setting or folder identity changes; stopped when idle; archiving only hides. Volumes are deleted only by **Delete
+Container and Data…** (lists containers, volumes and networks; asks once). Every blocked state (runtime down,
+containerd, no image, image not allowed, pull failed, folder not shared, settings unavailable) is a phase with message
+and fix, written to the helper configuration and shown as a banner, status item and context line. Ports: a listener is
+forwarded on demand to `127.0.0.1` through an exec relay; nothing is published. File-watch bridge: FSEvents →
+`touch -c -m -r` in the container (61 ms to a Node watcher).
 
-Tests: `HostGitIsolationTests` builds a hostile repository (28 configuration vectors, 15 hooks in `.git/hooks`, the
-origin and a `core.hooksPath` folder, `include`, `includeIf`, an `ext::` remote, an `ext` vcs remote, ssh and git://
-remotes) and runs BelloCode's status, all diff scopes, show, stage, unstage, commit, log, branches, worktree
-list/create (normal and copy-on-write)/remove/restore, start-from-origin fetch, fetch of every remote, push and
-`credential fill`, with the production and a permissive runner: no marker; then opencode's commands through the shim
-(status, numstat, diff, diff-files, ls-files, log, show, add, commit, checkout, reset --hard, snapshot add/write-tree,
-worktree add/list/remove, fetch --all, push): no marker. `core.worktree` pointed outside: nothing written there (the
-unconfined control writes). A submodule with its own fsmonitor: nothing ran. Control: plain git fires the vectors.
+## Host git, secrets, host requirements
 
-**Outside BelloCode's control:** git launched by anything other than BelloCode and opencode (the user's terminal, IDE,
-GUI clients, Finder previews) is unconfined: a repository the agent modified can still run programs when the user runs
-git on it outside BelloCode. `sandbox-exec` is deprecated by Apple (it works on this macOS; a future removal makes host
-git fail closed). The sandbox allows reads anywhere and writes inside the repository: a hostile configuration can make
-git read or overwrite files in the repository and its `.git` (the agent can do that anyway). A `url.*.insteadOf` can
-redirect a push to another https/ssh host (no credentials are sent unless the user's own helper has some for it).
-opencode could in principle start git by an absolute path in a future version (2.3.0 resolves it on PATH; the
-real-binary test fails if the shim is bypassed).
+Host git stays on the Mac for BelloCode and opencode (shim), confined at one choke point (`HostGit`): `sandbox-exec`
+(only the real git, no network except fetch/push, writes only in the repository), `GIT_CONFIG_COUNT` overrides (hooks,
+fsmonitor, pagers, editors, signing, helpers, `protocol.allow`), an allowlisted environment; 28 configuration vectors
+and 15 hooks fire nothing (`HostGitIsolationTests`). Git run outside BelloCode is unconfined; `sandbox-exec` is
+deprecated (removal makes host git fail closed). Secrets: delivered to containers by one-use reference; `secret_exec`
+runs the approved exact command in a one-shot sibling (no network, project read-only, value on stdin); see
+[orchestration-extras.md](orchestration-extras.md#3-secrets). Host executables: `git`, `/bin/sh`, bundled `opencode`,
+`bellocode-exec`, `rg` (pinned SHA-256, re-checked before signing); licences in `Resources/Acknowledgements/`.
 
-## Secrets
+## For the security team (decisions code cannot make)
 
-The host pipe (`SecretService`) cannot reach a container. For containerised projects a saved secret is delivered as a
-container reference (`bcsecretc_…`, one use, one thread, one hour, 64 outstanding). `bellocode_app_secret_exec`
-(M6-B) asks the person first: a card shows the secret's label, project and folder, the variable, **the command
-verbatim**, and its access. Only after Allow does the command run, in a **one-shot sibling container** (same image,
-user and limits, no capabilities, project and worktree folders read-only, no caches or persistent home, HOME=/tmp,
-network `none`) unless the agent asked for network or write access and the card said so. **Optional host mounts
-(S5):** none by default, whatever the project setting says; only when the agent asks (`includeMounts`) are the
-project's extra folders listed on the card, each with its access, bound into the approval's digest and passed with
-exactly that access (refused if the setting no longer allows it; checked on the create request in tests). The value goes on the exec's
-stdin into the variable (`NAME=$(cat)`), so it is in no container or exec configuration; the container is removed
-afterwards (also on error or timeout). The thread is woken with the bounded output; verbatim occurrences of the value
-are replaced by `<secret>` as a courtesy only. "Always for This Command" stores an approval bound to the secret,
-project, variable, exact command and access (SHA-256 in `app_grant`); any difference asks again; deleting the secret
-revokes it. Guarantee and limits: [orchestration-extras.md](orchestration-extras.md#3-secrets).
-
-## Host requirements
-
-Only `git`, `/bin/sh` and the bundled `opencode`, `bellocode-exec` and `rg` (ripgrep 15.1.0, pinned SHA-256 in
-`Scripts/ripgrep-checksums`, system libraries only). **Provenance (D2):** `Scripts/make-app.sh` bundles opencode and rg
-only when their executable SHA-256 equals the pin for the build architecture (both architectures are pinned; rg is
-required), bellocode-exec only as built by that run, re-checks the bundled copies just before signing and refuses any
-other helper. Licence texts and NOTICE files of every shipped component (Swift packages, opencode at the pinned tag in
-`Scripts/notices/`, ripgrep from its verified archive) go to `Resources/Acknowledgements/`; a missing one fails the build. Settings ▸ Containers lists them. `make plugin-test` runs the
-plugin's `bun test` in a throwaway container. **Policy point:** the opencode binary embeds Bun; `BUN_BE_BUN` would make
-it a JavaScript runtime on the host. The server's environment drops every `BUN_*` variable and the helper never sets one.
-
-## Measured (this arm64 Mac, Rancher Desktop 1.25, `node:22-bookworm-slim`)
-
-Container ready (create + start) 115–196 ms; terminal round trip in the container 133–144 ms; host edit to a green
-test in the container 105–112 ms; helper `-c true` p50 20 ms (spike); watch bridge 61 ms; `make plugin-test` 69 ms.
-
-## For the security team
-
-The review (docs/reviews/M3-M6-review.md) names decisions code cannot make. BelloCode enforces boundaries; these are
-policy, to be decided and written down:
-
-1. **Image provenance and signing.** Which images may run (default image in the internal registry, pinned by digest,
-   scanned, signed). BelloCode shows the resolved digest but does not verify signatures.
-2. **Registries.** Which registries are allowed and with which credentials (per-host Keychain items today).
-3. **Egress.** Containers default to `bridge` (all outbound traffic); `none` per project; secret commands default to
-   no network. Organisation egress control belongs in the network (proxy, firewall), not in BelloCode.
-4. **What may be mounted.** Project and its worktree folders read-write by design; user mounts read-only by default.
-   Whether users may add read-write mounts, and which paths are off limits (home, `~/.ssh`, cloud drives).
-5. **Whether host git is acceptable at all.** Host git is confined (see "Host git"), but runs on the Mac with the
-   user's credentials for push, reads the user's global configuration, and relies on Apple's deprecated
-   `sandbox-exec`. The alternative is git only in containers (credentials in the container, no host Changes panel
-   without a running container).
-6. **Secrets.** Whether agent-proposed commands may receive secrets at all, and whether "Always for This Command" is
-   allowed; a command the user approves can reveal the value.
-7. **Grants.** Acceptable scope and lifetime of schedule project grants, HTML-visual host grants, saved secret-command
-   approvals, and plain-HTTP GitLab instances (refused unless allowed per instance).
-8. **Threat model.** Whether the Rancher VM, other local Docker API clients, other processes of the same user and
-   other containers are in scope (any of them can inspect or influence containers through the socket).
-
-## Enterprise policy points
-
-Image provenance: set the default image to the internal registry, pin by digest, scan and sign there (BelloCode shows
-the resolved digest; signature verification is not enforced yet). Registry: credentials per host in the Keychain.
-Egress: bridge allows all outbound traffic; `none` per project; organisation egress belongs in the network. Limits:
-per project. Audit: signposts only; command content is never logged.
+1. **Image provenance and signing.** Which registries and prefixes to allow, whether digest pins are required, and
+   which signature scheme to adopt (key-based cosign, keyless with Fulcio/Rekor, or Notary v2) with which keys or
+   roots; until a verifier exists, requiring signatures refuses everything.
+2. **Registries and credentials** (per-host Keychain items today). 3. **Egress**: containers and services default to
+   outbound access; offline per project; organisation egress belongs in the network.
+4. **Mounts**: project and worktrees read-write by design; user mounts read-only by default.
+5. **Host git at all** (confined, but on the Mac with the user's credentials and a deprecated sandbox).
+6. **Secrets and grants**: agent-proposed secret commands, "Always" approvals, service-restart grants, schedule and
+   HTML-visual grants, plain-HTTP GitLab.
+7. **Services**: whether agent-edited compose files may start services without review (today: they run inside the
+   same container boundary, under the image policy, never privileged or published).
+8. **MCP servers**: whether project MCP servers are allowed, and whether a shared "tools" container should replace
+   the refusal for servers configured for all projects.
+9. **Threat model**: the Rancher VM, other Docker API clients and other local processes can influence containers.
 
 ## UX checklist (03-ux-patterns.md §E)
 
-Purpose/context: thread line shows project, branch, worktree and `Container: image (state)`. States: ready, checking,
-starting, pulling, failed, runtime down, no image, folder not shared, all with a next step (snapshots). Keyboard: Window
-▸ Containers…, Project Environment…, Verify Container Isolation; panes are plain SwiftUI controls. Accessibility: glyph
-+ word everywhere, combined labels on banner and status item. Not exercised: VoiceOver walk-through, two windows,
-Reduce Motion (nothing animates).
+Context: every row names project, service or container; thread line shows `Container: image (state)`. States:
+not started, pulling, starting, running, healthy/unhealthy, stopped (exit code), waiting (blocked dependency, reason),
+refused (keys or policy), failed; MCP connected/starting/failed/sign-in/off; empty and unusable definitions say why.
+Keyboard: Window ▸ Containers…, Project Environment…, Verify Container Isolation, Prune BelloCode Resources…; panes are
+standard controls. Accessibility: glyph + word everywhere, labelled toggles and editors. Destructive actions (Delete
+Service Data, Clean cache, Prune, Delete Container and Data) list exactly what goes and confirm once; MCP removal has
+Undo. Not exercised: VoiceOver walk-through, two windows, Reduce Motion (nothing animates), 30-session parallelism.
 
-## Known gaps, unverified
+## Known gaps
 
-- A helper `--stdio` mode for local MCP servers (they are flagged, not routed). Image signature verification.
-- Git run outside BelloCode and opencode is not confined. Secret-command containers a crash left behind are removed
-  when the runtime is next seen ready.
-- Snapshot glass drawn opaque; terminal working-directory (OSC 7) inside the container depends on the image's shell.
-- Not driven on screen: Ports "Open" into the built-in browser (the e2e fetches the forward URL directly).
-- Later "Rancher workloads" package: compose-style service containers per project, shared caches, remote runtimes.
+Signature verification (seam). MCP servers are registered for project roots (as app tools are), not for worktree
+locations. Edits to the isolated global configuration while running apply at the next launch (the scan flags them).
+Service images run as their own user with default capabilities. The thread header lets a long container crumb
+overlap the Agents chip at narrow widths (pre-existing). Remote runtimes. Snapshot glass drawn opaque.
 
-Snapshots: `docs/snapshots/containers-*.png`. Commands: `make smoke`, `make e2e-containers`, `make plugin-test`,
+Measured (Rancher Desktop 1.25, arm64): container ready 115–196 ms; terminal round trip 133–144 ms; watch bridge
+61 ms. Live tests end to end: workspace plus two redis services healthy and reachable by name 2.3 s; project MCP server
+registered, connected through the relay and proven in the container 4.7 s (both include container creation).
+Snapshots: `docs/snapshots/containers-*.png`, `containers2-*.png`. Commands: `make smoke`, `make e2e-containers`,
 `BELLOCODE_CONTAINER_TESTS=1 swift test --filter Live`, `--snapshot containers`.

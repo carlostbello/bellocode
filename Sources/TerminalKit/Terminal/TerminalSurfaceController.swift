@@ -290,8 +290,9 @@ public final class TerminalSurfaceController: NSViewController {
 
     // MARK: Commands
 
-    /// Starts a terminal in the thread's directory (creating the thread first for a draft) and focuses it.
-    public func newTerminal() {
+    /// Starts a terminal in the thread's directory (creating the thread first for a draft) and focuses it. `extraArgs`
+    /// are added to the launch command (a shell in a project service); `title` names the tab.
+    public func newTerminal(extraArgs: [String] = [], title: String? = nil) {
         guard let directory else { return NSSound.beep() }
         let size = estimatedSize()
         Task {
@@ -305,7 +306,8 @@ public final class TerminalSurfaceController: NSViewController {
                 display(terminals, directory: self.directory ?? directory, isDraft: false)
             }
             guard let terminals else { return }
-            if let record = await terminals.create(directory: self.directory ?? directory, placement: placement, size: size) {
+            if let record = await terminals.create(
+                directory: self.directory ?? directory, placement: placement, size: size, title: title, extraArgs: extraArgs) {
                 render()
                 workspace.existingPane(record.id)?.focus()
                 onChange?()

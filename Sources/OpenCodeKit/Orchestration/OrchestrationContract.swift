@@ -78,8 +78,10 @@ public enum OrchestrationContract {
     /// The `OPENCODE_CONFIG_CONTENT` JSON that loads the plugin from `directory`. `subagent_depth` is aligned with the
     /// plugin's depth limit so native `subagent` calls and `delegate_task` nest equally deep. With `container`, it also
     /// sets the shell to `bellocode-exec`, turns formatters and LSP off, defines the self-check's command and passes the
-    /// plugin its container guard options.
-    public static func serverConfig(pluginDirectory: URL?, limits: Limits = .standard, container: ContainerExecution? = nil) -> String {
+    /// plugin its container guard options. `mcpServers` replaces those local MCP servers' entries (container execution:
+    /// servers configured for all projects are refused, `MCPRouting`).
+    public static func serverConfig(pluginDirectory: URL?, limits: Limits = .standard, container: ContainerExecution? = nil,
+                                    mcpServers: [String: JSONValue] = [:]) -> String {
         var options: [String: JSONValue] = [
             "limits": .object([
                 "maxDepth": .number(Double(limits.maxDepth)),
@@ -98,6 +100,7 @@ public enum OrchestrationContract {
             config["plugins"] = .array([.object(["package": .string(pluginDirectory.path), "options": .object(options)])])
         }
         if let container { config.merge(container.configAdditions) { _, new in new } }
+        if !mcpServers.isEmpty { config["mcp"] = .object(["servers": .object(mcpServers)]) }
         let data = (try? JSONEncoder().encode(JSONValue.object(config))) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }

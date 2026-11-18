@@ -48,6 +48,9 @@ public struct TerminalRecord: Codable, Sendable, Hashable, Identifiable {
     public var placement: TerminalPlacement
     public var created: Date
     public var lastActivity: Date
+    /// Arguments added to the launch command (a shell in a project service: `--service NAME --project DIR`); kept on
+    /// restart.
+    public var launchArgs: [String]?
 
     public init(
         id: String, sessionID: SessionID, title: String, userTitle: String? = nil, startDirectory: String,

@@ -32,6 +32,8 @@ public enum AppGrantKind: String, Sendable {
     case secretCommand
     /// Agents may babysit merge requests in this project directory without asking.
     case gitlabBabysit
+    /// Agents may restart this project's services without asking (scope: the project directory).
+    case serviceRestart
 }
 
 extension ProjectionStore {

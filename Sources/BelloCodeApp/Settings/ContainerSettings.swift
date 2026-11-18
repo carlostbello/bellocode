@@ -116,10 +116,35 @@ final class ContainersSettingsModel: ObservableObject {
     @Published var containers: [ManagedContainer] = []
     @Published var logs: (title: String, text: String)?
     @Published var requirements: [HostRequirement] = HostRequirement.check()
+    @Published var caches: [CacheVolume] = []
+    @Published var allowlist: String
+    @Published var requireDigest: Bool
+    @Published var pullPolicy: ImagePolicy.PullPolicy
+    @Published var requireSignature: Bool
+
+    /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
+    static weak var last: ContainersSettingsModel?
 
     init(engine: Engine) {
         self.engine = engine
-        defaultImage = engine.environments.defaults.defaultImage ?? ""
+        engine.environments.reloadManagedPolicy()
+        defaultImage = engine.environments.defaultImage ?? ""
+        let policy = engine.environments.imagePolicy
+        allowlist = policy.allowedPrefixes.joined(separator: "\n")
+        requireDigest = policy.requireDigest
+        pullPolicy = policy.pullPolicy
+        requireSignature = policy.requireSignature
+    }
+
+    /// Saves the image policy set here (ignored while an administrator manages it).
+    func savePolicy() async {
+        guard service.managedPolicy == nil else { return }
+        var defaults = service.defaults
+        let prefixes = allowlist.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: requireSignature)
+        await service.setDefaults(defaults)
+        message = prefixes.isEmpty && !requireDigest && !requireSignature
+            ? "Image policy saved: any image may run." : "Image policy saved. Projects outside it are refused until their image is changed."
     }
 
     func saveDefaultImage() async {
@@ -142,7 +167,71 @@ final class ContainersSettingsModel: ObservableObject {
         password = ""
     }
 
-    func reload() async { containers = await service.managedContainers() }
+    func reload() async {
+        containers = await service.managedContainers()
+        caches = await service.cacheVolumes()
+    }
+
+    /// "Prune BelloCode Resources…": lists exactly what would be removed (stopped BelloCode containers, unused
+    /// BelloCode volumes of projects BelloCode no longer has, unattached BelloCode networks, unused images BelloCode
+    /// pulled), asks once (cannot be undone), then removes only those that still qualify.
+    func confirmPrune() async {
+        let plan: PrunePlan
+        do { plan = try await service.prunePlan() } catch {
+            message = "Could not list BelloCode's resources: \(error)"
+            return
+        }
+        guard !plan.isEmpty else {
+            message = "Nothing to prune: no stopped BelloCode containers, unused volumes, networks or pulled images."
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Remove \(plan.count) BelloCode resource\(plan.count == 1 ? "" : "s")?"
+        var sections: [String] = []
+        func section(_ title: String, _ items: [PrunePlan.Item]) {
+            guard !items.isEmpty else { return }
+            sections.append(title + ":\n" + items.map { "• \($0.name) (\($0.detail))" }.joined(separator: "\n"))
+        }
+        section("Stopped containers", plan.containers)
+        section("Unused volumes", plan.volumes)
+        section("Unused networks", plan.networks)
+        section("Unused images BelloCode pulled", plan.images)
+        sections.append("Only resources labelled as BelloCode's are listed; nothing else on Rancher Desktop is touched. Volume contents are lost. This cannot be undone.")
+        alert.informativeText = sections.joined(separator: "\n\n")
+        let remove = alert.addButton(withTitle: "Remove \(plan.count) Item\(plan.count == 1 ? "" : "s")")
+        remove.hasDestructiveAction = true
+        remove.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            let result = try await service.prune(plan)
+            message = "Removed \(result.removed.count) item\(result.removed.count == 1 ? "" : "s")."
+                + (result.kept.isEmpty ? "" : " Kept \(result.kept.count) that changed since: \(result.kept.joined(separator: ", ")).")
+        } catch {
+            message = "Prune failed: \(error)"
+        }
+        await reload()
+    }
+
+    /// "Clean…" on a cache: confirms (the contents are deleted), then deletes the volume.
+    func confirmClean(_ cache: CacheVolume) async {
+        let alert = NSAlert()
+        alert.messageText = "Empty the \(cache.cache?.title ?? "") cache “\(cache.name)”?"
+        alert.informativeText = "Its contents are deleted (\(cache.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown")); packages are downloaded again when needed. Stopped containers that use it are recreated on next use. This cannot be undone."
+        let clean = alert.addButton(withTitle: "Empty Cache")
+        clean.hasDestructiveAction = true
+        clean.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await service.cleanCache(cache.name)
+            message = "Emptied \(cache.name)."
+        } catch {
+            message = "Not emptied: \(error)"
+        }
+        await reload()
+    }
 
     func perform(_ action: EnvironmentService.ContainerAction, _ container: ManagedContainer) async {
         do { try await service.perform(action, on: container.id) } catch { message = "\(action.rawValue.capitalized) failed: \(error)" }
@@ -184,11 +273,22 @@ struct ContainersSettingsView: View {
                 "Default image",
                 footer: "Used by projects without their own image. There is no built-in public default: point this at your organisation's registry."
             ) {
-                SettingsFieldRow(divided: false) {
-                    TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
-                        .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
-                    Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                if let managed = service.managedPolicy?.defaultImage {
+                    SettingsRow(managed, detail: "Set by your organisation", divided: false) {
+                        DSPillView("Managed", tone: .info, symbolName: "building.2")
+                    }
+                } else {
+                    SettingsFieldRow(divided: false) {
+                        TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
+                            .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
+                        Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    }
                 }
+            }
+            SettingsGroup("Image policy", footer: model.service.managedPolicy == nil
+                ? "Applies to every project's image and its services. One registry (registry.acme.internal) or repository prefix (registry.acme.internal/dev/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
+                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Images outside it are refused for the workspace and every service.") {
+                ImagePolicySettingsView(model: model)
             }
             SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
                 SettingsFieldRow(divided: false) {
@@ -205,6 +305,11 @@ struct ContainersSettingsView: View {
                     Task { await service.verifyIsolation(full: true) }
                 }
             }
+            SettingsGroup("Caches", footer: "Package-manager caches kept across container rebuilds. Each project has its own unless a cache is shared (Project Settings ▸ Environment ▸ Caches).") {
+                CacheVolumesView(caches: model.caches, projects: model.engine.root.projects.map { ($0.directory, $0.name) }) { cache in
+                    Task { await model.confirmClean(cache) }
+                }
+            }
             SettingsGroup("Host requirements") {
                 ForEach(Array(model.requirements.enumerated()), id: \.element.id) { index, item in
                     SettingsRow(item.name, detail: item.detail, divided: index > 0) {
@@ -212,31 +317,8 @@ struct ContainersSettingsView: View {
                     }
                 }
             }
-            SettingsGroup("Containers") {
-                if model.containers.isEmpty {
-                    SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs", divided: false) {
-                        EmptyView()
-                    }
-                }
-                ForEach(Array(model.containers.enumerated()), id: \.element.id) { index, container in
-                    SettingsRow(container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name,
-                                detail: "\(container.image) · \(container.status)", divided: index > 0) {
-                        HStack(spacing: DS.Space.s2) {
-                            DSPillView(container.isRunning ? "Running" : container.state.capitalized, tone: container.isRunning ? .success : .neutral,
-                                       symbolName: container.isRunning ? "shippingbox" : "shippingbox")
-                                .padding(.trailing, DS.Space.s4)
-                            if container.isRunning {
-                                Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                                Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            } else {
-                                Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            }
-                            Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
-                                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                        }
-                    }
-                }
+            SettingsGroup("Containers", footer: "Prune removes stopped BelloCode containers, unused BelloCode volumes of projects no longer in BelloCode, unattached BelloCode networks and unused images BelloCode pulled, after listing them. Nothing else is touched.") {
+                ManagedContainersListView(model: model, service: service, confirmRemove: confirmRemove)
             }
             if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
             if let message = model.message { SettingsNote(message) }
@@ -248,6 +330,149 @@ struct ContainersSettingsView: View {
         guard case .ready(let ready) = service.runtime else { return service.runtime.map { _ in "Socket \(service.isEnabled ? "~/.rd/docker.sock" : "")" } }
         let rancher = ready.rancherVersion.map { "Rancher Desktop \($0) · " } ?? ""
         return "\(rancher)Docker Engine \(ready.engineVersion), API \(ready.apiVersion), \(ready.arch)" + (ready.notes.isEmpty ? "" : " · " + ready.notes.joined(separator: "; "))
+    }
+}
+
+/// Settings ▸ Containers ▸ Containers: Prune, then every BelloCode workspace and service container with its state (glyph +
+/// word, health first), Stop/Start/Restart, Logs and Remove.
+struct ManagedContainersListView: View {
+    @ObservedObject var model: ContainersSettingsModel
+    let service: EnvironmentService
+    let confirmRemove: (ManagedContainer) -> Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DS.Space.s8) {
+                Text(String(model.containers.count) + (model.containers.count == 1 ? " container" : " containers")).font(.ds(.label)).foregroundStyle(DSColor.text2)
+                Spacer(minLength: DS.Space.s8)
+                Button("Prune BelloCode Resources…") { Task { await model.confirmPrune() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .disabled(service.runtime?.isReady != true)
+                    .help("Lists stopped BelloCode containers and unused BelloCode volumes, networks and pulled images, then asks")
+            }
+            .padding(.horizontal, DS.Space.s12)
+            .frame(minHeight: 40)
+            if model.containers.isEmpty {
+                SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs") {
+                    EmptyView()
+                }
+            }
+            ForEach(Array(model.containers.enumerated()), id: \.element.id) { _, container in
+                TwoLineRow(
+                    title: (container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name)
+                        + (container.service.map { " · service \($0)" } ?? " · workspace"),
+                    detail: "\(container.image) · \(container.status)", divided: true
+                ) {
+                    ManagedContainerPill(container: container)
+                } actions: {
+                    if container.isRunning {
+                        Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    } else {
+                        Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
+                    Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    Spacer(minLength: DS.Space.s8)
+                    Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                }
+            }
+        }
+    }
+}
+
+/// A settings row on two lines: title and detail with a state on the right, then a line of actions, so a dense row
+/// never truncates in the 520 pt column.
+struct TwoLineRow<State: View, Actions: View>: View {
+    let title: String
+    let detail: String?
+    let divided: Bool
+    @ViewBuilder let state: () -> State
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                VStack(alignment: .leading, spacing: DS.Space.s2) {
+                    Text(title).font(.ds(.body)).foregroundStyle(DSColor.text)
+                    if let detail, !detail.isEmpty {
+                        Text(detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: DS.Space.s8)
+                state().fixedSize()
+            }
+            HStack(spacing: DS.Space.s2) { actions() }
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s8)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A managed container's state as glyph + word: health first when it has a healthcheck.
+struct ManagedContainerPill: View {
+    let container: ManagedContainer
+    var body: some View {
+        let (word, tone, symbol): (String, DS.Tone, String) = switch (container.isRunning, container.health) {
+        case (true, "healthy"?): ("Healthy", .success, "checkmark.circle")
+        case (true, "unhealthy"?): ("Unhealthy", .warning, "exclamationmark.triangle")
+        case (true, "starting"?): ("Checking health", .info, "arrow.triangle.2.circlepath")
+        case (true, _): ("Running", .success, container.service == nil ? "shippingbox.fill" : "cylinder.split.1x2")
+        default: (container.state.capitalized, .neutral, container.service == nil ? "shippingbox" : "cylinder.split.1x2")
+        }
+        DSPillView(word, tone: tone, symbolName: symbol)
+    }
+}
+
+/// The image policy: editable rows, or the administrator's values read-only with a "Managed" pill.
+struct ImagePolicySettingsView: View {
+    @ObservedObject var model: ContainersSettingsModel
+
+    var body: some View {
+        let service = model.service
+        if let managed = service.managedPolicy {
+            let policy = managed.policy
+            SettingsRow("Allowed images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
+                DSPillView("Managed", tone: .info, symbolName: "building.2")
+            }
+            SettingsRow("Pinned by digest", detail: policy.requireDigest ? "Required" : "Not required") { EmptyView() }
+            SettingsRow("Pulling", detail: Self.pullText(policy.pullPolicy)) { EmptyView() }
+            SettingsRow("Verified signatures", detail: policy.requireSignature
+                ? "Required: BelloCode cannot verify signatures yet, so every image is refused" : "Not required") {
+                if policy.requireSignature { DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised") } else { EmptyView() }
+            }
+        } else {
+            VStack(alignment: .trailing, spacing: DS.Space.s8) {
+                TextEditor(text: $model.allowlist).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                    .frame(height: 48).padding(DS.Space.s4)
+                    .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                    .accessibilityLabel("Allowed registries or repository prefixes, one per line")
+            }
+            .padding(DS.Space.s12)
+            SettingsToggleRow("Require images pinned by digest", detail: "name@sha256:…, so a tag cannot change under a project.", isOn: $model.requireDigest)
+            SettingsRow("Pulling") {
+                DSSegmentedPicker(options: [(id: ImagePolicy.PullPolicy.missing, title: "When missing"), (id: .always, title: "Always"), (id: .never, title: "Never")],
+                                  selection: $model.pullPolicy).fixedSize()
+            }
+            SettingsToggleRow("Require verified signatures", detail: "BelloCode cannot verify signatures yet: turning this on refuses every image.",
+                              isOn: $model.requireSignature)
+            SettingsActionsRow {
+                Spacer()
+                Button("Save Policy") { Task { await model.savePolicy() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+            }
+        }
+    }
+
+    static func pullText(_ policy: ImagePolicy.PullPolicy) -> String {
+        switch policy {
+        case .missing: "When an image is not on this Mac"
+        case .always: "Before every container is created (follows moved tags)"
+        case .never: "Never: images must be loaded on this Mac by other means"
+        }
     }
 }
 
@@ -351,7 +576,18 @@ final class EnvironmentSettingsModel: ObservableObject {
     @Published var fileWatchBridge = true
     @Published var message: String?
     @Published var logs: String?
+    @Published var newMCPName = ""
+    @Published var newMCPCommand = ""
+    /// The last removed MCP server, for Undo (reversible: applied at once).
+    @Published var removedMCP: MCPServerSetting?
+    /// Services defined in the pane (compose subset), edited here when the project has no compose file.
+    @Published var servicesYAML = ""
+    @Published var cacheChoices: [PackageCache: CacheSelection] = [:]
+    @Published var serviceLogs: (name: String, text: String)?
     var openTerminal: (String) -> Void = { _ in }
+    var openServiceTerminal: (String, String) -> Void = { service, directory in
+        EnvironmentSettingsModel.openServiceTerminalInFrontWindow(service: service, projectDirectory: directory)
+    }
     var openBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     init(engine: Engine, directory: String?) {
@@ -371,6 +607,13 @@ final class EnvironmentSettingsModel: ObservableObject {
         controller.newTerminal(nil)
     }
 
+    /// Opens a terminal tab with a shell in one of the project's service containers, in the frontmost main window.
+    static func openServiceTerminalInFrontWindow(service: String, projectDirectory: String) {
+        guard let controller = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first else { return }
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.terminals?.newServiceTerminal(service: service, projectDirectory: projectDirectory)
+    }
+
     func select(_ directory: String) { self.directory = directory }
 
     var projects: [(name: String, directory: String)] { engine.root.projects.map { ($0.name, $0.directory) } }
@@ -385,6 +628,25 @@ final class EnvironmentSettingsModel: ObservableObject {
         variables = settings.environment.keys.sorted().map { "\($0)=\(settings.environment[$0] ?? "")" }.joined(separator: "\n")
         network = settings.network
         fileWatchBridge = settings.fileWatchBridge
+        servicesYAML = settings.servicesYAML ?? ""
+        let declared = environment.record.imageCaches ?? [:]
+        cacheChoices = Dictionary(uniqueKeysWithValues: PackageCache.allCases.map { cache in
+            (cache, settings.caches.first { $0.cache == cache } ?? CacheSelection(cache: cache, enabled: declared[cache] != nil))
+        })
+    }
+
+    func saveCaches() async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        let declared = environment.record.imageCaches ?? [:]
+        // Store only what differs from the image's declaration (so a later image change still applies).
+        settings.caches = PackageCache.allCases.compactMap { cache in
+            guard let choice = cacheChoices[cache] else { return nil }
+            let byImage = declared[cache] != nil
+            return choice.enabled == byImage && !choice.shared ? nil : choice
+        }
+        await service.update(directory, settings: settings)
+        message = "Caches saved. The container is recreated on next use; cache contents are kept."
     }
 
     func save() async {
@@ -412,6 +674,117 @@ final class EnvironmentSettingsModel: ObservableObject {
         message = "Saved. The container is recreated on next use if anything changed."
     }
 
+    // MARK: Services
+
+    func saveServices() async {
+        guard let directory, let environment else { return }
+        let trimmed = servicesYAML.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            let parse = ComposeParser.parse(servicesYAML)
+            if !parse.isUsable {
+                message = parse.errors.joined(separator: " ")
+                return
+            }
+        }
+        var settings = environment.settings
+        settings.servicesYAML = trimmed.isEmpty ? nil : servicesYAML
+        await service.update(directory, settings: settings)
+        message = trimmed.isEmpty ? "Services removed from this project's settings (their volumes are kept)." : "Services saved. They start with the project's container."
+    }
+
+    func showServiceLogs(_ name: String) async {
+        guard let directory else { return }
+        do {
+            let (text, truncated) = try await service.serviceLogs(directory, name: name, tail: 300, limit: 256 * 1024)
+            serviceLogs = (name, (truncated ? "[older output omitted]\n" : "") + text)
+        } catch {
+            message = "\(error)"
+        }
+    }
+
+    func restartService(_ name: String) async {
+        guard let directory else { return }
+        do { try await service.restartService(directory, name: name) } catch { message = "Could not restart \(name): \(error)" }
+    }
+
+    func openServicePort(_ name: String, port: Int) {
+        guard let directory else { return }
+        do { openBrowser(try service.forwardService(directory, name: name, port: port)) } catch { message = "Could not forward \(name):\(port): \(error)" }
+    }
+
+    /// "Delete Service Data…": lists the service's volumes, asks once (cannot be undone), deletes only those.
+    func confirmDeleteServiceData(_ name: String) async {
+        guard let directory else { return }
+        let volumes: [String]
+        do { volumes = try await service.serviceDataToDelete(directory, name: name) } catch {
+            message = "Could not list \(name)'s data: \(error)"
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Delete the data of the service “\(name)”?"
+        alert.informativeText = (volumes.isEmpty ? "The service has no data volumes; its container is removed." :
+            "Volumes:\n" + volumes.map { "• \($0)" }.joined(separator: "\n") + "\n\nThe service's container is removed too.")
+            + " It is created again, empty, the next time services start. This cannot be undone."
+        let delete = alert.addButton(withTitle: "Delete Service Data")
+        delete.hasDestructiveAction = true
+        delete.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await service.deleteServiceData(directory, name: name, confirmed: volumes)
+            message = "Deleted \(name)'s container and \(volumes.count) volume(s)."
+        } catch {
+            message = "Not deleted: \(error)"
+        }
+    }
+
+    // MARK: MCP servers (applied at once; removal has Undo)
+
+    func addMCPServer() async {
+        guard let directory, let environment else { return }
+        let server = MCPServerSetting(name: newMCPName.trimmingCharacters(in: .whitespaces), command: MCPServerSetting.split(commandLine: newMCPCommand))
+        var settings = environment.settings
+        settings.mcpServers.removeAll { $0.name == server.name }
+        settings.mcpServers.append(server)
+        let errors = server.validationErrors()
+        guard errors.isEmpty else {
+            message = errors.joined(separator: " ")
+            return
+        }
+        await service.update(directory, settings: settings)
+        newMCPName = ""
+        newMCPCommand = ""
+        removedMCP = nil
+        message = "Added MCP server “\(server.name)”. It runs in this project's container and starts when the container is ready."
+        await service.refreshMCPStatus(directory)
+    }
+
+    func removeMCPServer(_ server: MCPServerSetting) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.mcpServers.removeAll { $0.name == server.name }
+        await service.update(directory, settings: settings)
+        removedMCP = server
+        message = nil
+    }
+
+    func undoRemoveMCPServer() async {
+        guard let directory, let environment, let server = removedMCP else { return }
+        var settings = environment.settings
+        settings.mcpServers.append(server)
+        await service.update(directory, settings: settings)
+        removedMCP = nil
+    }
+
+    func setMCPServer(_ server: MCPServerSetting, enabled: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        guard let index = settings.mcpServers.firstIndex(where: { $0.name == server.name }) else { return }
+        settings.mcpServers[index].enabled = enabled
+        await service.update(directory, settings: settings)
+    }
+
     func showLogs() async {
         guard let id = environment?.record.containerID else { logs = "No container yet."; return }
         logs = await service.logs(containerID: id)
@@ -437,8 +810,9 @@ final class EnvironmentSettingsModel: ObservableObject {
         var lines: [String] = []
         if !storage.containers.isEmpty { lines.append("Containers:\n" + storage.containers.map { "• \($0)" }.joined(separator: "\n")) }
         if !storage.volumes.isEmpty {
-            lines.append("Volumes (the container's home folder and caches):\n" + storage.volumes.map { "• \($0)" }.joined(separator: "\n"))
+            lines.append("Volumes (the container's home folder, caches and service data):\n" + storage.volumes.map { "• \($0)" }.joined(separator: "\n"))
         }
+        if !storage.networks.isEmpty { lines.append("Networks:\n" + storage.networks.map { "• \($0)" }.joined(separator: "\n")) }
         lines.append("Files saved only inside the container are lost. The project folder on this Mac is not touched. This cannot be undone.")
         alert.informativeText = lines.joined(separator: "\n\n")
         let delete = alert.addButton(withTitle: "Delete Container and Data")
@@ -540,6 +914,15 @@ struct EnvironmentSettingsView: View {
             }
             .padding(DS.Space.s12)
         }
+        SettingsGroup("Services", footer: ServicesSectionView.footer(environment)) {
+            ServicesSectionView(model: model, environment: environment)
+        }
+        SettingsGroup("Caches", footer: "Named volumes for package-manager caches, kept when the container is rebuilt. “Shared” uses one volume for every project that also shares it; otherwise the cache is this project's own.") {
+            ProjectCachesView(model: model, environment: environment)
+        }
+        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
+            MCPServersListView(model: model, environment: environment)
+        }
         SettingsGroup("Ports") {
             PortsListView(environment: environment, refresh: { Task { await service.refreshPorts(environment.directory) } },
                           open: { model.forward($0) }, stop: { service.stopForward(environment.directory, port: $0) })
@@ -565,6 +948,249 @@ struct EnvironmentSettingsView: View {
             }
         }
         if let logs = model.logs { LogsView(title: environment.containerName, text: logs) { model.logs = nil } }
+        if let logs = model.serviceLogs { LogsView(title: "service \(logs.name)", text: logs.text) { model.serviceLogs = nil } }
+    }
+}
+
+/// The project's services: one row per service (name, image, ports; state as glyph + word with health; Open per port
+/// into the built-in browser, Logs, Terminal, Restart, Delete Data…), what the definition left out (ignored and
+/// refused keys), and the definition itself (the compose file's path, or an editor for services defined here).
+struct ServicesSectionView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    static func footer(_ environment: ProjectEnvironment) -> String {
+        switch environment.servicesSource {
+        case .file(let path): "Defined in \((path as NSString).lastPathComponent) (checked in). Services share the project's own network: reach them by name (db:5432). Nothing is published; Open forwards a port to this Mac's loopback only."
+        case .pane: "Defined here (compose subset). Services share the project's own network: reach them by name (db:5432). Nothing is published; Open forwards a port to this Mac's loopback only."
+        case .none: "Supporting containers (databases, caches, queues) for this project, from a checked-in compose.yaml or defined below. They start and stop with the project's container."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if environment.services.isEmpty, environment.servicesParse?.isUsable != false {
+                SettingsRow("No services", detail: "Add a compose.yaml to the project, or define services below.", divided: false) { EmptyView() }
+            }
+            ForEach(environment.servicesParse?.errors ?? [], id: \.self) { error in
+                SettingsRow("The definition cannot be used", detail: error, divided: false) {
+                    DSPillView("Not used", tone: .danger, symbolName: "xmark.octagon")
+                }
+            }
+            ForEach(Array(environment.services.enumerated()), id: \.element.id) { index, service in
+                ServiceRowView(model: model, environment: environment, service: service, divided: index > 0)
+            }
+            if let parse = environment.servicesParse, !parse.rejected.isEmpty || !parse.ignored.isEmpty {
+                VStack(alignment: .leading, spacing: DS.Space.s4) {
+                    if !parse.rejected.isEmpty {
+                        Text("Refused (the service does not start): " + parse.rejected.map { "\($0.path): \($0.reason)" }.joined(separator: "; "))
+                            .font(.ds(.meta)).foregroundStyle(DSColor.dangerText).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !parse.ignored.isEmpty {
+                        Text("Ignored: " + parse.ignored.map { "\($0.path) (\($0.reason))" }.joined(separator: "; "))
+                            .font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
+                .overlay(alignment: .top) { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+            }
+            if case .file = environment.servicesSource {
+                SettingsActionsRow {
+                    Spacer()
+                    Button("Reload") { model.service.reloadServices(environment.directory) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        .help("Reads the compose file again and starts what changed")
+                }
+            } else {
+                VStack(alignment: .trailing, spacing: DS.Space.s8) {
+                    TextEditor(text: $model.servicesYAML).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                        .frame(height: 84).padding(DS.Space.s4)
+                        .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                        .accessibilityLabel("Services, in the compose file format")
+                    Button("Save Services") { Task { await model.saveServices() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+                }
+                .padding(DS.Space.s12)
+                .overlay(alignment: .top) { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+            }
+        }
+        .task(id: environment.directory) { await model.service.refreshServices(environment.directory) }
+    }
+}
+
+struct ServiceRowView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+    let service: ServiceState
+    let divided: Bool
+
+    /// Two lines: name, image and ports with the state (glyph + word) on the right; then the actions, so nothing
+    /// truncates in the pane's column.
+    var body: some View {
+        let detail = ([service.image.isEmpty ? nil : service.image,
+                       service.ports.isEmpty ? nil : service.ports.map { "\(service.name):\($0)" }.joined(separator: ", "),
+                       service.outdated ? "definition changed: Restart applies it" : nil, service.message]
+            .compactMap { $0 }).joined(separator: " · ")
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                VStack(alignment: .leading, spacing: DS.Space.s2) {
+                    Text(service.name).font(.ds(.body)).foregroundStyle(DSColor.text)
+                    if !detail.isEmpty {
+                        Text(detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: DS.Space.s8)
+                DSPillView(service.label, tone: service.tone.ds, symbolName: service.symbolName).fixedSize()
+            }
+            if service.phase != .refused {
+                HStack(spacing: DS.Space.s2) {
+                    if service.phase == .running {
+                        ForEach(service.ports.prefix(2), id: \.self) { port in
+                            let forwarded = environment.serviceForwards.contains { $0.service == service.name && $0.port == port }
+                            Button(forwarded ? "Open :" + String(port) + " Again" : "Open :" + String(port)) { model.openServicePort(service.name, port: port) }
+                                .buttonStyle(DSButtonStyle(.outline, size: .small))
+                                .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
+                        }
+                        Button("Terminal") { model.openServiceTerminal(service.name, environment.directory) }
+                            .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true)).help("A shell inside the service's container")
+                    }
+                    if service.containerID != nil {
+                        Button("Logs") { Task { await model.showServiceLogs(service.name) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
+                    Button(service.phase == .running ? "Restart" : "Start") { Task { await model.restartService(service.name) } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    Spacer(minLength: DS.Space.s8)
+                    Button("Delete Data…") { Task { await model.confirmDeleteServiceData(service.name) } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        .help("Removes the service's container and its data volumes after listing them. Cannot be undone.")
+                }
+            }
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s8)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(service.name), \(service.label)")
+    }
+}
+
+/// Settings ▸ Containers ▸ Caches: every cache volume with its scope and size, and Clean.
+struct CacheVolumesView: View {
+    let caches: [CacheVolume]
+    let projects: [(directory: String, name: String)]
+    let clean: (CacheVolume) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if caches.isEmpty {
+                SettingsRow("No caches yet", detail: "Turn one on in Project Settings ▸ Environment ▸ Caches.", divided: false) { EmptyView() }
+            }
+            ForEach(Array(caches.enumerated()), id: \.element.id) { index, cache in
+                let scope = cache.shared ? "Shared across projects"
+                    : cache.projectDirectory.map { directory in projects.first { $0.directory == directory }?.name ?? (directory as NSString).lastPathComponent } ?? "Project"
+                SettingsRow("\(cache.cache?.title ?? cache.name) · \(scope)",
+                            detail: [cache.name, cache.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown",
+                                     cache.users.map { $0 == 0 ? "unused" : "used by \($0) container\($0 == 1 ? "" : "s")" }].compactMap { $0 }.joined(separator: " · "),
+                            divided: index > 0) {
+                    HStack(spacing: DS.Space.s4) {
+                        if cache.shared { DSPillView("Shared", tone: .info, symbolName: "person.2") }
+                        Button("Clean…") { clean(cache) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                            .help("Deletes the cache's contents (downloaded again when needed)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Project Settings ▸ Environment ▸ Caches: one row per package manager (on/off, shared), "from image" when the image
+/// declares it, and Save.
+struct ProjectCachesView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    var body: some View {
+        let declared = environment.record.imageCaches ?? [:]
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(PackageCache.allCases.enumerated()), id: \.element) { index, cache in
+                let choice = model.cacheChoices[cache] ?? CacheSelection(cache: cache, enabled: false)
+                SettingsRow(cache.title, detail: (declared[cache] ?? cache.defaultPath) + (declared[cache] != nil ? " · declared by the image" : ""),
+                            divided: index > 0) {
+                    HStack(spacing: DS.Space.s8) {
+                        Toggle("Shared", isOn: Binding(get: { choice.shared }, set: { model.cacheChoices[cache]?.shared = $0 }))
+                            .toggleStyle(DSToggleStyle(.checkbox)).disabled(!choice.enabled)
+                            .help("One volume for every project that also shares this cache")
+                        Toggle("", isOn: Binding(get: { choice.enabled }, set: { value in
+                            model.cacheChoices[cache, default: CacheSelection(cache: cache, enabled: false)].enabled = value
+                        }))
+                        .toggleStyle(DSToggleStyle(.switch)).labelsHidden().accessibilityLabel("\(cache.title) cache")
+                    }
+                }
+            }
+            SettingsActionsRow {
+                Spacer()
+                Button("Save Caches") { Task { await model.saveCaches() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+            }
+        }
+    }
+}
+
+/// The project's MCP servers: name, command (mono), where it runs and opencode's status (glyph + word), enable toggle and
+/// Remove (applied at once, with Undo); then an add row.
+struct MCPServersListView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if environment.settings.mcpServers.isEmpty {
+                SettingsRow("No MCP servers", detail: "Add one below: its command runs inside the container.", divided: false) { EmptyView() }
+            }
+            ForEach(Array(environment.settings.mcpServers.enumerated()), id: \.element.id) { index, server in
+                let status = environment.mcpStatus.first { $0.name == server.name }
+                SettingsRow(server.name, detail: "\(server.commandLine) · in container" + (status?.error.map { " · \($0)" } ?? ""), divided: index > 0) {
+                    HStack(spacing: DS.Space.s4) {
+                        MCPStatusPill(enabled: server.enabled, status: status?.status)
+                        Toggle("", isOn: Binding(get: { server.enabled }, set: { value in Task { await model.setMCPServer(server, enabled: value) } }))
+                            .toggleStyle(DSToggleStyle(.switch)).labelsHidden().accessibilityLabel("Enable \(server.name)")
+                        Button("Remove") { Task { await model.removeMCPServer(server) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
+                }
+            }
+            if let removed = model.removedMCP {
+                SettingsRow("Removed “\(removed.name)”", divided: true) {
+                    Button("Undo") { Task { await model.undoRemoveMCPServer() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                }
+            }
+            SettingsFieldRow {
+                TextField("", text: $model.newMCPName, prompt: Text("name")).textFieldStyle(DSTextFieldStyle()).frame(width: 110)
+                    .accessibilityLabel("MCP server name")
+                TextField("", text: $model.newMCPCommand, prompt: Text("node tools/mcp.js")).textFieldStyle(DSTextFieldStyle()).font(.ds(.codeSmall))
+                    .accessibilityLabel("MCP server command, run in the container")
+                Button("Add") { Task { await model.addMCPServer() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .disabled(model.newMCPName.isEmpty || model.newMCPCommand.isEmpty)
+            }
+        }
+        .task(id: environment.directory) { await model.service.refreshMCPStatus(environment.directory) }
+    }
+}
+
+/// An MCP server's state as glyph + word (never colour only).
+struct MCPStatusPill: View {
+    let enabled: Bool
+    let status: String?
+
+    var body: some View {
+        let (word, tone, symbol): (String, DS.Tone, String) = switch (enabled, status) {
+        case (false, _): ("Off", .neutral, "pause.circle")
+        case (true, "connected"): ("Connected", .success, "checkmark.circle")
+        case (true, "pending"): ("Starting", .info, "arrow.triangle.2.circlepath")
+        case (true, "failed"): ("Failed", .danger, "xmark.octagon")
+        case (true, "needs_auth"): ("Sign-in needed", .warning, "exclamationmark.triangle")
+        default: ("Not started", .neutral, "shippingbox")
+        }
+        DSPillView(word, tone: tone, symbolName: symbol)
     }
 }
 

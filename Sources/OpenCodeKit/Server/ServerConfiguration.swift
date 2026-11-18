@@ -98,11 +98,16 @@ public struct ServerConfiguration: Sendable {
             "OPENCODE_DISABLE_MODELS_FETCH": "1",
             "OPENCODE_DISABLE_CLAUDE_CODE": "1",
         ]
+        // Local MCP servers in the isolated configuration files are configured for all projects: refused (MCPRouting).
+        let mcpOverrides = containerExecution.map {
+            MCPRouting.globalOverrides(configDirectory: configDirectory, helper: $0.helperURL.path).servers
+        } ?? [:]
         if let pluginDirectory {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
-                pluginDirectory: pluginDirectory, container: containerExecution)
+                pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides)
         } else if let containerExecution {
-            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(pluginDirectory: nil, container: containerExecution)
+            environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
+                pluginDirectory: nil, container: containerExecution, mcpServers: mcpOverrides)
         }
         if let containerExecution {
             environment.merge(containerExecution.environment) { _, container in container }
