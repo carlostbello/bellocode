@@ -262,7 +262,11 @@ public enum IsolationCheck {
                 }
             }
         }
-        checks += configurationChecks(entries, projects: projects, helperPath: context.helperPath, guardInstalled: guardInstalled)
+        // Project MCP servers are runtime registrations (not in the configuration documents): scanned as the
+        // highest-priority entry, since a location's runtime add replaces a configured server of the same name.
+        let registered = directory.map { service.registeredMCP[service.environment(for: $0).directory] ?? [:] } ?? [:]
+        let scanned = registered.isEmpty ? entries : entries + [.object(["mcp": .object(["servers": .object(registered)])])]
+        checks += configurationChecks(scanned, projects: projects, helperPath: context.helperPath, guardInstalled: guardInstalled)
 
         guard let directory else {
             checks.append(.init("Runtime paths", .skipped("no project with a container image to run the probes in: open a project and choose an image, then verify again")))
