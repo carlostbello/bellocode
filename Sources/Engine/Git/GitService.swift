@@ -105,7 +105,18 @@ public final class GitService {
     public var autoFetchInterval: Duration? = .seconds(300)
     public var autoFetchMaxInterval: Duration = .seconds(3_600)
     /// Fast-forward the default branch after a fetch when the checkout is clean (T3 Code "Automatically pull").
-    public var autoPullDefaultBranch = false
+    public var autoPullDefaultBranch = false {
+        didSet {
+            guard autoPullDefaultBranch != oldValue, let store else { return }
+            let value = autoPullDefaultBranch
+            Task { try? await store.setPreference("git.autoPull", value) }
+        }
+    }
+
+    /// Loads the app-wide git preferences (Automatically Pull Default Branch) from the store.
+    public func loadGlobalPreferences() async {
+        if let value = try? await store?.preference("git.autoPull", as: Bool.self) { autoPullDefaultBranch = value }
+    }
 
     /// Repository models kept (least recently used dropped beyond this; their watchers stop).
     public static let repositoryLimit = 24

@@ -260,6 +260,7 @@ public final class Engine {
         // environment (S3 in docs/reviews/deep-review-1.md); the service also refuses until then.
         await environments.start()
         await installCheckpoints()
+        await git.loadGlobalPreferences()
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.

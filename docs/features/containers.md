@@ -144,7 +144,9 @@ forwarded on demand to `127.0.0.1` through an exec relay; nothing is published. 
 Host git stays on the Mac for BelloCode and opencode (shim), confined at one choke point (`HostGit`): `sandbox-exec`
 (only the real git, no network except fetch/push, writes only in the repository), `GIT_CONFIG_COUNT` overrides (hooks,
 fsmonitor, pagers, editors, signing, helpers, `protocol.allow`), an allowlisted environment; 28 configuration vectors
-and 15 hooks fire nothing (`HostGitIsolationTests`). Git run outside BelloCode is unconfined; `sandbox-exec` is
+and 15 hooks fire nothing (`HostGitIsolationTests`, also with BelloCode's credential helper present). HTTPS remotes on a
+configured GitLab instance authenticate through `bellocode-exec --git-credential`, the only program the network profile
+adds, answering only git processes the app launched ([git-parity.md](git-parity.md) "HTTPS credentials"). Git run outside BelloCode is unconfined; `sandbox-exec` is
 deprecated (removal makes host git fail closed). Secrets: delivered to containers by one-use reference; `secret_exec`
 runs the approved exact command in a one-shot sibling (no network, project read-only, value on stdin); see
 [orchestration-extras.md](orchestration-extras.md#3-secrets). Host executables: `git`, `/bin/sh`, bundled `opencode`,
