@@ -95,3 +95,18 @@ struct ProjectServicesTests {
         #expect(runtime.state.withLock { $0.ensureCount } == 0, "nothing was created or pulled")
     }
 }
+
+@Suite("Project caches")
+struct ProjectCachesTests {
+    @Test func projectChoicesCombineWithTheImagesDeclaration() {
+        var settings = ProjectEnvironmentSettings()
+        let declared: [PackageCache: String] = [.npm: "/opt/npm", .pip: PackageCache.pip.defaultPath]
+        #expect(settings.cacheMounts(imageDeclared: declared) == [CacheMount(cache: .npm, path: "/opt/npm"), CacheMount(cache: .pip, path: PackageCache.pip.defaultPath)])
+        settings.caches = [CacheSelection(cache: .pip, enabled: false), CacheSelection(cache: .npm, shared: true), CacheSelection(cache: .cargo)]
+        #expect(settings.cacheMounts(imageDeclared: declared) == [
+            CacheMount(cache: .cargo, path: PackageCache.cargo.defaultPath), CacheMount(cache: .npm, path: "/opt/npm", shared: true),
+        ])
+        let old = try? JSONDecoder().decode(ProjectEnvironmentSettings.self, from: Data(#"{"image":"x"}"#.utf8))
+        #expect(old?.caches == [])
+    }
+}

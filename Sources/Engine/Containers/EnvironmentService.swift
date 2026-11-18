@@ -434,6 +434,15 @@ public final class EnvironmentService {
                 }
                 model.record.imageID = image.id
                 model.record.imageDigest = image.repoDigests?.first
+                let declared = PackageCache.declared(byImageLabels: image.labels)
+                if (model.record.imageCaches ?? [:]) != declared {
+                    model.record.imageCaches = declared
+                    // The caches are part of the spec: compute it again with them.
+                    if let updated = self.workspaceSpec(model), updated != spec {
+                        self.refreshImageAndPhase(model, recreate: recreate)
+                        return
+                    }
+                }
                 let unmountable = spec.unmountablePaths()
                 guard unmountable.isEmpty else {
                     model.phase = .unmountable(unmountable)
@@ -976,6 +985,8 @@ public final class EnvironmentService {
             image: image, network: model.settings.network, resources: model.settings.resources,
             environment: model.settings.environment)
         spec.serviceNetwork = serviceNetwork(model)
+        let caches = model.settings.cacheMounts(imageDeclared: model.record.imageCaches ?? [:])
+        spec.cacheMounts = caches.isEmpty ? nil : caches
         return spec
     }
 
@@ -1071,6 +1082,20 @@ public final class EnvironmentService {
                 self?.scheduleConfigWrite()
             })
         }
+    }
+
+    // MARK: Caches
+
+    /// Every cache volume (Settings ▸ Containers ▸ Caches) with sizes.
+    public func cacheVolumes() async -> [CacheVolume] {
+        guard isEnabled, runtime?.isReady == true else { return [] }
+        return (try? await activeRuntime.cacheVolumes()) ?? []
+    }
+
+    /// Empties one cache (deletes its volume; it is created again, empty, on next use).
+    public func cleanCache(_ name: String) async throws {
+        try await activeRuntime.cleanCache(name)
+        for model in models.values where model.phase == .ready { refreshImageAndPhase(model) }
     }
 
     // MARK: Image policy

@@ -20,10 +20,13 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var mcpServers: [MCPServerSetting]
     /// Services defined in the Environment pane (compose subset), used when the project has no compose file.
     public var servicesYAML: String?
+    /// Package-manager caches chosen for this project (an image's declared caches apply unless turned off here).
+    public var caches: [CacheSelection]
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
-                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil) {
+                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = []) {
+        self.caches = caches
         self.mcpServers = mcpServers
         self.servicesYAML = servicesYAML
         self.image = image
@@ -37,7 +40,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML }
+    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -50,6 +53,23 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 30
         mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
         servicesYAML = try c.decodeIfPresent(String.self, forKey: .servicesYAML)
+        caches = try c.decodeIfPresent([CacheSelection].self, forKey: .caches) ?? []
+    }
+
+    /// The cache mounts for this project: its own choices plus what the image declares (`PackageCache.declared`),
+    /// at the image's path when it names one; per project unless shared was chosen for that cache.
+    public func cacheMounts(imageDeclared: [PackageCache: String]) -> [CacheMount] {
+        var mounts: [PackageCache: CacheMount] = [:]
+        for (cache, path) in imageDeclared { mounts[cache] = CacheMount(cache: cache, path: path) }
+        for selection in caches {
+            if selection.enabled {
+                mounts[selection.cache] = CacheMount(cache: selection.cache, path: imageDeclared[selection.cache] ?? selection.cache.defaultPath,
+                                                     shared: selection.shared)
+            } else {
+                mounts[selection.cache] = nil
+            }
+        }
+        return mounts.values.sorted { $0.cache.rawValue < $1.cache.rawValue }
     }
 
     /// Names that may not be set as plain variables: they are the container's own or BelloCode's.
@@ -75,6 +95,21 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
             errors.append("\(mount.path) is not shared with Rancher Desktop (only your home folder, /Volumes and temporary folders are).")
         }
         return errors
+    }
+}
+
+/// One package-manager cache choice of a project.
+public struct CacheSelection: Codable, Sendable, Equatable, Hashable {
+    public var cache: PackageCache
+    /// Off turns off a cache the image declares.
+    public var enabled: Bool
+    /// One volume for every project that also opts in (off: the project's own volume).
+    public var shared: Bool
+
+    public init(cache: PackageCache, enabled: Bool = true, shared: Bool = false) {
+        self.cache = cache
+        self.enabled = enabled
+        self.shared = shared
     }
 }
 
@@ -158,6 +193,8 @@ public struct EnvironmentRecord: Codable, Sendable, Equatable {
     public var mountIdentity: String?
     public var inventory: ContainerProbes.ToolInventory?
     public var lastUsed: Date?
+    /// The caches the image declares (its labels), learned when the image was inspected.
+    public var imageCaches: [PackageCache: String]?
 
     public init(imageID: String? = nil, imageDigest: String? = nil, containerID: String? = nil, mountIdentity: String? = nil,
                 inventory: ContainerProbes.ToolInventory? = nil, lastUsed: Date? = nil) {

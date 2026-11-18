@@ -116,6 +116,7 @@ final class ContainersSettingsModel: ObservableObject {
     @Published var containers: [ManagedContainer] = []
     @Published var logs: (title: String, text: String)?
     @Published var requirements: [HostRequirement] = HostRequirement.check()
+    @Published var caches: [CacheVolume] = []
     @Published var allowlist: String
     @Published var requireDigest: Bool
     @Published var pullPolicy: ImagePolicy.PullPolicy
@@ -163,7 +164,29 @@ final class ContainersSettingsModel: ObservableObject {
         password = ""
     }
 
-    func reload() async { containers = await service.managedContainers() }
+    func reload() async {
+        containers = await service.managedContainers()
+        caches = await service.cacheVolumes()
+    }
+
+    /// "Clean…" on a cache: confirms (the contents are deleted), then deletes the volume.
+    func confirmClean(_ cache: CacheVolume) async {
+        let alert = NSAlert()
+        alert.messageText = "Empty the \(cache.cache?.title ?? "") cache “\(cache.name)”?"
+        alert.informativeText = "Its contents are deleted (\(cache.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown")); packages are downloaded again when needed. Stopped containers that use it are recreated on next use. This cannot be undone."
+        let clean = alert.addButton(withTitle: "Empty Cache")
+        clean.hasDestructiveAction = true
+        clean.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await service.cleanCache(cache.name)
+            message = "Emptied \(cache.name)."
+        } catch {
+            message = "Not emptied: \(error)"
+        }
+        await reload()
+    }
 
     func perform(_ action: EnvironmentService.ContainerAction, _ container: ManagedContainer) async {
         do { try await service.perform(action, on: container.id) } catch { message = "\(action.rawValue.capitalized) failed: \(error)" }
@@ -235,6 +258,11 @@ struct ContainersSettingsView: View {
             SettingsGroup("Isolation") {
                 IsolationReportView(report: service.isolation, running: service.isVerifyingIsolation) {
                     Task { await service.verifyIsolation(full: true) }
+                }
+            }
+            SettingsGroup("Caches", footer: "Package-manager caches kept across container rebuilds. Each project has its own unless a cache is shared (Project Settings ▸ Environment ▸ Caches).") {
+                CacheVolumesView(caches: model.caches, projects: model.engine.root.projects.map { ($0.directory, $0.name) }) { cache in
+                    Task { await model.confirmClean(cache) }
                 }
             }
             SettingsGroup("Host requirements") {
@@ -452,6 +480,7 @@ final class EnvironmentSettingsModel: ObservableObject {
     @Published var removedMCP: MCPServerSetting?
     /// Services defined in the pane (compose subset), edited here when the project has no compose file.
     @Published var servicesYAML = ""
+    @Published var cacheChoices: [PackageCache: CacheSelection] = [:]
     @Published var serviceLogs: (name: String, text: String)?
     var openTerminal: (String) -> Void = { _ in }
     var openServiceTerminal: (String, String) -> Void = { service, directory in
@@ -498,6 +527,24 @@ final class EnvironmentSettingsModel: ObservableObject {
         network = settings.network
         fileWatchBridge = settings.fileWatchBridge
         servicesYAML = settings.servicesYAML ?? ""
+        let declared = environment.record.imageCaches ?? [:]
+        cacheChoices = Dictionary(uniqueKeysWithValues: PackageCache.allCases.map { cache in
+            (cache, settings.caches.first { $0.cache == cache } ?? CacheSelection(cache: cache, enabled: declared[cache] != nil))
+        })
+    }
+
+    func saveCaches() async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        let declared = environment.record.imageCaches ?? [:]
+        // Store only what differs from the image's declaration (so a later image change still applies).
+        settings.caches = PackageCache.allCases.compactMap { cache in
+            guard let choice = cacheChoices[cache] else { return nil }
+            let byImage = declared[cache] != nil
+            return choice.enabled == byImage && !choice.shared ? nil : choice
+        }
+        await service.update(directory, settings: settings)
+        message = "Caches saved. The container is recreated on next use; cache contents are kept."
     }
 
     func save() async {
@@ -768,6 +815,9 @@ struct EnvironmentSettingsView: View {
         SettingsGroup("Services", footer: ServicesSectionView.footer(environment)) {
             ServicesSectionView(model: model, environment: environment)
         }
+        SettingsGroup("Caches", footer: "Named volumes for package-manager caches, kept when the container is rebuilt. “Shared” uses one volume for every project that also shares it; otherwise the cache is this project's own.") {
+            ProjectCachesView(model: model, environment: environment)
+        }
         SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
             MCPServersListView(model: model, environment: environment)
         }
@@ -904,6 +954,67 @@ struct ServiceRowView: View {
     }
 }
 
+/// Settings ▸ Containers ▸ Caches: every cache volume with its scope and size, and Clean.
+struct CacheVolumesView: View {
+    let caches: [CacheVolume]
+    let projects: [(directory: String, name: String)]
+    let clean: (CacheVolume) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if caches.isEmpty {
+                SettingsRow("No caches yet", detail: "Turn one on in Project Settings ▸ Environment ▸ Caches.", divided: false) { EmptyView() }
+            }
+            ForEach(Array(caches.enumerated()), id: \.element.id) { index, cache in
+                let scope = cache.shared ? "Shared across projects"
+                    : cache.projectDirectory.map { directory in projects.first { $0.directory == directory }?.name ?? (directory as NSString).lastPathComponent } ?? "Project"
+                SettingsRow("\(cache.cache?.title ?? cache.name) · \(scope)",
+                            detail: [cache.name, cache.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown",
+                                     cache.users.map { $0 == 0 ? "unused" : "used by \($0) container\($0 == 1 ? "" : "s")" }].compactMap { $0 }.joined(separator: " · "),
+                            divided: index > 0) {
+                    HStack(spacing: DS.Space.s4) {
+                        if cache.shared { DSPillView("Shared", tone: .info, symbolName: "person.2") }
+                        Button("Clean…") { clean(cache) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                            .help("Deletes the cache's contents (downloaded again when needed)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Project Settings ▸ Environment ▸ Caches: one row per package manager (on/off, shared), "from image" when the image
+/// declares it, and Save.
+struct ProjectCachesView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    var body: some View {
+        let declared = environment.record.imageCaches ?? [:]
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(PackageCache.allCases.enumerated()), id: \.element) { index, cache in
+                let choice = model.cacheChoices[cache] ?? CacheSelection(cache: cache, enabled: false)
+                SettingsRow(cache.title, detail: (declared[cache] ?? cache.defaultPath) + (declared[cache] != nil ? " · declared by the image" : ""),
+                            divided: index > 0) {
+                    HStack(spacing: DS.Space.s8) {
+                        Toggle("Shared", isOn: Binding(get: { choice.shared }, set: { model.cacheChoices[cache]?.shared = $0 }))
+                            .toggleStyle(DSToggleStyle(.checkbox)).disabled(!choice.enabled)
+                            .help("One volume for every project that also shares this cache")
+                        Toggle("", isOn: Binding(get: { choice.enabled }, set: { value in
+                            model.cacheChoices[cache, default: CacheSelection(cache: cache, enabled: false)].enabled = value
+                        }))
+                        .toggleStyle(DSToggleStyle(.switch)).labelsHidden().accessibilityLabel("\(cache.title) cache")
+                    }
+                }
+            }
+            SettingsActionsRow {
+                Spacer()
+                Button("Save Caches") { Task { await model.saveCaches() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+            }
+        }
+    }
+}
+
 /// The project's MCP servers: name, command (mono), where it runs and opencode's status (glyph + word), enable toggle and
 /// Remove (applied at once, with Undo); then an add row.
 struct MCPServersListView: View {
@@ -921,7 +1032,7 @@ struct MCPServersListView: View {
                     HStack(spacing: DS.Space.s4) {
                         MCPStatusPill(enabled: server.enabled, status: status?.status)
                         Toggle("", isOn: Binding(get: { server.enabled }, set: { value in Task { await model.setMCPServer(server, enabled: value) } }))
-                            .toggleStyle(DSToggleStyle()).labelsHidden().accessibilityLabel("Enable \(server.name)")
+                            .toggleStyle(DSToggleStyle(.switch)).labelsHidden().accessibilityLabel("Enable \(server.name)")
                         Button("Remove") { Task { await model.removeMCPServer(server) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                     }
                 }

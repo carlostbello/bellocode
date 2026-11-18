@@ -181,6 +181,11 @@ public struct WorkspaceManager: Sendable {
                 WorkspaceSpec.labelProjectKey: spec.projectKey,
             ].merging(spec.extraLabels) { a, _ in a })
         }
+        for cache in spec.cacheMounts ?? [] {
+            try await client.createVolume(
+                name: cache.volumeName(projectKey: spec.projectKey),
+                labels: cache.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey).merging(spec.extraLabels) { a, _ in a })
+        }
         var body = spec.createBody(imageID: imageID)
         body.labels?[WorkspaceSpec.labelConfig] = spec.configHash(imageID: imageID)
         body.labels?[WorkspaceSpec.labelMountIdentity] = spec.mountIdentity()
@@ -203,9 +208,13 @@ public struct WorkspaceManager: Sendable {
 
     /// Creates $HOME for the non-root user (a fresh volume belongs to root). Runs as root, issued by BelloCode only.
     func prepareHome(_ id: String, spec: WorkspaceSpec) async throws {
+        // Cache volumes nested in $HOME make the daemon create their parent folders (and a fresh volume) as root: give
+        // each folder from the cache up to $HOME to the user (not recursively: a shared cache keeps its contents).
+        let caches = (spec.cacheMounts ?? []).map(\.path).filter { $0.hasPrefix(WorkspaceSpec.home + "/") }
+        let script = "mkdir -p \"$HOME\" /tmp/.bellocode && chown \(spec.user) \"$HOME\" && chmod 1777 /tmp/.bellocode"
+            + #" && for p; do d=$p; while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do chown \#(spec.user) "$d"; d=$(dirname "$d"); done; done"#
         let result = try await ExecSession.run(
-            client: client, container: id,
-            argv: ["/bin/sh", "-c", "mkdir -p \"$HOME\" /tmp/.bellocode && chown \(spec.user) \"$HOME\" && chmod 1777 /tmp/.bellocode"],
+            client: client, container: id, argv: ["/bin/sh", "-c", script, "prepare-home"] + caches,
             user: "0:0", wrap: false, limit: 4096)
         if result.exitCode != 0 { throw ContainerError.http(status: 500, message: "preparing $HOME failed (exit \(result.exitCode))") }
     }

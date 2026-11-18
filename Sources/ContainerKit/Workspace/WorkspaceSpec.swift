@@ -72,6 +72,8 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     /// The project's service network (`ServiceLabels.networkName`) when it declares services: the workspace joins it
     /// instead of the default bridge, so services are reachable by name. Offline projects get an internal network.
     public var serviceNetwork: String?
+    /// Package-manager caches (`PackageCache`), each a named volume at its path; project-scoped unless shared.
+    public var cacheMounts: [CacheMount]?
 
     public init(projectRoot: String, extraMounts: [String] = [], userMounts: [UserMount] = [], image: String,
                 user: String = "\(getuid()):\(getgid())", network: Network = .bridge, publishedPorts: [Int] = [],
@@ -171,6 +173,8 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
         mounts += userMounts.map { Mount(type: .bind, source: $0.path, target: $0.path, readOnly: $0.readOnly, createMountpoint: false) }
         mounts += caches.sorted { $0.key < $1.key }.map { Mount(type: .volume, source: volumeName($0.key), target: $0.value) }
         mounts.append(Mount(type: .volume, source: volumeName("home"), target: Self.home))
+        // Nested in the home volume where the tools expect them (the daemon mounts parents first).
+        mounts += (cacheMounts ?? []).sorted { $0.path < $1.path }.map { Mount(type: .volume, source: $0.volumeName(projectKey: projectKey), target: $0.path) }
         host.mounts = mounts
         if network == .bridge, serviceNetwork == nil, !publishedPorts.isEmpty {
             body.exposedPorts = Dictionary(uniqueKeysWithValues: publishedPorts.map { ("\($0)/tcp", EmptyObject()) })

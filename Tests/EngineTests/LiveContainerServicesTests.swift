@@ -146,4 +146,29 @@ struct LiveContainerServicesTests {
             #expect(try await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(model.projectKey)"]).isEmpty, "nothing was created")
         }
     }
+
+    @Test func aCacheVolumeSurvivesAWorkspaceRecreate() async throws {
+        guard try await client.inspectImage(Self.workspaceImage) != nil else { Issue.record("needs \(Self.workspaceImage)"); return }
+        try await withProject { service, project in
+            var settings = service.environment(for: project).settings
+            settings.image = Self.workspaceImage
+            settings.caches = [CacheSelection(cache: .npm), CacheSelection(cache: .pnpm)]
+            await service.update(project, settings: settings)
+            service.activate(project)
+            let model = service.environment(for: project)
+            try await waitUntil("ready", timeout: .seconds(120)) { model.phase == .ready && model.record.containerID != nil }
+            let first = try #require(model.record.containerID)
+            // The user owns the cache folders (and the parents the daemon created in $HOME).
+            let owned = try await exec(service, project, "echo kept > $HOME/.npm/marker && touch $HOME/.local/share/pnpm/store/x && stat -c %u $HOME/.npm $HOME/.local && cat $HOME/.npm/marker")
+            #expect(owned.contains("\(getuid())\n\(getuid())\nkept"), "\(owned)")
+
+            settings.environment = ["RECREATE": "1"]
+            await service.update(project, settings: settings)
+            try await waitUntil("recreated", timeout: .seconds(120)) { model.phase == .ready && model.record.containerID != nil && model.record.containerID != first }
+            let after = try await exec(service, project, "cat $HOME/.npm/marker; echo $RECREATE")
+            #expect(after == "kept\n1\n", "the cache volume outlived the container: \(after)")
+            let caches = await service.cacheVolumes()
+            #expect(Set(caches.filter { $0.projectDirectory == project }.compactMap(\.cache)) == [.npm, .pnpm])
+        }
+    }
 }

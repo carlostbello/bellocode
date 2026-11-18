@@ -58,6 +58,10 @@ public protocol WorkspaceRuntime: Sendable {
     /// Forwards a service's port to the Mac's loopback through a relay in the workspace container (services publish
     /// nothing).
     func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder
+
+    // MARK: Caches
+    func cacheVolumes() async throws -> [CacheVolume]
+    func cleanCache(_ name: String) async throws
 }
 
 extension WorkspaceRuntime {
@@ -74,6 +78,8 @@ extension WorkspaceRuntime {
     public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
         throw ContainerError.notFound("service forwarding is not available here")
     }
+    public func cacheVolumes() async throws -> [CacheVolume] { [] }
+    public func cleanCache(_ name: String) async throws {}
 }
 
 /// Rancher Desktop through ContainerKit.
@@ -170,4 +176,6 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
         try PortForwarder(client: client, container: workspace, containerPort: port, containerHost: service, hostPort: hostPort, user: user)
     }
+    public func cacheVolumes() async throws -> [CacheVolume] { try await manager.cacheVolumes() }
+    public func cleanCache(_ name: String) async throws { try await manager.cleanCache(name) }
 }
