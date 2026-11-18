@@ -28,6 +28,14 @@ extension EnvironmentService {
     /// The validated code roots, as the policy layer's trusted roots (Auto mode, risk notices).
     public var trustedRoots: TrustedRoots { TrustedRoots(paths: codeRootsValidation.roots, source: codeRootsSource) }
 
+    /// What the policy layer (Auto mode, Full-access risk notices) treats as "in scope" for a thread in `directory`:
+    /// the project and its worktrees first, then the trusted code roots. A path outside all of them still escalates
+    /// (Auto) or produces a notice (Full access).
+    public func policyRoots(for directory: String) -> [String] {
+        let model = environment(for: directory)
+        return trustedRoots.scope(projectRoots: workspaceRoots(model, create: false))
+    }
+
     /// Re-validates the roots (file-system checks: a handful of `stat`/`realpath` calls).
     func recomputeCodeRoots() {
         let validation = CodeRoots.validate(configuredCodeRoots)

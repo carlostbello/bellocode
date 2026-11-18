@@ -1119,7 +1119,9 @@ public final class EnvironmentService {
                 spec: spec, mountIdentity: first.record.mountIdentity, image: spec?.image, inventory: first.record.inventory,
                 mode: .sharedWorkspace, docker: containerDockerAccess(scope: WorkspaceSpec.sharedProjectKey, spec: spec)))
         }
-        return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
+        var config = ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
+        config.trustedRoots = codeRootsValidation.roots.isEmpty ? nil : codeRootsValidation.roots
+        return config
     }
 
     /// Writes the helper configuration soon (coalesced, serialised). Off the main actor, atomically.

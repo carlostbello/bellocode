@@ -104,6 +104,8 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
     /// match the app's `Requirement` (same launch, generation at least the required one).
     public var epoch: String?
     public var generation: Int?
+    /// The developer's code roots (canonical): the policy layer treats paths inside them as in scope (`TrustedRoots`).
+    public var trustedRoots: [String]?
 
     public init(socket: String, workspaces: [Workspace], runtimeBlocked: Blocked? = nil, epoch: String? = nil, generation: Int? = nil) {
         version = Self.currentVersion
@@ -114,7 +116,7 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         self.generation = generation
     }
 
-    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked, epoch, generation }
+    enum CodingKeys: String, CodingKey { case version, socket, workspaces, runtimeBlocked, epoch, generation, trustedRoots }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -124,6 +126,7 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         runtimeBlocked = try c.decodeIfPresent(Blocked.self, forKey: .runtimeBlocked)
         epoch = try c.decodeIfPresent(String.self, forKey: .epoch)
         generation = try c.decodeIfPresent(Int.self, forKey: .generation)
+        trustedRoots = try c.decodeIfPresent([String].self, forKey: .trustedRoots)
     }
 
     /// What the app requires of the installed configuration (S4 in docs/reviews/deep-review-1.md): written *before*

@@ -189,4 +189,23 @@ struct ExecutionModeTests {
         #expect(service.mode(forDirectory: repoA) == .projectContainer, "a refused mode falls back to the default")
         #expect(!service.isAllowed(.hostDocker))
     }
+
+    @Test func trustedRootsReachThePolicyLayerAndTheHelperConfiguration() async throws {
+        let service = try await makeService()
+        defer { service.stop() }
+        await service.setCodeRoots([codeRoot])
+        let roots = service.policyRoots(for: repoA)
+        #expect(roots.first.flatMap(CodeRoots.canonical) == repoA, "the project first")
+        #expect(roots.contains(codeRoot), "then the code roots")
+        let trusted = service.trustedRoots
+        #expect(trusted.contains(repoB + "/README.md"), "another repository under the root is in scope")
+        #expect(!trusted.contains(outside + "/x"), "outside the roots is not")
+        #expect(trusted.source == .configured)
+        await service.writeConfigNow()
+        #expect(try config().trustedRoots == [codeRoot])
+        // A project outside the roots gets only its own folders.
+        let outsideRoots = service.policyRoots(for: outside).compactMap(CodeRoots.canonical)
+        #expect(outsideRoots.first == outside)
+        #expect(!outsideRoots.contains(base))
+    }
 }
