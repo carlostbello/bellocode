@@ -72,6 +72,10 @@ public final class MergeRequestService {
     @ObservationIgnored private var fetchIDs: [String: Int] = [:]
     @ObservationIgnored private var nextFetchID = 0
     @ObservationIgnored private var polling: Set<String> = []
+    /// Changes whenever a watch is created, dropped or re-added. A poll checks it after its fetch (and after a wake), so
+    /// a completion never restores, reschedules or wakes for a watch the person withdrew in the meantime.
+    @ObservationIgnored private var watchGenerations: [String: Int] = [:]
+    @ObservationIgnored private var nextWatchGeneration = 0
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "merge-requests")
 
@@ -117,6 +121,7 @@ public final class MergeRequestService {
             for link in list where link.watching {
                 let key = Self.key(session.id, link.ref.url)
                 if watches[key] == nil {
+                    bumpGeneration(key)
                     watches[key] = MergeRequestWatchRecord(sessionID: session.id, url: link.ref.url)
                     nextPoll[key] = clock.now()
                 }
@@ -128,6 +133,7 @@ public final class MergeRequestService {
         for id in ids {
             links[id] = nil
             for (key, record) in watches where record.sessionID == id {
+                bumpGeneration(key)
                 watches[key] = nil
                 nextPoll[key] = nil
                 Task { [store] in try? await store.deleteMergeRequestWatch(sessionID: id, url: record.url) }
@@ -274,6 +280,7 @@ public final class MergeRequestService {
         }
         let key = Self.key(id, ref.url)
         if watching {
+            if watches[key] == nil { bumpGeneration(key) }
             var record = watches[key] ?? MergeRequestWatchRecord(sessionID: id, url: ref.url)
             record.stoppedReason = nil
             record.consecutiveFailures = 0
@@ -289,9 +296,20 @@ public final class MergeRequestService {
 
     private func dropWatch(_ id: SessionID, _ url: String) async {
         let key = Self.key(id, url)
+        bumpGeneration(key)
         watches[key] = nil
         nextPoll[key] = nil
         try? await store.deleteMergeRequestWatch(sessionID: id, url: url)
+    }
+
+    private func bumpGeneration(_ key: String) {
+        nextWatchGeneration += 1
+        watchGenerations[key] = nextWatchGeneration
+    }
+
+    /// The watch this poll started for is still the current one (not dropped, not removed and re-added).
+    private func isCurrent(_ key: String, _ generation: Int?) -> Bool {
+        watches[key] != nil && watchGenerations[key] == generation
     }
 
     private func apply(_ list: [LinkedMergeRequest], for id: SessionID) { links[id] = list.isEmpty ? nil : list }
@@ -422,14 +440,23 @@ public final class MergeRequestService {
             nextPoll[key] = clock.now().addingTimeInterval(maxBackoff)  // its instance was removed: wait for it to return
             return
         }
-        let pause = host?.pause(start.sessionID) ?? .none
+        let generation = watchGenerations[key]
         let base = interval[key] ?? baseInterval
+        if (host?.pause(start.sessionID) ?? .none) == .archived {
+            nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
+            return
+        }
+        let fetched = await fetch(ref)
+        // Unwatched, unlinked or re-added while the request was out: this result belongs to nobody.
+        guard isCurrent(key, generation) else { return }
+        // The thread may have been archived or snoozed while GitLab answered.
+        let pause = host?.pause(start.sessionID) ?? .none
         if pause == .archived {
             nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
             return
         }
         let snapshot: MergeRequestSnapshot
-        switch await fetch(ref) {
+        switch fetched {
         case .success(let value):
             snapshot = value
         case .failure(let error):
@@ -480,12 +507,14 @@ public final class MergeRequestService {
         if pause == .none, let host {
             do {
                 try await host.wake(start.sessionID, text: MergeRequestWakeText.message(snapshot, events: events), url: start.url)
+                // Withdrawn while the wake was being posted: record nothing for the old watch.
+                guard isCurrent(key, generation) else { return }
                 record.wakes += 1
                 record.lastWake = clock.now()
                 record.lastWakeText = events.map(\.text).joined(separator: " ")
                 log.info("merge request wake posted")
             } catch {
-                watches[key] = record  // not delivered: the same events wake at the next poll
+                if isCurrent(key, generation) { watches[key] = record }  // not delivered: the same events wake at the next poll
                 return
             }
         }
@@ -496,7 +525,7 @@ public final class MergeRequestService {
         }
         watches[key] = record
         try? await store.saveMergeRequestWatch(record)
-        if terminal, let host {
+        if terminal, let host, isCurrent(key, generation) {
             _ = try? await host.writeLinks(start.sessionID) { list in
                 list.map { link in
                     var link = link
