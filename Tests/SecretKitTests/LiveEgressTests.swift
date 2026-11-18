@@ -231,9 +231,12 @@ struct LiveEgressTests {
             try writeTable(attempts, kind: kind)
         } catch {
             for step in cleanup { await step() }
+            try? await client.removeNetwork(EgressGateway.networkName(scopeKey))
             throw error
         }
         for step in cleanup { await step() }
+        // The workspace may detach from its network only after the gateway step: remove the network last too.
+        try? await client.removeNetwork(EgressGateway.networkName(scopeKey))
         let leftovers = try await client.listContainers(labels: ["app.bellocode.test=secrets"])
         #expect(leftovers.isEmpty, "test containers left behind")
     }

@@ -63,6 +63,9 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
   a transparent proxy needs nothing. Destinations resolving to the Mac or link-local are refused.
 - **Non-HTTP egress: blocked by default.** Per project, `host:port` pairs may be reached by a raw CONNECT tunnel
   (Settings ▸ Secrets ▸ Container network, labelled **no secret protection**: never inspected, never substituted).
+- **Agent-created containers** (filtered Docker endpoint, `DockerScope.egress`): put on the scope's egress network
+  (instead of default/bridge, or beside the agent's own networks, which are created `Internal`), given the proxy
+  variables, the CA bundle and IPv6 off; leaving the egress network, host networking and foreign networks are refused.
 - Switch: Settings ▸ Secrets ▸ Container network (next launch); administrators force it with `EgressEnforced`.
 
 ## Routing (for the shared browser package)
@@ -106,9 +109,12 @@ response if any form of the value appears.
 ## Adversarial results
 
 `BELLOCODE_SECRET_LIVE=1 swift test --filter LiveEgress`: real proxy, gateway and an egress-enforced workspace built
-from `WorkspaceSpec` on Rancher Desktop; loopback "bound" and "attacker" servers. Every output, a `docker export` of
-the workspace (362 MB), `docker inspect` of workspace and gateway and everything the attackers received are scanned for
-the canary in every encoding. **57 attempts, canary absent in all; every claimed path held.**
+from `WorkspaceSpec` on Rancher Desktop, run as a **project container and as a shared workspace**; loopback "bound" and
+"attacker" servers. Every output, a `docker export` of the workspace, `docker inspect` of workspace and gateway and
+everything the attackers received are scanned for the canary in every encoding. **57 attempts per workspace kind,
+canary absent in all; every claimed path held.** Agent containers (default and agent-created networks, through the
+real filtered endpoint): proxy forced, CA trusted, no DNS or direct route, substitution only for the binding, attacker
+403, canary absent; host and egress networks refused.
 
 | Attempt | Outcome |
 | --- | --- |
@@ -152,26 +158,21 @@ placeholder bound to a loopback test API. Without a model (session shell, the se
 showed the placeholder, the audit recorded destination and thread, opencode's data held no form of the key: **pass**.
 With a model (`opencode/glm-5.3-flash-free`, 2 prompts): asked to script the call, then to print and recover the key,
 the agent never showed it; the transcript (9 KB, tool inputs and outputs), opencode's data, the project, the
-workspace's environments and the audit held no form of it: **pass**. That run shared its thread with the shell leg, so
-it did not prove the agent's *own* call was substituted; the harness now uses separate threads and checks the audit's
-thread, but the rerun was refused by the free tier (5 earlier requests too, before any generation). Installs
+workspace's environments and the audit held no form of it: **pass**. It shared its thread with the shell leg, so the
+agent's *own* substitution is unproven; the fixed harness's rerun was refused by the free tier. Installs
 (`LiveEgressPerf`, fresh caches): npm 3.7 s direct, 3.6 s proxied; pip 4.5 s direct, 3.3 s proxied.
 
-**Administrators:** `EgressEnforced` (bool, forced in `com.bellocode.app`) fixes the switch; `NetworkHTTP(S)Proxy`
-(the proxy chains through it) and `NetworkTrust…` (roots beside BelloCode's CA) apply as in Containers 3.
+**Administrators:** `EgressEnforced` (forced in `com.bellocode.app`) fixes the switch; `NetworkHTTP(S)Proxy` and
+`NetworkTrust…` apply upstream as in Containers 3.
 
-**Needs the company network:** chaining to the transparent proxy (BelloCode's upstream TLS sees the company's interception certificate: trusted only if
-its root is in the Mac's admin trust settings); an explicit proxy requiring authentication (not supported); PAC-only
-proxies (not read); whether the company proxy blocks or rewrites CONNECT to internal hosts; images without node or
-python3 for the gateway; tools that pin certificates or ignore `HTTPS_PROXY` (they fail closed).
+**Needs the company network:** transparent-proxy chaining (its root in the Mac's admin trust); authenticating or
+PAC-only proxies (unsupported); CONNECT to internal hosts; gateway images without node/python3; pinning clients.
 
-**UX checklist (§E).** Purpose: cards and rows name label, handle, mode, destination, project; claims are glyph + words with a popover. States:
-none, proxy starting/running/failed/off, placeholder unavailable, revoked, commands only, refusals and blocked responses
-naming the rule, audit gap. Keyboard: Window ▸ Secrets…, ⌘N. Delete confirmed; Revoke reversible. Not run: VoiceOver,
-two windows, 30 sessions.
+**UX checklist (§E).** Cards and rows name label, handle, mode, destination, project; claims are glyph + words with a
+popover; every state (proxy off/failed, unavailable, revoked, refusals naming the rule, audit gap) is shown. Keyboard:
+Window ▸ Secrets…, ⌘N. Delete confirmed; Revoke reversible. Not run: VoiceOver, two windows, 30 sessions.
 
-**Known gaps.** The shared workspace carries the attachment (own gateway, code-root scope). Containers the agent starts through the filtered Docker endpoint get ordinary networking: they can reach the network
-directly, but never get a substituted value (the endpoint also refuses the gateway and egress network). Services see
+**Known gaps.** Project services see
 the internal network but keep their own egress (they could relay unsubstituted traffic). Clients that only speak
 HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The shared workspace is recreated once in its
 first second in the execution-modes end to end (a command then sees `EOF`); to investigate. The CA is per Mac. Bodies
