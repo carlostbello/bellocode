@@ -4,7 +4,9 @@
 #   Scripts/fetch-opencode.sh           download the official release archive, verify SHA-256, extract
 #   Scripts/fetch-opencode.sh --local   skip the download; copy the locally installed opencode if it matches the pin
 #
-# The version is pinned in Scripts/opencode-version and checksums live in Scripts/opencode-checksums.
+# The version is pinned in Scripts/opencode-version (the single source of truth, docs/features/opencode-upgrades.md)
+# and checksums live in Scripts/opencode-checksums. BELLOCODE_OPENCODE_VERSION fetches another recorded version
+# without changing the pin (the regression gate, `make opencode-verify`).
 # If the download fails, the script falls back to the local `opencode` when, and only when, its version equals the
 # pin and its binary SHA-256 matches the recorded one. Verified archives are cached in
 # ~/Library/Caches/BelloCode/downloads so parallel checkouts download once. Safe to run repeatedly.
@@ -12,7 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(tr -d '[:space:]' < "$ROOT/Scripts/opencode-version")"
+VERSION="${BELLOCODE_OPENCODE_VERSION:-$(tr -d '[:space:]' < "$ROOT/Scripts/opencode-version")}"
 DEST="$ROOT/Vendor/opencode/$VERSION"
 BIN="$DEST/opencode"
 RG_DEST="$ROOT/Vendor/ripgrep/rg"

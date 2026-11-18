@@ -1,3 +1,4 @@
+import BelloCore
 import Foundation
 import Synchronization
 import Testing
@@ -8,23 +9,34 @@ enum Repo {
     static let root: URL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-    static let contracts = root.appending(path: "Contracts/opencode-2.3.0")
+    /// `Contracts/opencode-<pin>` (the candidate's under `make opencode-verify`).
+    static var contracts: URL { OpenCodePin.contractsDirectory(root: root) ?? root.appending(path: "Contracts") }
 
     static var eventsSample: Data {
         get throws { try Data(contentsOf: contracts.appending(path: "events-sample.sse")) }
     }
 
-    static var pinnedVersion: String? {
-        try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The 2.3.0 recording, kept as a fixed fixture for tests that assert its exact content (text, IDs, usage).
+    static var fixtureSample: Data {
+        get throws { try Data(contentsOf: root.appending(path: "Contracts/opencode-2.3.0/events-sample.sse")) }
     }
 
-    /// The vendored opencode binary, if `Scripts/fetch-opencode.sh` has run in this checkout.
-    static var vendoredOpencode: URL? {
-        guard let version = pinnedVersion else { return nil }
-        let url = root.appending(path: "Vendor/opencode/\(version)/opencode")
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+    /// Frames (blank-line separated blocks with a `data:` line) and `:` comment lines in a recording, counted
+    /// naively so the parser's own count can be checked against it.
+    static func naiveCounts(_ sample: Data) -> (frames: Int, comments: Int) {
+        let text = String(decoding: sample, as: UTF8.self)
+        let lines = text.components(separatedBy: "\n")
+        let comments = lines.filter { $0.hasPrefix(":") }.count
+        let frames = text.components(separatedBy: "\n\n").filter { block in
+            block.components(separatedBy: "\n").contains { $0.hasPrefix("data:") }
+        }.count
+        return (frames, comments)
     }
+
+    static var pinnedVersion: String? { OpenCodePin.repositoryVersion(root: root) }
+
+    /// The vendored opencode binary, if `Scripts/fetch-opencode.sh` has run in this checkout.
+    static var vendoredOpencode: URL? { OpenCodePin.vendoredBinary(root: root) }
 }
 
 /// A clock that only moves when the test advances it.

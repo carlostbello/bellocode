@@ -298,7 +298,7 @@ enum Mapping {
                     mode: AgentEntry.Mode(rawValue: agent.mode.rawValue) ?? .all, hidden: agent.hidden,
                     color: agent.color, model: model(agent.model))
             },
-            defaultModel: defaultModel.map { ModelSelection(providerID: $0.providerID, modelID: $0.modelID) },
+            defaultModel: defaultModel.map { ModelSelection(providerID: $0.providerID, modelID: $0.id) },
             fetched: fetched)
     }
 
@@ -314,7 +314,8 @@ enum Mapping {
             }
         }
         return ModelEntry(
-            providerID: dto.providerID, modelID: dto.modelID, name: dto.name, family: dto.family,
+            // The entry ID, which model refs name (`ModelInfo.id`); the API `modelID` is shared by tiers of one model.
+            providerID: dto.providerID, modelID: dto.id, name: dto.name, family: dto.family,
             contextLimit: dto.limit.context, outputLimit: dto.limit.output, variants: dto.variants.map(\.id),
             supportsTools: dto.capabilities.tools, inputModalities: dto.capabilities.input, status: dto.status.rawValue,
             enabled: dto.enabled, isFree: free, inputCost: baseCost(dto.cost, "input"), outputCost: baseCost(dto.cost, "output"),

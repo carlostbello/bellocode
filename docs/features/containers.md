@@ -31,7 +31,7 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
 | --- | --- | --- |
 | Agent shell tool, `/api/shell`; PTY with `$SHELL`; BelloCode terminals | container | self-check (smoke); terminal round trip |
 | `!`cmd`` command templates | container | self-check (full) |
-| opencode schedule conditions | off (schedules disabled) | self-check reports Off |
+| opencode automations (2.3.1+; schedule conditions before) | off (disabled in config) | self-check reports Off |
 | Worktree setup scripts | container, in the worktree | unit test; refused outside the mounts |
 | Worktree `commands.start`, formatters, LSP | never set / off; flagged HOST if present | configuration scan |
 | **Local MCP servers, per project** | **container** (`bellocode-exec --stdio`) | scan + scratch-server probe (smoke); live test; e2e tool call |
@@ -46,9 +46,10 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
 | File tools, ripgrep | host (no project code runs) | n/a |
 
 The self-check runs at launch (quick: host git, configuration, shell job, PTY, scratch stdio and image MCP servers) and on
-demand ("Verify Isolation", full adds a command template, schedule condition and terminal). Probes leave markers: in the
-container proves the path, on the Mac an escape. **Isolated** only when every applicable check ran and held (skipped:
-**Not verified**; escape or failure: **Problem**). `make smoke` fails unless Isolated.
+demand ("Verify Isolation", full adds a command template, the automations probe (schedules on servers before 2.3.1) and
+terminal). Probes leave markers: in the container proves the path, on the Mac an escape. **Isolated** only when every
+applicable check ran and held (skipped: **Not verified**; escape or failure: **Problem**). `make smoke` fails unless
+Isolated.
 
 ## MCP servers
 

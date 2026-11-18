@@ -104,11 +104,12 @@ func normalized(_ messages: [Message]) -> [NormalizedMessage] {
     messages.sorted { $0.sortKey < $1.sortKey }.map(NormalizedMessage.init)
 }
 
-/// The `data` of every frame in the recorded contract stream (Contracts/opencode-2.3.0/events-sample.sse).
+/// The `data` of every frame in the pinned contract's recorded stream (Contracts/opencode-<pin>/events-sample.sse).
 func recordedFrames() throws -> [String] {
     var url = URL(fileURLWithPath: #filePath)
     for _ in 0..<3 { url.deleteLastPathComponent() }
-    let data = try Data(contentsOf: url.appending(path: "Contracts/opencode-2.3.0/events-sample.sse"))
+    let contracts = OpenCodePin.contractsDirectory(root: url) ?? url.appending(path: "Contracts")
+    let data = try Data(contentsOf: contracts.appending(path: "events-sample.sse"))
     var parser = SSEParser()
     var frames: [String] = []
     for byte in data {

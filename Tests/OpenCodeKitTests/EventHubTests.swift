@@ -75,6 +75,7 @@ struct EventHubTests {
 
     @Test func deliversResyncThenRecordedEventsInOrder() async throws {
         let sample = Array(try Repo.eventsSample)
+        let frameCount = Repo.naiveCounts(Data(sample)).frames
         let connector = ScriptedConnector([.open(chunks: randomChunks(sample, seed: 7), then: .hold)])
         let hub = EventHub(connector: connector, backoff: fastBackoff)
         let subscription = await hub.subscribe()
@@ -83,7 +84,7 @@ struct EventHubTests {
         let messages = try await within(.seconds(5)) {
             var iterator = subscription.makeAsyncIterator()
             var received: [EventHubMessage] = []
-            while received.count < 51, let message = await iterator.next() { received.append(message) }
+            while received.count < frameCount + 1, let message = await iterator.next() { received.append(message) }
             return received
         }
         guard case .resync(.connected(connection: 1)) = messages.first else {
@@ -96,7 +97,7 @@ struct EventHubTests {
         let expected = try parser.feed(sample).map { OpenCodeEventDecoder().decode(Data($0.data.utf8)).type }
         #expect(types == expected)
         let statistics = await hub.statistics
-        #expect(statistics.frames == 50)
+        #expect(statistics.frames == frameCount)
         #expect(statistics.unknownFrames == 0)
         await hub.stop()
     }

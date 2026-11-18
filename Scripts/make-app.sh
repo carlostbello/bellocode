@@ -6,6 +6,8 @@
 # Requires Scripts/fetch-opencode.sh to have run (Vendor/opencode/<pinned version>/opencode).
 # Signing is inside-out: helpers first (hardened runtime; opencode with its JIT entitlements), then the app.
 # Set BELLOCODE_SIGN_IDENTITY to a Developer ID identity to sign for distribution; the default "-" is ad-hoc.
+# The opencode version is Scripts/opencode-version. The regression gate (`make opencode-verify`) bundles a candidate
+# with BELLOCODE_OPENCODE_VERSION and writes the app to BELLOCODE_APP_PATH instead of build/BelloCode.app.
 
 set -euo pipefail
 
@@ -23,11 +25,11 @@ die() { echo "make-app: error: $*" >&2; exit 1; }
 IDENTITY="${BELLOCODE_SIGN_IDENTITY:--}"
 BUNDLE_ID="com.bellocode.app"
 APP_VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-OPENCODE_VERSION="$(tr -d '[:space:]' < "$ROOT/Scripts/opencode-version")"
+OPENCODE_VERSION="${BELLOCODE_OPENCODE_VERSION:-$(tr -d '[:space:]' < "$ROOT/Scripts/opencode-version")}"
 OPENCODE_BIN="$ROOT/Vendor/opencode/$OPENCODE_VERSION/opencode"
 RG_BIN="$ROOT/Vendor/ripgrep/rg"
 ENTITLEMENTS="$ROOT/Scripts/entitlements"
-APP="$ROOT/build/BelloCode.app"
+APP="${BELLOCODE_APP_PATH:-$ROOT/build/BelloCode.app}"
 CONTENTS="$APP/Contents"
 
 [[ -x "$OPENCODE_BIN" ]] || die "missing $OPENCODE_BIN; run Scripts/fetch-opencode.sh first"

@@ -41,7 +41,7 @@ Large data: `FixtureGenerator(seed:)`, `Scenario.large(...)` (10,000-message ses
 
 ## Known divergences
 
-- No location bootstrap events (`integration.updated`, `agent.updated`, …), no `session.instructions.updated`, no
+- No location bootstrap events (`integration.updated`, `agent.updated`, 2.3.2's `artifact.updated`, …), no `session.instructions.updated`, no
   `shell.created/exited`, no titles generated after the first prompt, cost always 0, token counts synthetic.
 - Interrupt: open blocks end, an unsettled tool gets `tool.failed{type:"aborted"}`, the step gets `step.failed`, then
   `execution.interrupted{reason:"user"}`; blocked permissions are withdrawn with a synthetic `permission.replied
