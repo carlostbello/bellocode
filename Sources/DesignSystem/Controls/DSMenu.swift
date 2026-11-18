@@ -367,6 +367,8 @@ public final class DSMenuPanel: NSPanel {
     private let scrollView = NSScrollView()
     private var resignObserver: (any NSObjectProtocol)?
     private var closing = false
+    private var dismissGeneration = 0
+    private var dismissFallback: Task<Void, Never>?
 
     public init(entries: [DSMenuEntry]) {
         list = DSMenuListView(entries: entries)
@@ -463,25 +465,36 @@ public final class DSMenuPanel: NSPanel {
         dismiss()
     }
 
-    /// Closes with an 80 ms fade and returns key status to the parent window.
+    /// Closes with an 80 ms fade and returns key status to the parent window. The close runs from the fade's completion
+    /// or, if that never arrives (animation completions were seen to stall while the app is otherwise idle on macOS
+    /// 27), from a ContinuousClock fallback shortly after; whichever comes first, once.
     public func dismiss() {
         guard !closing else { return }
         closing = true
+        dismissGeneration &+= 1
+        let generation = dismissGeneration
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         resignObserver = nil
         let parent = parent
+        let finish: @MainActor () -> Void = { [weak self] in
+            guard let self, self.closing, self.dismissGeneration == generation else { return }
+            self.dismissFallback?.cancel()
+            self.dismissFallback = nil
+            parent?.removeChildWindow(self)
+            self.orderOut(nil)
+            self.closing = false
+            if parent?.isVisible == true { parent?.makeKey() }
+            self.onClose?()
+        }
+        dismissFallback = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(DS.Motion.popOutDuration) + .milliseconds(250), clock: .continuous) } catch { return }
+            finish()
+        }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = DS.Motion.popOutDuration
             animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                parent?.removeChildWindow(self)
-                self.orderOut(nil)
-                self.closing = false
-                if parent?.isVisible == true { parent?.makeKey() }
-                self.onClose?()
-            }
+        }, completionHandler: {
+            MainActor.assumeIsolated { finish() }
         })
     }
 }

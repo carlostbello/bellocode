@@ -273,6 +273,20 @@ func key(_ characters: String, keyCode: UInt16, in window: NSWindow) -> NSEvent 
         window.close()
     }
 
+    /// A dismissed menu closes (and reports it) even if the fade's completion never arrives; the ContinuousClock
+    /// fallback guarantees it within its delay. Waits with one idle sleep, no polling.
+    @Test func menuDismissClosesWhileTheProcessIsIdle() async {
+        let panel = DSMenuPanel(entries: [])
+        var closes = 0
+        panel.onClose = { closes += 1 }
+        panel.orderFront(nil)
+        panel.dismiss()
+        panel.dismiss()  // ignored while closing
+        try? await Task.sleep(for: .seconds(DS.Motion.popOutDuration) + .milliseconds(600), clock: .continuous)
+        #expect(closes == 1)
+        #expect(!panel.isVisible)
+    }
+
     @Test func countBadgeAndPill() {
         let badge = CountBadge()
         badge.noun = "threads need you"
