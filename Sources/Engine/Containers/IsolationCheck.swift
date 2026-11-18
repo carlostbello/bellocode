@@ -105,9 +105,9 @@ public struct IsolationReport: Sendable, Equatable {
 /// answer to a marker under `/tmp`: read inside the container it proves the path ran there; found on the Mac it
 /// proves an escape. Nothing is written into a project folder and no prompt is ever sent.
 ///
-/// Quick (engine start, invisible): the configuration (shell, formatter, LSP, local MCP servers, worktree start
-/// commands, the plugin guard), a shell job (`/api/shell`, the agent shell tool's path) and a PTY started with
-/// `$SHELL` (`/api/pty`). Full (on demand, `make smoke`): also a command template (`!`…``), a schedule condition and
+/// Quick (engine start, invisible): the configuration (shell, formatter, LSP, local MCP servers and how each is routed,
+/// worktree start commands, the plugin guard), a shell job (`/api/shell`, the agent shell tool's path), a PTY started
+/// with `$SHELL` (`/api/pty`) and a scratch local MCP server registered like a project's. Full (on demand, `make smoke`): also a command template (`!`…``), a schedule condition and
 /// BelloCode's own terminal (a persistent PTY), which need a scratch thread that is deleted afterwards.
 public enum IsolationCheck {
     public struct Context: Sendable {
@@ -157,7 +157,8 @@ public enum IsolationCheck {
         var checks: [IsolationReport.Check] = []
         var shells: [String] = []
         var formatterOn = false, lspOn = false
-        var localMCP: [String] = []
+        // Entries come lowest priority first; a later entry replaces a server's whole entry (checked on 2.3.0).
+        var mcpRoutes: [String: MCPRouting.Route] = [:]
         func scan(_ value: JSONValue) {
             if let shell = value["shell"]?.stringValue { shells.append(shell) }
             if let formatter = value["formatter"] {
@@ -171,8 +172,13 @@ public enum IsolationCheck {
                 if case .object(let entries) = lsp, entries.values.contains(where: { $0["disabled"]?.boolValue != true }) { lspOn = true }
             }
             if case .object(let servers)? = value["mcp"]?["servers"] {
-                for (name, server) in servers where server["type"]?.stringValue == "local" && server["enabled"]?.boolValue != false {
-                    localMCP.append(name)
+                for (name, server) in servers {
+                    guard server["type"]?.stringValue == "local", server["disabled"]?.boolValue != true else {
+                        mcpRoutes[name] = nil
+                        continue
+                    }
+                    let command: [String] = if case .array(let items)? = server["command"] { items.compactMap(\.stringValue) } else { [] }
+                    mcpRoutes[name] = MCPRouting.route(of: command, helper: helperPath)
                 }
             }
         }
@@ -186,8 +192,15 @@ public enum IsolationCheck {
                 ?? "no configuration sets the shell to bellocode-exec: commands could run on this Mac")))
         checks.append(.init("Formatters", formatterOn ? .host("formatters are on: they run project tooling on this Mac") : .off("off")))
         checks.append(.init("Language servers", lspOn ? .host("language servers are configured: they would run on this Mac") : .off("off")))
-        checks.append(.init("Local MCP servers", localMCP.isEmpty ? .off("none configured")
-            : .host("local MCP servers run on this Mac: \(localMCP.sorted().joined(separator: ", "))")))
+        var routedMCP: [String] = [], refusedMCP: [String] = [], hostMCP: [String] = []
+        for (name, route) in mcpRoutes {
+            switch route {
+            case .container: routedMCP.append(name)
+            case .refused: refusedMCP.append(name)
+            case .host(let program): hostMCP.append("\(name) (\(program))")
+            }
+        }
+        checks.append(.init("Local MCP servers", localMCPOutcome(routed: routedMCP, refused: refusedMCP, host: hostMCP)))
         let starts = projects.filter { !($0.commands?.start ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
         checks.append(.init("Worktree start commands", starts.isEmpty ? .off("none set (setup scripts run in the container)")
             : .host("opencode would run a worktree start command on this Mac for \(starts.map(\.canonical).joined(separator: ", "))")))
@@ -198,6 +211,28 @@ public enum IsolationCheck {
         }
         return checks
     }
+
+    static func localMCPOutcome(routed: [String], refused: [String], host: [String]) -> IsolationReport.Outcome {
+        if !host.isEmpty { return .host("local MCP servers would run on this Mac: \(Set(host).sorted().joined(separator: ", "))") }
+        let refusedText = refused.isEmpty ? "" : "; refused (configured for all projects): \(Set(refused).sorted().joined(separator: ", "))"
+        if !routed.isEmpty { return .container("routed into the project's container (bellocode-exec --stdio): \(Set(routed).sorted().joined(separator: ", "))\(refusedText)") }
+        if !refused.isEmpty { return .off("none run" + refusedText) }
+        return .off("none configured")
+    }
+
+    /// Servers opencode lists for the location that neither its configuration nor BelloCode accounts for (added at
+    /// runtime by another API client): their command cannot be checked.
+    static func unaccountedMCP(listed: [MCPServerStatus], entries: [JSONValue], registered: Set<String>) -> [String] {
+        var known = registered
+        for entry in entries {
+            let value = entry["info"] ?? entry
+            if case .object(let servers)? = value["mcp"]?["servers"] { known.formUnion(servers.keys) }
+        }
+        return listed.map(\.name).filter { !known.contains($0) && $0 != verifyMCPName }.sorted()
+    }
+
+    /// The scratch MCP server the self-check registers for a moment.
+    static let verifyMCPName = "bellocode-verify-mcp"
 
     /// Runs the check against `directory` (a project whose container can run). `full` adds the session-based paths.
     @MainActor
@@ -242,7 +277,7 @@ public enum IsolationCheck {
             return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
         }
         let runtime = service.activeRuntime
-        let names = ["shell", "pty", "command", "schedule", "terminal"]
+        let names = ["shell", "pty", "mcp", "command", "schedule", "terminal"]
         await clear(names, runtime: runtime, container: container, user: spec.user)
 
         // 1. Shell job: the agent shell tool, /api/shell and /session/{id}/shell share this path.
@@ -283,6 +318,31 @@ public enum IsolationCheck {
             checks.append(.init("PTY ($SHELL)", result))
         } catch {
             checks.append(.init("PTY ($SHELL)", .failed("could not start a PTY: \(error)")))
+        }
+
+        // 3. A local MCP server: registered for the location with the routed command (as project servers are), it
+        // writes the probe and exits; opencode marks it failed, which is fine: only where it ran matters.
+        let listed = (try? await client.mcpServers(directory: directory)) ?? []
+        let strangers = unaccountedMCP(listed: listed, entries: entries, registered: service.registeredMCPNames(directory))
+        if !strangers.isEmpty {
+            checks.append(.init("MCP servers added at runtime", .failed("added by another client, command not checked: \(strangers.joined(separator: ", "))")))
+        }
+        do {
+            let config = MCPRouting.projectServerConfig(
+                helper: context.helperPath, project: service.environment(for: directory).directory,
+                argv: ["/bin/sh", "-c", probeCommand("mcp")], environment: [:], timeoutMilliseconds: 10_000)
+            try await client.addMCPServer(verifyMCPName, config: config, directory: directory)
+            var result = IsolationReport.Outcome.failed("no answer")
+            for _ in 0..<40 {
+                result = await outcome(of: "mcp", runtime: runtime, container: container, user: spec.user, path: "MCP server (stdio)")
+                if case .failed = result { try? await Task.sleep(for: .milliseconds(150)); continue }
+                break
+            }
+            try? await client.removeMCPServer(verifyMCPName, directory: directory)
+            checks.append(.init("MCP server (stdio)", result))
+        } catch {
+            try? await client.removeMCPServer(verifyMCPName, directory: directory)
+            checks.append(.init("MCP server (stdio)", .failed("could not register a scratch MCP server: \(error)")))
         }
 
         if full { checks += await sessionChecks(client: client, context: context, directory: directory, runtime: runtime, container: container, user: spec.user) }

@@ -237,11 +237,12 @@ public struct WorkspaceManager: Sendable {
         try await client.listContainers(labels: projectKey.map(Self.labelFilter(projectKey:)) ?? ["\(WorkspaceSpec.labelWorkspace)=1"])
     }
 
-    /// Execs of the container that are still running.
+    /// Commands of the container that are still running (relayed programs such as local MCP servers are not counted:
+    /// they run as long as opencode keeps them connected and must not keep the container from idling).
     public func runningExecs(_ status: WorkspaceStatus) async -> Int {
         var running = 0
         for id in status.execIDs.prefix(256) {
-            if let inspect = try? await client.inspectExec(id), inspect.running { running += 1 }
+            if let inspect = try? await client.inspectExec(id), inspect.running, !inspect.isRelayedProgram { running += 1 }
         }
         return running
     }

@@ -351,6 +351,10 @@ final class EnvironmentSettingsModel: ObservableObject {
     @Published var fileWatchBridge = true
     @Published var message: String?
     @Published var logs: String?
+    @Published var newMCPName = ""
+    @Published var newMCPCommand = ""
+    /// The last removed MCP server, for Undo (reversible: applied at once).
+    @Published var removedMCP: MCPServerSetting?
     var openTerminal: (String) -> Void = { _ in }
     var openBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
@@ -410,6 +414,52 @@ final class EnvironmentSettingsModel: ObservableObject {
         settings.fileWatchBridge = fileWatchBridge
         await service.update(directory, settings: settings)
         message = "Saved. The container is recreated on next use if anything changed."
+    }
+
+    // MARK: MCP servers (applied at once; removal has Undo)
+
+    func addMCPServer() async {
+        guard let directory, let environment else { return }
+        let server = MCPServerSetting(name: newMCPName.trimmingCharacters(in: .whitespaces), command: MCPServerSetting.split(commandLine: newMCPCommand))
+        var settings = environment.settings
+        settings.mcpServers.removeAll { $0.name == server.name }
+        settings.mcpServers.append(server)
+        let errors = server.validationErrors()
+        guard errors.isEmpty else {
+            message = errors.joined(separator: " ")
+            return
+        }
+        await service.update(directory, settings: settings)
+        newMCPName = ""
+        newMCPCommand = ""
+        removedMCP = nil
+        message = "Added MCP server “\(server.name)”. It runs in this project's container and starts when the container is ready."
+        await service.refreshMCPStatus(directory)
+    }
+
+    func removeMCPServer(_ server: MCPServerSetting) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.mcpServers.removeAll { $0.name == server.name }
+        await service.update(directory, settings: settings)
+        removedMCP = server
+        message = nil
+    }
+
+    func undoRemoveMCPServer() async {
+        guard let directory, let environment, let server = removedMCP else { return }
+        var settings = environment.settings
+        settings.mcpServers.append(server)
+        await service.update(directory, settings: settings)
+        removedMCP = nil
+    }
+
+    func setMCPServer(_ server: MCPServerSetting, enabled: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        guard let index = settings.mcpServers.firstIndex(where: { $0.name == server.name }) else { return }
+        settings.mcpServers[index].enabled = enabled
+        await service.update(directory, settings: settings)
     }
 
     func showLogs() async {
@@ -540,6 +590,9 @@ struct EnvironmentSettingsView: View {
             }
             .padding(DS.Space.s12)
         }
+        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
+            MCPServersListView(model: model, environment: environment)
+        }
         SettingsGroup("Ports") {
             PortsListView(environment: environment, refresh: { Task { await service.refreshPorts(environment.directory) } },
                           open: { model.forward($0) }, stop: { service.stopForward(environment.directory, port: $0) })
@@ -565,6 +618,64 @@ struct EnvironmentSettingsView: View {
             }
         }
         if let logs = model.logs { LogsView(title: environment.containerName, text: logs) { model.logs = nil } }
+    }
+}
+
+/// The project's MCP servers: name, command (mono), where it runs and opencode's status (glyph + word), enable toggle and
+/// Remove (applied at once, with Undo); then an add row.
+struct MCPServersListView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if environment.settings.mcpServers.isEmpty {
+                SettingsRow("No MCP servers", detail: "Add one below: its command runs inside the container.", divided: false) { EmptyView() }
+            }
+            ForEach(Array(environment.settings.mcpServers.enumerated()), id: \.element.id) { index, server in
+                let status = environment.mcpStatus.first { $0.name == server.name }
+                SettingsRow(server.name, detail: "\(server.commandLine) · in container" + (status?.error.map { " · \($0)" } ?? ""), divided: index > 0) {
+                    HStack(spacing: DS.Space.s4) {
+                        MCPStatusPill(enabled: server.enabled, status: status?.status)
+                        Toggle("", isOn: Binding(get: { server.enabled }, set: { value in Task { await model.setMCPServer(server, enabled: value) } }))
+                            .toggleStyle(DSToggleStyle()).labelsHidden().accessibilityLabel("Enable \(server.name)")
+                        Button("Remove") { Task { await model.removeMCPServer(server) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
+                }
+            }
+            if let removed = model.removedMCP {
+                SettingsRow("Removed “\(removed.name)”", divided: true) {
+                    Button("Undo") { Task { await model.undoRemoveMCPServer() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                }
+            }
+            SettingsFieldRow {
+                TextField("", text: $model.newMCPName, prompt: Text("name")).textFieldStyle(DSTextFieldStyle()).frame(width: 110)
+                    .accessibilityLabel("MCP server name")
+                TextField("", text: $model.newMCPCommand, prompt: Text("node tools/mcp.js")).textFieldStyle(DSTextFieldStyle()).font(.ds(.codeSmall))
+                    .accessibilityLabel("MCP server command, run in the container")
+                Button("Add") { Task { await model.addMCPServer() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .disabled(model.newMCPName.isEmpty || model.newMCPCommand.isEmpty)
+            }
+        }
+        .task(id: environment.directory) { await model.service.refreshMCPStatus(environment.directory) }
+    }
+}
+
+/// An MCP server's state as glyph + word (never colour only).
+struct MCPStatusPill: View {
+    let enabled: Bool
+    let status: String?
+
+    var body: some View {
+        let (word, tone, symbol): (String, DS.Tone, String) = switch (enabled, status) {
+        case (false, _): ("Off", .neutral, "pause.circle")
+        case (true, "connected"): ("Connected", .success, "checkmark.circle")
+        case (true, "pending"): ("Starting", .info, "arrow.triangle.2.circlepath")
+        case (true, "failed"): ("Failed", .danger, "xmark.octagon")
+        case (true, "needs_auth"): ("Sign-in needed", .warning, "exclamationmark.triangle")
+        default: ("Starts with container", .neutral, "shippingbox")
+        }
+        DSPillView(word, tone: tone, symbolName: symbol)
     }
 }
 

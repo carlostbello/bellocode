@@ -298,7 +298,23 @@ public struct ExecInspect: Decodable, Sendable, Equatable {
     public var running: Bool
     public var exitCode: Int?
     public var pid: Int?
-    enum CodingKeys: String, CodingKey { case id = "ID", running = "Running", exitCode = "ExitCode", pid = "Pid" }
+    /// The exec's arguments after its entrypoint (`ProcessConfig.arguments`).
+    public var arguments: [String]?
+    enum CodingKeys: String, CodingKey { case id = "ID", running = "Running", exitCode = "ExitCode", pid = "Pid", processConfig = "ProcessConfig" }
+    struct ProcessConfig: Decodable { var arguments: [String]?; enum CodingKeys: String, CodingKey { case arguments } }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        running = try c.decode(Bool.self, forKey: .running)
+        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+        pid = try c.decodeIfPresent(Int.self, forKey: .pid)
+        arguments = (try? c.decodeIfPresent(ProcessConfig.self, forKey: .processConfig))?.arguments
+    }
+
+    /// A long-lived relayed program (`StdioRelay`, a local MCP server): not a command, so it neither keeps the
+    /// container from idling nor holds back the stray-process reaper.
+    public var isRelayedProgram: Bool { (arguments?.count ?? 0) >= 3 && arguments?[2] == StdioRelay.processName }
 }
 
 public struct EngineEvent: Decodable, Sendable, Equatable {

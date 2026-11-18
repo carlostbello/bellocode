@@ -435,6 +435,8 @@ public final class Engine {
                 if let first = directories.first ?? self.configuration.defaultDirectory { await orchestration.checkPlugin(directory: first) }
                 await orchestration.hostAppTools(directories: directories)
             })
+        // Project MCP servers are runtime registrations: a (re)connected server has none.
+        environments.serverConnected()
     }
 
     private func subscribeRoot() {

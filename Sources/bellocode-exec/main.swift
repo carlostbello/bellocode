@@ -29,24 +29,25 @@ func fail(_ code: Int32, _ message: String) -> Never {
     exit(code)
 }
 
-/// The command after `-c`, or nil for an interactive shell. Accepts what opencode and shells pass: `-l` (login),
-/// `+o nomatch`, then `-c command`.
-func parseCommand(_ all: [String]) -> String? {
-    var arguments = Array(all.dropFirst())
-    if arguments.first == "--version" {
-        print(helperVersion)
-        exit(0)
-    }
-    while let first = arguments.first, first == "-l" || first == "--login" || first == "-i" { arguments.removeFirst() }
-    if arguments.count >= 2, arguments[0] == "+o" { arguments.removeFirst(2) }
-    if arguments.first == "-c" {
-        guard arguments.count >= 2 else { fail(2, "-c needs a command.") }
-        return arguments[1]
-    }
-    if !arguments.isEmpty { fail(2, "unsupported arguments; use -c <command> or no arguments for an interactive shell.") }
-    return nil
+let invocation: HelperInvocation
+do {
+    invocation = try HelperInvocation.parse(Array(CommandLine.arguments.dropFirst()))
+} catch {
+    fail(2, error.description)
 }
-let command = parseCommand(CommandLine.arguments)
+if invocation == .version {
+    print(helperVersion)
+    exit(0)
+}
+if case .refuse(let name) = invocation { fail(125, HelperInvocation.refusalMessage(server: name)) }
+if case .service = invocation { fail(126, "service shells are not available in this version of the helper.") }
+/// `-c` command, interactive shell, or a program relayed over stdin/stdout (`--stdio`, local MCP servers).
+let command: String? = if case .command(let value) = invocation { value } else { nil }
+let stdioArgv: [String]? = if case .stdio(_, let argv) = invocation { argv } else { nil }
+let projectOption: String? = switch invocation {
+case .stdio(let project, _), .service(let project, _): project
+default: nil
+}
 
 let environment = ProcessInfo.processInfo.environment
 guard let configPath = environment["BELLOCODE_EXEC_CONFIG"] else {
@@ -79,13 +80,23 @@ func loadAuthorisedConfig() -> ExecHelperConfig {
 let config = loadAuthorisedConfig()
 let hostDirectory = FileManager.default.currentDirectoryPath
 if let blocked = config.runtimeBlocked { fail(125, blocked.message) }
-guard let (workspace, cwd) = config.resolve(directory: hostDirectory) else {
-    fail(126, "\(hostDirectory) is not inside a project with a container environment, so there is nowhere to run this. Open the folder as a BelloCode project, or run the command from the project folder.")
+/// The project comes from `--project` when given (a local MCP server BelloCode routed: its working directory may be
+/// anywhere opencode chose); the command runs in the current directory when that is inside the project, else at the
+/// project's root.
+func resolveWorkspace() -> (ExecHelperConfig.Workspace, String)? {
+    guard let projectOption else { return config.resolve(directory: hostDirectory) }
+    guard let (workspace, root) = config.resolve(directory: projectOption) else { return nil }
+    if let (current, directory) = config.resolve(directory: hostDirectory), current.container == workspace.container { return (current, directory) }
+    return (workspace, root)
+}
+guard let (workspace, cwd) = resolveWorkspace() else {
+    fail(126, "\(projectOption ?? hostDirectory) is not inside a project with a container environment, so there is nowhere to run this. Open the folder as a BelloCode project, or run the command from the project folder.")
 }
 if let blocked = workspace.blocked { fail(125, blocked.message) }
 
 let client = EngineClient(socketPath: config.socket)
-let interactive = isatty(STDIN_FILENO) == 1
+// A relayed program is never given a terminal, whatever stdin is: its bytes must pass unchanged.
+let interactive = stdioArgv == nil && isatty(STDIN_FILENO) == 1
 let forwarded = ExecHelperConfig.forwardedEnvironment(environment)
 let token = UUID().uuidString.prefix(12).lowercased()
 
@@ -95,8 +106,9 @@ func windowSize() -> (rows: Int, cols: Int)? {
     return (Int(size.ws_row), Int(size.ws_col))
 }
 
-let argv = command.map { [workspace.shell, "-c", $0] } ?? [workspace.shell, "-l"]
-let wrapped = interactive ? ExecWrapper.interactive(token: String(token), argv) : ExecWrapper.nonInteractive(argv)
+let argv = stdioArgv ?? command.map { [workspace.shell, "-c", $0] } ?? [workspace.shell, "-l"]
+let wrapped = stdioArgv != nil ? StdioRelay.wrapper(token: String(token), argv)
+    : interactive ? ExecWrapper.interactive(token: String(token), argv) : ExecWrapper.nonInteractive(argv)
 
 func startSession() async throws -> ExecSession {
     try await ExecSession.start(client: client, container: workspace.container, argv: wrapped, workingDir: cwd,
@@ -154,6 +166,7 @@ let savedTermios: termios? = {
 // Main queue: these handlers touch main-actor state; Swift 6 traps if they run elsewhere.
 let signalQueue = DispatchQueue.main
 var sources: [any DispatchSourceSignal] = []
+signal(SIGPIPE, SIG_IGN)
 for sig in [SIGTERM, SIGINT, SIGHUP, SIGWINCH] {
     signal(sig, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: sig, queue: signalQueue)
@@ -162,7 +175,18 @@ for sig in [SIGTERM, SIGINT, SIGHUP, SIGWINCH] {
             if let size = windowSize() { Task { try? await session.resize(rows: size.rows, cols: size.cols) } }
             return
         }
-        if interactive {
+        if stdioArgv != nil {
+            // A relayed program (MCP server): end its input, then signal its whole group in the container (TERM, then
+            // KILL a second later), then leave. The wrapper also passes the TERM to the program.
+            session.closeStdin()
+            Task {
+                _ = try? await ExecSession.run(client: client, container: workspace.container,
+                                               argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: workspace.user,
+                                               wrap: false, timeout: .seconds(5))
+                exit(128 + sig)
+            }
+            signalQueue.asyncAfter(wallDeadline: .now() + 6) { exit(128 + sig) }
+        } else if interactive {
             // Hang up the whole session in the container, then leave.
             Task {
                 _ = try? await ExecSession.run(client: client, container: workspace.container,
@@ -193,6 +217,28 @@ if interactive {
 
 let stdoutStream = FileStream(fd: STDOUT_FILENO, owned: false, isSocket: false)
 let stderrStream = FileStream(fd: STDERR_FILENO, owned: false, isSocket: false)
+if stdioArgv != nil {
+    let input = FileStream(fd: STDIN_FILENO, owned: false, isSocket: false)
+    let code: Int
+    do {
+        code = try await StdioRelay.run(
+            session: session, readInput: { try await input.read(maxLength: StdioRelay.chunkSize) },
+            writeOutput: { chunk in
+                switch chunk.stream {
+                case .stderr, .system: try stderrStream.writeAllBlocking(chunk.bytes)
+                default: try stdoutStream.writeAllBlocking(chunk.bytes)
+                }
+            })
+    } catch {
+        // The reader went away (stdout closed) or the connection to the container dropped: stop the program there.
+        _ = try? await ExecSession.run(client: client, container: workspace.container,
+                                       argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: workspace.user,
+                                       wrap: false, timeout: .seconds(5))
+        FileHandle.standardError.write(Data("BelloCode: the relayed program's stream ended unexpectedly; it was stopped in the container.\n".utf8))
+        exit(125)
+    }
+    exit(Int32(truncatingIfNeeded: code < 0 ? 125 : code))
+}
 do {
     for try await chunk in session.output() {
         switch chunk.stream {

@@ -16,10 +16,13 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var fileWatchBridge: Bool
     /// Stop the container after this many minutes without commands, terminals or forwarded ports (0 = never).
     public var idleStopMinutes: Int
+    /// Local (stdio) MCP servers of this project: they run in its container (`bellocode-exec --stdio`).
+    public var mcpServers: [MCPServerSetting]
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
-                idleStopMinutes: Int = 30) {
+                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = []) {
+        self.mcpServers = mcpServers
         self.image = image
         self.environment = environment
         self.resources = resources
@@ -31,7 +34,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes }
+    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -42,6 +45,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         network = try c.decodeIfPresent(WorkspaceSpec.Network.self, forKey: .network) ?? .bridge
         fileWatchBridge = try c.decodeIfPresent(Bool.self, forKey: .fileWatchBridge) ?? true
         idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 30
+        mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
     }
 
     /// Names that may not be set as plain variables: they are the container's own or BelloCode's.
@@ -58,10 +62,104 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         if resources.cpus <= 0 || resources.memoryBytes < 256 << 20 || resources.pidsLimit < 64 {
             errors.append("Resource limits are too small (at least 0.1 CPU, 256 MB memory, 64 processes).")
         }
+        var names = Set<String>()
+        for server in mcpServers {
+            errors += server.validationErrors()
+            if !names.insert(server.name).inserted { errors.append("Two MCP servers are named “\(server.name)”.") }
+        }
         for mount in userMounts where !RancherFileSharing.isShared(mount.path) {
             errors.append("\(mount.path) is not shared with Rancher Desktop (only your home folder, /Volumes and temporary folders are).")
         }
         return errors
+    }
+}
+
+/// A local (stdio) MCP server of one project. It runs in the project's workspace container: BelloCode registers it with
+/// opencode for the project's location with the command rewritten to `bellocode-exec --stdio` (`MCPRouting`).
+public struct MCPServerSetting: Codable, Sendable, Equatable, Hashable, Identifiable {
+    /// The server's name (its tools appear to the agent as `<name>_<tool>`).
+    public var name: String
+    /// The program and its arguments, as run inside the container (e.g. `["node", "tools/mcp.js"]`).
+    public var command: [String]
+    /// Non-secret variables for the server (visible to it in the container).
+    public var environment: [String: String]
+    public var enabled: Bool
+    public var id: String { name }
+
+    public init(name: String, command: [String], environment: [String: String] = [:], enabled: Bool = true) {
+        self.name = name
+        self.command = command
+        self.environment = environment
+        self.enabled = enabled
+    }
+
+    enum CodingKeys: String, CodingKey { case name, command, environment, enabled }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        command = try c.decode([String].self, forKey: .command)
+        environment = try c.decodeIfPresent([String: String].self, forKey: .environment) ?? [:]
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+    }
+
+    public func validationErrors() -> [String] {
+        var errors: [String] = []
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        if name.isEmpty || name.unicodeScalars.contains(where: { !allowed.contains($0) }) || name.count > 48 {
+            errors.append("MCP server name “\(name)”: use letters, digits, - and _ (at most 48).")
+        }
+        if command.first?.trimmingCharacters(in: .whitespaces).isEmpty ?? true { errors.append("MCP server “\(name)” has no command.") }
+        for key in environment.keys where key.isEmpty || key.contains("=") || key.hasPrefix("BUN_") || key.hasPrefix("BELLOCODE_") {
+            errors.append("MCP server “\(name)”: \(key) cannot be set.")
+        }
+        return errors
+    }
+
+    /// Splits a command line the way a shell would for plain words and quotes (no expansion): `node "my tool.js" -v`.
+    public static func split(commandLine: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var quote: Character?
+        var hasWord = false
+        var escaped = false
+        for character in commandLine {
+            if escaped {
+                current.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\", quote != "'" {
+                escaped = true
+                hasWord = true
+                continue
+            }
+            if let open = quote {
+                if character == open { quote = nil } else { current.append(character) }
+                continue
+            }
+            if character == "\"" || character == "'" {
+                quote = character
+                hasWord = true
+            } else if character.isWhitespace {
+                if hasWord { words.append(current) }
+                current = ""
+                hasWord = false
+            } else {
+                current.append(character)
+                hasWord = true
+            }
+        }
+        if hasWord { words.append(current) }
+        return words
+    }
+
+    /// The command as one line (for the pane), quoting words with spaces or quotes.
+    public var commandLine: String {
+        command.map { word in
+            word.isEmpty || word.contains(where: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "\\" })
+                ? "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" : word
+        }.joined(separator: " ")
     }
 }
 

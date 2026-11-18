@@ -2,6 +2,7 @@ import BelloCore
 import ContainerKit
 import Foundation
 import Observation
+import OpenCodeKit
 import os
 
 /// Where containerised execution plugs into the app (docs/features/containers.md). Set by the app for the bundled
@@ -60,6 +61,8 @@ public final class ProjectEnvironment {
     public internal(set) var lastError: String?
     /// File-watch bridge counters (Environment pane, measurements).
     public internal(set) var bridgeStats: FileEventBridge.Stats?
+    /// The project's MCP servers as opencode reports them for its location (Environment pane).
+    public internal(set) var mcpStatus: [MCPServerStatus] = []
     /// The project's opencode ID (names opencode's worktree folder).
     @ObservationIgnored var projectID: ProjectID?
     @ObservationIgnored var extraWorktrees: [String] = []
@@ -100,8 +103,10 @@ public final class EnvironmentService {
 
     @ObservationIgnored let configuration: ContainerConfiguration?
     @ObservationIgnored private let store: ProjectionStore
-    @ObservationIgnored private var models: [String: ProjectEnvironment] = [:]
-    @ObservationIgnored private let tasks = TaskBox()
+    @ObservationIgnored var models: [String: ProjectEnvironment] = [:]
+    @ObservationIgnored let tasks = TaskBox()
+    /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
+    @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var forwarders: [String: [Int: PortForwarder]] = [:]
     @ObservationIgnored private var bridges: [String: FileEventBridge] = [:]
@@ -267,6 +272,7 @@ public final class EnvironmentService {
         refreshImageAndPhase(model, recreate: true)
         restartBridge(model)
         scheduleConfigWrite()
+        if model.phase == .ready { syncMCPServers(model) }
     }
 
     private func persist(_ model: ProjectEnvironment) async {
@@ -417,7 +423,13 @@ public final class EnvironmentService {
                     model.phase = status.containerID == nil ? .idle : .ready
                 default: model.phase = .idle
                 }
-                if model.phase == .ready { self.restartBridge(model) } else { self.bridges.removeValue(forKey: model.directory)?.stop() }
+                if model.phase == .ready {
+                    self.restartBridge(model)
+                    // Idempotent and cheap without servers; reconnects servers an idle stop or recreate ended.
+                    self.syncMCPServers(model)
+                } else {
+                    self.bridges.removeValue(forKey: model.directory)?.stop()
+                }
                 self.scheduleConfigWrite()
             } catch {
                 guard let self, self.generations[model.directory] == generation else { return }
@@ -472,6 +484,7 @@ public final class EnvironmentService {
                 await self.persist(model)
                 self.restartBridge(model)
                 self.scheduleConfigWrite()
+                self.syncMCPServers(model)
             } catch {
                 guard let self, self.generations[model.directory] == generation else { return }
                 if case WorkspaceError.unmountable(let paths) = error { model.phase = .unmountable(paths) } else {
