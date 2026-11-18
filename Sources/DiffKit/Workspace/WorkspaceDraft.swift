@@ -121,11 +121,16 @@ public final class WorkspaceDraft {
 
     /// Local mode: switches the main checkout to `branch` (git refuses when that would overwrite changes), or creates
     /// it from the current HEAD.
+    /// Throws `GitSwitchError.localChanges` when local changes are in the way (the picker offers Stash and Switch).
     public func switchLocalBranch(to branch: String, create: Bool) async throws {
-        let repository = repository.repository
-        _ = try await repository.git(create ? ["switch", "-c", branch] : ["switch", branch])
-        self.repository.refresh()
-        self.repository.loadBranches(force: true)
+        try await repository.switchBranch(branch, create: create)
+    }
+
+    /// Git parity: stashes local changes (untracked included), switches, and remembers the stash for the branch left
+    /// behind (Git ▸ Restore Stashed Changes).
+    public func stashAndSwitch(to branch: String, create: Bool) async throws {
+        let from = repository.status?.branch
+        if let hash = try await repository.stashAndSwitch(to: branch, create: create), let from { repository.parkStash(hash, for: from) }
     }
 
     // MARK: Prepare

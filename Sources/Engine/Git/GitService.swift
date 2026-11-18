@@ -416,6 +416,8 @@ public final class GitRepositoryModel {
     /// The running git action ("Pushing…"), nil when idle.
     public internal(set) var activity: String?
     public internal(set) var remotes: [GitRemote] = []
+    /// Stashes made by "Stash and Switch", by the branch they came from (in memory; the stash itself stays in git).
+    public internal(set) var parkedStashes: [String: String] = [:]
 
     isolated deinit {
         refreshTask?.cancel()
