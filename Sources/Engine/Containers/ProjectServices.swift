@@ -168,6 +168,9 @@ extension EnvironmentService {
 
     /// The project's service network when it declares services (the workspace joins it).
     func serviceNetwork(_ model: ProjectEnvironment) -> String? {
+        // BelloCode's own services belong to a project container; elsewhere the project's compose runs through the
+        // filtered Docker endpoint instead.
+        guard mode(for: model) == .projectContainer else { return nil }
         guard let parse = model.servicesParse, !parse.services.isEmpty else { return nil }
         return ServiceLabels.networkName(projectKey: model.projectKey, offline: model.settings.network == .none)
     }
@@ -175,7 +178,7 @@ extension EnvironmentService {
     /// Starts (or updates) the project's services: pulls missing images under the image policy, then starts them in
     /// dependency order. Owned by the service; a newer start replaces an older one.
     func startServices(_ model: ProjectEnvironment) {
-        guard isEnabled, runtime?.isReady == true, policyBlock(model) == nil else { return }
+        guard isEnabled, runtime?.isReady == true, policyBlock(model) == nil, mode(for: model) == .projectContainer else { return }
         loadServices(model)
         let specs = serviceSpecs(model)
         guard !specs.isEmpty || model.services.contains(where: { $0.containerID != nil }) else { return }

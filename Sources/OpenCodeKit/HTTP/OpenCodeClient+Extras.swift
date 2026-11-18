@@ -65,3 +65,20 @@ extension OpenCodeClient {
         try await sendIgnoringBody("session.shell", request)
     }
 }
+
+struct GenerateTextBody: Encodable, Sendable {
+    var prompt: String
+    var model: ModelRef?
+}
+
+extension OpenCodeClient {
+    /// `POST /api/experimental/generate/text` (generate.text): one stateless generation with the server's base
+    /// configuration (no session, no history, no tools; nothing is stored). Verified on 2.3.0: it creates no session.
+    /// BelloCode Auto's reviewer (docs/features/auto-mode.md). Cancelling the calling task cancels the request.
+    public func generateText(prompt: String, model: ModelRef?, timeout: Duration? = nil) async throws -> String {
+        let request = try makeRequest(
+            .post, ["api", "experimental", "generate", "text"], body: GenerateTextBody(prompt: prompt, model: model),
+            timeout: timeout)
+        return try await send("generate.text", request, as: GenerateResponse.self).data.text
+    }
+}

@@ -1,0 +1,63 @@
+# Company CA in the containerised Chromium (2026-11-18T20:46:05Z)
+## before: no CA mounted
+browse navigate https://fixture-tls:8443/ -> Navigation failed: net::ERR_CERT_AUTHORITY_INVALID
+## docker stop with the TERM trap: 139 ms
+## recreated with the CA PEM mounted read-only at /etc/bellocode/ca (volume subpath 'trust')
+not connected after 90 s
+20:46:05.951 ca imported acme-test-ca.pem
+20:46:06.017 pairing: already paired
+
+Certificate Nickname                                         Trust Attributes
+                                                             SSL,S/MIME,JAR/XPI
+
+bellocode-acme-test-ca.pem                                   C,,  
+browse is installed but not paired. Run `browse install` again: it pairs the browser when it can open it, or prints a code to enter in browse's Options (`browse pair` prints one too).
+
+## image rebuilt (new packing key => new extension ID): the startup check re-paired by itself
+20:47:50.912 ca imported acme-test-ca.pem
+20:47:50.964 display ready +72ms
+20:47:50.976 relay ready +83ms
+20:47:55.516 pairing: one-time code handed to the extension's setup page +4624ms
+20:47:55.630 extension connected +4738ms
+## with the CA imported:
+{
+  "url": "https://fixture-tls:8443/",
+  "navigated": true,
+  "from": "about:blank",
+  "title": "internal TLS ok",
+  "status": 200,
+  "tab": 1425768500
+}
+
+# Downloads: agent clicks 'Download report' on the fixture
+browse: --selector needs a value; see `browse click --help`
+
+total 8
+drwxr-xr-x 2 browser browser 4096 Nov 18 19:47 .
+drwxr-xr-x 5 browser browser 4096 Nov 18 19:47 ..
+cat: /data/downloads/report.txt: No such file or directory
+browse: unexpected argument "1425768502"; see `browse click --help`
+
+total 8
+drwxr-xr-x 2 browser browser 4096 Nov 18 19:47 .
+drwxr-xr-x 5 browser browser 4096 Nov 18 19:47 ..
+content: cat: /data/downloads/report.txt: No such file or directory
+Unknown command or tool: files. Run `browse --help`.
+$ browse click --tab 1425768503 --selector a[download]
+browse: --selector needs a value; see `browse click --help`
+
+total 8
+drwxr-xr-x 2 browser browser 4096 Nov 18 19:47 .
+drwxr-xr-x 5 browser browser 4096 Nov 18 19:47 ..
+content: cat: /data/downloads/report.txt: No such file or directory
+$ browse click --json {tab, selector: a[download]}
+{
+  "clicked": "link \"Download report\" (a[download])",
+  "url": "http://fixture:8080/index.html"
+}
+
+total 12
+drwxr-xr-x 2 browser browser 4096 Nov 18 20:48 .
+drwxr-xr-x 5 browser browser 4096 Nov 18 19:47 ..
+-rw-r--r-- 1 browser browser   20 Nov 18 20:48 report.txt
+content: G7 download fixture

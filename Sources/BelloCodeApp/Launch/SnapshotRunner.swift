@@ -32,6 +32,7 @@ struct SnapshotRunner {
     func run() async -> Bool {
         if name == "nav" { return await runNavigation() }
         if name == "orch" { return await runOrchestration() }
+        if name == "auto" { return await runAuto() }
         if name == "extras" { return await runExtras() }
         if name == "secrets" { return await runSecrets() }
         if name == "gitlab" { return await runGitLab() }

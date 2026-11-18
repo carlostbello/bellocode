@@ -34,7 +34,7 @@ struct SecretCommandApprovalTests {
             configuration.wallClock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
             configuration.containers = ContainerConfiguration(
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
-                execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault())
+                execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()).projectContainerDefault()
             let engine = try Engine(configuration: configuration)
             await engine.start()
             try await waitUntil("live") { engine.root.connection == .live }

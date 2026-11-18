@@ -1,3 +1,4 @@
+import BelloCore
 import Foundation
 import Testing
 @testable import MockOpenCode
@@ -48,7 +49,7 @@ struct RouteTests {
     @Test func serverInfoShape() async throws {
         try await withServer { _, client in
             let info = try await client.get("/api/info")
-            #expect(info["version"] == "2.3.0")
+            #expect(info["version"]?.stringValue == OpenCodePin.current)
             #expect(info["pid"]?.intValue != nil)
             #expect(info["urls"]?[0]?.stringValue == client.endpoint.url.absoluteString)
             #expect(info["capabilities"]?["persistentPty"] == true)

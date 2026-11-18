@@ -160,6 +160,7 @@ final class AppRuntime {
             helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
             runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
         configuration.gitShim = execution.gitShimDirectory?.appending(path: "git")
+        configuration.dockerEndpoint = true
         configuration.mcpLogDirectory = server.dataRoot.appending(path: "mcp-logs", directoryHint: .isDirectory)
         configuration.opencodeConfigDirectory = server.configDirectory
         configuration.certificateDirectory = certificateDirectory(dataRoot: server.dataRoot)
@@ -273,6 +274,12 @@ final class AppRuntime {
     func issueMockBrowserCommand(_ sessionID: SessionID, _ action: OpenCodeKit.JSONValue) async -> MockBrowserOutcome? {
         guard let mockServer, let data = try? action.encodedData(), let value = try? MockOpenCode.JSONValue.parse(data) else { return nil }
         return await mockServer.issueBrowserCommand(sessionID: sessionID.rawValue, action: value)
+    }
+
+    /// Mock mode: sets a session metadata key (the plugin's interrupt record in Auto snapshots).
+    func setMockSessionMetadata(_ sessionID: SessionID, key: String, json: String) async {
+        guard let mockServer, let value = try? MockOpenCode.JSONValue.parse(Data(json.utf8)) else { return }
+        await mockServer.setSessionMetadataKey(sessionID.rawValue, key, value)
     }
 
     /// Mock mode: children report to their parent and wake it, as opencode does (orchestration snapshots).

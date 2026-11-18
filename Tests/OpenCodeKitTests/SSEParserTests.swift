@@ -162,8 +162,9 @@ struct SSEParserTests {
         let sample = Array(try Repo.eventsSample)
         var whole = SSEParser()
         let expected = try whole.feed(sample)
-        #expect(expected.count == 50)
-        #expect(whole.commentCount == 30)  // heartbeats
+        let counts = Repo.naiveCounts(Data(sample))
+        #expect(expected.count == counts.frames && counts.frames > 0)
+        #expect(whole.commentCount == counts.comments)  // heartbeats
 
         var byteAtATime = SSEParser()
         var events: [SSEEvent] = []

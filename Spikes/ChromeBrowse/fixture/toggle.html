@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>G7 latency</title>
+<style>html,body{margin:0;height:100%;background:#000}textarea{position:fixed;right:8px;bottom:8px;width:240px;height:40px}</style></head>
+<body>
+<textarea id="t" aria-label="clipboard target"></textarea>
+<script>
+// Every key press or click flips the whole page between black and white: what the live-view harness looks for.
+let on = false;
+const flip = () => { on = !on; document.body.style.background = on ? '#fff' : '#000'; };
+addEventListener('keydown', e => { if (document.activeElement !== document.getElementById('t')) { e.preventDefault(); flip(); } });
+addEventListener('mousedown', e => { if (e.target.id !== 't') flip(); });
+</script></body></html>

@@ -74,6 +74,10 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     public var serviceNetwork: String?
     /// Package-manager caches (`PackageCache`), each a named volume at its path; project-scoped unless shared.
     public var cacheMounts: [CacheMount]?
+    /// Set for the shared workspace (`ExecutionMode.sharedWorkspace`): its identity instead of `projectRoot`, so one
+    /// container (and home volume) serves every project under the code roots. `projectRoot` is then the first code
+    /// root and `extraMounts` the other roots and the worktree folders.
+    public var sharedKeySeed: String?
     /// Enterprise certificates and proxy variables (Corporate network).
     public var corporateNetwork: CorporateNetwork?
     /// The project's service names (added to `NO_PROXY`).
@@ -107,6 +111,24 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     public static let labelConfig = "app.bellocode.config"
     public static let labelMountIdentity = "app.bellocode.mounts"
     public static let labelImage = "app.bellocode.image"
+    /// Marks the shared workspace (one per developer).
+    public static let labelShared = "app.bellocode.shared"
+    /// The key seed of the shared workspace (one per developer on this Mac).
+    public static let sharedSeed = "shared-workspace"
+
+    /// The shared workspace for a set of roots (first root is the working directory by default).
+    public static func shared(roots: [String], extraMounts: [String] = [], image: String, resources: ResourceLimits = .standard,
+                              environment: [String: String] = [:], extraLabels: [String: String] = [:]) -> WorkspaceSpec {
+        var spec = WorkspaceSpec(projectRoot: roots.first ?? "/", extraMounts: Array(roots.dropFirst()) + extraMounts, image: image,
+                                 resources: resources, environment: environment, extraLabels: extraLabels)
+        spec.sharedKeySeed = sharedSeed
+        return spec
+    }
+
+    public var isShared: Bool { sharedKeySeed != nil }
+    /// The container name of the shared workspace.
+    public static var sharedContainerName: String { "bellocode-ws-\(projectKey(for: sharedSeed))" }
+    public static var sharedProjectKey: String { projectKey(for: sharedSeed) }
 
     /// Every host folder mounted at the same path (project first).
     public var mountedRoots: [String] { [projectRoot] + extraMounts + userMounts.map(\.path) }
@@ -135,20 +157,21 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     }
 
     /// Stable short identity of the project: names the container and its volumes.
-    public var projectKey: String { Self.projectKey(for: projectRoot) }
+    public var projectKey: String { Self.projectKey(for: sharedKeySeed ?? projectRoot) }
 
     public static func projectKey(for projectRoot: String) -> String {
         let digest = SHA256.hash(data: Data(projectRoot.utf8))
         return digest.map { String(format: "%02x", $0) }.joined().prefix(12).description
     }
 
-    public var containerName: String { Self.containerName(for: projectRoot) }
+    public var containerName: String { "bellocode-ws-\(projectKey)" }
     public static func containerName(for projectRoot: String) -> String { "bellocode-ws-\(projectKey(for: projectRoot))" }
     public func volumeName(_ cache: String) -> String { "bellocode-\(projectKey)-\(cache)" }
 
     public var labels: [String: String] {
-        [Self.labelWorkspace: "1", Self.labelProject: projectRoot, Self.labelProjectKey: projectKey, Self.labelImage: image]
-            .merging(extraLabels) { a, _ in a }
+        var labels = [Self.labelWorkspace: "1", Self.labelProject: projectRoot, Self.labelProjectKey: projectKey, Self.labelImage: image]
+        if isShared { labels[Self.labelShared] = "1" }
+        return labels.merging(extraLabels) { a, _ in a }
     }
 
     /// The create body, without the config and mount-identity labels.

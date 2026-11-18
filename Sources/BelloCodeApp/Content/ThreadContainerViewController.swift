@@ -20,6 +20,8 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var composer: NSViewController?
     private(set) var requestStack: NSViewController?
     private(set) var statusBanner: StatusUnknownBanner?
+    private(set) var interruptedBanner: InterruptedBanner?
+    private(set) var riskNoticeBanner: RiskNoticeBanner?
     /// Commands cannot run in this project's container (M6-A, docs/features/containers.md).
     private(set) var environmentBanner: EnvironmentBannerHost?
     private(set) var queuedPrompts: QueuedPromptsView?
@@ -133,6 +135,8 @@ final class ThreadContainerViewController: NSViewController {
         composer = nil
         requestStack = nil
         statusBanner = nil
+        interruptedBanner = nil
+        riskNoticeBanner = nil
         environmentBanner = nil
         queuedPrompts = nil
         unconfirmedSends = nil
@@ -183,7 +187,15 @@ final class ThreadContainerViewController: NSViewController {
             let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })
             environmentBanner = environment
             environmentView = environment
-            let attached = AttachedTrayView(rows: [unknown, unconfirmed, queued])
+            let interrupted = InterruptedBanner(thread: thread)
+            interruptedBanner = interrupted
+            var rows: [NSView] = [unknown, interrupted]
+            if let auto = workspace.engine.auto {
+                let notices = RiskNoticeBanner(thread: thread, auto: auto)
+                riskNoticeBanner = notices
+                rows.append(notices)
+            }
+            let attached = AttachedTrayView(rows: rows + [unconfirmed, queued])
             attachedTray = attached
             tray = attached
         } else {
@@ -237,6 +249,7 @@ final class ThreadContainerViewController: NSViewController {
         // Observed reads: the same state the tray's rows show themselves for.
         let hasTray: Bool = if let thread = context?.thread {
             !thread.queue.isEmpty || !thread.unconfirmedSends.isEmpty || (statusBanner?.isShowing ?? false)
+                || (interruptedBanner?.isShowing ?? false) || (riskNoticeBanner?.isShowing ?? false)
         } else { false }
         attachedTray?.render(visible: hasTray)
         trayToRequests.constant = hasTray ? -overlap : 0

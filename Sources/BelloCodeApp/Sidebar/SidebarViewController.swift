@@ -261,6 +261,10 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
         }
         let filter = workspace.filterText.trimmingCharacters(in: .whitespaces)
         var attention = root.attention.items.map(\.sessionID).filter { !hidden.contains($0) }
+        // Full-access risk notices to review (docs/features/auto-mode.md): after the blocking items, never counted as
+        // approvals; the row says "Review".
+        let blocking = Set(attention)
+        attention += (workspace.engine.auto?.threadsToReview ?? []).filter { !blocking.contains($0) && !hidden.contains($0) }
         if !filter.isEmpty {
             let names = Dictionary(root.projects.map { ($0.directory, $0.name) }, uniquingKeysWith: { a, _ in a })
             projects = SidebarFilter.apply(

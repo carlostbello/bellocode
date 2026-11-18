@@ -140,6 +140,8 @@ let targets: [Target] =
             name: "BrowserDemo",
             dependencies: ["BrowserKit", "Engine", "OpenCodeKit", "MockOpenCode", "BelloCore", "DesignSystem"],
             swiftSettings: swiftSettings),
+        // Spike G7: noVNC live view of the containerised Chromium in a WKWebView (docs/spikes/G7-chrome-browse-container.md).
+        .executableTarget(name: "ChromeLiveViewDemo", swiftSettings: swiftSettings),
     ]
     + [
         // Window shell logic (sidebar tree, commands, restoration, undo, switch timing). `@testable import BelloCodeApp`.

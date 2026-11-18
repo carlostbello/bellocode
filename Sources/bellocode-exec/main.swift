@@ -102,6 +102,41 @@ guard let (workspace, cwd) = resolveWorkspace() else {
 }
 if let blocked = workspace.blocked { fail(125, blocked.message) }
 
+// "Host shell, docker only": one plain docker command runs on the Mac, by absolute path, with BelloCode's filtered
+// endpoint; anything else is refused (HostDockerCommand). The helper replaces itself with docker (no shell).
+if workspace.mode == .hostDocker {
+    guard let docker = workspace.docker, let binary = docker.binary, binary.hasPrefix("/"),
+          FileManager.default.isExecutableFile(atPath: binary) else {
+        fail(125, "this project runs in “Host shell, docker only” mode, but Rancher Desktop's docker (~/.rd/bin/docker) or BelloCode's filtered Docker endpoint is not available. Start Rancher Desktop, or switch the project to the shared workspace.")
+    }
+    let hostArgv: [String]
+    do {
+        if let command {
+            hostArgv = try HostDockerCommand.argv(for: command, docker: binary)
+        } else if let stdioArgv, let program = stdioArgv.first, program == "docker" || program == binary {
+            try HostDockerCommand.check(arguments: Array(stdioArgv.dropFirst()))
+            hostArgv = [binary] + stdioArgv.dropFirst()
+        } else if let stdioArgv {
+            throw HostDockerCommand.Refusal.notDocker(stdioArgv.first ?? "")
+        } else if serviceName != nil {
+            fail(126, "service shells are not available in “Host shell, docker only” mode. Use docker compose exec SERVICE sh, or switch the project to the shared workspace.")
+        } else {
+            fail(126, "terminals are not available in “Host shell, docker only” mode (a shell on this Mac is not allowed). Run docker commands one at a time, or switch the project to the shared workspace in Project Settings ▸ Environment.")
+        }
+    } catch let refusal as HostDockerCommand.Refusal {
+        fail(126, refusal.description)
+    } catch {
+        fail(126, "the command could not be checked.")
+    }
+    var hostEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": environment["LANG"] ?? "en_US.UTF-8"]
+    if let term = environment["TERM"] { hostEnvironment["TERM"] = term }
+    hostEnvironment.merge(docker.environment) { _, new in new }
+    let cArgs = hostArgv.map { strdup($0) } + [nil]
+    let cEnv = hostEnvironment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    execve(binary, cArgs, cEnv)
+    fail(125, "could not start docker (\(String(cString: strerror(errno)))).")
+}
+
 // `--service NAME`: an interactive shell in one of the project's service containers (as the image's user), never the
 // workspace's; only services the app lists for the project.
 if let serviceName, !(workspace.services ?? []).contains(serviceName) {
@@ -116,7 +151,7 @@ let targetDirectory: String? = serviceName == nil ? cwd : nil
 let client = EngineClient(socketPath: config.socket)
 // A relayed program is never given a terminal, whatever stdin is: its bytes must pass unchanged.
 let interactive = stdioArgv == nil && isatty(STDIN_FILENO) == 1
-let forwarded = ExecHelperConfig.forwardedEnvironment(environment)
+let forwarded = ExecHelperConfig.forwardedEnvironment(environment).merging(workspace.docker?.environment ?? [:]) { _, new in new }
 let token = UUID().uuidString.prefix(12).lowercased()
 
 func windowSize() -> (rows: Int, cols: Int)? {

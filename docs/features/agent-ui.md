@@ -37,11 +37,13 @@ Mapping (`PermissionModeRules.rules(for:agentRules:)`): mode rules, then the age
 | --- | --- | --- | --- | --- | --- |
 | Ask (`edit,shell,external_directory: ask`) / build | allow | ask | ask | ask | ask |
 | Auto-edit (`edit: allow`, others ask) / build | allow | ask | allow | ask | ask |
+| Auto (`bellocode_auto` marker, `* *: ask`) / build | policy | asks (mandatory) | policy/reviewer | policy/reviewer | asks (mandatory) |
 | Full access (`* *: allow`) / build | allow | allow | allow | allow | allow |
 | Any mode / plan (`+ edit *: deny, edit ~/.opencode/plan/*: allow`) | as above | as above | **deny** | as above | as above |
 | No rules (opencode default) / build | allow | ask | allow | allow | allow |
 
-So `*` does grant full access, including `.env` reads. `setAgent` rewrites the rules for the new agent. Children copy
+So `*` does grant full access, including `.env` reads. Auto (docs/features/auto-mode.md): every request asks and
+BelloCode's policy answers it; the plugin's `permission.evaluate` hook keeps saved grants from skipping it. `setAgent` rewrites the rules for the new agent. Children copy
 the parent's rules at creation. "Always" saves a rule per **project** (every thread, survives restarts;
 `GET /api/permission/saved?projectID=`; without `projectID` the list is empty). A cold location answers 404 for
 `agent.get` and `connect/key`; the Engine retries the agent lookup.

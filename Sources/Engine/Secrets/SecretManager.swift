@@ -534,19 +534,18 @@ extension SecretManager {
         guard let environments, let configuration else { return }
         let directory = Self.certificateDirectory(configuration)
         environments.egress = EgressHooks(
-            attachment: { [weak self] model in
+            attachment: { [weak self] scopeKey, services in
                 guard let self else { return nil }
-                return self.attachment(for: model, certificates: directory)
+                return self.attachment(scopeKey: scopeKey, services: services, certificates: directory)
             },
             preflight: { [weak self] spec in try await self?.preflight(spec) },
             servicesStarted: { [weak self] model in self?.attachServices(model) })
         environments.scheduleConfigWrite()
     }
 
-    func attachment(for model: ProjectEnvironment, certificates: URL) -> (EgressAttachment, CorporateNetwork?) {
+    func attachment(scopeKey: String, services: [String], certificates: URL) -> (EgressAttachment, CorporateNetwork?) {
         let fingerprint = authorityFingerprint ?? "unavailable"
-        let services = model.services.map(\.name).sorted()
-        let attachment = EgressAttachment(network: EgressGateway.networkName(model.projectKey), caFingerprint: fingerprint, noProxy: services)
+        let attachment = EgressAttachment(network: EgressGateway.networkName(scopeKey), caFingerprint: fingerprint, noProxy: services)
         var corporate = environments?.network.corporate ?? CorporateNetwork()
         corporate.certificateDirectory = certificates.path
         corporate.certificateFingerprint = SHA256Hex.of((corporate.certificateFingerprint ?? "") + fingerprint)

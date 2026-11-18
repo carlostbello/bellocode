@@ -54,7 +54,7 @@ public enum ExtrasTools {
         "destination": string("new_thread (default: a new thread per run in this project), this_thread, or a thread ID of this project."),
         "agent": string("Agent for new threads (default: build)."),
         "model": string("\"providerID/modelID\" for new threads."),
-        "permissionMode": string("ask, autoEdit or fullAccess; never broader than this thread's own mode."),
+        "permissionMode": string("ask, autoEdit, auto or fullAccess; never broader than this thread's own mode."),
         "catchUp": boolean("If missed while BelloCode was quit, run once at the next launch (default true)."),
     ]
 

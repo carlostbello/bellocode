@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import BelloCore
 import Engine
 import Foundation
 @testable import SwiftTerm
@@ -11,17 +12,9 @@ enum DemoPaths {
     static let snapshots = root.appending(path: "build/snapshots")
     static let reports = root.appending(path: "build/terminal")
 
-    static var opencode: URL? {
-        let version = (try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "2.3.0"
-        let url = root.appending(path: "Vendor/opencode/\(version)/opencode")
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
-    }
+    static var opencode: URL? { OpenCodePin.vendoredBinary(root: root) }
 
-    static var pinnedVersion: String? {
-        (try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    static var pinnedVersion: String? { OpenCodePin.repositoryVersion(root: root) }
 }
 
 /// A window that reports itself key, so focus rendering appears even though the demo never activates.

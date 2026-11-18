@@ -40,7 +40,7 @@ extension MockOpenCodeServer {
             "readMaxChars": 12000,
         ]
         let output: JSONValue = [
-            "contract": 1, "plugin": "bellocode", "location": directory.map(JSONValue.string) ?? .null, "limits": limits,
+            "contract": 2, "plugin": "bellocode", "location": directory.map(JSONValue.string) ?? .null, "limits": limits,
             "tools": .array(Self.orchestrationTools.map(JSONValue.string)),
         ]
         return .response(.json(["output": output]))

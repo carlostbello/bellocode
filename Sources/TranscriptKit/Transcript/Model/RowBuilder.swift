@@ -145,6 +145,9 @@ public enum RowBuilder {
                             .tool(
                                 toolItem(call, partID: part.id), messageID: message.id, turnID: turnID, revision: revision,
                                 created: message.created))
+                        if let note = riskNote(call) ?? interruptNote(call) {
+                            result.append(row(.risk(part.id), .system, .lifecycle(note)))
+                        }
                     }
                 case .subagent(let reference):
                     result.append(row(.part(part.id), .assistant, .subagent(subagentCard(reference))))
@@ -334,6 +337,12 @@ public enum RowBuilder {
     static func belloCodeWake(_ text: String) -> String? {
         guard text.hasPrefix("[BelloCode ") else { return nil }
         let first = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
+        // Attributed interrupts (docs/features/auto-mode.md): the stopped thread's note and the person's Resume.
+        if first.hasPrefix("[BelloCode interrupt] ") {
+            let rest = first.dropFirst("[BelloCode interrupt] ".count)
+            return "Interrupted: " + (rest.count > 220 ? rest.prefix(219) + "…" : rest)
+        }
+        if first.hasPrefix("[BelloCode resume] ") { return "Resumed by you after an interrupt" }
         if first.hasPrefix("[BelloCode MR watch] ") {
             let rest = first.dropFirst("[BelloCode MR watch] ".count)
             return "↻ MR watch woke this thread: " + (rest.count > 200 ? rest.prefix(199) + "…" : rest)
@@ -346,6 +355,51 @@ public enum RowBuilder {
             return "Secret request: " + (rest.count > 200 ? String(rest.prefix(199)) + "…" : rest)
         }
         return nil
+    }
+
+    // MARK: Auto and risk (docs/features/auto-mode.md)
+
+    /// Reason codes of routine approvals that get no chip (the audit log still lists them).
+    static let quietApprovals: Set<String> = ["in_project_read", "todowrite", "todoread", "question", "skill", "subagent", "app_tool"]
+
+    /// The notice under a tool call: Full-access risk findings (attempted vs completed), else a non-routine Auto
+    /// approval. nil when there is nothing to say.
+    static func riskNote(_ call: ToolCall) -> LifecycleContent? {
+        if let risk = call.risk, let first = risk.notices.first {
+            let stage: String =
+                switch call.status {
+                case .completed: "completed"
+                case .failed: "attempted, failed"
+                default: "attempted"
+                }
+            let more = risk.notices.count > 1 ? " (+\(risk.notices.count - 1) more)" : ""
+            return LifecycleContent(kind: .risk, text: "\(first.noticeText)\(more) · \(stage) · best effort")
+        }
+        if let approval = call.risk?.autoApproval, !(approval.source == .policy && quietApprovals.contains(approval.reasonCode)) {
+            let by: String =
+                switch approval.source {
+                case .reviewer: approval.model.map { "reviewer \($0)" } ?? "reviewer"
+                case .savedGrant: "your saved scope"
+                case .policy: "policy"
+                case .person: "you"
+                }
+            return LifecycleContent(kind: .autoApproved, text: "Auto-approved · \(approval.explanation) · \(by)")
+        }
+        return nil
+    }
+
+    /// The interrupting thread's own note for `thread_interrupt` (the stopped thread gets "[BelloCode interrupt]").
+    static func interruptNote(_ call: ToolCall) -> LifecycleContent? {
+        guard call.name == "thread_interrupt", call.status == .completed,
+            let data = call.metadata?.text.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let record = object["interrupt"] as? [String: Any], let actual = record["actual"] as? String
+        else { return nil }
+        let title = (object["title"] as? String) ?? (object["threadID"] as? String) ?? "a thread"
+        if actual == "not_running" { return LifecycleContent(kind: .interruption, text: "Tried to stop “\(title)”: it was not running") }
+        let reason = (record["reason"] as? String).map { ": \($0)" } ?? ""
+        let state = actual == "stopped" ? "stopped" : actual == "still_running" ? "still stopping" : "stop failed"
+        return LifecycleContent(kind: .interruption, text: "Stopped “\(title)”\(reason) · requested stop, \(state)")
     }
 
     /// BelloCode's `html_render` app tool (`bellocode_app_html_render`) as a visual card, from the call's title and the

@@ -152,12 +152,51 @@ describe("container guidance", () => {
     expect(C.workspaceFor(config, "/Users/me/application")).toBeUndefined()
   })
 
+  test("the contract describes the shared workspace, code roots and the filtered Docker endpoint", () => {
+    const shared: C.ExecConfig = {
+      trustedRoots: ["/Users/me/Documents/Repos"],
+      workspaces: [
+        {
+          roots: ["/Users/me/Documents/Repos", "/Users/me/.bellocode/worktrees"],
+          container: "bellocode-ws-shared",
+          user: "501:20",
+          image: "registry.corp/base:1",
+          inventory: { os: "Debian 12", arch: "aarch64", tools: ["bash", "git"] },
+          mode: "shared",
+          docker: { host: "tcp://host.docker.internal:1234/bcTOKEN" },
+        },
+      ],
+    }
+    const text = C.containerGuidance(shared, "/Users/me/Documents/Repos/api")
+    expect(text).toContain("shared Linux workspace")
+    expect(text).toContain("/Users/me/Documents/Repos")
+    expect(text).toContain("multi-repo")
+    expect(text).toContain("working directory is the thread's project (/Users/me/Documents/Repos/api)")
+    expect(text).toContain("aarch64 Linux")
+    expect(text).toContain("user 501:20")
+    expect(text).toContain("filtered Docker endpoint")
+    expect(text).toContain("bind mounts only inside the code roots")
+    expect(text).toContain("company's certificate authority")
+    expect(text).toContain("Never fall back")
+    expect(text).not.toContain("bcTOKEN")
+  })
+
+  test("the contract for host docker-only mode says one plain docker command", () => {
+    const host: C.ExecConfig = { workspaces: [{ roots: ["/Users/me/app"], container: "", mode: "host-docker", docker: { host: "tcp://127.0.0.1:1/t", binary: "/Users/me/.rd/bin/docker" } }] }
+    const text = C.containerGuidance(host, "/Users/me/app")
+    expect(text).toContain("ONE plain `docker`")
+    expect(text).toContain("docker compose run --rm")
+    expect(text).toContain("no terminal")
+  })
+
   test("guidance names the image, tools and the rules", () => {
     const text = C.containerGuidance(config, "/Users/me/app")
     expect(text).toContain("never on the user's Mac")
     expect(text).toContain("registry.corp/dev:1")
     expect(text).toContain("bash, node")
-    expect(text).toContain("no ports are published")
+    expect(text).toContain("localhost differs on each side")
+    expect(text).toContain("hooks disabled")
+    expect(text).toContain("Docker is not available")
     expect(text).not.toContain("BelloCode's proxy")
     const egress = { ...config, workspaces: config.workspaces.map((w) => ({ ...w, spec: { egress: { network: "bellocode-egress-x" } } })) }
     expect(C.containerGuidance(egress, "/Users/me/app")).toContain("go only through BelloCode's proxy")

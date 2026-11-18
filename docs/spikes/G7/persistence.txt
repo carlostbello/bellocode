@@ -1,0 +1,20 @@
+# Session persistence in the profile volume (2026-11-18T20:49:19Z)
+## first attempt (stop trap signalled every chromium process): cookie set, container recreated -> cookie gone
+## after the fix (TERM only to the browser process, wait for it):
+"g7session=signed-in-as-ada"
+
+docker stop: 165 ms
+20:49:20.005 chromium closed
+connected 576 ms after docker run
+## after recreating the container, same volume:
+""
+
+## on disk (Chromium on Linux without a keyring, --password-store=basic):
+## second try: same cookie, then waited; rows in Default/Cookies at +1 s, +6 s: absent; at +41 s: ('fixture-tls','g7session', persistent) -> Chromium commits cookies on its ~30 s timer, and a SIGTERM shutdown 150 ms later did not flush them
+connected 518 ms after docker run
+## after recreating the container, same volume:
+"g7session=signed-in-as-ada"
+
+## on disk in the volume:
+fixture-tls g7session prefix b'v10' 67 bytes
+decrypted with the fixed public v10 key, tail: b'\x181isigned-in-as-ada'

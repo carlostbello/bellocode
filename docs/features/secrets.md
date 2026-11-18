@@ -2,9 +2,10 @@
 
 Status: built 2026-11-18 on opencode 2.3.0 and Rancher Desktop 1.25. Research: [08 §4](../research/08-auto-mode-risk-secrets.md#4-a-value-the-agent-cannot-see).
 
-> **Database migration `v11-secret-manager`** (named distinctly; `currentVersion` 11): `app_managed_secret` (mode, scope,
+> **Database migration `v12-secret-manager`** (named distinctly; registered after develop's `v11-auto-audit`;
+> `currentVersion` 12): `app_managed_secret` (mode, scope,
 > bindings, use counts: never a value), `app_secret_placeholder` (per-thread placeholders: capabilities, not secrets),
-> `app_secret_audit` (≤ 200 rows per secret, ≤ 2,000 in all). Another branch adding an eleventh migration only needs
+> `app_secret_audit` (≤ 200 rows per secret, ≤ 2,000 in all). Another branch adding a migration only needs
 > `currentVersion` reconciled.
 
 ## Modes
@@ -156,7 +157,9 @@ Destructive: Delete confirmed; Revoke reversible (Restore). Not run: VoiceOver, 
 
 ## Known gaps
 
-Shared-workspace mode (execution modes branch) needs its spec to carry the attachment (one line at merge). Services see
+The shared workspace (execution modes) carries the attachment too (its own gateway, scoped to the code roots).
+Containers the agent starts through the filtered Docker endpoint get ordinary networking: they can reach the network
+directly, but never get a substituted value (the endpoint also refuses the gateway and egress network). Services see
 the internal network but keep their own egress (they could relay unsubstituted traffic). Clients that only speak
 HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The CA is per Mac; rotating it recreates
 containers. Response bodies above 16 MB from secret-bound destinations are refused.

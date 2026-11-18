@@ -28,6 +28,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     /// A draft's workspace choice (M2-C): local checkout, new worktree or existing worktree.
     private(set) var workspaceDraft: WorkspaceDraft?
     private var gitLoop: ObservationLoop?
+    private var modeLoop: ObservationLoop?
 
     init(context: ThreadSurfaceContext, services: AppServices) {
         self.context = context
@@ -45,6 +46,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         loop?.cancel()
         gitTask?.cancel()
         gitLoop?.cancel()
+        modeLoop?.cancel()
     }
 
     // MARK: ComposerSurface
@@ -93,6 +95,7 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         readGitContext()
         loop = ObservationLoop { [weak self] in self?.observeSettings() }
         observeGitStatus()
+        observeExecutionMode()
     }
 
     override func viewWillDisappear() {
@@ -244,6 +247,13 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     func openModelPicker() { modelPicker?.requestOpen() }
     /// Opens the permission-mode popover (menu: Permission Mode…).
     func openPermissionMode() { modeTrigger.fire() }
+    /// Sets the permission mode of the thread or the draft (Thread ▸ Set Permission Mode, ⌃⌥⌘1–4).
+    func setPermissionMode(_ mode: PermissionMode) {
+        let source: (any AgentModeSource)? = context.thread ?? draftSource
+        guard let source else { return }
+        Task { await source.setPermissionMode(mode) }
+    }
+
     /// Switches between the plan and build agents (menu: Toggle Plan Mode).
     func togglePlan() {
         let source: (any AgentModeSource)? = context.thread ?? draftSource
@@ -253,6 +263,22 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     }
 
     // MARK: Context line
+
+    /// Where commands run ("Shared workspace", "Project container", "Host docker only") with its state.
+    private func observeExecutionMode() {
+        let engine = context.engine
+        let directory = context.directory
+        modeLoop = ObservationLoop { [weak self] in
+            guard let self else { return }
+            let service = engine.environments
+            guard service.isEnabled, !directory.isEmpty, let environment = service.project(containing: directory) else {
+                self.contextLine.execution = nil
+                return
+            }
+            self.contextLine.execution = .init(symbolName: environment.mode.symbolName,
+                                               text: ThreadHeaderView.executionText(environment))
+        }
+    }
 
     private func readGitContext() {
         let directory = context.directory
@@ -276,6 +302,8 @@ final class ComposerContextLine {
     var statusText: String? { didSet { if statusText != oldValue { render() } } }
     /// The draft's chosen workspace when it is not the local checkout ("New worktree").
     var workspaceOverride: String? { didSet { if workspaceOverride != oldValue { render() } } }
+    /// Where commands run (execution mode and state).
+    var execution: ComposerContextStrip.Item? { didSet { if execution != oldValue { render() } } }
     var hint: String {
         get { strip.hint }
         set { if strip.hint != newValue { strip.hint = newValue } }
@@ -304,6 +332,7 @@ final class ComposerContextLine {
             let text = (workspaceOverride ?? git?.workspaceLabel ?? "Local checkout") + (statusText.map { " · " + $0 } ?? "")
             items.append(.init(symbolName: worktree ? "square.on.square.dashed" : "laptopcomputer", text: text))
         }
+        if let execution { items.append(execution) }
         strip.items = items
         strip.toolTip = directory
     }

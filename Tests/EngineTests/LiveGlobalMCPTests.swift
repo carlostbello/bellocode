@@ -45,7 +45,7 @@ struct LiveGlobalMCPTests {
         configuration.defaultDirectory = project.path
         var containers = ContainerConfiguration(
             helperURL: helper, execConfigURL: execConfig, opencodeDataDirectory: server.dataDirectory, runtime: LiveWorkspaceRuntime(),
-            registryVault: InMemorySecretVault())
+            registryVault: InMemorySecretVault()).projectContainerDefault()
         containers.mcpVault = InMemorySecretVault()
         containers.mcpLogDirectory = root.appending(path: "mcp-logs", directoryHint: .isDirectory)
         containers.opencodeConfigDirectory = server.configDirectory

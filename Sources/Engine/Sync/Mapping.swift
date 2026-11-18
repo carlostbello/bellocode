@@ -274,6 +274,8 @@ enum Mapping {
 
     static func queued(_ dto: InboxItem) -> QueuedPrompt? {
         guard dto.type == "user" || dto.type == "synthetic" else { return nil }
+        // The plugin's parked interrupt note is not queued work (the thread's banner shows it; it is delivered on Resume).
+        if dto.type == "synthetic", (dto.text ?? "").hasPrefix("[BelloCode interrupt]") { return nil }
         return QueuedPrompt(
             id: MessageID(dto.id), sessionID: SessionID(dto.sessionID), text: dto.text ?? "",
             delivery: PromptDelivery(rawValue: dto.delivery.rawValue) ?? .steer,
@@ -298,7 +300,7 @@ enum Mapping {
                     mode: AgentEntry.Mode(rawValue: agent.mode.rawValue) ?? .all, hidden: agent.hidden,
                     color: agent.color, model: model(agent.model))
             },
-            defaultModel: defaultModel.map { ModelSelection(providerID: $0.providerID, modelID: $0.modelID) },
+            defaultModel: defaultModel.map { ModelSelection(providerID: $0.providerID, modelID: $0.id) },
             fetched: fetched)
     }
 
@@ -314,7 +316,8 @@ enum Mapping {
             }
         }
         return ModelEntry(
-            providerID: dto.providerID, modelID: dto.modelID, name: dto.name, family: dto.family,
+            // The entry ID, which model refs name (`ModelInfo.id`); the API `modelID` is shared by tiers of one model.
+            providerID: dto.providerID, modelID: dto.id, name: dto.name, family: dto.family,
             contextLimit: dto.limit.context, outputLimit: dto.limit.output, variants: dto.variants.map(\.id),
             supportsTools: dto.capabilities.tools, inputModalities: dto.capabilities.input, status: dto.status.rawValue,
             enabled: dto.enabled, isFree: free, inputCost: baseCost(dto.cost, "input"), outputCost: baseCost(dto.cost, "output"),
@@ -355,10 +358,20 @@ public enum PermissionModeRules {
                 PermissionRule(action: "shell", resource: "*", effect: .ask),
                 PermissionRule(action: "external_directory", resource: "*", effect: .ask),
             ]
+        case .auto:
+            // The marker first (the plugin's `permission.evaluate` hook recognises Auto by it and turns saved grants'
+            // `allow` back into `ask`), then everything asks: BelloCode's policy answers each request `once`.
+            [
+                PermissionRule(action: autoMarker, resource: "*", effect: .ask),
+                PermissionRule(action: "*", resource: "*", effect: .ask),
+            ]
         case .fullAccess:
             [PermissionRule(action: "*", resource: "*", effect: .allow)]
         }
     }
+
+    /// The rule action that marks an Auto session (`Plugin/src/auto.ts` `AUTO_MARKER_ACTION`). No tool asserts it.
+    public static let autoMarker = "bellocode_auto"
 
     /// The session rules for `mode` with the agent's restrictions re-applied last, so a mode never loosens what the
     /// agent itself denies (plan stays read-only in every mode).

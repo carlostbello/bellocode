@@ -83,7 +83,7 @@ struct LiveContainerMCPTests {
         configuration.defaultDirectory = project.path
         configuration.containers = ContainerConfiguration(
             helperURL: helper, execConfigURL: execConfig, opencodeDataDirectory: server.dataDirectory, runtime: LiveWorkspaceRuntime(),
-            registryVault: InMemorySecretVault())
+            registryVault: InMemorySecretVault()).projectContainerDefault()
         let engine = try Engine(configuration: configuration)
         await engine.start()
         await engine.addProject(directory: project.path)

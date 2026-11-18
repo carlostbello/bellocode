@@ -5,6 +5,7 @@ import plugin from "../server.ts"
 
 export type FakeSession = {
   id: string
+  permissions?: Array<{ action: string; resource: string; effect: string }>
   parentID?: string
   projectID?: string
   title?: string
@@ -30,6 +31,12 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     worktrees: [] as any[],
     creates: [] as any[],
     lists: [] as any[],
+    synthetic: [] as any[],
+    updates: [] as any[],
+  }
+  const hooks: Record<string, Array<(event: any) => any>> = {}
+  const addHook = (name: string) => async (hook: string, fn: (event: any) => any) => {
+    ;(hooks[`${name}.${hook}`] ??= []).push(fn)
   }
   const tools: any[] = []
   let counter = 0
@@ -82,7 +89,14 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
         const found = sessions.get(input.sessionID)
         if (found) found.time = { ...found.time, idle: (found.time.busy ?? 0) + 1 }
       },
-      update: async () => undefined,
+      update: async (input: any) => {
+        calls.updates.push(input)
+        const found = sessions.get(input.sessionID)
+        if (found && input.metadata) found.metadata = structuredClone(input.metadata)
+      },
+      synthetic: async (input: any) => {
+        calls.synthetic.push(input)
+      },
       context: async () => ({ data: [] }),
       instructions: { entry: { put: async () => undefined } },
     },
@@ -96,8 +110,17 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     },
     agent: { list: async () => ({ data: [{ id: "general", mode: "subagent" }] }) },
     model: { list: async () => ({ data: [] }) },
-    permission: { assert: async () => undefined, list: async () => ({ data: [] }), reply: async () => undefined },
+    permission: {
+      assert: async (input: any) => {
+        ;(calls as any).asserts = [...((calls as any).asserts ?? []), input]
+      },
+      list: async () => ({ data: [] }),
+      reply: async () => undefined,
+      hook: addHook("permission"),
+    },
+    shell: { hook: addHook("shell") },
     tool: {
+      hook: addHook("tool"),
       transform: async (callback: any) => callback({ add: (tool: any) => tools.push(tool), list: () => [] }),
       list: async () => [],
     },
@@ -133,7 +156,12 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
       progress: async () => undefined,
     })
   }
-  return { sessions, calls, add, run, dispose }
+  /** Runs every hook registered under `name` (e.g. "permission.evaluate") on `event`, as opencode does. */
+  const fire = async (name: string, event: any) => {
+    for (const fn of hooks[name] ?? []) await fn(event)
+    return event
+  }
+  return { sessions, calls, add, run, dispose, fire, hooks }
 }
 
 export const running = { created: 1, busy: 10, idle: 5 }

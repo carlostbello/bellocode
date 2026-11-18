@@ -54,6 +54,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private(set) var agents: AgentsSurfaces?
     /// The window's "Merge Requests" tab (M3-B; MainWindowController+MergeRequests.swift).
     private(set) var mergeRequests: MergeRequestSurfaces?
+    private(set) var autoAudit: AutoAuditSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -119,6 +120,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             self?.changes?.display(context)
             self?.browser?.display(context)
             self?.agents?.display(context)
+            self?.autoAudit?.display(context)
+            self?.attachAuto(context)
             context?.onShowAgents = { [weak self] in self?.showAgentsPanel() }
             self?.attachExtras(context)
         }
@@ -139,6 +142,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         mergeRequests = surfaces.mergeRequests
         mergeRequests?.showPanel = { [weak self] in self?.showMergeRequestsPanel() }
         mergeRequests?.bind(engine: workspace.engine)
+        autoAudit = surfaces.autoAudit
+        autoAudit?.bind(engine: workspace.engine)
         wireCreateMergeRequest()
         wireStartThreadFromIssue()
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
@@ -331,6 +336,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         var context = baseCommandContext(target: target)
         context.agents = agentsCommandState()
         context.gitLab = gitLabCommandState
+        context.auto = autoCommandState()
         context.git = gitCommandState()
         return context
     }
@@ -564,6 +570,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             NSApp.sendAction(command.selector, to: nil, from: nil)
         case .pruneContainerResources:
             NSApp.sendAction(command.selector, to: nil, from: nil)
+        case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess, .showAutoAudit, .reviewRiskNotices, .resumeInterrupted:
+            performAuto(command)
         }
     }
 

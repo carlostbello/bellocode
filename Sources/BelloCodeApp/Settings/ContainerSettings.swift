@@ -275,6 +275,18 @@ struct ContainersSettingsView: View {
                 }
             }
             SettingsGroup(
+                "Execution",
+                footer: "Where commands run for projects that have not chosen. opencode and its file tools always edit files on this Mac; each project can choose its own mode in Project Settings ▸ Environment."
+            ) {
+                DefaultExecutionModeView(service: service)
+            }
+            SettingsGroup(
+                "Code roots",
+                footer: "Folders your repositories live in. The shared workspace mounts each read-write at the same path, and paths inside them count as in scope for approvals and risk notices. Never your whole home folder or a system location; each must be shared with Rancher Desktop."
+            ) {
+                CodeRootsSettingsView(service: service)
+            }
+            SettingsGroup(
                 "Default image",
                 footer: "Used by projects without their own image. There is no built-in public default: point this at your organisation's registry."
             ) {
@@ -910,6 +922,22 @@ struct EnvironmentSettingsView: View {
             EnvironmentBannerView(notice: notice, progress: { if case .pulling(let p) = environment.phase { p.fraction } else { nil } }(),
                                   fix: { fix in EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { _ in }) },
                                   retry: { Task { await service.retry(environment.directory) } })
+        }
+        SettingsGroup("Where commands run", footer: "opencode and its file tools always edit files on this Mac. This decides where the agent's commands, terminals and MCP servers run.") {
+            ExecutionModePickerView(service: service, environment: environment)
+        }
+        if environment.mode != .hostDocker {
+            SettingsGroup("Docker from the workspace", footer: "docker, docker compose and docker build inside the container reach BelloCode's filtered endpoint: only this workspace's containers, volumes and networks, bind mounts inside \(environment.mode == .sharedWorkspace ? "the code roots" : "the project"), no privileged or host access.") {
+                DockerRefusalsView(refusals: service.dockerRefusals.filter { $0.scope == environment.containerKey })
+            }
+        }
+        if environment.mode == .projectContainer, let plan = service.devContainerFile(environment.directory) {
+            SettingsGroup("Dev container", footer: "A safe subset of the Dev Container specification: image or build, environment, user, forwarded ports and post-create/start commands after review. Commands that would run on this Mac, Features, privileges and extra mounts are refused.") {
+                DevContainerSectionView(service: service, environment: environment, plan: plan)
+            }
+        }
+        if environment.mode == .sharedWorkspace {
+            SettingsNote("The shared workspace uses the default image (Settings ▸ Containers). The project's own image, services and caches below apply only in Project container mode.")
         }
         SettingsGroup("Image", footer: environment.record.inventory.map { "\($0.os) · \($0.arch) · \($0.tools.joined(separator: ", "))" }) {
             SettingsFieldRow(divided: false) {

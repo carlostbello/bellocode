@@ -249,6 +249,8 @@ public struct ToolCall: Hashable, Sendable, Codable {
     public var completed: Timestamp?
     /// The provider ran the tool itself.
     public var executedByProvider: Bool
+    /// BelloCode's risk notices and Auto approval for this call (docs/features/auto-mode.md); nil when there are none.
+    public var risk: ToolRisk? = nil
 
     public init(
         callID: String, name: String, status: ToolStatus, inputText: String = "", input: RawJSON? = nil,
