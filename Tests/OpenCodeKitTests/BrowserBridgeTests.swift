@@ -216,7 +216,7 @@ struct BrowserAttachmentTests {
         }
         try await attachment.start()
         async let outcome = harness.server.issueBrowserCommand(sessionID: harness.sessionID, action: ["type": "click", "tabID": .string(sampleTab.id), "ref": "e1"])
-        for _ in 0..<100 where await attachment.runningRequestIDs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        try await eventually(timeout: .seconds(30)) { await !attachment.runningRequestIDs.isEmpty }
         await attachment.cancelAll()
         let result = await outcome
         #expect(result.failureCode == "cancelled")
@@ -245,7 +245,7 @@ struct BrowserAttachmentTests {
         try await first.start()
         let second = harness.attachment(tabs: [sampleTab]) { _ in .success(BrowserResult(value: "second")) }
         try await second.start()
-        for _ in 0..<100 where await first.end == nil { try await Task.sleep(for: .milliseconds(10)) }
+        try await eventually(timeout: .seconds(30)) { await first.end != nil }
         #expect(await first.end == .replaced)
         #expect(await second.isAttached)
         let outcome = await harness.server.issueBrowserCommand(sessionID: harness.sessionID, action: ["type": "tabs.list"])
@@ -262,10 +262,10 @@ struct BrowserAttachmentTests {
         }
         try await attachment.start()
         async let pending = harness.server.issueBrowserCommand(sessionID: harness.sessionID, action: ["type": "tabs.list"])
-        for _ in 0..<100 where await attachment.runningRequestIDs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        try await eventually(timeout: .seconds(30)) { await !attachment.runningRequestIDs.isEmpty }
         await harness.server.closeBrowserAttachment(sessionID: harness.sessionID)
         #expect(await pending == .disconnected)
-        for _ in 0..<100 where await attachment.end == nil { try await Task.sleep(for: .milliseconds(10)) }
+        try await eventually(timeout: .seconds(30)) { await attachment.end != nil }
         #expect(await attachment.end == .closed)
         #expect(await attachment.runningRequestIDs.isEmpty, "ending cancels running work")
         await harness.stop()

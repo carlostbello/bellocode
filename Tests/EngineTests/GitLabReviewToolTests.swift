@@ -120,7 +120,7 @@ struct GitLabReviewToolTests {
         defer { Task { await fixture.stop() } }
         let session = try await fixture.thread(.fullAccess)
         await fixture.engine.extras.mergeRequests.setSettings(GitLabInstanceSettings(writesEnabled: true), for: GitLabWorld.instance.baseURL)
-        for _ in 0..<500 where await fixture.engine.core.knownSession(session)?.permissionMode != .fullAccess { await Task.yield() }
+        try await waitFor("full access", timeout: .seconds(30)) { await fixture.engine.core.knownSession(session)?.permissionMode == .fullAccess }
         // The draft-notes probe happens on the first load.
         _ = await fixture.call(GitLabTools.readReviewDiscussions, ["ref": "!42"], session)
         fixture.server.clearRequests()

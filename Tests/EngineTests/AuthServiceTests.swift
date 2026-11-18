@@ -114,7 +114,7 @@ struct AuthServiceTests {
 
         await harness.server.setOAuthBehaviour(.pending, integrationID: "openai", methodID: "chatgpt-browser")
         await service.startOAuth(integrationID: "openai", methodID: "chatgpt-browser")
-        for _ in 0..<400 where await harness.server.openAttemptCount() != 1 { try await Task.sleep(for: .milliseconds(5)) }
+        try await waitFor("the browser open", timeout: .seconds(30)) { await harness.server.openAttemptCount() >= 1 }
         #expect(await harness.server.openAttemptCount() == 1)
         await service.cancel()
         #expect(service.flow?.phase == .cancelled)

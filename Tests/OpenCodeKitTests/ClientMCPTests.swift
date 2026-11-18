@@ -105,7 +105,7 @@ struct ClientMCPTests {
 
         let (secondInbox, secondCollector) = collect(second)
         first.peerClose()
-        for _ in 0..<100 where await dialer.opened.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        try await eventually(timeout: .seconds(30)) { await dialer.opened.count >= 2 }
         #expect(await dialer.opened.count == 2)
         second.deliver(#"{"jsonrpc":"2.0","id":9,"method":"ping"}"#)
         let pong = await waitFor(secondInbox, count: 1)
