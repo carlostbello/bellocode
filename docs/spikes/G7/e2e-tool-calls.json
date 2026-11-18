@@ -1,0 +1,93 @@
+{
+ "model": "opencode/big-pickle",
+ "mcp": {
+  "location": {
+   "directory": "/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/g7-opencode-46cs0a34/work"
+  },
+  "data": [
+   {
+    "name": "browse",
+    "status": {
+     "status": "connected"
+    }
+   }
+  ]
+ },
+ "mcp_register_ms": 55,
+ "prompts": [
+  {
+   "text": "Use the browse tools (not bash). Navigate to http://fixture:8080/index.html, take a snapshot, fill the form (Full name: Ada Lovelace, Email: ada@example.com, Plan: Pro, accept the terms), click Create account, then take a screenshot and reply with the exact confirmation text shown under the form.",
+   "seconds": 34.1
+  },
+  {
+   "text": "Use the browse tools. Navigate to https://example.com in a new tab, take a snapshot and reply with the page's main heading only.",
+   "seconds": 16.4
+  }
+ ],
+ "tool_calls": [
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const r = await search({namespace: \"browse\", limit: 50}); return r.items.map(i => i.path + \" :: \" + i.description).join(\"\\n\");",
+   "result": "tools.browse.click :: Click an element (or x/y in page CSS pixels). Waits until it is visible, enabled and not moving, scrolls it into view and checks nothing covers it: a covered target fails fast naming the element on top (dismiss it, or pass force). Returns JSON: clicked, url, and what changed: navigated/title, urlChanged, dialog (the page is paused until you call dialog), newTabs, challenge/warning.\ntools.browse.console :: Opt-in capture of a tab's own console messages and uncaught errors. Off by default because it enables the CDP Runtime domain, which pages (and bot checks) can detect; stop it when done. Includes out-of-process iframes and workers, and browser log entries such as CSP vi"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const nav = await tools.browse.navigate({url: \"http://fixture:8080/index.html\"}); const snap = await tools.browse.snapshot({tab: nav.tab}); return JSON.stringify({nav, snap}, null, 2);",
+   "result": "{\n  \"nav\": {\n    \"url\": \"http://fixture:8080/index.html\",\n    \"navigated\": true,\n    \"from\": \"about:blank\",\n    \"title\": \"G7 fixture: sign up\",\n    \"status\": 200,\n    \"tab\": 1425768222\n  },\n  \"snap\": \"- heading \\\"Create your account\\\" [level=1]\\n  - textbox \\\"Full name\\\" [ref=e1]\\n  - textbox \\\"Email\\\" [ref=e2]\\n  - combobox \\\"Plan\\\" [ref=e3 selected=\\\"Free\\\" 3 options]\\n  - checkbox \\\"I accept the terms\\\" [ref=e4 unchecked]\\n  - button \\\"Create account\\\" [ref=e5]\\n  - p \\\"Download report \u00b7\\\"\\n  - link \\\"Download report\\\" [ref=e6]\\n  - textbox \\\"Paste here\\\" [ref=e7]\"\n}"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const tab = 1425768222; const filled = await tools.browse.fill({tab, fields: [\n  {ref: \"e1\", value: \"Ada Lovelace\"},\n  {ref: \"e2\", value: \"ada@example.com\"},\n  {ref: \"e4\", checked: true}\n]}); const sel = await tools.browse.select({tab, ref: \"e3\", label: \"Pro\"}); const snap2 = await tools.browse.snapshot({tab}); return JSON.stringify({filled, sel, snap2}, null, 2);",
+   "result": "Invalid arguments for tool \"browse_select\":\n- values: Missing key\n\nArguments provided:\n{\n  \"tab\": 1425768222,\n  \"ref\": \"e3\"\n}\n\nUpdate the arguments and call the tool again."
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const tab = 1425768222; const sel = await tools.browse.select({tab, ref: \"e3\", by: \"label\", values: [\"Pro\"]}); const snap2 = await tools.browse.snapshot({tab}); return JSON.stringify({sel, snap2}, null, 2);",
+   "result": "{\n  \"sel\": {\n    \"target\": \"combobox \\\"Plan\\\" (e3)\",\n    \"selected\": [\n      \"pro\"\n    ],\n    \"url\": \"http://fixture:8080/index.html\"\n  },\n  \"snap2\": \"- heading \\\"Create your account\\\" [level=1]\\n  - textbox \\\"Full name\\\" [ref=e1]\\n  - textbox \\\"Email\\\" [ref=e2]\\n  - combobox \\\"Plan\\\" [ref=e3 selected=\\\"Pro\\\" 3 options]\\n  - checkbox \\\"I accept the terms\\\" [ref=e4 checked]\\n  - button \\\"Create account\\\" [ref=e5]\\n  - p \\\"Download report \u00b7\\\"\\n  - link \\\"Download report\\\" [ref=e6]\\n  - textbox \\\"Paste here\\\" [ref=e7]\"\n}"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const tab = 1425768222; const vals = await tools.browse.eval({tab, expression: \"() => [...document.querySelectorAll('input,select')].map(e => ({name:e.name, id:e.id, type:e.type, value:e.value, checked:e.checked}))\"}); const click = await tools.browse.click({tab, ref: \"e5\"}); const snap3 = await tools.browse.snapshot({tab}); return JSON.stringify({vals, click, snap3}, null, 2);",
+   "result": "{\n  \"vals\": [\n    {\n      \"checked\": false,\n      \"id\": \"name\",\n      \"name\": \"name\",\n      \"type\": \"text\",\n      \"value\": \"Ada Lovelace\"\n    },\n    {\n      \"checked\": false,\n      \"id\": \"email\",\n      \"name\": \"email\",\n      \"type\": \"email\",\n      \"value\": \"ada@example.com\"\n    },\n    {\n      \"id\": \"plan\",\n      \"name\": \"plan\",\n      \"type\": \"select-one\",\n      \"value\": \"pro\"\n    },\n    {\n      \"checked\": true,\n      \"id\": \"terms\",\n      \"name\": \"\",\n      \"type\": \"checkbox\",\n      \"value\": \"on\"\n    }\n  ],\n  \"click\": {\n    \"clicked\": \"button \\\"Create account\\\" (e5)\",\n    \"url\": \"http://fixture:8080/index.html\"\n  },\n  \"snap3\": \"- heading \\\"Create your account\\\" [level=1]\\n  - textbox \\\"Full na"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const tab = 1425768222; const shot = await tools.browse.screenshot({tab}); const status = await tools.browse.eval({tab, expression: \"() => document.querySelector('[role=status]')?.textContent ?? [...document.querySelectorAll('p,div,span')].map(e=>e.textContent).find(t=>t.includes('Confirmation')) ?? null\"}); return JSON.stringify({shot, status}, null, 2);",
+   "result": "{\n  \"shot\": {\n    \"width\": 1279,\n    \"height\": 712,\n    \"format\": \"png\"\n  },\n  \"status\": \"\\\"Confirmation G7-PRO-12: welcome, Ada Lovelace.\\\"\"\n} [file]"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "return await tools.browse.tabs({action: \"close\", tab: 1425768222});",
+   "result": "{\"closed\":[1425768222]}"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const nav = await tools.browse.navigate({url: \"https://example.com\"}); const snap = await tools.browse.snapshot({tab: nav.tab}); const close = await tools.browse.tabs({action: \"close\", tab: nav.tab}); return JSON.stringify({nav, snap, close}, null, 2);",
+   "result": "{\n  \"nav\": {\n    \"url\": \"https://example.com/\",\n    \"navigated\": true,\n    \"from\": \"about:blank\",\n    \"title\": \"Example Domain\",\n    \"status\": 200,\n    \"tab\": 1425768224\n  },\n  \"snap\": \"- p \\\"This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.\\\"\\n- p \\\"\u0647\u0630\u0627 \u0627\u0644\u0646\u0637\u0627\u0642 \u0645\u064f\u062e\u0635\u0635 \u0644\u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0641\u064a \u0623\u0645\u062b\u0644\u0629 \u0627\u0644\u062a\u0648\u062b\u064a\u0642 \u062f\u0648\u0646 \u0627\u0644\u062d\u0627\u062c\u0629 \u0625\u0644\u0649 \u0625\u0630\u0646. \u0647\u0630\u0647 \u0644\u064a\u0633\u062a \u062e\u062f\u0645\u0629\u060c \u064a\u064f\u0631\u062c\u0649 \u062a\u062c\u0646\u0628 \u0627\u0644\u0627\u0639\u062a\u0645\u0627\u062f \u0639\u0644\u064a\u0647\u0627 \u0644\u0623\u063a\u0631\u0627\u0636 \u0627\u0644\u0627\u062e\u062a\u0628\u0627\u0631 \u0648\u0627\u0644\u0645\u0631\u0627\u0642\u0628\u0629.\\\"\\n- p \\\"\u8be5\u57df\u540d\u4ec5\u7528\u4e8e\u6587\u6863\u793a\u4f8b\uff0c\u65e0\u9700\u83b7\u5f97\u8bb8\u53ef\u3002\u8fd9\u5e76\u975e\u4e00\u9879\u670d\u52a1\uff0c\u8bf7\u52ff\u5c06\u5176\u7528\u4e8e\u6d4b\u8bd5\u548c\u76d1\u63a7\u76ee\u7684\u3002\\\"\\n- p \\\"L\u2019usage de ce domaine est r\u00e9serv\u00e9 \u00e0 des exemples de documentation, sans autorisation pr\u00e9alable. Il ne s\u2019agit pas d\u2019un service ; son utilisation \u00e0 des f"
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const nav = await tools.browse.navigate({url: \"https://example.com\"}); const snapAll = await tools.browse.snapshot({tab: nav.tab, within: \"body\"}); const h1 = await tools.browse.eval({tab: nav.tab, expression: \"() => document.querySelector('h1')?.textContent ?? null\"}); const close = await tools.browse.tabs({action: \"close\", tab: nav.tab}); return JSON.stringify({snapAll, h1, close}, null, 2);",
+   "result": "{\n  \"snapAll\": \"- p \\\"This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.\\\"\\n- p \\\"\u0647\u0630\u0627 \u0627\u0644\u0646\u0637\u0627\u0642 \u0645\u064f\u062e\u0635\u0635 \u0644\u0644\u0627\u0633\u062a\u062e\u062f\u0627\u0645 \u0641\u064a \u0623\u0645\u062b\u0644\u0629 \u0627\u0644\u062a\u0648\u062b\u064a\u0642 \u062f\u0648\u0646 \u0627\u0644\u062d\u0627\u062c\u0629 \u0625\u0644\u0649 \u0625\u0630\u0646. \u0647\u0630\u0647 \u0644\u064a\u0633\u062a \u062e\u062f\u0645\u0629\u060c \u064a\u064f\u0631\u062c\u0649 \u062a\u062c\u0646\u0628 \u0627\u0644\u0627\u0639\u062a\u0645\u0627\u062f \u0639\u0644\u064a\u0647\u0627 \u0644\u0623\u063a\u0631\u0627\u0636 \u0627\u0644\u0627\u062e\u062a\u0628\u0627\u0631 \u0648\u0627\u0644\u0645\u0631\u0627\u0642\u0628\u0629.\\\"\\n- p \\\"\u8be5\u57df\u540d\u4ec5\u7528\u4e8e\u6587\u6863\u793a\u4f8b\uff0c\u65e0\u9700\u83b7\u5f97\u8bb8\u53ef\u3002\u8fd9\u5e76\u975e\u4e00\u9879\u670d\u52a1\uff0c\u8bf7\u52ff\u5c06\u5176\u7528\u4e8e\u6d4b\u8bd5\u548c\u76d1\u63a7\u76ee\u7684\u3002\\\"\\n- p \\\"L\u2019usage de ce domaine est r\u00e9serv\u00e9 \u00e0 des exemples de documentation, sans autorisation pr\u00e9alable. Il ne s\u2019agit pas d\u2019un service ; son utilisation \u00e0 des fins de test ou de...\\\"\\n- p \\\"\u0414\u0430\u043d\u043d\u044b\u0439 \u0434\u043e\u043c\u0435\u043d \u043f\u0440\u0435\u0434\u043d\u0430\u0437\u043d\u0430\u0447\u0435\u043d \u0434\u043b\u044f \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u044f \u0432 \u043f\u0440\u0438\u043c\u0435\u0440\u0430\u0445 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0430\u0446\u0438\u0438 \u0431\u0435\u0437 \u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f \u043f\u0440\u0435\u0434\u0432\u0430\u0440\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0433\u043e \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u0438\u044f. \u042d\u0442\u043e \u043d\u0435 \u0441\u0435\u0440\u0432\u0438\u0441; "
+  },
+  {
+   "tool": "execute",
+   "status": "completed",
+   "code": "const nav = await tools.browse.navigate({url: \"https://example.com\"}); const html = await tools.browse.eval({tab: nav.tab, expression: \"() => document.documentElement.outerHTML.slice(0, 6000)\"}); const headings = await tools.browse.eval({tab: nav.tab, expression: \"() => [...document.querySelectorAll('h1,h2,h3,[role=heading]')].map(e=>({tag:e.tagName,text:e.textContent,aria:e.getAttribute('aria-level')}))\"}); const close = await tools.browse.tabs({action: \"close\", tab: nav.tab}); return JSON.stringify({headings, html, close}, null, 2);",
+   "result": "{\n  \"headings\": [],\n  \"html\": \"\\\"<html lang=\\\\\\\"en\\\\\\\"><head><meta charset=\\\\\\\"utf-8\\\\\\\"><link rel=\\\\\\\"icon\\\\\\\" href=\\\\\\\"data:,\\\\\\\"><meta name=\\\\\\\"viewport\\\\\\\" content=\\\\\\\"width=device-width,initial-scale=1\\\\\\\"><title>Example Domain</title><style>html{color-scheme:light dark;background:light-dark(#eee,#222)}body{font:16px/1.6 system-ui,sans-serif;max-width:26em;margin:auto;padding:25vh 2em 2em;text-align:center}</style></head><body><style>svg{display:block;margin:-2.75em auto 0;opacity:.55}p+p{font-size:.875em;opacity:.6}</style><svg viewBox=\\\\\\\"0,0,20,20\\\\\\\" width=\\\\\\\"44\\\\\\\" height=\\\\\\\"44\\\\\\\" fill=\\\\\\\"currentColor\\\\\\\" aria-hidden=\\\\\\\"true\\\\\\\"><path fill=\\\\\\\"none\\\\\\\" stroke=\\\\\\\"currentColor\\"
+  }
+ ],
+ "replies": [
+  "Confirmation G7-PRO-12: welcome, Ada Lovelace.\n\nI filled and submitted the form and captured a screenshot of the result. Note: the screenshot image couldn't be displayed to me in this session, so I read the exact confirmation text from the page's status element instead.",
+  "Example Domain"
+ ]
+}

@@ -58,7 +58,7 @@ try:
 
     # Project MCP server, scoped to this location (as MCPRouting does), command run through the docker CLI.
     t = time.time()
-    cfg = {"type": "local", "command": [docker, "exec", "-i", container, "browse", "mcp"],
+    cfg = {"type": "local", "command": [docker, "exec", "-i", container, "browse-mcp"],
            "environment": {"DOCKER_HOST": "unix://" + os.path.expanduser("~/.rd/docker.sock")}}
     call("PUT", f"api/experimental/mcp/browse?location[directory]={urllib.parse.quote(work)}", {"config": cfg})
     status = None
@@ -89,20 +89,24 @@ try:
         except Exception as e:
             print("wait:", e)
         record["prompts"].append({"text": text, "seconds": round(time.time() - t, 1)})
-    msgs = call("GET", f"api/session/{sess}/message")["data"]
-    record["messages"] = msgs
-    calls = []
+    msgs = list(reversed(call("GET", f"api/session/{sess}/message")["data"]))
+    record["tool_calls"], record["replies"] = [], []
     for m in msgs:
-        for part in m.get("content") or []:
-            if part.get("type") in ("tool", "tool-call", "tool_call") or "tool" in part:
-                calls.append(part)
-    record["tool_parts"] = len(calls)
+        for c in m.get("content") or []:
+            if c.get("type") == "tool":
+                st = c.get("state", {})
+                result = " ".join(x.get("text", "") if x.get("type") == "text" else f"[{x.get('type')}]"
+                                  for x in st.get("content") or [])
+                record["tool_calls"].append({"tool": c["name"], "status": st.get("status"),
+                                             "code": str(st.get("input", {}).get("code", st.get("input")))[:600],
+                                             "result": result[:700]})
+            elif c.get("type") == "text":
+                record["replies"].append(c["text"])
 finally:
     server.terminate()
     try: server.wait(10)
     except Exception: server.kill()
-    shutil.copy(os.path.join(root, "server.log"), os.path.join(out, "e2e-opencode-server.log"))
-    with open(os.path.join(out, "e2e-transcript.json"), "w") as f:
+    with open(os.path.join(out, "e2e-tool-calls.json"), "w") as f:
         json.dump(record, f, indent=1, default=str)
     shutil.rmtree(root, ignore_errors=True)
-print("written", os.path.join(out, "e2e-transcript.json"))
+print("written", os.path.join(out, "e2e-tool-calls.json"))
