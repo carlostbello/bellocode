@@ -121,6 +121,29 @@ struct TerminalServiceTests {
         await fixture.stop()
     }
 
+    /// A save that finds the set clean still waits for a write already in flight: the exit-triggered save clears
+    /// `dirty` before its write completes, and `save()` (shutdown, flush) must not return before the set is stored.
+    @Test func saveWaitsForAWriteAlreadyInFlight() async throws {
+        // A file store (WAL pool, as the app uses): a read does not wait for a write in progress.
+        let directory = FileManager.default.temporaryDirectory.appending(path: "terminal-save-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try await Fixture.start(store: ProjectionStore(location: .file(directory.appending(path: "store.sqlite"))))
+        let terminals = fixture.service.terminals(for: fixture.sessionID)
+        await terminals.waitUntilLoaded()
+        let record = try #require(await terminals.create(directory: "/tmp/mock-project"))
+        await terminals.save()
+        for round in 0..<20 {
+            let code = 10 + round
+            terminals.streamExited(record.id, code: code)
+            // The exit's own save starts and suspends in its write.
+            await Task.yield()
+            await terminals.save()
+            #expect(try await fixture.store.terminalSet(fixture.sessionID)?.record(record.id)?.state == .exited(code: code), "round \(round)")
+        }
+        await fixture.stop()
+    }
+
     @Test func streamTypesResizesDetachesAndReplaysOnlyTheGap() async throws {
         let fixture = try await Fixture.start()
         let server = fixture.harness.server

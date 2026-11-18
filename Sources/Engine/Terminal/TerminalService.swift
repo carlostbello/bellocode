@@ -113,6 +113,8 @@ public final class ThreadTerminals {
     @ObservationIgnored private let launch: TerminalLaunch
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var dirty = false
+    /// The latest save; each save runs after the one before it (see `save()`).
+    @ObservationIgnored private var lastSave: Task<Void, Never>?
     @ObservationIgnored private var loadWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(sessionID: SessionID, service: TerminalService) {
@@ -441,8 +443,20 @@ public final class ThreadTerminals {
 
     func flushSoon() { if dirty { Task { await save() } } }
 
-    /// Writes the set now if it changed.
+    /// Writes the set now if it changed, and returns once it is on disk. Saves run one after another: a save that
+    /// finds the set clean must still wait for a write already in flight (a scheduled or exit-triggered save clears
+    /// `dirty` before its write completes), otherwise its caller (shutdown, flush) could return before the set is stored.
     public func save() async {
+        let previous = lastSave
+        let save = Task { [weak self] in
+            await previous?.value
+            await self?.write()
+        }
+        lastSave = save
+        await save.value
+    }
+
+    private func write() async {
         guard dirty else { return }
         dirty = false
         do {
