@@ -225,6 +225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showContainers(_ sender: Any?) { openSettings(pane: "containers") }
     /// Window ▸ MCP Servers… (Containers 3).
     @objc func showMCPServers(_ sender: Any?) { openSettings(pane: "mcp") }
+    /// Window ▸ Secrets… (secret manager).
+    @objc func showSecrets(_ sender: Any?) { openSettings(pane: "secrets") }
 
     @objc func showEnvironment(_ sender: Any?) {
         if let directory = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first?.currentProjectDirectory {

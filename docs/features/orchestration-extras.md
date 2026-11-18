@@ -80,6 +80,9 @@ instance stays listed with the problem. A removed address is remembered (`gitlab
 without a new token deletes any token still found for it instead of reusing it.
 
 ## 3. Secrets
+**Superseded in part by [secrets.md](secrets.md) (secret manager):** brokered, placeholder and visible modes, the egress
+proxy and its audit. What follows is the command-only path, now labelled **"The command can reveal this value"** on the
+card, the approval card and Settings ▸ Secrets (both `secret_exec` and the host pipe disclose the value to the command).
 `request_secret` (label, reason, https setup URL, delivery) raises a card and returns at once; the agent ends its turn.
 Save Securely → Keychain → the thread is woken by a synthetic message with a one-use `secretRef` (this thread, 1 h), or
 with delivery `file` a path. `secret_file(secretRef)` → a one-read **named pipe** path (projects without container execution only; the app always
@@ -131,7 +134,7 @@ environment while it runs. Tests: fake-runtime end to end (nothing runs before A
 Once vs Always, changed command or access asks again, Deny, revocation) and a live Rancher run (offline, read-only,
 HOME=/tmp, nothing left behind).
 
-Settings ▸ Secrets lists labels and deletes (confirmed).
+Settings ▸ Secrets lists every secret with its mode and claim (secrets.md); deletion is confirmed.
 
 ## 4. HTML visuals
 `html_preview` (height, console, CSP-blocked requests, PNG path for export) and `html_render` (stored, shown inline).

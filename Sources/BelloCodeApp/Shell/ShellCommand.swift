@@ -109,6 +109,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
     /// Containers 3: Settings ▸ MCP Servers (docs/features/containers.md).
     case showMCPServers
+    /// Settings ▸ Secrets (secret manager, docs/features/secrets.md).
+    case showSecrets
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
     // Git parity (MainWindowController+Git.swift, docs/features/git-parity.md).
@@ -235,6 +237,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
         case .showMCPServers: #selector(AppDelegate.showMCPServers(_:))
+        case .showSecrets: #selector(AppDelegate.showSecrets(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .gitQuickAction: #selector(MainWindowController.gitQuickAction(_:))
         case .showGitActions: #selector(MainWindowController.showGitActions(_:))
@@ -368,6 +371,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: "Containers…"
         case .showEnvironment: "Project Environment…"
         case .showMCPServers: "MCP Servers…"
+        case .showSecrets: "Secrets…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
         case .gitQuickAction: "Run Suggested Git Action"
@@ -523,7 +527,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openParentThread: ("u", [.command, .control])
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: ("", [])
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: ("", [])
         case .pruneContainerResources: ("", [])
         // Git parity: ⌃⌘ letters free elsewhere (⌃⌘F full screen, ⌃⌘Q lock and ⌃⌘D look up are avoided).
         case .gitQuickAction: ("\r", [.command, .control])
@@ -732,7 +736,7 @@ struct CommandContext: Equatable, Sendable {
         case .openParentThread: return agents.hasParent
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: return true
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: return true
         case .pruneContainerResources: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
