@@ -27,6 +27,10 @@ public struct ContainerConfiguration: Sendable {
     public var gitShim: URL?
     /// The administrator's image policy (managed preferences), read at start and when Settings asks.
     public var managedPolicy: @Sendable () -> ManagedImagePolicy.Managed? = { ManagedImagePolicy.read() }
+    /// The administrator's code roots and execution modes (managed preferences).
+    public var managedExecution: @Sendable () -> ManagedExecutionPolicy.Managed? = { ManagedExecutionPolicy.read() }
+    /// Run BelloCode's filtered Docker endpoint (the app; tests that exercise it).
+    public var dockerEndpoint = false
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -79,12 +83,18 @@ public final class ProjectEnvironment {
         self.directory = directory
         settings = stored.settings
         record = stored.record
+        containerName = WorkspaceSpec.containerName(for: directory)
     }
 
     /// The banner for threads and terminals in this project, or nil while commands can run.
     public var notice: EnvironmentNotice? { EnvironmentNotice.from(phase) }
     public var projectKey: String { WorkspaceSpec.projectKey(for: directory) }
-    public var containerName: String { WorkspaceSpec.containerName(for: directory) }
+    /// The container commands run in: the project's own, or the shared workspace (`mode`).
+    public internal(set) var containerName: String
+    /// Where the project's commands run (resolved from its setting and the app default).
+    public internal(set) var mode: ExecutionMode = .projectContainer
+    /// The key of the resources the container actions act on (the shared workspace's in shared mode).
+    public var containerKey: String { mode == .sharedWorkspace ? WorkspaceSpec.sharedProjectKey : projectKey }
 }
 
 /// Containerised execution for every project (docs/features/containers.md): the runtime's state, each project's
@@ -102,7 +112,7 @@ public final class ProjectEnvironment {
 public final class EnvironmentService {
     /// Nil while the first check runs.
     public private(set) var runtime: RuntimeState?
-    public private(set) var defaults = EnvironmentDefaults()
+    public internal(set) var defaults = EnvironmentDefaults()
     /// The last isolation self-check (at engine start and on demand).
     public internal(set) var isolation: IsolationReport?
     public internal(set) var isVerifyingIsolation = false
@@ -110,7 +120,7 @@ public final class EnvironmentService {
     public let isEnabled: Bool
 
     @ObservationIgnored let configuration: ContainerConfiguration?
-    @ObservationIgnored private let store: ProjectionStore
+    @ObservationIgnored let store: ProjectionStore
     @ObservationIgnored var models: [String: ProjectEnvironment] = [:]
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
@@ -121,6 +131,10 @@ public final class EnvironmentService {
     @ObservationIgnored var servicesParseCache: [String: (text: String, parse: ComposeParseResult)] = [:]
     /// The administrator's policy (managed preferences), nil when none is managed.
     public private(set) var managedPolicy: ManagedImagePolicy.Managed?
+    /// The administrator's code roots and modes (managed preferences), nil when none are managed.
+    public internal(set) var managedExecution: ManagedExecutionPolicy.Managed?
+    /// The code roots in force, validated (recomputed when Settings, the managed policy or the projects change).
+    public internal(set) var codeRootsValidation = CodeRoots.Validation(roots: [], issues: [])
     /// Images BelloCode pulled that were not on this Mac before (image IDs): "Prune" may remove them when unused.
     @ObservationIgnored var pulledImageIDs: Set<String> = []
     @ObservationIgnored private var generations: [String: Int] = [:]
@@ -131,9 +145,9 @@ public final class EnvironmentService {
     /// True once every project's saved policy is in force (S3). Before that nothing is created, published or run.
     @ObservationIgnored private(set) var settingsLoaded = false
     /// The whole settings table could not be read: every project is blocked (never run under defaults).
-    @ObservationIgnored private var policyReadFailure: String?
+    @ObservationIgnored var policyReadFailure: String?
     /// Projects whose saved row could not be decoded: blocked until the person saves the setting again.
-    @ObservationIgnored private var unreadablePolicies: Set<String> = []
+    @ObservationIgnored var unreadablePolicies: Set<String> = []
     /// Why the helper's configuration could not be saved (commands are refused meanwhile); nil when it is current.
     public private(set) var helperConfigProblem: String?
     /// This launch's identity in the helper's files: a configuration from an earlier launch never authorises a command.
@@ -154,6 +168,13 @@ public final class EnvironmentService {
         (NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees/\((directory as NSString).lastPathComponent)")
     }
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
+    /// BelloCode's filtered Docker endpoint (nil until started, and in tests that do not use it).
+    @ObservationIgnored public internal(set) var dockerEndpoint: DockerEndpoint?
+    @ObservationIgnored var dockerProxy: DockerFilterProxy?
+    /// The image policy as the endpoint's tasks read it (updated with every configuration write).
+    @ObservationIgnored let dockerPolicy = SharedImagePolicy()
+    /// Docker requests the endpoint refused recently (newest last, at most 20): the Environment pane lists them.
+    public internal(set) var dockerRefusals: [DockerFilterProxy.Refusal] = []
     /// The isolation self-check's server access (set by the engine).
     @ObservationIgnored var isolationContext: IsolationCheck.Context?
     @ObservationIgnored nonisolated static let log = Logger(subsystem: "app.bellocode", category: "containers")
@@ -193,9 +214,13 @@ public final class EnvironmentService {
         if let saved = try? await store.preference(EnvironmentDefaults.preferenceKey, as: EnvironmentDefaults.self) { defaults = saved }
         if let pulled = try? await store.preference(Self.pulledImagesKey, as: [String].self) { pulledImageIDs = Set(pulled) }
         managedPolicy = configuration?.managedPolicy()
+        managedExecution = configuration?.managedExecution()
+        await migrateExecutionModes()
+        recomputeCodeRoots()
         settingsLoaded = true
         for model in models.values { refreshImageAndPhase(model) }
         guard isEnabled else { return }
+        startDockerEndpoint()
         tasks.set("runtime", Task { [weak self] in await self?.runtimeLoop() })
         tasks.set("idle", Task { [weak self] in await self?.idleLoop() })
     }
@@ -212,6 +237,9 @@ public final class EnvironmentService {
 
     /// Stops forwards, bridges and loops. Containers keep running (they stop when idle or with Rancher Desktop).
     public func stop() {
+        dockerProxy?.stop()
+        dockerProxy = nil
+        dockerEndpoint = nil
         tasks.cancelAll()
         queuedWrite?.cancel()
         writeChain?.cancel()
@@ -263,6 +291,7 @@ public final class EnvironmentService {
                 if started { refreshImageAndPhase(model) }
             }
         }
+        if settingsLoaded { suggestCodeRootsIfNeeded() }
         guard isEnabled else { return }
         scheduleConfigWrite()
     }
@@ -298,7 +327,7 @@ public final class EnvironmentService {
         }
     }
 
-    private func persist(_ model: ProjectEnvironment) async {
+    func persist(_ model: ProjectEnvironment) async {
         try? await store.saveEnvironment(StoredEnvironment(settings: model.settings, record: model.record), directory: model.directory)
     }
 
@@ -369,9 +398,13 @@ public final class EnvironmentService {
     }
 
     private func handle(_ event: EngineEvent) {
-        guard let name = event.attributes["name"], name.hasPrefix("bellocode-ws-"),
-              let model = models.values.first(where: { $0.containerName == name }) else { return }
+        guard let name = event.attributes["name"], name.hasPrefix("bellocode-ws-") else { return }
         let action = event.action.split(separator: ":").first.map(String.init) ?? event.action
+        // The shared workspace serves several projects: each follows it.
+        for model in models.values where model.containerName == name { handle(action: action, model: model) }
+    }
+
+    private func handle(action: String, model: ProjectEnvironment) {
         switch action {
         case "exec_start", "exec_create":
             model.lastActivity = Date()
@@ -391,7 +424,11 @@ public final class EnvironmentService {
     /// is configured but missing (the configured image only; there is no built-in default). With `recreate`, an
     /// outdated running container is replaced now (a setting change).
     func refreshImageAndPhase(_ model: ProjectEnvironment, recreate: Bool = false) {
-        model.image = model.settings.image ?? defaultImage
+        let mode = mode(for: model)
+        if model.mode != mode { model.mode = mode }
+        let containerName = mode == .sharedWorkspace ? WorkspaceSpec.sharedContainerName : WorkspaceSpec.containerName(for: model.directory)
+        if model.containerName != containerName { model.containerName = containerName }
+        model.image = mode == .hostDocker ? nil : mode == .sharedWorkspace ? defaultImage : model.settings.image ?? defaultImage
         guard isEnabled, started else { return }
         loadServices(model)
         if let message = policyBlock(model) {
@@ -400,6 +437,21 @@ public final class EnvironmentService {
             return
         }
         if case .policyUnavailable = model.phase { model.phase = .unknown }
+        if mode == .hostDocker {
+            // Nothing to create: one plain docker command at a time runs on the Mac through the filtered endpoint.
+            bridges.removeValue(forKey: model.directory)?.stop()
+            stopForwards(model)
+            if let runtime { model.phase = runtime.isReady ? .ready : .runtimeUnavailable(runtime) }
+            scheduleConfigWrite()
+            return
+        }
+        if mode == .sharedWorkspace, let message = outsideRootsMessage(model) {
+            model.phase = .outsideCodeRoots(message)
+            bridges.removeValue(forKey: model.directory)?.stop()
+            scheduleConfigWrite()
+            return
+        }
+        if case .outsideCodeRoots = model.phase { model.phase = .unknown }
         if let image = model.image, let refusal = imageRefusal(image) {
             model.phase = .imageRefused(refusal)
             bridges.removeValue(forKey: model.directory)?.stop()
@@ -497,13 +549,14 @@ public final class EnvironmentService {
     public func activate(_ directory: String) {
         guard isEnabled, let runtime, runtime.isReady else { return }
         let model = environment(for: directory)
-        guard policyBlock(model) == nil else { return }
+        guard policyBlock(model) == nil, model.mode != .hostDocker else { return }
         guard let spec = workspaceSpec(model) else {
             if model.image == nil { model.phase = .noImage }
             return
         }
         switch model.phase {
-        case .ready where model.outdatedReason == nil, .pulling, .noImage, .unmountable, .pullFailed, .runtimeUnavailable, .starting, .imageRefused:
+        case .ready where model.outdatedReason == nil, .pulling, .noImage, .unmountable, .pullFailed, .runtimeUnavailable, .starting, .imageRefused,
+             .outsideCodeRoots:
             return
         default:
             break
@@ -521,6 +574,12 @@ public final class EnvironmentService {
             do {
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
                 let id = try await runtimeRef.ensureRunning(spec)
+                // The shared workspace mounts code roots outside the folders Rancher Desktop is known to share: check
+                // each is really visible in the container (a marker written on the Mac), once per container.
+                if spec.isShared {
+                    let hidden = await Self.invisibleRoots(spec.workspaceRoots, container: id, user: spec.user, runtime: runtimeRef)
+                    if !hidden.isEmpty { throw WorkspaceError.unmountable(hidden) }
+                }
                 var inventory: ContainerProbes.ToolInventory?
                 if firstInventory { inventory = try? await runtimeRef.inventory(container: id, user: spec.user) }
                 guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
@@ -641,9 +700,9 @@ public final class EnvironmentService {
         let model = environment(for: directory)
         stopForwards(model)
         bridges.removeValue(forKey: model.directory)?.stop()
-        let key = model.projectKey
+        let key = model.containerKey
         let runtimeRef = activeRuntime
-        tasks.set("remove-\(key)", Task { [weak self] in
+        tasks.set("remove-\(model.projectKey)", Task { [weak self] in
             do { try await runtimeRef.remove(projectKey: key) } catch { model.lastError = Self.describe(error) }
             model.record.containerID = nil
             self?.refreshImageAndPhase(model)
@@ -653,7 +712,7 @@ public final class EnvironmentService {
     /// What "Delete Container and Data…" would delete for the project: shown in its confirmation (it cannot be undone).
     public func storageToPurge(_ directory: String) async throws -> WorkspaceStorage {
         guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
-        return try await activeRuntime.storage(projectKey: environment(for: directory).projectKey)
+        return try await activeRuntime.storage(projectKey: environment(for: directory).containerKey)
     }
 
     /// The explicit destructive action: removes the project's containers and exactly the volumes the person confirmed
@@ -661,7 +720,7 @@ public final class EnvironmentService {
     /// refuses; the pane shows the error.
     public func purge(_ directory: String, confirmed storage: WorkspaceStorage) async throws {
         let model = environment(for: directory)
-        guard storage.projectKey == model.projectKey else {
+        guard storage.projectKey == model.containerKey else {
             throw EnvironmentBlockedError(message: "The confirmed list belongs to another project; nothing was deleted.")
         }
         stopForwards(model)
@@ -729,7 +788,12 @@ public final class EnvironmentService {
         while !Task.isCancelled {
             try? await Task.sleep(for: configuration.idleCheckInterval)
             guard runtime?.isReady == true else { continue }
-            for model in models.values where model.phase == .ready {
+            var sharedHandled = false
+            for model in models.values where model.phase == .ready && model.mode != .hostDocker {
+                if model.mode == .sharedWorkspace {
+                    if !sharedHandled { sharedHandled = true; await stopSharedIfIdle() }
+                    continue
+                }
                 let minutes = model.settings.idleStopMinutes
                 guard minutes > 0, model.forwards.isEmpty, model.serviceForwards.isEmpty, let id = model.record.containerID else { continue }
                 let last = model.lastActivity ?? model.record.lastUsed ?? .distantPast
@@ -850,6 +914,8 @@ public final class EnvironmentService {
     }
 
     // MARK: File-watch bridge
+
+    func stopBridge(_ model: ProjectEnvironment) { bridges.removeValue(forKey: model.directory)?.stop() }
 
     private func restartBridge(_ model: ProjectEnvironment) {
         guard model.settings.fileWatchBridge, model.phase == .ready, let id = model.record.containerID,
@@ -983,6 +1049,11 @@ public final class EnvironmentService {
     }
 
     func workspaceSpec(_ model: ProjectEnvironment) -> WorkspaceSpec? {
+        switch mode(for: model) {
+        case .hostDocker: return nil
+        case .sharedWorkspace: return outsideRootsMessage(model) == nil ? sharedSpec() : nil
+        case .projectContainer: break
+        }
         guard let image = model.settings.image ?? defaultImage, imageRefusal(image) == nil else { return nil }
         let roots = workspaceRoots(model, create: true)
         var spec = WorkspaceSpec(
@@ -1009,21 +1080,48 @@ public final class EnvironmentService {
         } else if runtime == nil {
             runtimeBlocked = nil  // not checked yet: the helper tries and reports what it finds
         }
-        let workspaces = models.values.sorted { $0.directory < $1.directory }.map { model -> ExecHelperConfig.Workspace in
+        var workspaces: [ExecHelperConfig.Workspace] = []
+        var sharedModels: [ProjectEnvironment] = []
+        for model in models.values.sorted(by: { $0.directory < $1.directory }) {
+            let mode = mode(for: model)
+            let policy = policyBlock(model).map { ExecHelperConfig.Blocked(message: $0, fix: EnvironmentFix.openSettings.title) }
+            if mode == .sharedWorkspace, policy == nil, outsideRootsMessage(model) == nil {
+                sharedModels.append(model)
+                continue
+            }
+            if mode == .hostDocker {
+                workspaces.append(ExecHelperConfig.Workspace(
+                    roots: workspaceRoots(model, create: false), container: "", user: "\(getuid()):\(getgid())", shell: "/bin/sh",
+                    blocked: policy ?? model.phase.blocked, mode: .hostDocker, docker: hostDockerAccess(model)))
+                continue
+            }
             let spec = workspaceSpec(model)
-            return ExecHelperConfig.Workspace(
+            workspaces.append(ExecHelperConfig.Workspace(
                 roots: spec?.workspaceRoots ?? workspaceRoots(model, create: false), container: model.containerName,
                 user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(model),
-                blocked: policyBlock(model).map { .init(message: $0, fix: EnvironmentFix.openSettings.title) } ?? model.phase.blocked,
-                spec: policyBlock(model) == nil ? spec : nil,
+                blocked: policy ?? model.phase.blocked,
+                spec: policy == nil ? spec : nil,
                 mountIdentity: model.record.mountIdentity, image: model.image, inventory: model.record.inventory,
-                services: model.services.filter { $0.phase != .refused }.map(\.name))
+                services: model.services.filter { $0.phase != .refused }.map(\.name), mode: mode,
+                docker: containerDockerAccess(scope: model.projectKey, spec: spec)))
+        }
+        // One entry for the shared workspace: every directory inside the code roots (and the shared worktree folders)
+        // runs there. A project inside a root that has its own mode keeps its own, longer, root.
+        if let first = sharedModels.first {
+            let spec = sharedSpec()
+            let blocked = sharedModels.compactMap { $0.phase.blocked }.first ?? (spec == nil ? EnvironmentPhase.noImage.blocked : nil)
+            workspaces.append(ExecHelperConfig.Workspace(
+                roots: spec?.workspaceRoots ?? codeRootsValidation.roots, container: WorkspaceSpec.sharedContainerName,
+                user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(first), blocked: blocked,
+                spec: spec, mountIdentity: first.record.mountIdentity, image: spec?.image, inventory: first.record.inventory,
+                mode: .sharedWorkspace, docker: containerDockerAccess(scope: WorkspaceSpec.sharedProjectKey, spec: spec)))
         }
         return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
     }
 
     /// Writes the helper configuration soon (coalesced, serialised). Off the main actor, atomically.
     func scheduleConfigWrite() {
+        dockerPolicy.update(imagePolicy)
         guard isEnabled, settingsLoaded, configuration?.execConfigURL != nil else { return }
         _ = enqueueConfigWrite(delay: .milliseconds(30))
     }
@@ -1110,12 +1208,12 @@ public final class EnvironmentService {
     public func prunePlan() async throws -> PrunePlan {
         guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
         guard runtime?.isReady == true else { throw EnvironmentBlockedError(message: runtime?.userMessage ?? "Rancher Desktop is not ready.") }
-        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey) + [WorkspaceSpec.sharedProjectKey]), pulledImageIDs: pulledImageIDs)
     }
 
     /// Removes exactly the confirmed items that still qualify. Cannot be undone.
     public func prune(_ plan: PrunePlan) async throws -> PruneResult {
-        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey) + [WorkspaceSpec.sharedProjectKey]), pulledImageIDs: pulledImageIDs)
         let removedImages = Set(plan.images.filter { result.removed.contains($0.name) }.map(\.id))
         if !removedImages.isEmpty {
             pulledImageIDs.subtract(removedImages)
@@ -1138,6 +1236,13 @@ public final class EnvironmentService {
 
     /// Re-reads the managed policy (Settings opens, Retry) and re-evaluates every project.
     public func reloadManagedPolicy() {
+        let execution = configuration?.managedExecution()
+        if execution != managedExecution {
+            managedExecution = execution
+            recomputeCodeRoots()
+            for model in models.values { refreshImageAndPhase(model) }
+            scheduleConfigWrite()
+        }
         let managed = configuration?.managedPolicy()
         guard managed != managedPolicy else { return }
         managedPolicy = managed

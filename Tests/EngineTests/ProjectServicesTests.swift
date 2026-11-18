@@ -22,7 +22,7 @@ struct ProjectServicesTests {
     func makeService(policy: ImagePolicy? = nil) async throws -> EnvironmentService {
         var configuration = ContainerConfiguration(
             helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
-            execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault())
+            execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()).projectContainerDefault()
         configuration.managedPolicy = { policy.map { .init(policy: $0, defaultImage: nil, source: "test") } }
         let service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
         service.worktreeParent = { [root] _ in root.appending(path: "worktrees").path }

@@ -1,0 +1,178 @@
+import AppKit
+import BelloCore
+import ContainerKit
+import DesignSystem
+import Engine
+import SwiftUI
+
+// Settings ▸ Containers ▸ Code roots and Execution, and the per-project mode picker (docs/features/containers.md,
+// "Execution modes").
+
+/// Settings ▸ Containers ▸ Code roots: the folders the shared workspace mounts and the policy layer trusts.
+struct CodeRootsSettingsView: View {
+    let service: EnvironmentService
+    @StateObject private var box = MessageBox()
+    private var message: String? { box.message }
+
+    var body: some View {
+        let roots = service.configuredCodeRoots
+        let validation = service.codeRootsValidation
+        if roots.isEmpty {
+            SettingsRow("No code roots", detail: "Add the folder your repositories are in (for example ~/Documents/Repos). Projects in the shared workspace must be inside one.", divided: false) {
+                DSPillView("None", tone: .warning, symbolName: "exclamationmark.triangle")
+            }
+        }
+        ForEach(Array(roots.enumerated()), id: \.element) { index, path in
+            let standardized = CodeRoots.standardize(path)
+            let issues = validation.issues.filter { $0.path == standardized || $0.path == (CodeRoots.canonical(standardized) ?? standardized) }
+            let blocking = issues.first(where: \.isBlocking)
+            SettingsRow(CodeRoots.display(standardized), detail: (blocking ?? issues.first)?.message, divided: index > 0) {
+                HStack(spacing: DS.Space.s6) {
+                    if let blocking {
+                        DSPillView(Self.label(blocking.kind), tone: .danger, symbolName: "xmark.octagon")
+                        if let suggestion = blocking.suggestion, !service.codeRootsLocked {
+                            Button("Use Real Path") { replace(path, with: suggestion) }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                        }
+                    } else if issues.contains(where: { $0.kind == .overlaps }) {
+                        DSPillView("Inside another root", tone: .neutral, symbolName: "arrow.turn.down.right")
+                    } else {
+                        DSPillView("Mounted", tone: .success, symbolName: "checkmark")
+                    }
+                    if !service.codeRootsLocked {
+                        Button("Remove") { remove(path) }.buttonStyle(DSButtonStyle(.ghost, size: .small))
+                            .accessibilityLabel("Remove code root \(CodeRoots.display(standardized))")
+                    }
+                }
+            }
+        }
+        if service.codeRootsLocked {
+            SettingsRow("Set by your organisation", detail: service.managedExecution?.source, divided: true) {
+                DSPillView("Managed", tone: .info, symbolName: "building.2")
+            }
+        } else {
+            SettingsActionsRow {
+                Button("Add Folder…") { addFolder() }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                let suggestion = suggestion
+                if !suggestion.isEmpty, Set(suggestion) != Set(service.codeRootsValidation.roots) {
+                    Button("Use Suggestion: \(suggestion.map { CodeRoots.display($0) }.joined(separator: ", "))") {
+                        Task { await service.setCodeRoots(suggestion) }
+                    }
+                    .buttonStyle(DSButtonStyle(.ghost, size: .small))
+                }
+                if service.codeRootsSource == .suggested {
+                    Text("Suggested from where your projects live").font(.ds(.meta)).foregroundStyle(Color.ds.text3)
+                }
+            }
+        }
+        if let message { SettingsNote(message) }
+    }
+
+    private var suggestion: [String] {
+        CodeRoots.suggestion(projectDirectories: service.environments.map(\.directory))
+    }
+
+    static func label(_ kind: CodeRootIssue.Kind) -> String {
+        switch kind {
+        case .notAbsolute: "Not a full path"
+        case .missing: "Missing"
+        case .notDirectory: "Not a folder"
+        case .notCanonical: "Link"
+        case .systemLocation: "System location"
+        case .wholeHome: "Home folder"
+        case .sensitive: "Holds credentials"
+        case .overlaps: "Inside another root"
+        case .notShared: "Not shared with Rancher"
+        }
+    }
+
+    private func addFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add Code Root"
+        panel.message = "Choose the folder your repositories are in. The shared workspace mounts it read-write at the same path."
+        guard panel.runModal() == .OK else { return }
+        let added = panel.urls.map(\.path)
+        let issues = added.flatMap { CodeRoots.issues(for: $0) }.filter(\.isBlocking)
+        box.message = issues.isEmpty ? nil : issues.map(\.message).joined(separator: " ")
+        Task { await service.setCodeRoots(service.configuredCodeRoots + added) }
+    }
+
+    private func remove(_ path: String) {
+        let previous = service.configuredCodeRoots
+        Task { await service.setCodeRoots(previous.filter { $0 != path }) }
+        box.message = "Removed \(CodeRoots.display(CodeRoots.standardize(path))). The shared workspace is recreated without it on its next use."
+    }
+
+    private func replace(_ path: String, with canonical: String) {
+        Task { await service.setCodeRoots(service.configuredCodeRoots.map { $0 == path ? canonical : $0 }) }
+    }
+}
+
+/// Settings ▸ Containers ▸ Execution: the default mode for projects that have not chosen one.
+struct DefaultExecutionModeView: View {
+    let service: EnvironmentService
+
+    var body: some View {
+        let modes = ExecutionMode.allCases.filter(service.isAllowed)
+        ForEach(Array(modes.enumerated()), id: \.element) { index, mode in
+            ExecutionModeRow(mode: mode, selected: service.defaultMode == mode, recommended: mode == .defaultMode,
+                             enabled: service.managedExecution?.defaultMode == nil, divided: index > 0) {
+                Task { await service.setDefaultMode(mode) }
+            }
+        }
+        if service.managedExecution?.defaultMode != nil {
+            SettingsRow("Default set by your organisation", detail: service.managedExecution?.source, divided: true) {
+                DSPillView("Managed", tone: .info, symbolName: "building.2")
+            }
+        }
+    }
+}
+
+/// One mode as a radio row with its explanation.
+struct ExecutionModeRow: View {
+    let mode: ExecutionMode
+    let selected: Bool
+    var recommended = false
+    var enabled = true
+    var divided = true
+    var detail: String?
+    let choose: () -> Void
+
+    var body: some View {
+        Button(action: choose) {
+            HStack(alignment: .top, spacing: DS.Space.s8) {
+                DSToggleMark(kind: .radio, isOn: selected).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: DS.Space.s6) {
+                        Image(systemName: mode.symbolName).font(.system(size: 11)).foregroundStyle(Color.ds.text2)
+                        Text(mode.title).font(.ds(.bodyEmph)).foregroundStyle(Color.ds.text)
+                        if recommended { DSPillView("Default", tone: .info) }
+                        if mode == .hostDocker { DSPillView("Weaker", tone: .warning, symbolName: "exclamationmark.triangle") }
+                    }
+                    Text(detail ?? mode.explanation).font(.ds(.meta)).foregroundStyle(Color.ds.text3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, DS.Space.s12)
+            .padding(.vertical, DS.Space.s8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(Color.ds.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(mode.title). \(mode.explanation)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// A transient note shown under a settings group (SwiftUI's `@State` macro is unavailable with Command Line Tools).
+@MainActor
+final class MessageBox: ObservableObject {
+    @Published var message: String?
+}

@@ -139,7 +139,7 @@ struct ContainerEnvironmentTests {
             ? ContainerConfiguration(
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
                 execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime,
-                registryVault: InMemorySecretVault())
+                registryVault: InMemorySecretVault()).projectContainerDefault()
             : nil
         let service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
         service.worktreeParent = { [root] directory in root.appending(path: "worktrees/\((directory as NSString).lastPathComponent)").path }
@@ -378,7 +378,7 @@ struct WorktreeFolderIsolationTests {
         let service = EnvironmentService(
             configuration: ContainerConfiguration(
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"), execConfigURL: root.appending(path: "exec.json"),
-                opencodeDataDirectory: nil, runtime: FakeWorkspaceRuntime(), registryVault: InMemorySecretVault()),
+                opencodeDataDirectory: nil, runtime: FakeWorkspaceRuntime(), registryVault: InMemorySecretVault()).projectContainerDefault(),
             store: try ProjectionStore(location: .inMemory))
         let home = root.appending(path: "home").path
         service.worktreeParent = { WorkspacePreferences.defaultParent(projectDirectory: $0, home: home) }
@@ -386,5 +386,15 @@ struct WorktreeFolderIsolationTests {
         let rootsB = service.workspaceRoots(service.environment(for: projectB), create: false)
         #expect(Set(rootsA).isDisjoint(with: rootsB))
         #expect(!rootsA.contains { $0.hasSuffix("/worktrees/service") })
+    }
+}
+
+extension ContainerConfiguration {
+    /// Tests written for project containers (the behaviour before execution modes) run with that as the default,
+    /// as an administrator would set it.
+    func projectContainerDefault() -> ContainerConfiguration {
+        var copy = self
+        copy.managedExecution = { ManagedExecutionPolicy.Managed(defaultMode: .projectContainer, source: "test") }
+        return copy
     }
 }

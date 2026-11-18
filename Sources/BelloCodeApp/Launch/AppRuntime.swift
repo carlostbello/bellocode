@@ -145,6 +145,7 @@ final class AppRuntime {
             helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
             runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
         configuration.gitShim = execution.gitShimDirectory?.appending(path: "git")
+        configuration.dockerEndpoint = true
         return configuration
     }
 

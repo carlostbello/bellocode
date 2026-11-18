@@ -4,7 +4,7 @@ import Foundation
 /// project's environment changes; read on every command, so a fix (Rancher started, image chosen) applies to the next
 /// command without restarting anything. Holds no secrets (non-secret environment values only).
 public struct ExecHelperConfig: Codable, Sendable, Equatable {
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     /// Why commands in a workspace cannot run now, and the fix the user sees in the app.
     public struct Blocked: Codable, Sendable, Equatable {
@@ -14,6 +14,30 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         public init(message: String, fix: String? = nil) {
             self.message = message
             self.fix = fix
+        }
+    }
+
+    /// How commands reach BelloCode's filtered Docker endpoint (`DockerFilterProxy`).
+    public struct DockerAccess: Codable, Sendable, Equatable {
+        /// `DOCKER_HOST` for commands: `tcp://host.docker.internal:<port>/<token>` in a container,
+        /// `tcp://127.0.0.1:<port>/<token>` on the Mac (host docker-only mode).
+        public var host: String
+        /// Host docker-only mode: Rancher Desktop's `docker` by absolute path (never looked up on PATH).
+        public var binary: String?
+        /// Host docker-only mode: BelloCode's own `DOCKER_CONFIG` (no credential helpers, only Rancher's plugins).
+        public var configDirectory: String?
+
+        public init(host: String, binary: String? = nil, configDirectory: String? = nil) {
+            self.host = host
+            self.binary = binary
+            self.configDirectory = configDirectory
+        }
+
+        /// Variables set for every command that may use docker (the legacy builder: BuildKit's gRPC is not proxied).
+        public var environment: [String: String] {
+            var values = ["DOCKER_HOST": host, "DOCKER_BUILDKIT": "0", "COMPOSE_BAKE": "false"]
+            if let configDirectory { values["DOCKER_CONFIG"] = configDirectory }
+            return values
         }
     }
 
@@ -38,10 +62,17 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         public var mountIdentity: String?
         /// The project's services (names): `bellocode-exec --service NAME` opens a shell in one of them.
         public var services: [String]?
+        /// Where commands run (nil: a container, as before execution modes).
+        public var mode: ExecutionMode?
+        /// The filtered Docker endpoint for this workspace, when it runs.
+        public var docker: DockerAccess?
 
         public init(roots: [String], container: String, user: String? = nil, shell: String = "/bin/sh", blocked: Blocked? = nil,
                     spec: WorkspaceSpec? = nil, mountIdentity: String? = nil, image: String? = nil,
-                    inventory: ContainerProbes.ToolInventory? = nil, services: [String]? = nil) {
+                    inventory: ContainerProbes.ToolInventory? = nil, services: [String]? = nil, mode: ExecutionMode? = nil,
+                    docker: DockerAccess? = nil) {
+            self.mode = mode
+            self.docker = docker
             self.services = services
             self.mountIdentity = mountIdentity
             self.image = image
@@ -175,6 +206,9 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         "PATH", "HOME", "TMPDIR", "SHELL", "USER", "LOGNAME", "PWD", "OLDPWD", "SHLVL", "_", "SSH_AUTH_SOCK",
         "COMMAND_MODE", "MallocNanoZone", "LaunchInstanceID", "SECURITYSESSIONID", "XPC_FLAGS", "XPC_SERVICE_NAME",
         "BELLOCODE_EXEC_CONFIG", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "OPENCODE_CLIENT",
+        // The Mac's docker settings never reach a command: BelloCode sets its own filtered endpoint.
+        "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY", "DOCKER_TLS",
+        "DOCKER_BUILDKIT", "COMPOSE_BAKE",
     ]
     public static let hostOnlyPrefixes = ["XDG_", "__CF", "DYLD_", "OPENCODE_PASSWORD", "OPENCODE_SERVER", "OPENCODE_DISABLE",
                                           "OPENCODE_CONFIG", "OPENCODE_PTY", "OPENCODE_EXPERIMENTAL", "BUN_", "Apple_",

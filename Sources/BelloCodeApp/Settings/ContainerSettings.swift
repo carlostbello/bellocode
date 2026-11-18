@@ -270,6 +270,18 @@ struct ContainersSettingsView: View {
                 }
             }
             SettingsGroup(
+                "Execution",
+                footer: "Where commands run for projects that have not chosen. opencode and its file tools always edit files on this Mac; each project can choose its own mode in Project Settings ▸ Environment."
+            ) {
+                DefaultExecutionModeView(service: service)
+            }
+            SettingsGroup(
+                "Code roots",
+                footer: "Folders your repositories live in. The shared workspace mounts each read-write at the same path, and paths inside them count as in scope for approvals and risk notices. Never your whole home folder or a system location; each must be shared with Rancher Desktop."
+            ) {
+                CodeRootsSettingsView(service: service)
+            }
+            SettingsGroup(
                 "Default image",
                 footer: "Used by projects without their own image. There is no built-in public default: point this at your organisation's registry."
             ) {

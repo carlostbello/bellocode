@@ -92,7 +92,7 @@ struct HelperConfigWriterTests {
         let service = EnvironmentService(
             configuration: ContainerConfiguration(
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"), execConfigURL: configURL,
-                opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()),
+                opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()).projectContainerDefault(),
             store: try ProjectionStore(location: .inMemory))
         service.worktreeParent = { [root] directory in root.appending(path: "worktrees/\((directory as NSString).lastPathComponent)").path }
         let sink = self.sink
