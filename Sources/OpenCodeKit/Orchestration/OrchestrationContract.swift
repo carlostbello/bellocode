@@ -11,7 +11,7 @@ public enum OrchestrationContract {
     public static let rpcID = "bellocode"
     public static let pluginID = "bellocode"
     /// Bumped by the plugin (`src/logic.ts` `CONTRACT_VERSION`) whenever a tool or metadata shape changes.
-    public static let version = 1
+    public static let version = 2
     /// The instruction entry the plugin writes on every session (`<context key="bellocode.orchestration">`).
     public static let guidanceKey = "bellocode.orchestration"
     /// `metadata.bellocode` on sessions the plugin created or summarised.

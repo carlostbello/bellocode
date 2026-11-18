@@ -3,7 +3,7 @@
 // The plugin works on opencode's own session JSON (the shape `GET /api/session/{id}` returns): child sessions have a
 // `parentID`, `time.busy`/`time.idle` give the run state, and `metadata.bellocode` holds what BelloCode adds.
 
-export const CONTRACT_VERSION = 1
+export const CONTRACT_VERSION = 2
 
 export interface Limits {
   /** Deepest delegation below a top-level thread (a child of a top-level thread has depth 1). */
