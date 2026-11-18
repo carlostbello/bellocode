@@ -98,8 +98,10 @@ struct HTMLVisualSandboxTests {
         defer { window.close() }
         await sandbox.load(page, theme: .light, allowedHosts: [])
         // Let the page's timers and blocked loads play out.
-        for _ in 0..<40 {
-            if sandbox.refusedNavigations.count >= 1 { break }
+        // Wait for the page's scripted navigation to be refused (a condition, not a fixed delay: under a loaded
+        // machine the page's timer can fire well after a second).
+        for _ in 0..<400 {
+            if sandbox.refusedNavigations.contains(where: { $0.hasSuffix("/nav") }) { break }
             try await Task.sleep(for: .milliseconds(25))
         }
         try await Task.sleep(for: .milliseconds(200))
