@@ -153,6 +153,10 @@ extension ExtrasHub {
             }
             lines.append("Agents cannot approve or merge.")
             return ClientMCPResult(text: lines.joined(separator: "\n"))
+        case GitLabTools.readIssue: return try await readIssueTool(arguments, caller)
+        case GitLabTools.listIssues: return try await listIssuesTool(arguments, caller)
+        case GitLabTools.readReviewDiscussions: return try await readReviewDiscussionsTool(arguments, caller)
+        case GitLabTools.createDraftComment: return try await requestDraftComment(arguments, caller)
         default:
             return try await requestGitLabWrite(call, caller)
         }
@@ -306,10 +310,24 @@ extension ExtrasHub {
             case .play(let ref, let jobID):
                 let id = try await mergeRequests.playJob(ref, jobID: jobID)
                 return "Started manual job \(jobID) of \(ref)\(id.map { " (job \($0))" } ?? "")."
+            case .draftComment(let ref, let path, let side, let first, let last, let body, let refs, let serverDraft):
+                return try await executeDraftComment(ref, path: path, side: side, first: first, last: last, body: body, refs: refs, serverDraft: serverDraft)
             }
         } catch let error as ForgeError {
             throw ExtrasError(error.description)
         }
+    }
+
+    /// Puts a pending write on its card (no "Always"): host, project, MR, SHA and the exact request are in `detail`.
+    func raiseGitLabCard(_ pending: PendingGitLabWrite, title: String, detail: String, scope: String) async {
+        if pendingGitLabWrites.count >= Self.maxPendingGitLabWrites, let oldest = pendingGitLabWrites.keys.sorted().first { pendingGitLabWrites[oldest] = nil }
+        let subject = AppRequest.makeID("glw")
+        pendingGitLabWrites[subject] = pending
+        await core.putAppRequest(
+            AppRequest(
+                id: AppRequest.makeID("glw"), sessionID: pending.sessionID,
+                kind: .approval(AppApproval(action: .gitlabWrite, title: title, detail: detail, scope: scope, subjectID: subject, allowsAlways: false, digest: pending.digest)),
+                received: .now))
     }
 
     func respondGitLabWrite(_ approval: AppApproval, _ response: AppRequestResponse) async throws {
