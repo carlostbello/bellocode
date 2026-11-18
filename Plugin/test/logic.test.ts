@@ -121,7 +121,7 @@ describe("text", () => {
 
   test("guidance names the app tools briefly", () => {
     const text = L.guidance({ depth: 0, limits: L.DEFAULT_LIMITS, delegated: false })
-    for (const tool of ["schedule_task", "watch_merge_request", "request_secret", "secret_exec", "html_render", "html_preview"])
+    for (const tool of ["schedule_task", "watch_merge_request", "request_secret", "secret_exec", "html_render", "html_preview", "gitlab_read_"])
       expect(text).toContain(tool)
     expect(text).toContain("Never poll")
     expect(text).not.toContain("GitHub")

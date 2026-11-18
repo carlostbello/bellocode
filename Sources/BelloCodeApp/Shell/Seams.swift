@@ -151,6 +151,9 @@ final class ThreadSurfaceContext {
     @ObservationIgnored var onOpenInBrowser: ((URL) -> Bool)?
     /// Shows the right panel on its "Merge Requests" tab (M3-B: header MR chips).
     @ObservationIgnored var onShowMergeRequests: (() -> Void)?
+    /// Inserts text into this thread's composer as one undoable edit (GitLab triage "Send to Agent"); set by the
+    /// thread container while its composer exists.
+    @ObservationIgnored var onInsertIntoComposer: ((String) -> Void)?
 
     init(engine: Engine, directory: String, projectName: String, thread: ThreadModel?, newThreadDraft: String = "") {
         self.engine = engine

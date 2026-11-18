@@ -137,6 +137,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         mergeRequests = surfaces.mergeRequests
         mergeRequests?.showPanel = { [weak self] in self?.showMergeRequestsPanel() }
         mergeRequests?.bind(engine: workspace.engine)
+        wireCreateMergeRequest()
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 

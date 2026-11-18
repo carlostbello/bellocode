@@ -27,7 +27,7 @@ public enum ExtrasTools {
         scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkMergeRequests,
         unlinkMergeRequests, listThreadMergeRequests, watchMergeRequest, unwatchMergeRequest, requestSecret, secretFile,
         secretExec, htmlPreview, htmlRender,
-    ]
+    ] + GitLabTools.all
 
     static func string(_ description: String) -> JSONValue { .object(["type": .string("string"), "description": .string(description)]) }
     static func number(_ description: String) -> JSONValue { .object(["type": .string("number"), "description": .string(description)]) }
@@ -85,10 +85,10 @@ public enum ExtrasTools {
             inputSchema: object([:])),
         ClientMCPTool(
             name: watchMergeRequest,
-            description: "Watch a merge request: this thread is woken (once per event) when its pipeline finishes, an approval is given or revoked, comments arrive, or it is merged or closed. Do not poll.",
+            description: "Babysit a merge request: this thread is woken once per event (pipeline failed or passed, with a failing-job log excerpt; new review comments; approval given or revoked; merged or closed), within the user's wake budget. The first time in a project the user approves it on a card. Do not poll.",
             inputSchema: object(["ref": string("MR URL or !iid.")], required: ["ref"])),
         ClientMCPTool(
-            name: unwatchMergeRequest, description: "Stop watching a merge request (it stays linked).",
+            name: unwatchMergeRequest, description: "Stop babysitting a merge request (it stays linked).",
             inputSchema: object(["ref": string("MR URL or !iid.")], required: ["ref"])),
         ClientMCPTool(
             name: requestSecret,
@@ -136,5 +136,5 @@ public enum ExtrasTools {
                     "html": string("The document."), "path": string("Or an .html file."), "title": string("Short title shown above it."),
                     "allowNetwork": strings("Host names to load from (asks the user)."),
                 ], required: ["title"])),
-    ]
+    ] + GitLabTools.definitions
 }

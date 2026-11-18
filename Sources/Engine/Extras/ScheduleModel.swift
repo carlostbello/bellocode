@@ -332,6 +332,7 @@ public struct ExtrasError: Error, Sendable, Hashable, CustomStringConvertible, L
     /// The message of any error, preferring ours.
     public static func message(_ error: any Error) -> String {
         if let error = error as? ExtrasError { return error.message }
+        if let error = error as? ForgeError { return error.description }
         return EngineError.from(error).userMessage
     }
 }

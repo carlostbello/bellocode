@@ -25,6 +25,15 @@ extension MockOpenCodeServer {
                     to: session.id, text: text, description: nil, metadata: body["metadata"] ?? .object([]), hold: hold)
                 return .json(["data": ["id": .string(inboxID), "sessionID": .string(session.id), "type": "synthetic"]])
             }
+        case ("POST", "generate"):
+            // session.generate: a fixed, recognisable proposal (title line, blank line, description).
+            return withSession(id) { _ in
+                guard case .success(let body) = self.jsonBody(request), body["prompt"]?.stringValue != nil else {
+                    return .error(400, tag: "InvalidRequestError", message: "Missing key prompt")
+                }
+                let text = "Parser: precedence climbing for binary operators\n\nReplaces the recursive-descent expression parser with precedence climbing.\n\n- Operators keep their associativity\n- Tested with the parser suite"
+                return .json(["data": ["text": .string(text), "tokens": ["input": 0, "output": 0], "cost": 0]])
+            }
         case ("PUT", "environment"):
             return withSession(id) { session in
                 guard case .success(let body) = self.jsonBody(request), let variables = body["variables"]?.objectEntries else {
@@ -40,6 +49,9 @@ extension MockOpenCodeServer {
 
     /// Synthetic texts admitted so far (tests: what woke a thread, and that no secret value was ever posted).
     public var syntheticTexts: [String] { state.syntheticLog }
+
+    /// Every session environment set through `PUT /api/session/{id}/environment` (tests: what agent shells receive).
+    public var environmentText: String { String(describing: state.environments) }
 
     /// Every message text the mock holds, joined (tests scan it for secret values).
     public func allMessageText() -> String {

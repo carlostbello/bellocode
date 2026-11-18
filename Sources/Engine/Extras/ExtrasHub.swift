@@ -40,7 +40,7 @@ public final class ExtrasHub {
     public let secrets: SecretService
     public let visuals: VisualService
 
-    @ObservationIgnored private let core: EngineCore
+    @ObservationIgnored let core: EngineCore
     @ObservationIgnored private weak var engine: Engine?
     @ObservationIgnored private var archived: Set<SessionID> = []
     @ObservationIgnored private let tasks = TaskBox()
@@ -52,12 +52,16 @@ public final class ExtrasHub {
     @ObservationIgnored private let containerSecrets = ContainerSecretReferences()
     @ObservationIgnored private let secretVault: any SecretVault
     @ObservationIgnored private let wallClock: any WallClock
-    @ObservationIgnored private let store: ProjectionStore
+    @ObservationIgnored let store: ProjectionStore
     /// Secret commands waiting for the person's approval (card), by card subject. In memory only: after a relaunch the
     /// card cannot run anything and asks the agent to request again. At most 16.
     @ObservationIgnored var pendingSecretCommands: [String: PendingSecretCommand] = [:]
     /// "Always for this command" approvals (`app_grant` kind secretCommand, scope `<account>\n<digest>`).
     @ObservationIgnored var secretCommandGrants: Set<String> = []
+    /// GitLab changes agents asked for, waiting on their cards (in memory; at most 16).
+    @ObservationIgnored var pendingGitLabWrites: [String: PendingGitLabWrite] = [:]
+    /// Projects where agents may babysit merge requests without asking (`app_grant` kind gitlabBabysit).
+    @ObservationIgnored var babysitGrants: Set<String> = []
 
     init(core: EngineCore, store: ProjectionStore, engine: Engine, configuration: EngineConfiguration) {
         self.core = core
@@ -82,6 +86,7 @@ public final class ExtrasHub {
         await secrets.load()
         await visuals.load()
         secretCommandGrants = (try? await store.grants(.secretCommand)) ?? []
+        babysitGrants = (try? await store.grants(.gitlabBabysit)) ?? []
         let lineage = store.observe(.lineage)
         tasks.set(
             "lineage",
@@ -159,8 +164,10 @@ public final class ExtrasHub {
                 return ClientMCPResult(text: "Ran “\(task.name)”: \(last?.label ?? "started")\(last?.sessionID.map { " in thread \($0.rawValue)" } ?? "").")
             case ExtrasTools.linkMergeRequests:
                 let refs = try await mergeRequestRefs(arguments["refs"], caller)
-                let links = try await mergeRequests.link(refs, to: caller.sessionID, source: .agent, watch: arguments["watch"]?.boolValue == true)
-                return ClientMCPResult(text: "Linked: \(refs.map(\.description).joined(separator: ", ")). This thread has \(links.count) linked merge request(s).")
+                let links = try await mergeRequests.link(refs, to: caller.sessionID, source: .agent)
+                var text = "Linked: \(refs.map(\.description).joined(separator: ", ")). This thread has \(links.count) linked merge request(s)."
+                if arguments["watch"]?.boolValue == true { text += " " + (try await requestBabysit(refs, caller)) }
+                return ClientMCPResult(text: text)
             case ExtrasTools.unlinkMergeRequests:
                 let refs = try await mergeRequestRefs(arguments["refs"], caller)
                 try await mergeRequests.unlink(refs, from: caller.sessionID)
@@ -168,12 +175,14 @@ public final class ExtrasHub {
             case ExtrasTools.listThreadMergeRequests: return await listMergeRequests(caller)
             case ExtrasTools.watchMergeRequest, ExtrasTools.unwatchMergeRequest:
                 let refs = try await mergeRequestRefs(arguments["ref"].map { .array([$0]) }, caller)
-                let watching = call.tool == ExtrasTools.watchMergeRequest
-                try await mergeRequests.setWatching(refs[0], for: caller.sessionID, watching)
-                return ClientMCPResult(
-                    text: watching
-                        ? "Watching \(refs[0]). You will be woken once per event (pipeline finished, approval given or revoked, comments, merged/closed). Do not poll; end your turn."
-                        : "Stopped watching \(refs[0]).")
+                guard call.tool == ExtrasTools.watchMergeRequest else {
+                    try await mergeRequests.setWatching(refs[0], for: caller.sessionID, false)
+                    return ClientMCPResult(text: "Stopped babysitting \(refs[0]).")
+                }
+                if !mergeRequests.links(for: caller.sessionID).contains(where: { $0.ref == refs[0] }) {
+                    try await mergeRequests.link(refs, to: caller.sessionID, source: .agent)
+                }
+                return ClientMCPResult(text: try await requestBabysit(refs, caller))
             case ExtrasTools.requestSecret: return try await requestSecret(arguments, caller)
             case ExtrasTools.secretFile:
                 guard let reference = arguments["secretRef"]?.stringValue else { throw ExtrasError("Give secretRef.") }
@@ -190,6 +199,8 @@ public final class ExtrasHub {
                 let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
                 return ClientMCPResult(text: try await visuals.preview(html: html, hosts: hosts))
             case ExtrasTools.htmlRender: return try await htmlRender(arguments, caller)
+            case let tool where GitLabTools.all.contains(tool):
+                return try await handleGitLab(call, caller: caller)
             default:
                 return .error("Unknown tool \(call.tool).")
             }
@@ -514,6 +525,12 @@ public final class ExtrasHub {
                 await core.resolveAppRequest(id)
                 try await approveSecretCommand(approval, always: always)
                 return
+            case (.gitlabWrite, _):
+                await core.resolveAppRequest(id)
+                try await respondGitLabWrite(approval, response)
+                return
+            case (.gitlabBabysit, _):
+                try await respondBabysit(approval, response)
             case (.secretCommand, _):
                 await core.resolveAppRequest(id)
                 if let pending = pendingSecretCommands.removeValue(forKey: approval.subjectID) {
@@ -729,6 +746,17 @@ extension ExtrasHub: MergeRequestHost {
     public func wake(_ sessionID: SessionID, text: String, url: String) async throws {
         try await core.postSynthetic(
             sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("merge_request"), "url": .string(url)])]))
+    }
+
+    /// Looks for the wake's ID in the thread's recent synthetic messages on the server.
+    public func wakeDelivered(_ sessionID: SessionID, wakeID: String) async -> Bool? {
+        guard let client = try? await core.currentClient(),
+            let page = try? await client.messages(sessionID: sessionID.rawValue, MessageListQuery(limit: 100, order: .descending, type: "synthetic"))
+        else { return nil }
+        return page.data.contains { message in
+            guard case .other(_, _, let raw) = message else { return false }
+            return raw["text"]?.stringValue?.contains(wakeID) == true
+        }
     }
 
     public func pause(_ sessionID: SessionID) -> MergeRequestPause {

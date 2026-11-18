@@ -69,7 +69,7 @@ extension SnapshotRunner {
         await extras.mergeRequests.waitForFetches()
         await extras.mergeRequests.pollDue()
         _ = await waitUntil(timeout: .seconds(5)) { extras.mergeRequests.watch(mrThread, MockGitLab.ref.url)?.baseline != nil }
-        if let transport = engine.configuration.forgeTransport as? FixtureForgeTransport { MockGitLab.finish(transport) }
+        if let transport = engine.configuration.forgeTransport as? FakeGitLabServer { MockGitLab.finish(transport) }
         // The 2 s mock poll interval finds the finished checks and wakes the thread once.
         _ = await waitUntil(timeout: .seconds(8)) { extras.mergeRequests.watch(mrThread, MockGitLab.ref.url)?.wakes == 1 }
         _ = await waitUntil(timeout: .seconds(5)) { !workspace.threadModel(mrThread).isRunning }

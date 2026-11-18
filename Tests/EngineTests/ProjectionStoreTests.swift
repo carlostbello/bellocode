@@ -13,7 +13,7 @@ struct ProjectionStoreTests {
         do {
             let store = try ProjectionStore(location: .file(url))
             #expect(!store.wasRecreated)
-            #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences", "v3-app-terminals", "v4-thread-organisation", "v5-orchestration-extras", "v6-container-environments", "v7-app-requests", "v8-app-outbox"])
+            #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences", "v3-app-terminals", "v4-thread-organisation", "v5-orchestration-extras", "v6-container-environments", "v7-app-requests", "v8-app-outbox", "v9-gitlab"])
             var batch = StoreBatch()
             batch.sessions = [Fixtures.session("ses_1")]
             try await store.apply(batch)
@@ -42,7 +42,7 @@ struct ProjectionStoreTests {
         let store = try ProjectionStore(location: .file(url))
         #expect(store.wasRecreated)
         #expect(try await store.allSessions().isEmpty)
-        #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences", "v3-app-terminals", "v4-thread-organisation", "v5-orchestration-extras", "v6-container-environments", "v7-app-requests", "v8-app-outbox"])
+        #expect(try await store.appliedMigrations() == ["v1-initial", "v2-app-preferences", "v3-app-terminals", "v4-thread-organisation", "v5-orchestration-extras", "v6-container-environments", "v7-app-requests", "v8-app-outbox", "v9-gitlab"])
         try? FileManager.default.removeItem(at: directory)
     }
 
