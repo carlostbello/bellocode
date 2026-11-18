@@ -405,3 +405,10 @@ enum VaultIO {
     @concurrent
     static func run<T: Sendable>(_ operation: @Sendable () throws -> T) async throws -> T { try operation() }
 }
+
+extension EnvironmentService {
+    /// Snapshots and previews only (`--snapshot containers3`): shows a state with no runtime or server behind it.
+    public func previewGlobalMCPState(_ id: String, _ state: GlobalMCPState) { globalMCPStates[id] = state }
+    /// Snapshots and previews only: shows a diagnostics run without fetching anything.
+    public func previewNetworkDiagnostics(_ run: NetworkDiagnostics) { network.diagnostics = run }
+}

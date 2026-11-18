@@ -497,7 +497,7 @@ struct MCPFieldsEditor: View {
             }
             ForEach($fields) { $field in
                 SettingsFieldRow {
-                    TextField("", text: $field.name, prompt: Text(namePrompt)).textFieldStyle(DSTextFieldStyle()).frame(width: 130)
+                    TextField("", text: $field.name, prompt: Text(namePrompt)).textFieldStyle(DSTextFieldStyle()).frame(width: 190)
                         .font(.ds(.codeSmall)).accessibilityLabel("\(title) name")
                     if field.secret {
                         SecureField("", text: $field.newValue, prompt: Text(field.stored ? "Saved in Keychain" : "secret value")).textFieldStyle(DSTextFieldStyle())

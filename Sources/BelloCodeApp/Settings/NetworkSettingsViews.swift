@@ -232,11 +232,13 @@ struct GitLabRegistryView: View {
                     }
                 }
             }
-            SettingsFieldRow {
+            SettingsRow("Sign in with the GitLab token", detail: "The registry host and your GitLab user name; the token of the instance is used as the password.") {
                 DSMenuSelect("GitLab instance", options: model.gitLabInstances.map { (id: $0, title: $0) }, selection: $model.gitLabInstance)
+            }
+            SettingsFieldRow {
                 TextField("", text: $model.gitLabRegistry, prompt: Text(suggestions.first ?? "registry host")).textFieldStyle(DSTextFieldStyle())
                     .accessibilityLabel("GitLab registry host")
-                TextField("", text: $model.gitLabUser, prompt: Text("GitLab user")).textFieldStyle(DSTextFieldStyle()).frame(width: 96)
+                TextField("", text: $model.gitLabUser, prompt: Text("GitLab user")).textFieldStyle(DSTextFieldStyle()).frame(width: 120)
                     .accessibilityLabel("GitLab user name")
                 Button("Use GitLab Token") { model.signInWithGitLab() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                     .disabled(model.gitLabRegistry.isEmpty || model.gitLabUser.isEmpty)

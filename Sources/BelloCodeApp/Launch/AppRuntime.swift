@@ -69,7 +69,9 @@ final class AppRuntime {
                      environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> AppRuntime {
         if let scenario = options.mock {
             guard LaunchOptions.allowsDevelopmentModes else { throw LaunchError.developmentOnly("Mock mode") }
-            if case .snapshot("containers") = options.mode { return try await makeMock(scenario, containers: true) }
+            if case .snapshot(let name) = options.mode, name == "containers" || name == "containers3" {
+                return try await makeMock(scenario, containers: true)
+            }
             return try await makeMock(scenario)
         }
         #if BELLOCODE_DEVELOPMENT
@@ -213,6 +215,14 @@ final class AppRuntime {
                 .init(policy: ImagePolicy(allowedPrefixes: ["registry.acme.internal"], pullPolicy: .missing), defaultImage: nil,
                       source: "configuration profile")
             }
+            // Containers 3: global MCP secrets in memory, the scripted Mac's enterprise roots (never the real Keychain),
+            // no proxy (a transparent one), bundles and logs in the temporary folder.
+            configuration.containers?.mcpVault = InMemorySecretVault()
+            configuration.containers?.mcpLogDirectory = directory.appending(path: "mcp-logs", directoryHint: .isDirectory)
+            configuration.containers?.certificateSource = SnapshotCertificates()
+            configuration.containers?.certificateDirectory = directory.appending(path: "certs", directoryHint: .isDirectory)
+            configuration.containers?.managedNetwork = { nil }
+            configuration.containers?.systemProxy = { SystemProxySettings() }
         }
         let suite = "com.bellocode.app.mock"
         return AppRuntime(
