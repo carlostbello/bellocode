@@ -104,3 +104,23 @@ extension Engine {
 enum HostGitPaths {
     static func real(_ path: String) -> String { URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path }
 }
+
+extension Engine {
+    public enum WorktreeCleanupTrigger: Sendable { case settled, archived }
+
+    /// Applies the project's cleanup policy to the worktree of thread `id` after it was settled or archived. Removes
+    /// only clean worktrees whose work is pushed or merged (`WorktreeService.cleanupVerdict`); the removal can be
+    /// undone like a manual one. Returns the removal (for an Undo toast) or nil when kept.
+    public func cleanupWorktree(of session: Session, projectDirectory: String, trigger: WorktreeCleanupTrigger) async -> RemovedWorktree? {
+        let preferences = await git.preferences(projectDirectory: projectDirectory)
+        guard let policy = preferences.cleanup, trigger == .settled ? policy.afterSettle : policy.afterArchive else { return nil }
+        guard HostGitPaths.real(session.directory) != HostGitPaths.real(projectDirectory) else { return nil }
+        let base = git.repository(for: projectDirectory).baseBranch ?? "main"
+        let verdict = await git.worktrees.cleanupVerdict(
+            directory: session.directory, projectDirectory: projectDirectory, parent: preferences.parentDirectory(projectDirectory: projectDirectory),
+            base: base, sharedByOtherThreads: !threadsSharing(directory: session.directory, except: session.id).isEmpty)
+        guard verdict == .remove else { return nil }
+        return try? await git.removeWorktree(
+            directory: session.directory, projectDirectory: projectDirectory, projectID: session.projectID, deleteBranch: false, force: false)
+    }
+}

@@ -138,6 +138,8 @@ public final class Engine {
     /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
     /// (docs/features/containers.md).
     public let environments: EnvironmentService
+    /// Git parity: clone from GitLab, publish, new projects (docs/features/git-parity.md).
+    public private(set) var gitProjects: GitProjectService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -200,6 +202,10 @@ public final class Engine {
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
         git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
+        git.tokenScopes = { [weak mergeRequests] base in mergeRequests?.instanceStatus[base]?.token?.scopes }
+        gitProjects = GitProjectService(
+            git: git, provider: { [weak mergeRequests] in mergeRequests?.provider },
+            addProject: { [weak self] directory in await self?.addProject(directory: directory) })
         // Git parity: HTTPS git to the configured GitLab instances authenticates with the Keychain token through
         // `bellocode-exec --git-credential` (only with the bundled helper; tests configure their own).
         if let helper = configuration.gitCredentialHelper ?? configuration.containers?.helperURL,

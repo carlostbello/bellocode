@@ -34,6 +34,10 @@ public struct WorkspacePreferences: Codable, Sendable, Hashable {
     /// Runs in each new worktree; nil uses the project's opencode start command, if any.
     public var setupScript: String?
     public var branchPrefix = "bellocode/"
+    /// Git parity: automatic cleanup of this project's worktrees (optional so older saved preferences still decode).
+    public var cleanup: WorktreeCleanupPolicy?
+    /// Git parity: propose worktree branch names with the session's model (the slug is used until it answers).
+    public var generateBranchNames: Bool?
 
     public init() {}
 
@@ -95,6 +99,13 @@ public struct WorkspacePreferences: Codable, Sendable, Hashable {
 public final class GitService {
     /// The configured GitLab instances (Create Merge Request), set by the engine from Settings ▸ GitLab.
     public var forgeInstances: @MainActor () -> [GitLabInstance] = { [] }
+    /// Token scopes per instance base URL when GitLab reported them (git parity: HTTPS scope checks).
+    public var tokenScopes: @MainActor (String) -> [String]? = { _ in nil }
+    /// Background fetch interval for watched repositories (nil: off). Failures back off to `autoFetchMaxInterval`.
+    public var autoFetchInterval: Duration? = .seconds(300)
+    public var autoFetchMaxInterval: Duration = .seconds(3_600)
+    /// Fast-forward the default branch after a fetch when the checkout is clean (T3 Code "Automatically pull").
+    public var autoPullDefaultBranch = false
 
     /// Repository models kept (least recently used dropped beyond this; their watchers stop).
     public static let repositoryLimit = 24
@@ -375,7 +386,7 @@ public final class GitRepositoryModel {
     public var workspaceKind: GitWorkspaceKind { location?.kind ?? (phase == .notRepository ? .notRepository : .mainCheckout) }
     public var repository: GitRepository { GitRepository(directory: directory, runner: service?.runner ?? GitRunner()) }
 
-    @ObservationIgnored private weak var service: GitService?
+    @ObservationIgnored weak var service: GitService?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var branchTask: Task<Void, Never>?
     @ObservationIgnored private var refreshAgain = false
@@ -389,15 +400,26 @@ public final class GitRepositoryModel {
         self.service = service
     }
 
+    // Git parity (GitRepositoryModel+Parity.swift): fetch schedule and action state.
+    @ObservationIgnored var fetchTask: Task<Void, Never>?
+    public internal(set) var lastFetched: Date?
+    public internal(set) var fetchProblem: String?
+    public internal(set) var isFetching = false
+    /// The running git action ("Pushing…"), nil when idle.
+    public internal(set) var activity: String?
+    public internal(set) var remotes: [GitRemote] = []
+
     isolated deinit {
         refreshTask?.cancel()
         branchTask?.cancel()
+        fetchTask?.cancel()
         watcher?.stop()
     }
 
     func shutdown() {
         refreshTask?.cancel()
         branchTask?.cancel()
+        stopAutoFetch()
         watcher?.stop()
         watcher = nil
         watchCount = 0
@@ -488,6 +510,7 @@ public final class GitRepositoryModel {
     /// Starts watching the working tree and its git directory (reference counted; pair with `endWatching`).
     public func beginWatching() {
         watchCount += 1
+        startAutoFetch()
         guard watcher == nil else { return }
         startWatcherWhenLocated()
     }
@@ -497,6 +520,7 @@ public final class GitRepositoryModel {
         if watchCount == 0 {
             watcher?.stop()
             watcher = nil
+            stopAutoFetch()
         }
     }
 

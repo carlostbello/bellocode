@@ -107,6 +107,10 @@ public final class FakeGitLabServer: ForgeTransport {
         public var branches: [String] = ["main"]
         public var members: [GitLabUserRef] = []
         public var mrs: [Int: MR] = [:]
+        /// Git parity: protected branches (`repository/branches/:name` reports `protected`).
+        public var protectedBranches: Set<String> = []
+        public var name: String?
+        public var lastActivity = "2026-11-17T10:00:00.000Z"
         public var jobs: [Int: [Job]] = [:]
         public var traces: [Int: String] = [:]
         public init(id: Int, path: String) {
@@ -214,6 +218,26 @@ public final class FakeGitLabServer: ForgeTransport {
         case ("GET", "personal_access_tokens"):
             guard options.tokenIntrospection else { return Self.json(404, ["message": "404 Not found"]) }
             return Self.json(200, ["id": 7, "name": "bellocode", "scopes": ["api", "read_api"], "active": true, "revoked": false, "expires_at": "2026-12-01"])
+        // Git parity: clone picker, namespaces and publish.
+        case ("GET", "projects") where segments.count == 1:
+            let search = (query["search"] ?? "").lowercased()
+            let items = state.projects.values.sorted { $0.lastActivity > $1.lastActivity }
+                .filter { search.isEmpty || $0.path.lowercased().contains(search) }.map { projectJSON($0) }
+            return Self.json(200, items)
+        case ("GET", "namespaces"):
+            return Self.json(200, [["id": 1, "full_path": username, "kind": "user"], ["id": 2, "full_path": "team", "kind": "group"]])
+        case ("POST", "projects") where segments.count == 1:
+            guard let name = input["name"] as? String else { return Self.json(400, ["message": "name is missing"]) }
+            let slug = input["path"] as? String ?? name.lowercased()
+            let namespace = (input["namespace_id"] as? Int) == 2 ? "team" : username
+            let path = namespace + "/" + slug
+            if state.projects[path] != nil { return Self.json(400, ["message": ["path": ["has already been taken"]]]) }
+            state.nextID += 1
+            var created = Project(id: state.nextID, path: path)
+            created.name = name
+            created.branches = []
+            state.projects[path] = created
+            return Self.json(201, projectJSON(created))
         case (_, "projects"): break
         default: return Self.json(404, ["message": "404 Not found"])
         }
@@ -239,6 +263,11 @@ public final class FakeGitLabServer: ForgeTransport {
         switch (method, rest.first ?? "") {
         case ("GET", ""):
             return etagged(Self.json(200, ["id": project.id, "path_with_namespace": project.path, "default_branch": project.defaultBranch, "web_url": "\(instance.baseURL)/\(project.path)"]))
+        case ("GET", "repository") where rest.count >= 3 && rest[1] == "branches":
+            let name = rest.dropFirst(2).joined(separator: "/")
+            guard project.branches.contains(name) else { return Self.json(404, ["message": "404 Branch Not Found"]) }
+            let isProtected = project.protectedBranches.contains(name)
+            return Self.json(200, ["name": name, "protected": isProtected, "can_push": !isProtected, "default": name == project.defaultBranch])
         case ("GET", "repository"):
             let search = query["search"] ?? ""
             return page(project.branches.filter { search.isEmpty || $0.contains(search) }.map { ["name": $0] })
@@ -348,6 +377,12 @@ public final class FakeGitLabServer: ForgeTransport {
         default:
             return Self.json(404, ["message": "404 Not found"])
         }
+    }
+
+    private func projectJSON(_ project: Project) -> [String: Any] {
+        ["id": project.id, "path_with_namespace": project.path, "name": project.name ?? (project.path as NSString).lastPathComponent,
+         "http_url_to_repo": "\(instance.baseURL)/\(project.path).git", "web_url": "\(instance.baseURL)/\(project.path)",
+         "default_branch": project.defaultBranch, "last_activity_at": project.lastActivity]
     }
 
     private func web(_ project: Project) -> String { "\(instance.baseURL)/\(project.path)" }
