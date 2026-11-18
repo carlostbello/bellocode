@@ -209,7 +209,7 @@ struct MergeRequestCard: View {
             if expanded {
                 if let snapshot {
                     OverviewSection(snapshot: snapshot, link: link)
-                    ApprovalsSection(model: model, snapshot: snapshot)
+                    ApprovalsSection(model: model, snapshot: snapshot).id("approvals")
                     PipelineSection(model: model, snapshot: snapshot).id("pipeline")
                     DiscussionsSection(snapshot: snapshot).id("discussions")
                     if model.work != nil { DependenciesSection(model: model, snapshot: snapshot).id("dependencies") }

@@ -112,4 +112,130 @@ enum MockGitLab {
             }
         }
     }
+
+    // MARK: GitLab 2 (`--snapshot gitlab2`)
+
+    static let precedenceV1 = """
+        @@ -58,10 +58,11 @@ struct PrecedenceParser {
+             func bindingPower(of op: Token) -> (left: Int, right: Int)? {
+                 switch op.kind {
+        -        case .plus, .minus: return (1, 2)
+        -        case .star, .slash: return (3, 4)
+        +        case .plus, .minus: return (10, 11)
+        +        case .star, .slash: return (20, 21)
+        +        case .caret: return (30, 31)
+                 default: return nil
+                 }
+             }
+         
+             mutating func parseExpression(minimum: Int = 0) throws -> Expr {
+                 var lhs = try parsePrefix()
+
+        """
+    static let precedenceV2 = """
+        @@ -58,10 +58,12 @@ struct PrecedenceParser {
+             func bindingPower(of op: Token) -> (left: Int, right: Int)? {
+                 switch op.kind {
+        -        case .plus, .minus: return (1, 2)
+        -        case .star, .slash: return (3, 4)
+        +        case .plus, .minus: return (10, 11)
+        +        case .star, .slash: return (20, 21)
+        +        // Right-associative: the right binding power is lower.
+        +        case .caret: return (31, 30)
+                 default: return nil
+                 }
+             }
+         
+             mutating func parseExpression(minimum: Int = 0) throws -> Expr {
+                 var lhs = try parsePrefix()
+
+        """
+    static let testsV2 = """
+        @@ -0,0 +1,8 @@
+        +import Testing
+        +@testable import Rocket
+        +
+        +@Test func exponentIsRightAssociative() throws {
+        +    #expect(try evaluate("2 ^ 3 ^ 2") == 512)
+        +}
+        +
+        +@Test func unaryMinusBindsTighter() throws { #expect(try evaluate("-2 ^ 2") == 4) }
+
+        """
+
+    /// Review data on MR !128: two diff versions, a current thread on the new `^` line, an outdated thread from the first
+    /// version, a resolved thread in the new test file; issues of the project; to-dos; Premium approval rules.
+    static func addReview(_ server: FakeGitLabServer) {
+        let v1 = FakeGitLabServer.Version(
+            id: 7_001, base: "4e1d2c3b4a5f6e7d", start: "4e1d2c3b4a5f6e7d", head: "71c0d2e9a8b3c4d5",
+            diffs: [("Sources/Parser/Precedence.swift", "Sources/Parser/Precedence.swift", precedenceV1)])
+        let v2 = FakeGitLabServer.Version(
+            id: 7_002, base: "4e1d2c3b4a5f6e7d", start: "4e1d2c3b4a5f6e7d", head: "9f2c1ab4e5d6",
+            diffs: [("Sources/Parser/Precedence.swift", "Sources/Parser/Precedence.swift", precedenceV2), ("", "Tests/ParserTests/PrecedenceTests.swift", testsV2)])
+        func position(_ version: FakeGitLabServer.Version, _ path: String, new: Int?, old: Int? = nil) -> FakeGitLabServer.Position {
+            FakeGitLabServer.Position(base: version.base, start: version.start, head: version.head, oldPath: path, newPath: path, oldLine: old, newLine: new)
+        }
+        func note(_ id: Int, _ author: String, _ body: String, _ position: FakeGitLabServer.Position?, resolved: Bool = false, created: String) -> FakeGitLabServer.Note {
+            var note = FakeGitLabServer.Note(id: id, author: author, body: body, resolvable: true, resolved: resolved)
+            note.diffPosition = position
+            note.created = created
+            return note
+        }
+        server.update {
+            $0.version = "17.4.1-ee"
+            $0.approvalRules = true
+            $0.dependencies = true
+        }
+        server.editMR(project, 128) { mr in
+            mr.versions = [v1, v2]
+            mr.sha = v2.head
+            mr.diffs = v2.diffs
+            mr.eligibleApprovers = ["mara", "lee", "octo"]
+            mr.hiddenGroups = true
+            mr.blockedBy = [131]
+            let caret = position(v2, "Sources/Parser/Precedence.swift", new: 63)
+            mr.discussions = [
+                .init(id: "c1a", notes: [
+                    note(501, "mara", "Right-associative `^` needs its own binding power; `2 ^ 3 ^ 2` should be 512, not 64.", caret, created: "2026-11-18T08:12:00Z"),
+                    note(502, "octo", "Good catch: the right power is now lower than the left. Added a test.", caret, created: "2026-11-18T08:40:00Z"),
+                ]),
+                .init(id: "c0d", notes: [
+                    note(505, "lee", "Should `^` share the multiplicative powers?", position(v1, "Sources/Parser/Precedence.swift", new: 62), created: "2026-11-17T16:05:00Z"),
+                ]),
+                .init(id: "c4e", notes: [
+                    note(506, "lee", "Nice: a test for unary minus too.", position(v2, "Tests/ParserTests/PrecedenceTests.swift", new: 8), resolved: true, created: "2026-11-18T09:02:00Z"),
+                ]),
+                .init(id: "c2b", notes: [.init(id: 503, author: "lee", body: "Can we keep the old entry point as a deprecated wrapper for one release?")]),
+            ]
+        }
+        server.edit(project) { project in
+            let issues: [(Int, String, [String], [String])] = [
+                (212, "Exponent operator is left-associative", ["mock-user"], ["parser", "bug"]),
+                (215, "Parse errors should name the expected token", ["mock-user"], ["parser"]),
+                (219, "Benchmark the precedence climber on large inputs", ["mock-user", "mara"], ["performance"]),
+                (220, "Document operator precedence in the 2.0 guide", ["mock-user"], ["docs"]),
+            ]
+            for (iid, title, assignees, labels) in issues {
+                var issue = FakeGitLabServer.Issue(iid: iid, title: title, assignees: assignees)
+                issue.labels = labels
+                issue.updatedAt = "2026-11-1\(iid % 8)T10:00:00Z"
+                project.issues[iid] = issue
+            }
+            project.issues[212]?.description = """
+                `2 ^ 3 ^ 2` evaluates to 64; it should be 512 (exponentiation is right-associative).
+
+                Steps:
+                1. `rocket eval "2 ^ 3 ^ 2"`
+                2. Expected 512, got 64.
+
+                Probably the binding powers in `Precedence.swift`.
+                """
+            project.issues[212]?.relatedMRs = [128]
+        }
+        server.addTodo(FakeGitLabServer.Todo(id: 8_001, action: "review_requested", targetType: "MergeRequest", targetIID: 131, projectPath: project))
+        server.addTodo(FakeGitLabServer.Todo(id: 8_002, action: "mentioned", targetType: "Issue", targetIID: 215, projectPath: project, body: "@mock-user can you take this?"))
+        server.addTodo(FakeGitLabServer.Todo(id: 8_003, action: "build_failed", targetType: "MergeRequest", targetIID: 128, projectPath: project))
+        server.addTodo(FakeGitLabServer.Todo(id: 8_004, action: "assigned", targetType: "Issue", targetIID: 220, projectPath: project))
+        server.addTodo(FakeGitLabServer.Todo(id: 8_005, action: "approval_required", targetType: "MergeRequest", targetIID: 131, projectPath: project))
+    }
 }

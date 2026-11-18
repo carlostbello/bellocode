@@ -350,15 +350,16 @@ public struct ApprovalExplanation: Hashable, Sendable {
     ) -> ApprovalExplanation {
         var lines: [Line] = []
         func add(_ id: String, _ label: String, _ text: String, _ tone: Tone) { lines.append(Line(id: id, label: label, text: text, tone: tone)) }
-        func people(_ names: [String], limit: Int = 6) -> String {
-            guard !names.isEmpty else { return "nobody listed" }
-            let shown = names.prefix(limit).map { "@\($0)" }.joined(separator: ", ")
-            return names.count > limit ? shown + " and \(names.count - limit) more" : shown
+        func people(_ names: [String], groups: [String] = [], limit: Int = 6) -> String {
+            let all = names.map { "@\($0)" } + groups.map { "group \($0)" }
+            guard !all.isEmpty else { return "nobody listed" }
+            let shown = all.prefix(limit).joined(separator: ", ")
+            return all.count > limit ? shown + " and \(all.count - limit) more" : shown
         }
         if let rules {
             for rule in rules where !rule.isCodeOwner {
                 let count = "\(rule.approvedBy.count) of \(rule.required)"
-                let who = rule.eligible.isEmpty && rule.groups.isEmpty ? (rule.type == "any_approver" ? "any eligible member" : "nobody visible to you") : people(rule.eligible + rule.groups.map { "group \($0)" })
+                let who = rule.eligible.isEmpty && rule.groups.isEmpty ? (rule.type == "any_approver" ? "any eligible member" : "nobody visible to you") : people(rule.eligible, groups: rule.groups)
                 if rule.isRequired {
                     add("rule-\(rule.id)", "Required", "\(rule.name): \(count)\(rule.approved ? ", satisfied" : ""). Can approve: \(who).", rule.approved ? .done : .waiting)
                 } else {
@@ -371,7 +372,7 @@ public struct ApprovalExplanation: Hashable, Sendable {
                 let section = rule.section.map { $0 == "codeowners" ? "" : " [\($0)]" } ?? ""
                 add(
                     "owner-\(rule.id)", "Code Owners",
-                    "\(rule.name)\(section): \(rule.approvedBy.count) of \(rule.required)\(rule.isRequired ? "" : " (optional)"). Owners: \(people(rule.eligible + rule.groups.map { "group \($0)" })).",
+                    "\(rule.name)\(section): \(rule.approvedBy.count) of \(rule.required)\(rule.isRequired ? "" : " (optional)"). Owners: \(people(rule.eligible, groups: rule.groups)).",
                     rule.approved || !rule.isRequired ? .done : .waiting)
                 if rule.containsHiddenGroups { add("hidden-\(rule.id)", "Visibility", "Code owners for \(rule.name) include groups you cannot see.", .warning) }
             }

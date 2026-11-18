@@ -175,7 +175,7 @@ struct GitLabApprovalAndDependencyTests {
         let (work, _, _) = try await WorkWorld.make(server)
         let explanation = try #require(await work.loadApprovals(GitLabWorld.ref))
         let text = explanation.lines.map { "\($0.label): \($0.text)" }
-        #expect(text.contains("Required: Backend: 0 of 1. Can approve: @mara, @lee, @group platform/backend."))
+        #expect(text.contains("Required: Backend: 0 of 1. Can approve: @mara, @lee, group platform/backend."))
         #expect(text.contains { $0.hasPrefix("Visibility: Backend includes groups you cannot see") })
         #expect(text.contains { $0.hasPrefix("Optional: Docs") })
         #expect(text.contains { $0.hasPrefix("Code Owners: CODEOWNERS [src/parser/]: 0 of 1") && $0.contains("@lee") })

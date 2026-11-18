@@ -127,6 +127,7 @@ public final class MergeRequestReviewModel {
 
     func relative(_ date: Date?) -> String {
         guard let date else { return "" }
+        if abs(date.timeIntervalSince(now())) < 60 { return "just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now())
