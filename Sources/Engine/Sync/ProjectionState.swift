@@ -47,6 +47,8 @@ struct MessageCache: Sendable {
     let capacity: Int
     private var entries: [MessageID: Message] = [:]
     private var lastUse: [MessageID: UInt64] = [:]
+    /// When each message was last put (inserted or replaced), on the same clock as `lastUse`.
+    private var lastPut: [MessageID: UInt64] = [:]
     private var tick: UInt64 = 0
     /// Messages whose latest state is only in memory.
     private(set) var unpersisted: Set<MessageID> = []
@@ -61,12 +63,19 @@ struct MessageCache: Sendable {
 
     func contains(_ id: MessageID) -> Bool { entries[id] != nil }
 
+    /// A point on the cache's clock. Read it before a server read; `putSince(_:)` then tells what changed meanwhile.
+    var now: UInt64 { tick }
+
+    /// Whether `id` was put (by an event, a send or a fetch) after `mark`, a value of `now` read earlier.
+    func putSince(_ mark: UInt64, _ id: MessageID) -> Bool { (lastPut[id] ?? 0) > mark }
+
     /// Inserts or replaces; returns unpersisted messages evicted to make room (write them).
     @discardableResult
     mutating func put(_ message: Message, persisted: Bool) -> [Message] {
         tick += 1
         entries[message.id] = message
         lastUse[message.id] = tick
+        lastPut[message.id] = tick
         if persisted { unpersisted.remove(message.id) } else { unpersisted.insert(message.id) }
         return evictIfNeeded()
     }
@@ -80,6 +89,7 @@ struct MessageCache: Sendable {
     mutating func remove(_ id: MessageID) {
         entries[id] = nil
         lastUse[id] = nil
+        lastPut[id] = nil
         unpersisted.remove(id)
     }
 
