@@ -243,7 +243,7 @@ struct DockerFilterTests {
 
     @Test func requestsWithoutTheTokenAreRefusedBeforeAnything() async throws {
         defer { proxy.stop(); daemon.stop() }
-        for bad in ["", "wrong-token-value", String(token.dropLast()) + "0", "../" + token] {
+        for bad in ["", "wrong-token-value", String(token.dropLast()) + (token.hasSuffix("0") ? "1" : "0"), "../" + token] {
             let answer = try await send("GET", "/containers/json", token: bad)
             #expect(answer.status == 401 || answer.status == 400, "token \(bad)")
         }
