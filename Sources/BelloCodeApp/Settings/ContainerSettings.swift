@@ -886,6 +886,17 @@ struct EnvironmentSettingsView: View {
                                   fix: { fix in EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { _ in }) },
                                   retry: { Task { await service.retry(environment.directory) } })
         }
+        SettingsGroup("Where commands run", footer: "opencode and its file tools always edit files on this Mac. This decides where the agent's commands, terminals and MCP servers run.") {
+            ExecutionModePickerView(service: service, environment: environment)
+        }
+        if environment.mode != .hostDocker {
+            SettingsGroup("Docker from the workspace", footer: "docker, docker compose and docker build inside the container reach BelloCode's filtered endpoint: only this workspace's containers, volumes and networks, bind mounts inside \(environment.mode == .sharedWorkspace ? "the code roots" : "the project"), no privileged or host access.") {
+                DockerRefusalsView(refusals: service.dockerRefusals.filter { $0.scope == environment.containerKey })
+            }
+        }
+        if environment.mode == .sharedWorkspace {
+            SettingsNote("The shared workspace uses the default image (Settings ▸ Containers). The project's own image, services and caches below apply only in Project container mode.")
+        }
         SettingsGroup("Image", footer: environment.record.inventory.map { "\($0.os) · \($0.arch) · \($0.tools.joined(separator: ", "))" }) {
             SettingsFieldRow(divided: false) {
                 TextField("", text: $model.image, prompt: Text(service.defaults.defaultImage.map { "Default: \($0)" } ?? "registry.example.com/team/image:tag"))

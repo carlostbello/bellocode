@@ -176,3 +176,76 @@ struct ExecutionModeRow: View {
 final class MessageBox: ObservableObject {
     @Published var message: String?
 }
+
+/// Project Settings ▸ Environment ▸ Where commands run: the project's mode (or the default), each with what it does;
+/// a change applies at once, says what it changed and can be undone.
+struct ExecutionModePickerView: View {
+    let service: EnvironmentService
+    let environment: ProjectEnvironment
+    @StateObject private var box = UndoBox()
+
+    var body: some View {
+        let chosen = environment.settings.executionMode
+        ExecutionModeRow(mode: service.defaultMode, selected: chosen == nil, divided: false,
+                         detail: "Use the default (\(service.defaultMode.title)). \(service.defaultMode.explanation)") {
+            choose(nil)
+        }
+        .accessibilityLabel("Use the default, \(service.defaultMode.title)")
+        ForEach(ExecutionMode.allCases.filter(service.isAllowed), id: \.self) { mode in
+            ExecutionModeRow(mode: mode, selected: chosen == mode, recommended: false) { choose(mode) }
+        }
+        if environment.mode == .sharedWorkspace {
+            SettingsRow("Code roots", detail: service.codeRootsValidation.roots.map { CodeRoots.display($0) }.joined(separator: ", "), divided: true) {
+                DSPillView(environment.phase.label, tone: environment.phase.tone.ds, symbolName: environment.phase.symbolName)
+            }
+        }
+        if let message = box.message {
+            SettingsActionsRow {
+                Text(message).font(.ds(.meta)).foregroundStyle(Color.ds.text2).fixedSize(horizontal: false, vertical: true)
+                if let undo = box.undo {
+                    Button("Undo") {
+                        box.message = nil
+                        box.undo = nil
+                        Task { await service.setMode(undo.mode, for: environment.directory) }
+                    }
+                    .buttonStyle(DSButtonStyle(.outline, size: .small))
+                }
+            }
+        }
+    }
+
+    private func choose(_ mode: ExecutionMode?) {
+        let previous = environment.settings.executionMode
+        guard previous != mode else { return }
+        let effective = mode ?? service.defaultMode
+        box.message = "Now: \(effective.title). \(effective.switchEffect)"
+        box.undo = .init(mode: previous)
+        Task { await service.setMode(mode, for: environment.directory) }
+    }
+}
+
+@MainActor
+final class UndoBox: ObservableObject {
+    struct Undo { var mode: ExecutionMode? }
+    @Published var message: String?
+    @Published var undo: Undo?
+}
+
+/// Docker requests BelloCode's endpoint refused for this environment (newest first): what was asked and why.
+struct DockerRefusalsView: View {
+    let refusals: [DockerFilterProxy.Refusal]
+
+    var body: some View {
+        if refusals.isEmpty {
+            SettingsRow("No refused requests", detail: "docker inside the container talks to BelloCode's filtered endpoint; anything it refuses is listed here.", divided: false) {
+                DSPillView("Filtered", tone: .success, symbolName: "checkmark.shield")
+            }
+        }
+        ForEach(Array(refusals.reversed().prefix(5).enumerated()), id: \.offset) { index, refusal in
+            SettingsRow("\(refusal.method) \(refusal.path)", detail: refusal.message.replacingOccurrences(of: "BelloCode refused this Docker request: ", with: ""),
+                        divided: index > 0) {
+                DSPillView("Refused", tone: .danger, symbolName: "hand.raised")
+            }
+        }
+    }
+}
