@@ -352,7 +352,9 @@ struct LiveEgressRoutingTests {
         try? FileManager.default.removeItem(atPath: root)
         #expect(outcome.contains("200 hello from web"), "routed: \(outcome)")
         #expect(!other.contains("hello from web") && other.contains("403"), "unrouted names: \(other)")
-        let leftovers = try await client.listContainers(labels: ["app.bellocode.test=secrets"])
-        #expect(leftovers.isEmpty)
+        // Only this test's own containers (the adversarial suite may run alongside with the same label).
+        for name in ["bellocode-test-web-\(key)", EgressGateway.containerName(key), spec.containerName] {
+            #expect(try await client.inspectContainer(name) == nil, "\(name) left behind")
+        }
     }
 }
