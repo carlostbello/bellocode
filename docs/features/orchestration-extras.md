@@ -17,8 +17,10 @@ Request" (GitLab's new-MR page for the branch; no API write).
 | Visuals | `~/Library/Caches/BelloCode/visuals` (≤ 300 docs, `<id>.html/.json/-light.png/-dark.png`) | n/a | Rows keep rendering from cache |
 Migration `v5-orchestration-extras` (tables above; unshipped, so the MR table was renamed in place from `app_pr_watch`).
 App requests (secret card, schedule/network approval) are a new `PendingRequest.app` case: pinned above the composer,
-counted in Needs You, persisted like other requests, kept across resyncs, never auto-dismissed; they do not mark a
-thread running (the agent ended its turn and is woken).
+counted in Needs You, kept across resyncs, never auto-dismissed; they do not mark a thread running (the agent ended its
+turn and is woken). Since migration `v7-app-requests` (deep review 1, C3) they live in the app-owned `app_request`
+table, not the `pending_request` cache: a cache rebuild, a complete server list and the cache-write give-up keep them;
+deleting the thread removes them.
 
 ## 1. Scheduled tasks
 opencode's experimental schedules (verified on 2.3.0: cron+tz works) bind to one existing session, cannot start a thread
@@ -26,7 +28,11 @@ per run, cannot be edited and keep no history, so BelloCode schedules itself (`S
 Rules: every N minutes (from an anchor), HH:MM on weekdays in an IANA zone, once. DST: a missing time runs after the gap
 with the same minutes (02:30 → 03:30); a repeated time runs at its first occurrence. **Catch-up:** a run up to 2 min
 late is on time; later (quit, asleep) → one catch-up run if the task allows it, else one "skipped" record; never a
-burst. Ticks on launch, timer (injected `WallClock`), and `NSWorkspace.didWake`. Destination: a new thread per run in
+burst. Ticks on launch, timer (injected `WallClock`), and `NSWorkspace.didWake`. **Dispatch is armed by the engine's
+first successful reconcile** (deep review 1, C7): definitions show at once, but nothing runs while the connection is not
+live (launch before the server is ready, a reconnect). A run that cannot reach opencode (no endpoint, connection
+refused, 503) keeps its due occurrence (no record, a one-off stays enabled; `SchedulerService.deferred`) and is retried
+30 s later or on the next arm; a rejection, timeout or unknown delivery is recorded as before. Destination: a new thread per run in
 the project, or a message into a thread (queued if running; a deleted thread disables the task). Prompts are prefixed
 `[Scheduled task “name”]`. An agent's first task in a project is paused behind an approval card (Allow Once / Always in
 This Project / Deny = delete); agents may only change agent-created tasks of their own project and never request a
@@ -57,7 +63,10 @@ or `!iid` in the thread's project. Reads per MR: the MR (`head_pipeline`, `user_
 pipeline `/jobs`, `/discussions` (unresolved count). Auto-link: the branch's open MR (≤ every 10 min while shown) and MR
 URLs printed by `git push`. Watch: every 2 min, doubling to 30 min after failures, stops after 8 failures or when
 merged/closed; wakes once per event (pipeline finished, approval given or revoked, new comments, merged/closed) with a
-synthetic `[BelloCode MR watch] …` whose first line (the transcript note) says why. Archived threads are not polled;
+synthetic `[BelloCode MR watch] …` whose first line (the transcript note) says why. Each watch has a generation
+(deep review 1, C8): a poll whose watch was unwatched, unlinked or removed and re-added while its GitLab read was out
+neither restores, reschedules nor wakes; archive/settle is re-checked after the read. Link edits to one thread's metadata
+run one at a time (C9). Archived threads are not polled;
 settled threads keep chips current but absorb events without waking (no replay on unsettle). UI: header chip `!42 Open ·
 ✕ Pipeline failed (1 job)`, sidebar `!42 ✕`, "Merge Requests" tab (Thread ▸ Show Merge Requests ⌃⌘M) with jobs + log links,
 approvals, unresolved discussions, watch state and last wake, Open / Open in BelloCode, Unlink with Undo; Settings ▸

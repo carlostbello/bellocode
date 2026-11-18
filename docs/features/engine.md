@@ -12,7 +12,9 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   `catalog: CatalogModel`, `project(id) -> ProjectModel?`.
 - `ProjectModel`: `sessionIDs` / `archivedSessionIDs` (top level, newest created first: rows never reshuffle while
   agents work), `row(id) -> SessionRowModel` (`session`, `status` with text `label` and `symbolName`), `children(of:)`.
-- `engine.openThread(id) -> ThreadModel` (same instance while open; call `close()`): `phase`, `session`, `status`,
+- `engine.openThread(id) -> ThreadModel` (same instance while open; each call takes a lease and `close()` releases one;
+  the subscription ends with the last lease, so one window closing or evicting a thread never freezes another window's
+  view of it; `Engine.stop()` ends all): `phase`, `session`, `status`,
   `messageIDs` (server IDs, oldest first), `message(id) -> MessageModel` (`message`, `revision`: cache rendering by
   `(id, revision)`), `hasOlder` + `loadOlder()`, `pendingRequests` (pin above the composer), `submittingRequestIDs`,
   `queue`, `draft` (persisted), `isRunning`/`isStopping`/`sendMode`, `lastError: EngineError` (`userMessage`).
@@ -32,8 +34,11 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   inbox, then the message again; found = accepted; absent = one more same-ID send (or not sent after a definite
   refusal); unreachable = `EngineError.deliveryUnknown`: the entry stays `.sending`, the text is not put back in the
   draft, and `ThreadModel.unconfirmedSends` holds it (32 max) for `retryUnconfirmed(_:)` (check, then same-ID resend)
-  or, once a retry is refused, `takeUnconfirmed(_:)`. Every successful resync checks unknown sends (never resends).
-  In memory only: a relaunch drops them (the resync shows the prompt if it was admitted). Queued items sort by server
+  or, once a retry is refused, `takeUnconfirmed(_:)` / `discardUnconfirmed(_:)`. Every successful resync checks unknown
+  sends (never resends). Durable (migration `v8-app-outbox`, deep review 1, C6): every send is written to `app_outbox`
+  (text, attachment references, delivery, admission state; ≤ 64) before its first dispatch and removed once admitted or
+  refused, so after a quit the next launch restores the card and asks opencode for the original ID; attachment files an
+  entry references survive the launch clean-up. Queued items sort by server
   time only (the event's time until the answer brings the item's); optimistic IDs never go backwards. Steer and
   withdraw are kept as unconfirmed edits (256 max) until their event arrives, so a late `inbox.enqueued` or an inbox
   read from before the edit cannot undo them; a resync keeps items admitted while it read the inbox
@@ -46,7 +51,8 @@ Cache (rebuildable): `project`, `session` (by project, parent), `message` (`seq`
 `part` (by message/idx), `message_fts` (FTS5, rowid = `message.seq`), `pending_request`, `queued_prompt`, `catalog`
 (no secret-bearing fields), `session_sync` (older-page cursor, history complete). App-owned (kept by `rebuild()`):
 `app_project` (directory, order, pinned, archived), `app_thread` (draft, visit watermark, pinned, snoozed, settled,
-scroll anchor), `app_preference`. Rows hold the domain value as JSON plus query columns. Nothing is ever deleted at
+scroll anchor), `app_preference`, and (later migrations) `app_request` (BelloCode's own pending requests, `v7`) and
+`app_outbox` (unsettled sends, `v8`). Rows hold the domain value as JSON plus query columns. Nothing is ever deleted at
 open: a verifiably corrupt (`SQLITE_CORRUPT`/`NOTADB`) or newer-schema file is moved aside with its WAL
 (`projection.sqlite.corrupt-<ms>` / `.newer-<ms>`, newest three kept), a new one is created and
 `EngineRoot.storage == .recovered(...)`; any other failure (lock, I/O, permission, failed migration) throws
@@ -69,7 +75,13 @@ ends, on eviction from the 2,048-message memory cache, and at `stop()` (which re
   late events and replay over a newer snapshot change nothing (tested on the recorded stream).
 - `.resync` (every connect and overflow): `/api/info` (pid), projects, all session pages, pending permissions and
   questions per directory, the inbox of running sessions, and the newest 50 messages of open threads (4 requests in
-  parallel). Server copies merge onto local ones; local streamed text ahead of a snapshot is kept unless the pid
+  parallel). Pending lists are read per directory and inboxes per session, each on its own (deep review 1, C2): a failed
+  read is a `SyncGaps` partition whose last-known rows are kept (never resolved by absence), `EngineRoot.syncGaps` is
+  published (toolbar "Partly synced" with the reason) and only those partitions are retried with `resyncRetryBackoff`
+  while the stream stays connected; a full resync supersedes the retry. A window shorter than `windowSize` proves the
+  whole history (C5): every cached message of the session up to the read time is reconciled, with parts and search
+  entries, in one transaction (`StoreBatch.reconciledHistory`); sends in flight, admitted during the read, in the outbox
+  or newer than the read are kept. Server copies merge onto local ones; local streamed text ahead of a snapshot is kept unless the pid
   changed (server restart: the server wins). A window that does not connect to the cache truncates older cache and
   resets the thread. Sessions busy across a restart show `unknown` (opencode keeps them busy). A resync that fails all
   three attempts while the stream stays connected shows `.offline("Could not sync with opencode; retrying")` and retries
