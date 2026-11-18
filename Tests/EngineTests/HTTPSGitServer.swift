@@ -78,6 +78,7 @@ final class HTTPSGitServer: Sendable {
 
     static func git(_ arguments: [String], in directory: String? = nil) throws {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: HostGit.realGit() ?? "/usr/bin/git")
         process.arguments = arguments
         if let directory { process.currentDirectoryURL = URL(filePath: directory) }
@@ -97,6 +98,7 @@ final class HTTPSGitServer: Sendable {
         let openssl = "/usr/bin/openssl"
         func run(_ arguments: [String]) throws {
             let process = Process()
+            process.standardInput = FileHandle.nullDevice
             process.executableURL = URL(filePath: openssl)
             process.arguments = arguments
             process.currentDirectoryURL = URL(filePath: folder)
@@ -222,6 +224,8 @@ final class HTTPSGitServer: Sendable {
             process.environment = environment
             let stdin = Pipe()
             let stdout = Pipe()
+            // git http-backend may exit before reading the whole body: EPIPE, not SIGPIPE.
+            _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
             process.standardInput = stdin
             process.standardOutput = stdout
             process.standardError = FileHandle.nullDevice

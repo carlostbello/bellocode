@@ -461,8 +461,13 @@ final class RecordingDelivery: NotificationDelivering {
         var rowEdits: [Int] = []
         let someThread = try #require(engine.root.projects.first.flatMap { workspace.projectModel($0)?.sessionIDs.first })
         for round in 0..<10 {
+            // Wait for this change to reach the outline before reading its counters: on a busy main actor (other
+            // suites run alongside) a fixed idle can end first, and the counters would still describe the previous
+            // structure change (for the first round, the filter restore's thousands of rows).
+            let before = sidebar.roots
             engine.organise([someThread], round % 2 == 0 ? .pin : .unpin)
-            await driver.idle(1)
+            let moved = await waitUntil(timeout: .seconds(30)) { sidebar.roots != before }
+            #expect(moved, "round \(round): the thread moved between sections")
             typical.append(sidebar.lastStructureMilliseconds)
             inputs.append(sidebar.lastInputMilliseconds)
             rowEdits.append(sidebar.lastRowEdits)

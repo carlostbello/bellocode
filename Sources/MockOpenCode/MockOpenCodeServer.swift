@@ -258,7 +258,7 @@ public actor MockOpenCodeServer {
         let line: JSONValue = .compact([
             ("url", .string(endpoint.url.absoluteString)), ("password", endpoint.password.map(JSONValue.string)),
         ])
-        output.write(Data((line.serialized + "\n").utf8))
+        try? output.write(contentsOf: Data((line.serialized + "\n").utf8))
         do {
             for try await _ in input.bytes {}
         } catch {

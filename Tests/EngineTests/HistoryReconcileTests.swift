@@ -92,6 +92,48 @@ struct HistoryReconcileTests {
         await harness.stop()
     }
 
+    /// A thread's first history page is read before a turn and answered after it (a slow answer under load): the page
+    /// is older than the turn's events, so the prompt and reply it does not list stay shown and cached. This used to
+    /// remove them (the page is short, so it "proved" the whole history), leaving an empty thread, or a reply
+    /// rebuilt from later parts without its prompt or first parts.
+    @Test func aHistoryPageAnsweredAfterLaterEventsRemovesNothingNewer() async throws {
+        let harness = try await MockHarness.start()
+        let url = FileManager.default.temporaryDirectory.appending(path: "history-\(UUID().uuidString).sqlite")
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }
+        let engine = try engine(harness, url: url)
+        await engine.start()
+        try await waitUntil("live") { engine.root.connection == .live }
+        let session = try await engine.createThread(in: "/tmp/mock-project")
+        // The window read reaches the server now (empty history) and its answer waits at the gate.
+        await harness.server.injectHTTPFault(HTTPFault(
+            method: "GET", pathPrefix: "/api/session/\(session.id.rawValue)/message", action: .holdResponse(gate: "page"), count: 1))
+        let thread = engine.openThread(session.id)
+        let held = await waitUntilAsync(timeout: .seconds(20)) { await harness.server.heldResponseCount(gate: "page") == 1 }
+        try #require(held, "the window read is held at the server")
+
+        // A whole turn arrives by events while the page is in flight.
+        await thread.send("hello #script:greeting")
+        await harness.server.waitUntilAllIdle()
+        try await waitUntil("reply") { thread.status?.status == .finishedUnread }
+        await engine.flush()
+        try await threadBarrier(engine, thread)
+        let shown = thread.messageIDs
+        #expect(shown.compactMap { thread.message($0)?.message.kind.typeName } == ["user", "assistant"])
+
+        // The stale, empty page lands.
+        await harness.server.releaseResponses(gate: "page")
+        let applied = await waitUntilAsync(timeout: .seconds(20)) { (try? await engine.store.syncState(session.id))?.synced != nil }
+        #expect(applied, "the held page was applied")
+        await engine.flush()
+        try await threadBarrier(engine, thread)
+        #expect(thread.messageIDs == shown, "nothing newer than the page is removed from the thread")
+        let cached = try await engine.store.allMessages(sessionID: session.id).map(\.id)
+        #expect(Set(cached) == Set(shown), "nor from the cache")
+        thread.close()
+        await engine.stop()
+        await harness.stop()
+    }
+
     @Test func storeReconcileDeletesPartsAndSearchEntriesInOneBatch() async throws {
         let store = try ProjectionStore(location: .inMemory)
         let session = SessionID("ses_r")

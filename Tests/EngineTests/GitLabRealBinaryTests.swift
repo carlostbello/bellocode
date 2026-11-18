@@ -37,6 +37,7 @@ struct GitLabRealBinaryTests {
                 ["remote", "add", "origin", "git@code.corp.test:platform/rocket.git"],
             ] {
                 let process = Process()
+                process.standardInput = FileHandle.nullDevice
                 process.executableURL = URL(filePath: "/usr/bin/git")
                 process.arguments = arguments
                 process.currentDirectoryURL = project

@@ -43,6 +43,7 @@ private func processExists(_ pid: Int32) -> Bool {
 /// Child pids of `pid`, via pgrep.
 private func childPIDs(of pid: Int32) throws -> [Int32] {
     let pgrep = Process()
+    pgrep.standardInput = FileHandle.nullDevice
     pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
     pgrep.arguments = ["-P", String(pid)]
     let output = Pipe()

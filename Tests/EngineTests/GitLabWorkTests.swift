@@ -268,6 +268,7 @@ struct CodeOwnersTests {
         try "Sources/** @mara\n[Docs]\n*.md @lee\n".write(to: root.appending(path: ".gitlab/CODEOWNERS"), atomically: true, encoding: .utf8)
         for arguments in [["init", "-q", "-b", "main"], ["add", "."], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "owners"]] {
             let process = Process()
+            process.standardInput = FileHandle.nullDevice
             process.executableURL = URL(filePath: "/usr/bin/git")
             process.arguments = arguments
             process.currentDirectoryURL = root

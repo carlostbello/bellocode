@@ -227,7 +227,7 @@ import Testing
         let controller = harness.controller
         controller.showFind()
         controller.setFindQuery("5 tests passed", debounce: false)
-        for _ in 0..<50 where controller.findMatches.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+        await FindRevealTests.waitForMatches(controller)
         await harness.settle()
         #expect(controller.findMatches.count == 1)
         let match = controller.findMatches[0]

@@ -240,6 +240,7 @@ struct LiveGlobalMCPTests {
     static func makeTestCA(in folder: URL) throws -> (caDER: Data, serverKey: String, serverCert: String) {
         func run(_ arguments: [String]) throws {
             let process = Process()
+            process.standardInput = FileHandle.nullDevice
             process.executableURL = URL(filePath: "/usr/bin/openssl")
             process.arguments = arguments
             process.currentDirectoryURL = folder

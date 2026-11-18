@@ -28,6 +28,7 @@ struct GitLabToolTests {
                 ["remote", "add", "origin", "git@code.corp.test:platform/rocket.git"],
             ] {
                 let process = Process()
+                process.standardInput = FileHandle.nullDevice
                 process.executableURL = URL(filePath: "/usr/bin/git")
                 process.arguments = arguments
                 process.currentDirectoryURL = root
@@ -171,7 +172,7 @@ struct GitLabToolTests {
         defer { Task { await fixture.stop() } }
         let session = try await fixture.thread(.fullAccess)
         await fixture.engine.extras.mergeRequests.setSettings(GitLabInstanceSettings(writesEnabled: true), for: GitLabWorld.instance.baseURL)
-        for _ in 0..<500 where await fixture.engine.core.knownSession(session)?.permissionMode != .fullAccess { await Task.yield() }
+        try await waitFor("full access", timeout: .seconds(30)) { await fixture.engine.core.knownSession(session)?.permissionMode == .fullAccess }
         #expect(await fixture.engine.core.knownSession(session)?.permissionMode == .fullAccess)
         let retried = await fixture.call(GitLabTools.retryJob, ["ref": "!42", "jobID": 1], session)
         #expect(retried.text.contains("Retried job 1"), "\(retried.text)")
@@ -217,7 +218,7 @@ struct GitLabToolTests {
         (fixture.engine.configuration.wallClock as? ManualWallClock)?.advance(by: 200)
         await service.pollDue()
         // The engine's own poll loop may have taken this poll: wait for its wake.
-        for _ in 0..<500 where (await fixture.harness.server.syntheticTexts).isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        try await waitFor("the poll's wake", timeout: .seconds(30)) { !(await fixture.harness.server.syntheticTexts).isEmpty }
         _ = await service.refreshInstanceStatus(GitLabWorld.instance)
         _ = await fixture.call(GitLabTools.readJobLog, ["ref": "!42", "jobID": 2], session)
         await fixture.engine.flush()

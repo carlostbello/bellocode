@@ -210,9 +210,9 @@ struct SchedulerServiceTests {
         let (service, clock, runner, _) = try make(start)
         await service.start()
         try await service.create(ScheduledTask(name: "Ping", prompt: "p", rule: .interval(minutes: 5), directory: "/r", created: start))
-        for _ in 0..<200 where clock.sleeperCount == 0 { await Task.yield() }
+        try await waitFor("the timer loop sleeps", timeout: .seconds(30)) { clock.sleeperCount > 0 }
         clock.advance(by: 300)
-        for _ in 0..<500 where runner.started.isEmpty { await Task.yield() }
+        try await waitFor("the task runs", timeout: .seconds(30)) { !runner.started.isEmpty }
         #expect(runner.started.count == 1)
         service.shutdown()
     }
