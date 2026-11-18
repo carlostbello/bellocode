@@ -107,6 +107,12 @@ public final class EnvironmentService {
     @ObservationIgnored private var bridges: [String: FileEventBridge] = [:]
     @ObservationIgnored private var bridgeContainers: [String: String] = [:]
     @ObservationIgnored private var started = false
+    /// True once every project's saved policy is in force (S3). Before that nothing is created, published or run.
+    @ObservationIgnored private(set) var settingsLoaded = false
+    /// The whole settings table could not be read: every project is blocked (never run under defaults).
+    @ObservationIgnored private var policyReadFailure: String?
+    /// Projects whose saved row could not be decoded: blocked until the person saves the setting again.
+    @ObservationIgnored private var unreadablePolicies: Set<String> = []
     @ObservationIgnored private var configWrite: Task<Void, Never>?
     @ObservationIgnored private var lastWrittenConfig: ExecHelperConfig?
     @ObservationIgnored var worktreeParent: @MainActor (String) -> String = { directory in
@@ -126,18 +132,45 @@ public final class EnvironmentService {
 
     // MARK: Lifecycle
 
-    /// Loads settings, then checks the runtime and follows its events. Returns at once.
+    /// Loads settings, then checks the runtime and follows its events. Returns once every project's saved execution
+    /// policy is in force. A model created before (a project list applied earlier, a pane asking) gets its saved
+    /// setting now, replacing the placeholder; a read failure blocks commands instead of applying defaults (S3).
     public func start() async {
         guard !started else { return }
         started = true
-        let stored = (try? await store.environments()) ?? [:]
-        for (directory, value) in stored where models[directory] == nil {
-            models[directory] = ProjectEnvironment(directory: directory, stored: value)
+        do {
+            let (stored, unreadable) = try await store.environmentsChecked()
+            unreadablePolicies = unreadable
+            for directory in unreadable where models[directory] == nil {
+                models[directory] = ProjectEnvironment(directory: directory, stored: StoredEnvironment())
+            }
+            for (directory, value) in stored {
+                if let model = models[directory] {
+                    model.settings = value.settings
+                    model.record = value.record
+                } else {
+                    models[directory] = ProjectEnvironment(directory: directory, stored: value)
+                }
+            }
+        } catch {
+            policyReadFailure = "BelloCode could not read the saved environment settings (\(error)), so commands are not run under default settings. Restart BelloCode; if this persists, open Settings ▸ Environment."
         }
         if let saved = try? await store.preference(EnvironmentDefaults.preferenceKey, as: EnvironmentDefaults.self) { defaults = saved }
+        settingsLoaded = true
+        for model in models.values { refreshImageAndPhase(model) }
         guard isEnabled else { return }
         tasks.set("runtime", Task { [weak self] in await self?.runtimeLoop() })
         tasks.set("idle", Task { [weak self] in await self?.idleLoop() })
+    }
+
+    /// Why the project's saved policy is not in force, or nil when it is.
+    func policyBlock(_ model: ProjectEnvironment) -> String? {
+        if !settingsLoaded { return "BelloCode is still loading this project's environment settings. Retry in a moment." }
+        if let policyReadFailure { return policyReadFailure }
+        if unreadablePolicies.contains(model.directory) {
+            return "This project's saved environment settings could not be read, so commands are not run under default settings. Review and save them in Project Settings ▸ Environment."
+        }
+        return nil
     }
 
     /// Stops forwards, bridges and loops. Containers keep running (they stop when idle or with Rancher Desktop).
@@ -178,12 +211,14 @@ public final class EnvironmentService {
     /// docs/reviews/deep-review-1.md). Deleting them is the separate, confirmed `purge`.
     func projectsChanged(_ projects: [ProjectItem]) {
         for item in projects {
+            var created = false
             let model = models[item.directory] ?? {
                 let model = ProjectEnvironment(directory: item.directory, stored: StoredEnvironment())
                 models[item.directory] = model
+                created = true
                 return model
             }()
-            if model.projectID != item.projectID {
+            if model.projectID != item.projectID || created {
                 model.projectID = item.projectID
                 if started { refreshImageAndPhase(model) }
             }
@@ -212,6 +247,8 @@ public final class EnvironmentService {
         model.lastError = nil
         if case .pullFailed = model.phase { model.phase = .unknown }
         await persist(model)
+        // The person reviewed and saved the setting: it is the policy now (an unreadable row is replaced).
+        unreadablePolicies.remove(model.directory)
         refreshImageAndPhase(model, recreate: true)
         restartBridge(model)
         scheduleConfigWrite()
@@ -312,6 +349,12 @@ public final class EnvironmentService {
     func refreshImageAndPhase(_ model: ProjectEnvironment, recreate: Bool = false) {
         model.image = model.settings.image ?? defaults.defaultImage
         guard isEnabled, started else { return }
+        if let message = policyBlock(model) {
+            if settingsLoaded { model.phase = .policyUnavailable(message) }
+            scheduleConfigWrite()
+            return
+        }
+        if case .policyUnavailable = model.phase { model.phase = .unknown }
         guard let runtime, runtime.isReady else {
             if let runtime { model.phase = .runtimeUnavailable(runtime) }
             scheduleConfigWrite()
@@ -380,6 +423,7 @@ public final class EnvironmentService {
     public func activate(_ directory: String) {
         guard isEnabled, let runtime, runtime.isReady else { return }
         let model = environment(for: directory)
+        guard policyBlock(model) == nil else { return }
         guard let spec = workspaceSpec(model) else {
             if model.image == nil { model.phase = .noImage }
             return
@@ -428,7 +472,7 @@ public final class EnvironmentService {
     /// Pulls the project's image with progress (the configured image; credentials from the Keychain, in the request
     /// header only). On success the container is created on first use.
     public func pull(_ model: ProjectEnvironment) {
-        guard isEnabled, let image = model.image else { return }
+        guard isEnabled, policyBlock(model) == nil, let image = model.image else { return }
         let auth = registryAuth(for: image)
         model.phase = .pulling(PullProgress(detail: "starting"))
         model.lastError = nil
@@ -811,6 +855,7 @@ public final class EnvironmentService {
     func readyContainer(_ directory: String) async throws -> (String, WorkspaceSpec, String) {
         guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
         let model = environment(for: directory)
+        if let message = policyBlock(model) { throw EnvironmentBlockedError(message: message) }
         if let blocked = model.phase.blocked { throw EnvironmentBlockedError(message: blocked.message) }
         guard let spec = workspaceSpec(model) else { throw EnvironmentBlockedError(message: EnvironmentPhase.noImage.blocked?.message ?? "No image is set.") }
         let id = try await activeRuntime.ensureRunning(spec)
@@ -875,7 +920,9 @@ public final class EnvironmentService {
             let spec = workspaceSpec(model)
             return ExecHelperConfig.Workspace(
                 roots: spec?.workspaceRoots ?? workspaceRoots(model, create: false), container: model.containerName,
-                user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(model), blocked: model.phase.blocked, spec: spec,
+                user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(model),
+                blocked: policyBlock(model).map { .init(message: $0, fix: EnvironmentFix.openSettings.title) } ?? model.phase.blocked,
+                spec: policyBlock(model) == nil ? spec : nil,
                 mountIdentity: model.record.mountIdentity, image: model.image, inventory: model.record.inventory)
         }
         return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
@@ -883,7 +930,7 @@ public final class EnvironmentService {
 
     /// Writes the helper configuration soon (coalesced). Off the main actor, atomically.
     func scheduleConfigWrite() {
-        guard isEnabled, let url = configuration?.execConfigURL else { return }
+        guard isEnabled, settingsLoaded, let url = configuration?.execConfigURL else { return }
         configWrite?.cancel()
         configWrite = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(30))
@@ -897,7 +944,7 @@ public final class EnvironmentService {
 
     /// Writes now (engine start, before the server launches; tests).
     public func writeConfigNow() async {
-        guard isEnabled, let url = configuration?.execConfigURL else { return }
+        guard isEnabled, settingsLoaded, let url = configuration?.execConfigURL else { return }
         let config = helperConfig()
         lastWrittenConfig = config
         await Self.write(config, to: url)

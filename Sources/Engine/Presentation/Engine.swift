@@ -228,10 +228,12 @@ public final class Engine {
     public func start() async {
         guard !started else { return }
         started = true
+        // Every project's saved execution policy is in force before any project model can create, publish or use an
+        // environment (S3 in docs/reviews/deep-review-1.md); the service also refuses until then.
+        await environments.start()
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.
-        await environments.start()
         await environments.writeConfigNow()
         orchestration.start()
         await extras.start(store: store)

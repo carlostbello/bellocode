@@ -60,7 +60,11 @@ configuration on every command. Setup scripts and secret commands throw the same
 
 ## Workspace model
 
-Per project setting (`app_environment`, migration `v6-container-environments`, kept by `rebuild()`): image (else the
+Per project setting (`app_environment`, migration `v6-container-environments`, kept by `rebuild()`). **Saved policy
+first (S3):** at launch every project's saved setting is loaded and in force before the cached project list is applied
+or any container is created, the helper configuration is written or a command runs; until then, and for a row that
+cannot be read (or a table read failure), the project is "Settings unavailable" and blocked (never run under
+defaults; saving the setting again replaces an unreadable row). Fields: image (else the
 app default; **no public default**), variables (reserved names refused), limits (CPU, memory, pids), user mounts (off;
 read-only by default), network (bridge / none), file-watch bridge, idle minutes. Registry passwords: Keychain
 (`app.bellocode.registry`), sent only in the pull's `X-Registry-Auth` header. One container per project

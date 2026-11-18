@@ -125,4 +125,87 @@ struct ProjectEnvironmentLifetimeTests {
         let other = WorkspaceStorage(projectKey: WorkspaceSpec.projectKey(for: fixture.projectB), containers: [], volumes: ["x"])
         await #expect(throws: EnvironmentBlockedError.self) { try await relaunched.environments.purge(fixture.projectA, confirmed: other) }
     }
+
+    /// Seeds the store the way an earlier launch left it: project B offline with an approved image, an app default image.
+    private func seedPolicy(_ fixture: Fixture) async throws {
+        let store = try await ProjectionStore.open(location: .file(fixture.root.appending(path: "projection.sqlite")), changes: ChangeBus())
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "approved:1"
+        settings.network = .none
+        try await store.saveEnvironment(StoredEnvironment(settings: settings), directory: fixture.projectB)
+        try await store.setPreference(EnvironmentDefaults.preferenceKey, EnvironmentDefaults(defaultImage: "default:1"))
+    }
+
+    private func assertSavedPolicyInForce(_ fixture: Fixture, _ engine: Engine) async throws {
+        let model = engine.environments.environment(for: fixture.projectB)
+        #expect(model.settings.network == WorkspaceSpec.Network.none, "the saved offline policy is in force")
+        #expect(model.image == "approved:1", "the saved image, not the app default")
+        let workspace = try #require(try fixture.helperConfig().workspace(for: fixture.projectB))
+        #expect(workspace.spec?.network == WorkspaceSpec.Network.none, "the helper never gets a default (online) spec")
+        #expect(workspace.spec?.image == "approved:1")
+        try await waitUntil("idle") { model.phase == .idle }
+        engine.environments.activate(fixture.projectB)
+        try await waitUntil("ready") { model.phase == .ready }
+        let specs = fixture.runtime.state.withLock { $0.specs }.filter { $0.projectRoot == fixture.projectB }
+        #expect(!specs.isEmpty)
+        #expect(specs.allSatisfy { $0.network == WorkspaceSpec.Network.none && $0.image == "approved:1" }, "Docker is only ever asked for the saved policy")
+    }
+
+    @Test func warmLaunchWithACachedProjectKeepsTheSavedRestrictivePolicy() async throws {
+        let fixture = try await Fixture()
+        defer { Task { await fixture.finish() } }
+        // First launch: the project is added (so the next launch applies it from the cache before anything else).
+        let first = try await fixture.launch()
+        await first.addProject(directory: fixture.projectB)
+        try await waitUntil("project") { first.root.projects.contains { $0.directory == fixture.projectB } }
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "approved:1"
+        settings.network = .none
+        await first.environments.update(fixture.projectB, settings: settings)
+        await first.environments.setDefaults(EnvironmentDefaults(defaultImage: "default:1"))
+        await fixture.quit()
+        try? FileManager.default.removeItem(at: fixture.root.appending(path: "exec.json"))
+        fixture.runtime.state.withLock { $0.specs = []; $0.running = [:] }
+
+        let engine = try await fixture.launch()
+        #expect(engine.root.projects.contains { $0.directory == fixture.projectB }, "warm: the cached project list was applied")
+        try await assertSavedPolicyInForce(fixture, engine)
+    }
+
+    @Test func coldLaunchKeepsTheSavedRestrictivePolicy() async throws {
+        let fixture = try await Fixture()
+        defer { Task { await fixture.finish() } }
+        try await seedPolicy(fixture)
+        let engine = try await fixture.launch()
+        await engine.addProject(directory: fixture.projectB)
+        try await waitUntil("project") { engine.root.projects.contains { $0.directory == fixture.projectB } }
+        await engine.environments.writeConfigNow()
+        try await assertSavedPolicyInForce(fixture, engine)
+    }
+
+    @Test func anUnreadableSavedPolicyBlocksInsteadOfApplyingDefaults() async throws {
+        let fixture = try await Fixture()
+        defer { Task { await fixture.finish() } }
+        try await seedPolicy(fixture)
+        let store = try await ProjectionStore.open(location: .file(fixture.root.appending(path: "projection.sqlite")), changes: ChangeBus())
+        try await store.writer.write { db in
+            try db.execute(sql: "UPDATE app_environment SET json = ? WHERE directory = ?", arguments: [Data("{not json".utf8), fixture.projectB])
+        }
+        let engine = try await fixture.launch()
+        await engine.addProject(directory: fixture.projectB)
+        let model = engine.environments.environment(for: fixture.projectB)
+        try await waitUntil("blocked") { if case .policyUnavailable = model.phase { true } else { false } }
+        await #expect(throws: EnvironmentBlockedError.self) { _ = try await engine.environments.readyContainer(fixture.projectB) }
+        engine.environments.activate(fixture.projectB)
+        await engine.environments.writeConfigNow()
+        let workspace = try #require(try fixture.helperConfig().workspace(for: fixture.projectB))
+        #expect(workspace.blocked != nil && workspace.spec == nil, "the helper refuses rather than using defaults")
+        #expect(fixture.runtime.state.withLock { $0.specs }.isEmpty, "no container is created under a guessed policy")
+        // Saving the setting again makes it the policy.
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "approved:1"
+        settings.network = .none
+        await engine.environments.update(fixture.projectB, settings: settings)
+        try await waitUntil("unblocked") { model.phase == .idle }
+    }
 }

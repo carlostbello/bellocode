@@ -141,6 +141,9 @@ public enum EnvironmentPhase: Sendable, Equatable {
     /// Image present, container stopped or not created yet: it starts on the first command.
     case idle
     case failed(String)
+    /// The project's saved execution policy is not in force yet (still loading) or could not be read: nothing may run
+    /// under a guessed (default) policy (S3 in docs/reviews/deep-review-1.md).
+    case policyUnavailable(String)
 
     public var isBlocking: Bool { blocked != nil }
 
@@ -164,6 +167,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
             .init(message: "The container cannot mount \(paths.joined(separator: ", ")): the folder is missing or not shared with Rancher Desktop (only your home folder, /Volumes and temporary folders are).",
                   fix: EnvironmentFix.openSettings.title)
         case .failed(let message): .init(message: "The project's container failed: \(message)", fix: EnvironmentFix.retry.title)
+        case .policyUnavailable(let message): .init(message: message, fix: EnvironmentFix.openSettings.title)
         }
     }
 
@@ -180,6 +184,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .ready: "Running"
         case .idle: "Stopped"
         case .failed: "Failed"
+        case .policyUnavailable: "Settings unavailable"
         }
     }
 
@@ -190,7 +195,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .ready: "shippingbox.fill"
         case .idle: "shippingbox"
         case .noImage, .unmountable: "exclamationmark.triangle"
-        case .runtimeUnavailable, .pullFailed, .failed: "xmark.octagon"
+        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: "xmark.octagon"
         }
     }
 
@@ -200,7 +205,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle, .unknown: .neutral
         case .starting, .pulling: .info
         case .noImage, .unmountable: .warning
-        case .runtimeUnavailable, .pullFailed, .failed: .danger
+        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: .danger
         }
     }
 }
@@ -269,13 +274,14 @@ public struct EnvironmentNotice: Sendable, Equatable {
         case .pullFailed(_, true): "Commands cannot run: sign in to the registry"
         case .pullFailed: "Commands cannot run: the image could not be pulled"
         case .unmountable: "Commands cannot run: a folder cannot be mounted"
+        case .policyUnavailable: "Commands cannot run: the environment settings are unavailable"
         default: "Commands cannot run"
         }
         let fix: EnvironmentFix? = switch phase {
         case .runtimeUnavailable(let state): EnvironmentFix(state.fix)
         case .noImage: .chooseImage
         case .pullFailed(_, let signIn): signIn ? .signIn : .retry
-        case .unmountable: .openSettings
+        case .unmountable, .policyUnavailable: .openSettings
         case .failed: .retry
         default: nil
         }

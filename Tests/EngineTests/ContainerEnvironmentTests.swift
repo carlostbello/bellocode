@@ -26,6 +26,8 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         /// Volumes per project key (created with the container) and every volume deleted (U1: only the explicit purge).
         var volumes: [String: [String]] = [:]
         var purgedVolumes: [String] = []
+        /// Every spec a container was ensured from (what Docker would be asked to create).
+        var specs: [WorkspaceSpec] = []
     }
 
     let state = Mutex(State())
@@ -50,6 +52,7 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     func ensureRunning(_ spec: WorkspaceSpec) async throws -> String {
         state.withLock { s in
             s.ensureCount += 1
+            s.specs.append(spec)
             s.running[spec.containerName] = spec.configHash(imageID: "sha256:abc")
             if s.volumes[spec.projectKey] == nil { s.volumes[spec.projectKey] = [spec.volumeName("home")] }
         }
