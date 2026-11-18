@@ -336,6 +336,7 @@ enum MainMenu {
         menu.add(.showScheduledTasks)
         menu.add(.showContainers)
         menu.add(.showEnvironment)
+        menu.add(.showMCPServers)
         menu.add(.verifyIsolation)
         menu.add(.pruneContainerResources)
         menu.addItem(.separator())

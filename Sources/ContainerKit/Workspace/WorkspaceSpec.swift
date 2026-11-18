@@ -74,6 +74,10 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     public var serviceNetwork: String?
     /// Package-manager caches (`PackageCache`), each a named volume at its path; project-scoped unless shared.
     public var cacheMounts: [CacheMount]?
+    /// Enterprise certificates and proxy variables (Corporate network).
+    public var corporateNetwork: CorporateNetwork?
+    /// The project's service names (added to `NO_PROXY`).
+    public var serviceNames: [String]?
 
     public init(projectRoot: String, extraMounts: [String] = [], userMounts: [UserMount] = [], image: String,
                 user: String = "\(getuid()):\(getgid())", network: Network = .bridge, publishedPorts: [Int] = [],
@@ -184,6 +188,7 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
             })
         }
         body.hostConfig = host
+        corporateNetwork?.apply(to: &body, noProxyExtra: serviceNames ?? [])
         return body
     }
 

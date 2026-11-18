@@ -223,6 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Window ▸ Containers… / Project Environment… / Verify Container Isolation (M6-A, docs/features/containers.md).
     @objc func showContainers(_ sender: Any?) { openSettings(pane: "containers") }
+    /// Window ▸ MCP Servers… (Containers 3).
+    @objc func showMCPServers(_ sender: Any?) { openSettings(pane: "mcp") }
 
     @objc func showEnvironment(_ sender: Any?) {
         if let directory = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first?.currentProjectDirectory {

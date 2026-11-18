@@ -1,0 +1,18 @@
+// opencode 2.x global configuration (fixture: fake values only)
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "type": "local",
+        "command": ["docker", "run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+        "environment": { "GITHUB_PERSONAL_ACCESS_TOKEN": "fixture-not-a-real-token" },
+      },
+      "gateway": {
+        "type": "remote",
+        "url": "https://mcp-gateway.example.com/mcp",
+        "headers": { "Authorization": "Bearer {env:GATEWAY_TOKEN}", "X-Team": "platform" },
+      },
+      "filesystem": { "type": "local", "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/Users/me"] },
+    },
+  },
+}

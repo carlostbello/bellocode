@@ -203,6 +203,11 @@ public struct WorkspaceManager: Sendable {
         }
         try await client.startContainer(id)
         try await prepareHome(id, spec: spec)
+        if spec.corporateNetwork?.certificateDirectory != nil {
+            // Best effort: images without the tool (or a writable store) still trust the roots through the variables.
+            _ = try? await ExecSession.run(client: client, container: id, argv: CorporateNetwork.trustStoreUpdateScript, user: "0:0",
+                                           wrap: false, limit: 4096, timeout: .seconds(60))
+        }
         return id
     }
 

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ContainerKit
@@ -138,5 +139,38 @@ struct BoundedOutputTests {
         let result = ExecResult(exitCode: 0, output: output)
         #expect(!result.isTruncated)
         #expect(result.stdout == Data("ok\n".utf8))
+    }
+}
+
+/// Compose-stack MCP endpoints: each connection first runs `prepare` (start the stack on first use); a stack that could
+/// not start closes the connection instead of relaying to nothing.
+@Suite("Stack endpoint forwarding", .timeLimit(.minutes(3)))
+struct StackForwardTests {
+    @Test func theStackIsPreparedBeforeEachConnectionAndAFailureClosesIt() async throws {
+        let prepared = EventGate()
+        let relayed = EventGate()
+        let allow = Mutex(false)
+        let forwarder = try PortForwarder(
+            client: EngineClient(socketPath: "/nonexistent.sock"), container: "bellocode-svc-k-mcp", containerPort: 8080,
+            relay: { _, peer in
+                await relayed.signal()
+                try? await peer.write(Data("ok".utf8))
+            }, afterSpawn: nil, onEnded: nil,
+            prepare: {
+                await prepared.signal()
+                return allow.withLock { $0 }
+            })
+        let run = Task { await forwarder.run() }
+        defer {
+            forwarder.stop()
+            run.cancel()
+        }
+        #expect(PortForwarderTests.connectAndReadToEnd(forwarder.hostPort), "refused: closed at once")
+        await prepared.wait(for: 1)
+        #expect(await relayed.value == 0, "nothing relayed while the stack could not start")
+        allow.withLock { $0 = true }
+        #expect(PortForwarderTests.connectAndReadToEnd(forwarder.hostPort))
+        await prepared.wait(for: 2)
+        await relayed.wait(for: 1)
     }
 }
