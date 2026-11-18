@@ -66,6 +66,8 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case network
         /// A saved secret goes to one exact command (label, project, variable, command, network and write access shown).
         case secretCommand
+        /// An agent restarts one of the project's service containers (the first time per project).
+        case serviceRestart
     }
 
     public var action: Action

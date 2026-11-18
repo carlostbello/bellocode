@@ -25,6 +25,8 @@ public struct ContainerConfiguration: Sendable {
     public var idleCheckInterval: Duration = .seconds(60)
     /// The `git` shim first on the server's PATH (opencode's host git, confined by `HostGit`); probed by the self-check.
     public var gitShim: URL?
+    /// The administrator's image policy (managed preferences), read at start and when Settings asks.
+    public var managedPolicy: @Sendable () -> ManagedImagePolicy.Managed? = { ManagedImagePolicy.read() }
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -63,6 +65,12 @@ public final class ProjectEnvironment {
     public internal(set) var bridgeStats: FileEventBridge.Stats?
     /// The project's MCP servers as opencode reports them for its location (Environment pane).
     public internal(set) var mcpStatus: [MCPServerStatus] = []
+    /// The project's services (compose file or the pane) and where each stands.
+    public internal(set) var services: [ServiceState] = []
+    public internal(set) var servicesSource: ServicesSource = .none
+    /// The parsed definition with its ignored and rejected keys (shown in the pane).
+    public internal(set) var servicesParse: ComposeParseResult?
+    public internal(set) var serviceForwards: [ServiceForwardInfo] = []
     /// The project's opencode ID (names opencode's worktree folder).
     @ObservationIgnored var projectID: ProjectID?
     @ObservationIgnored var extraWorktrees: [String] = []
@@ -107,6 +115,11 @@ public final class EnvironmentService {
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
     @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
+    @ObservationIgnored var serviceForwarders: [String: [String: PortForwarder]] = [:]
+    /// The administrator's policy (managed preferences), nil when none is managed.
+    public private(set) var managedPolicy: ManagedImagePolicy.Managed?
+    /// Images BelloCode pulled that were not on this Mac before (image IDs): "Prune" may remove them when unused.
+    @ObservationIgnored var pulledImageIDs: Set<String> = []
     @ObservationIgnored private var generations: [String: Int] = [:]
     @ObservationIgnored private var forwarders: [String: [Int: PortForwarder]] = [:]
     @ObservationIgnored private var bridges: [String: FileEventBridge] = [:]
@@ -175,6 +188,8 @@ public final class EnvironmentService {
             policyReadFailure = "BelloCode could not read the saved environment settings (\(error)), so commands are not run under default settings. Restart BelloCode; if this persists, open Settings ▸ Environment."
         }
         if let saved = try? await store.preference(EnvironmentDefaults.preferenceKey, as: EnvironmentDefaults.self) { defaults = saved }
+        if let pulled = try? await store.preference(Self.pulledImagesKey, as: [String].self) { pulledImageIDs = Set(pulled) }
+        managedPolicy = configuration?.managedPolicy()
         settingsLoaded = true
         for model in models.values { refreshImageAndPhase(model) }
         guard isEnabled else { return }
@@ -272,7 +287,10 @@ public final class EnvironmentService {
         refreshImageAndPhase(model, recreate: true)
         restartBridge(model)
         scheduleConfigWrite()
-        if model.phase == .ready { syncMCPServers(model) }
+        if model.phase == .ready {
+            syncMCPServers(model)
+            startServices(model)
+        }
     }
 
     private func persist(_ model: ProjectEnvironment) async {
@@ -368,14 +386,22 @@ public final class EnvironmentService {
     /// is configured but missing (the configured image only; there is no built-in default). With `recreate`, an
     /// outdated running container is replaced now (a setting change).
     func refreshImageAndPhase(_ model: ProjectEnvironment, recreate: Bool = false) {
-        model.image = model.settings.image ?? defaults.defaultImage
+        model.image = model.settings.image ?? defaultImage
         guard isEnabled, started else { return }
+        loadServices(model)
         if let message = policyBlock(model) {
             if settingsLoaded { model.phase = .policyUnavailable(message) }
             scheduleConfigWrite()
             return
         }
         if case .policyUnavailable = model.phase { model.phase = .unknown }
+        if let image = model.image, let refusal = imageRefusal(image) {
+            model.phase = .imageRefused(refusal)
+            bridges.removeValue(forKey: model.directory)?.stop()
+            scheduleConfigWrite()
+            return
+        }
+        if case .imageRefused = model.phase { model.phase = .unknown }
         guard let runtime, runtime.isReady else {
             if let runtime { model.phase = .runtimeUnavailable(runtime) }
             scheduleConfigWrite()
@@ -398,6 +424,11 @@ public final class EnvironmentService {
                 let image = try await runtimeRef.image(spec.image)
                 guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 guard let image else {
+                    if self.imagePolicy.pullPolicy == .never {
+                        model.phase = .imageRefused("The image \(spec.image) is not on this Mac, and the image policy does not allow pulling. Load it by other means, or ask your administrator.")
+                        self.scheduleConfigWrite()
+                        return
+                    }
                     self.pull(model)
                     return
                 }
@@ -427,6 +458,8 @@ public final class EnvironmentService {
                     self.restartBridge(model)
                     // Idempotent and cheap without servers; reconnects servers an idle stop or recreate ended.
                     self.syncMCPServers(model)
+                    // The container was started outside the app (a command through the helper): services follow it.
+                    if model.services.contains(where: { $0.phase == .notStarted }) { self.startServices(model) }
                 } else {
                     self.bridges.removeValue(forKey: model.directory)?.stop()
                 }
@@ -456,7 +489,7 @@ public final class EnvironmentService {
             return
         }
         switch model.phase {
-        case .ready where model.outdatedReason == nil, .pulling, .noImage, .unmountable, .pullFailed, .runtimeUnavailable, .starting:
+        case .ready where model.outdatedReason == nil, .pulling, .noImage, .unmountable, .pullFailed, .runtimeUnavailable, .starting, .imageRefused:
             return
         default:
             break
@@ -465,10 +498,14 @@ public final class EnvironmentService {
         let generation = nextGeneration(model.directory)
         let runtimeRef = activeRuntime
         let firstInventory = model.record.inventory == nil || model.outdatedReason != nil
+        // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed.
+        let pullFirst = imagePolicy.pullPolicy == .always && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
+        let auth = pullFirst ? registryAuth(for: spec.image) : nil
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
             let interval = Self.signposter.beginInterval("ensureRunning")
             defer { Self.signposter.endInterval("ensureRunning", interval) }
             do {
+                if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
                 let id = try await runtimeRef.ensureRunning(spec)
                 var inventory: ContainerProbes.ToolInventory?
                 if firstInventory { inventory = try? await runtimeRef.inventory(container: id, user: spec.user) }
@@ -485,6 +522,7 @@ public final class EnvironmentService {
                 self.restartBridge(model)
                 self.scheduleConfigWrite()
                 self.syncMCPServers(model)
+                self.startServices(model)
             } catch {
                 guard let self, self.generations[model.directory] == generation else { return }
                 if case WorkspaceError.unmountable(let paths) = error { model.phase = .unmountable(paths) } else {
@@ -501,6 +539,11 @@ public final class EnvironmentService {
     /// header only). On success the container is created on first use.
     public func pull(_ model: ProjectEnvironment) {
         guard isEnabled, policyBlock(model) == nil, let image = model.image else { return }
+        if let refusal = imageRefusal(image) {
+            model.phase = .imageRefused(refusal)
+            scheduleConfigWrite()
+            return
+        }
         let auth = registryAuth(for: image)
         model.phase = .pulling(PullProgress(detail: "starting"))
         model.lastError = nil
@@ -520,7 +563,9 @@ public final class EnvironmentService {
             }
             defer { ticker.cancel() }
             do {
+                let present = (try? await runtimeRef.image(image)) != nil
                 try await runtimeRef.pull(image, auth: auth) { aggregator.add($0) }
+                if !present { self?.recordPulled(image) }
                 guard let self, self.generations[model.directory] == generation else { return }
                 model.phase = .idle
                 self.refreshImageAndPhase(model, recreate: true)
@@ -638,8 +683,8 @@ public final class EnvironmentService {
                 id: summary.id, name: summary.name, image: summary.labels[WorkspaceSpec.labelImage] ?? summary.image,
                 state: summary.state, status: summary.status ?? summary.state,
                 projectDirectory: summary.labels[WorkspaceSpec.labelProject],
-                created: summary.created.map { Date(timeIntervalSince1970: TimeInterval($0)) })
-        }.sorted { ($0.projectDirectory ?? $0.name) < ($1.projectDirectory ?? $1.name) }
+                created: summary.created.map { Date(timeIntervalSince1970: TimeInterval($0)) }, service: summary.labels[ServiceLabels.service])
+        }.sorted { ($0.projectDirectory ?? $0.name, $0.service ?? "") < ($1.projectDirectory ?? $1.name, $1.service ?? "") }
     }
 
     /// Starts, stops, restarts or removes one managed container by ID (Containers view).
@@ -671,7 +716,7 @@ public final class EnvironmentService {
             guard runtime?.isReady == true else { continue }
             for model in models.values where model.phase == .ready {
                 let minutes = model.settings.idleStopMinutes
-                guard minutes > 0, model.forwards.isEmpty, let id = model.record.containerID else { continue }
+                guard minutes > 0, model.forwards.isEmpty, model.serviceForwards.isEmpty, let id = model.record.containerID else { continue }
                 let last = model.lastActivity ?? model.record.lastUsed ?? .distantPast
                 guard Date().timeIntervalSince(last) > TimeInterval(minutes * 60) else { continue }
                 let runtimeRef = activeRuntime
@@ -683,6 +728,7 @@ public final class EnvironmentService {
                 _ = try? await runtimeRef.reap(container: id, user: user)
                 try? await runtimeRef.stop(container: id)
                 bridges.removeValue(forKey: model.directory)?.stop()
+                stopServices(model)
                 model.phase = .idle
                 scheduleConfigWrite()
             }
@@ -834,7 +880,7 @@ public final class EnvironmentService {
         return object["u"]
     }
 
-    private func registryAuth(for image: String) -> RegistryAuth? {
+    func registryAuth(for image: String) -> RegistryAuth? {
         let registry = RegistryAuth.registry(of: image)
         guard let value = try? configuration?.registryVault.read(account: registry),
               let object = try? JSONSerialization.jsonObject(with: value.utf8) as? [String: String],
@@ -922,12 +968,14 @@ public final class EnvironmentService {
     }
 
     func workspaceSpec(_ model: ProjectEnvironment) -> WorkspaceSpec? {
-        guard let image = model.settings.image ?? defaults.defaultImage else { return nil }
+        guard let image = model.settings.image ?? defaultImage, imageRefusal(image) == nil else { return nil }
         let roots = workspaceRoots(model, create: true)
-        return WorkspaceSpec(
+        var spec = WorkspaceSpec(
             projectRoot: model.directory, extraMounts: Array(roots.dropFirst()), userMounts: model.settings.userMounts,
             image: image, network: model.settings.network, resources: model.settings.resources,
             environment: model.settings.environment)
+        spec.serviceNetwork = serviceNetwork(model)
+        return spec
     }
 
     /// The shell used in the container: bash when the image has it.
@@ -951,7 +999,8 @@ public final class EnvironmentService {
                 user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(model),
                 blocked: policyBlock(model).map { .init(message: $0, fix: EnvironmentFix.openSettings.title) } ?? model.phase.blocked,
                 spec: policyBlock(model) == nil ? spec : nil,
-                mountIdentity: model.record.mountIdentity, image: model.image, inventory: model.record.inventory)
+                mountIdentity: model.record.mountIdentity, image: model.image, inventory: model.record.inventory,
+                services: model.services.filter { $0.phase != .refused }.map(\.name))
         }
         return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
     }
@@ -1021,6 +1070,38 @@ public final class EnvironmentService {
                 self?.scheduleConfigWrite()
             })
         }
+    }
+
+    // MARK: Image policy
+
+    /// The policy in force: the administrator's (managed) or the one set in Settings.
+    public var imagePolicy: ImagePolicy { managedPolicy?.policy ?? defaults.imagePolicy ?? .open }
+
+    /// The app-wide default image: the administrator's, else Settings'.
+    public var defaultImage: String? { managedPolicy?.defaultImage ?? defaults.defaultImage }
+
+    /// Why `image` may not run under the policy, or nil.
+    public func imageRefusal(_ image: String) -> String? { imagePolicy.refusal(for: image) }
+
+    /// Re-reads the managed policy (Settings opens, Retry) and re-evaluates every project.
+    public func reloadManagedPolicy() {
+        let managed = configuration?.managedPolicy()
+        guard managed != managedPolicy else { return }
+        managedPolicy = managed
+        for model in models.values { refreshImageAndPhase(model) }
+        scheduleConfigWrite()
+    }
+
+    nonisolated static let pulledImagesKey = "containers.pulledImages"
+
+    /// Remembers an image BelloCode pulled that was not on this Mac (so Prune may remove it once unused).
+    func recordPulled(_ image: String) {
+        let runtimeRef = activeRuntime
+        tasks.set("record-pull-\(image)", Task { [weak self] in
+            guard let id = try? await runtimeRef.image(image)?.id, let self else { return }
+            self.pulledImageIDs.insert(id)
+            try? await self.store.setPreference(Self.pulledImagesKey, Array(self.pulledImageIDs).sorted())
+        })
     }
 
     @concurrent

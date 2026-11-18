@@ -149,6 +149,12 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
         (panel?.containsFocus == true ? panel : drawer)?.newTerminal()
     }
 
+    /// A terminal tab with a shell in one of the project's service containers (`bellocode-exec --service`).
+    func newServiceTerminal(service: String, projectDirectory: String) {
+        if shell?.isTerminalDrawerVisible == false { shell?.setTerminalDrawer(visible: true, height: terminals?.set.drawerHeight) }
+        drawer?.newTerminal(extraArgs: ["--service", service, "--project", projectDirectory], title: "Service: \(service)")
+    }
+
     func closeTerminal() { activeSurface?.closeSelected() }
     func selectNext() { activeSurface?.selectAdjacent(1) }
     func selectPrevious() { activeSurface?.selectAdjacent(-1) }

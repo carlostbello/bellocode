@@ -18,11 +18,14 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var idleStopMinutes: Int
     /// Local (stdio) MCP servers of this project: they run in its container (`bellocode-exec --stdio`).
     public var mcpServers: [MCPServerSetting]
+    /// Services defined in the Environment pane (compose subset), used when the project has no compose file.
+    public var servicesYAML: String?
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
-                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = []) {
+                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil) {
         self.mcpServers = mcpServers
+        self.servicesYAML = servicesYAML
         self.image = image
         self.environment = environment
         self.resources = resources
@@ -34,7 +37,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers }
+    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -46,6 +49,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         fileWatchBridge = try c.decodeIfPresent(Bool.self, forKey: .fileWatchBridge) ?? true
         idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 30
         mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
+        servicesYAML = try c.decodeIfPresent(String.self, forKey: .servicesYAML)
     }
 
     /// Names that may not be set as plain variables: they are the container's own or BelloCode's.
@@ -117,42 +121,7 @@ public struct MCPServerSetting: Codable, Sendable, Equatable, Hashable, Identifi
     }
 
     /// Splits a command line the way a shell would for plain words and quotes (no expansion): `node "my tool.js" -v`.
-    public static func split(commandLine: String) -> [String] {
-        var words: [String] = []
-        var current = ""
-        var quote: Character?
-        var hasWord = false
-        var escaped = false
-        for character in commandLine {
-            if escaped {
-                current.append(character)
-                escaped = false
-                continue
-            }
-            if character == "\\", quote != "'" {
-                escaped = true
-                hasWord = true
-                continue
-            }
-            if let open = quote {
-                if character == open { quote = nil } else { current.append(character) }
-                continue
-            }
-            if character == "\"" || character == "'" {
-                quote = character
-                hasWord = true
-            } else if character.isWhitespace {
-                if hasWord { words.append(current) }
-                current = ""
-                hasWord = false
-            } else {
-                current.append(character)
-                hasWord = true
-            }
-        }
-        if hasWord { words.append(current) }
-        return words
-    }
+    public static func split(commandLine: String) -> [String] { ShellWords.split(commandLine) }
 
     /// The command as one line (for the pane), quoting words with spaces or quotes.
     public var commandLine: String {
@@ -169,10 +138,13 @@ public struct EnvironmentDefaults: Codable, Sendable, Equatable {
     public var defaultImage: String?
     /// Another Engine API socket than Rancher Desktop's `~/.rd/docker.sock`.
     public var socketOverride: String?
+    /// The image policy set in Settings (an administrator's managed policy wins over it).
+    public var imagePolicy: ImagePolicy?
 
-    public init(defaultImage: String? = nil, socketOverride: String? = nil) {
+    public init(defaultImage: String? = nil, socketOverride: String? = nil, imagePolicy: ImagePolicy? = nil) {
         self.defaultImage = defaultImage
         self.socketOverride = socketOverride
+        self.imagePolicy = imagePolicy
     }
 
     public static let preferenceKey = "containers.defaults"
@@ -242,6 +214,8 @@ public enum EnvironmentPhase: Sendable, Equatable {
     /// The project's saved execution policy is not in force yet (still loading) or could not be read: nothing may run
     /// under a guessed (default) policy (S3 in docs/reviews/deep-review-1.md).
     case policyUnavailable(String)
+    /// The image is outside the image policy (allowlist, digest, signature, pull policy): nothing is pulled or run.
+    case imageRefused(String)
 
     public var isBlocking: Bool { blocked != nil }
 
@@ -266,6 +240,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
                   fix: EnvironmentFix.openSettings.title)
         case .failed(let message): .init(message: "The project's container failed: \(message)", fix: EnvironmentFix.retry.title)
         case .policyUnavailable(let message): .init(message: message, fix: EnvironmentFix.openSettings.title)
+        case .imageRefused(let message): .init(message: message, fix: EnvironmentFix.chooseImage.title)
         }
     }
 
@@ -283,6 +258,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle: "Stopped"
         case .failed: "Failed"
         case .policyUnavailable: "Settings unavailable"
+        case .imageRefused: "Image not allowed"
         }
     }
 
@@ -294,6 +270,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle: "shippingbox"
         case .noImage, .unmountable: "exclamationmark.triangle"
         case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: "xmark.octagon"
+        case .imageRefused: "hand.raised"
         }
     }
 
@@ -303,7 +280,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .idle, .unknown: .neutral
         case .starting, .pulling: .info
         case .noImage, .unmountable: .warning
-        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: .danger
+        case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable, .imageRefused: .danger
         }
     }
 }
@@ -373,11 +350,12 @@ public struct EnvironmentNotice: Sendable, Equatable {
         case .pullFailed: "Commands cannot run: the image could not be pulled"
         case .unmountable: "Commands cannot run: a folder cannot be mounted"
         case .policyUnavailable: "Commands cannot run: the environment settings are unavailable"
+        case .imageRefused: "Commands cannot run: the image is not allowed"
         default: "Commands cannot run"
         }
         let fix: EnvironmentFix? = switch phase {
         case .runtimeUnavailable(let state): EnvironmentFix(state.fix)
-        case .noImage: .chooseImage
+        case .noImage, .imageRefused: .chooseImage
         case .pullFailed(_, let signIn): signIn ? .signIn : .retry
         case .unmountable, .policyUnavailable: .openSettings
         case .failed: .retry
@@ -405,9 +383,18 @@ public struct ManagedContainer: Sendable, Equatable, Identifiable {
     public var status: String
     public var projectDirectory: String?
     public var created: Date?
+    /// The service name for a project service container; nil for a workspace.
+    public var service: String?
     public var isRunning: Bool { state == "running" }
+    /// `healthy`, `unhealthy` or `starting` from Docker's status text, when the container has a healthcheck.
+    public var health: String? {
+        for word in ["unhealthy", "healthy", "health: starting"] where status.contains("(\(word))") { return word == "health: starting" ? "starting" : word }
+        return nil
+    }
 
-    public init(id: String, name: String, image: String, state: String, status: String, projectDirectory: String?, created: Date?) {
+    public init(id: String, name: String, image: String, state: String, status: String, projectDirectory: String?, created: Date?,
+                service: String? = nil) {
+        self.service = service
         self.id = id
         self.name = name
         self.image = image

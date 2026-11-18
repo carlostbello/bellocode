@@ -127,7 +127,8 @@ struct AppApprovalCard: View {
                 request: .app(request), count: count)
             VStack(alignment: .leading, spacing: DS.Space.s8) {
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
-                    Image(systemName: approval.action == .schedule ? "calendar.badge.clock" : approval.action == .secretCommand ? "key" : "network")
+                    Image(systemName: approval.action == .schedule ? "calendar.badge.clock" : approval.action == .secretCommand ? "key"
+                          : approval.action == .serviceRestart ? "arrow.clockwise" : "network")
                         .font(.system(size: DS.Size.iconPointRow))
                         .foregroundStyle(SwiftUI.Color.ds.icon)
                         .accessibilityHidden(true)
@@ -179,6 +180,7 @@ struct AppApprovalCard: View {
         case .schedule: "Always in This Project"
         case .network: "Always for These Hosts"
         case .secretCommand: "Always for This Command"
+        case .serviceRestart: "Always in This Project"
         }
     }
 
@@ -187,6 +189,7 @@ struct AppApprovalCard: View {
         case .schedule: approval.allowsAlways ? "The scheduled task is deleted." : "The task keeps the version you approved."
         case .network: "The visual stays offline."
         case .secretCommand: "The command does not run and the secret is not used."
+        case .serviceRestart: "The service keeps running as it is."
         }
     }
 
@@ -198,6 +201,8 @@ struct AppApprovalCard: View {
             "Hosts: \(approval.scope). “Always” lets HTML visuals load from these hosts without asking again."
         case .secretCommand:
             "Project: \(approval.scope). The command receives the value and can reveal it (print, encode, send or save it): allow only a command you trust with it. “Always” runs exactly this command with this secret, in this project, without asking again (deleting the secret revokes it)."
+        case .serviceRestart:
+            "Project: \(approval.scope). Restarting stops the service briefly; its data volumes are kept. “Always” lets agents restart this project's services without asking again."
         }
     }
 }

@@ -480,6 +480,36 @@ public struct EngineClient: Sendable {
         try await call("DELETE", "/networks/\(Self.escape(id))")
     }
 
+    public func inspectNetwork(_ id: String) async throws -> NetworkInfo? {
+        do {
+            return try decode(NetworkInfo.self, try await call("GET", "/networks/\(Self.escape(id))"))
+        } catch ContainerError.notFound {
+            return nil
+        }
+    }
+
+    /// Volumes with labels, sizes and reference counts (`GET /system/df?type=volume`; sizes may be unknown).
+    public func volumeUsage() async throws -> [VolumeInfo] {
+        struct Body: Decodable {
+            var volumes: [VolumeInfo]?
+            enum CodingKeys: String, CodingKey { case volumes = "Volumes" }
+        }
+        return try decode(Body.self, try await call("GET", "/system/df", query: [("type", "volume")], timeout: .seconds(60))).volumes ?? []
+    }
+
+    /// Volumes bearing every label given, with their labels (no sizes).
+    public func listVolumeInfos(labels: [String]) async throws -> [VolumeInfo] {
+        struct Body: Decodable {
+            var volumes: [VolumeInfo]?
+            enum CodingKeys: String, CodingKey { case volumes = "Volumes" }
+        }
+        return try decode(Body.self, try await call("GET", "/volumes", query: [("filters", Self.filters(["label": labels]))])).volumes ?? []
+    }
+
+    public func listImages() async throws -> [ImageListItem] {
+        try decode([ImageListItem].self, try await call("GET", "/images/json"))
+    }
+
     public func listNetworks(labels: [String]) async throws -> [String] {
         struct Net: Decodable { var id: String; enum CodingKeys: String, CodingKey { case id = "Id" } }
         return try decode([Net].self, try await call("GET", "/networks", query: [("filters", Self.filters(["label": labels]))])).map(\.id)

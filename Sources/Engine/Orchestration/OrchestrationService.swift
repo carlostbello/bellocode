@@ -302,6 +302,10 @@ public final class OrchestrationService {
         guard node.projectID == callerNode.projectID else {
             return .error("That thread is in another project; app tools act only within this project.")
         }
+        if ContainerTools.all.contains(call.tool), let engine {
+            let project = engine.root.projects.first { $0.projectID == callerNode.projectID }?.directory ?? callerNode.directory
+            return await engine.handleContainerTool(call, caller: caller, projectDirectory: project)
+        }
         if ExtrasTools.all.contains(call.tool), let engine {
             let project = engine.root.projects.first { $0.projectID == callerNode.projectID }?.directory ?? callerNode.directory
             let mode = await core.knownSession(caller)?.permissionMode
@@ -379,6 +383,6 @@ public enum AppTools {
 struct AppToolProvider: ClientMCPToolProvider {
     let service: OrchestrationService
 
-    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions }
+    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions + ContainerTools.definitions }
     func call(_ call: ClientMCPCall) async -> ClientMCPResult { await service.handleAppTool(call) }
 }

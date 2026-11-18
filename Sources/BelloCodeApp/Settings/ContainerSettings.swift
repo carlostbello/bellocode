@@ -219,12 +219,11 @@ struct ContainersSettingsView: View {
                     }
                 }
                 ForEach(Array(model.containers.enumerated()), id: \.element.id) { index, container in
-                    SettingsRow(container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name,
+                    SettingsRow((container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name)
+                                    + (container.service.map { " · service \($0)" } ?? " · workspace"),
                                 detail: "\(container.image) · \(container.status)", divided: index > 0) {
                         HStack(spacing: DS.Space.s2) {
-                            DSPillView(container.isRunning ? "Running" : container.state.capitalized, tone: container.isRunning ? .success : .neutral,
-                                       symbolName: container.isRunning ? "shippingbox" : "shippingbox")
-                                .padding(.trailing, DS.Space.s4)
+                            ManagedContainerPill(container: container).padding(.trailing, DS.Space.s4)
                             if container.isRunning {
                                 Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                                 Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
@@ -248,6 +247,21 @@ struct ContainersSettingsView: View {
         guard case .ready(let ready) = service.runtime else { return service.runtime.map { _ in "Socket \(service.isEnabled ? "~/.rd/docker.sock" : "")" } }
         let rancher = ready.rancherVersion.map { "Rancher Desktop \($0) · " } ?? ""
         return "\(rancher)Docker Engine \(ready.engineVersion), API \(ready.apiVersion), \(ready.arch)" + (ready.notes.isEmpty ? "" : " · " + ready.notes.joined(separator: "; "))
+    }
+}
+
+/// A managed container's state as glyph + word: health first when it has a healthcheck.
+struct ManagedContainerPill: View {
+    let container: ManagedContainer
+    var body: some View {
+        let (word, tone, symbol): (String, DS.Tone, String) = switch (container.isRunning, container.health) {
+        case (true, "healthy"?): ("Healthy", .success, "checkmark.circle")
+        case (true, "unhealthy"?): ("Unhealthy", .warning, "exclamationmark.triangle")
+        case (true, "starting"?): ("Checking health", .info, "arrow.triangle.2.circlepath")
+        case (true, _): ("Running", .success, container.service == nil ? "shippingbox.fill" : "cylinder.split.1x2")
+        default: (container.state.capitalized, .neutral, container.service == nil ? "shippingbox" : "cylinder.split.1x2")
+        }
+        DSPillView(word, tone: tone, symbolName: symbol)
     }
 }
 
@@ -355,7 +369,13 @@ final class EnvironmentSettingsModel: ObservableObject {
     @Published var newMCPCommand = ""
     /// The last removed MCP server, for Undo (reversible: applied at once).
     @Published var removedMCP: MCPServerSetting?
+    /// Services defined in the pane (compose subset), edited here when the project has no compose file.
+    @Published var servicesYAML = ""
+    @Published var serviceLogs: (name: String, text: String)?
     var openTerminal: (String) -> Void = { _ in }
+    var openServiceTerminal: (String, String) -> Void = { service, directory in
+        EnvironmentSettingsModel.openServiceTerminalInFrontWindow(service: service, projectDirectory: directory)
+    }
     var openBrowser: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     init(engine: Engine, directory: String?) {
@@ -375,6 +395,13 @@ final class EnvironmentSettingsModel: ObservableObject {
         controller.newTerminal(nil)
     }
 
+    /// Opens a terminal tab with a shell in one of the project's service containers, in the frontmost main window.
+    static func openServiceTerminalInFrontWindow(service: String, projectDirectory: String) {
+        guard let controller = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first else { return }
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.terminals?.newServiceTerminal(service: service, projectDirectory: projectDirectory)
+    }
+
     func select(_ directory: String) { self.directory = directory }
 
     var projects: [(name: String, directory: String)] { engine.root.projects.map { ($0.name, $0.directory) } }
@@ -389,6 +416,7 @@ final class EnvironmentSettingsModel: ObservableObject {
         variables = settings.environment.keys.sorted().map { "\($0)=\(settings.environment[$0] ?? "")" }.joined(separator: "\n")
         network = settings.network
         fileWatchBridge = settings.fileWatchBridge
+        servicesYAML = settings.servicesYAML ?? ""
     }
 
     func save() async {
@@ -414,6 +442,71 @@ final class EnvironmentSettingsModel: ObservableObject {
         settings.fileWatchBridge = fileWatchBridge
         await service.update(directory, settings: settings)
         message = "Saved. The container is recreated on next use if anything changed."
+    }
+
+    // MARK: Services
+
+    func saveServices() async {
+        guard let directory, let environment else { return }
+        let trimmed = servicesYAML.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            let parse = ComposeParser.parse(servicesYAML)
+            if !parse.isUsable {
+                message = parse.errors.joined(separator: " ")
+                return
+            }
+        }
+        var settings = environment.settings
+        settings.servicesYAML = trimmed.isEmpty ? nil : servicesYAML
+        await service.update(directory, settings: settings)
+        message = trimmed.isEmpty ? "Services removed from this project's settings (their volumes are kept)." : "Services saved. They start with the project's container."
+    }
+
+    func showServiceLogs(_ name: String) async {
+        guard let directory else { return }
+        do {
+            let (text, truncated) = try await service.serviceLogs(directory, name: name, tail: 300, limit: 256 * 1024)
+            serviceLogs = (name, (truncated ? "[older output omitted]\n" : "") + text)
+        } catch {
+            message = "\(error)"
+        }
+    }
+
+    func restartService(_ name: String) async {
+        guard let directory else { return }
+        do { try await service.restartService(directory, name: name) } catch { message = "Could not restart \(name): \(error)" }
+    }
+
+    func openServicePort(_ name: String, port: Int) {
+        guard let directory else { return }
+        do { openBrowser(try service.forwardService(directory, name: name, port: port)) } catch { message = "Could not forward \(name):\(port): \(error)" }
+    }
+
+    /// "Delete Service Data…": lists the service's volumes, asks once (cannot be undone), deletes only those.
+    func confirmDeleteServiceData(_ name: String) async {
+        guard let directory else { return }
+        let volumes: [String]
+        do { volumes = try await service.serviceDataToDelete(directory, name: name) } catch {
+            message = "Could not list \(name)'s data: \(error)"
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Delete the data of the service “\(name)”?"
+        alert.informativeText = (volumes.isEmpty ? "The service has no data volumes; its container is removed." :
+            "Volumes:\n" + volumes.map { "• \($0)" }.joined(separator: "\n") + "\n\nThe service's container is removed too.")
+            + " It is created again, empty, the next time services start. This cannot be undone."
+        let delete = alert.addButton(withTitle: "Delete Service Data")
+        delete.hasDestructiveAction = true
+        delete.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await service.deleteServiceData(directory, name: name, confirmed: volumes)
+            message = "Deleted \(name)'s container and \(volumes.count) volume(s)."
+        } catch {
+            message = "Not deleted: \(error)"
+        }
     }
 
     // MARK: MCP servers (applied at once; removal has Undo)
@@ -487,8 +580,9 @@ final class EnvironmentSettingsModel: ObservableObject {
         var lines: [String] = []
         if !storage.containers.isEmpty { lines.append("Containers:\n" + storage.containers.map { "• \($0)" }.joined(separator: "\n")) }
         if !storage.volumes.isEmpty {
-            lines.append("Volumes (the container's home folder and caches):\n" + storage.volumes.map { "• \($0)" }.joined(separator: "\n"))
+            lines.append("Volumes (the container's home folder, caches and service data):\n" + storage.volumes.map { "• \($0)" }.joined(separator: "\n"))
         }
+        if !storage.networks.isEmpty { lines.append("Networks:\n" + storage.networks.map { "• \($0)" }.joined(separator: "\n")) }
         lines.append("Files saved only inside the container are lost. The project folder on this Mac is not touched. This cannot be undone.")
         alert.informativeText = lines.joined(separator: "\n\n")
         let delete = alert.addButton(withTitle: "Delete Container and Data")
@@ -590,6 +684,9 @@ struct EnvironmentSettingsView: View {
             }
             .padding(DS.Space.s12)
         }
+        SettingsGroup("Services", footer: ServicesSectionView.footer(environment)) {
+            ServicesSectionView(model: model, environment: environment)
+        }
         SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
             MCPServersListView(model: model, environment: environment)
         }
@@ -618,6 +715,111 @@ struct EnvironmentSettingsView: View {
             }
         }
         if let logs = model.logs { LogsView(title: environment.containerName, text: logs) { model.logs = nil } }
+        if let logs = model.serviceLogs { LogsView(title: "service \(logs.name)", text: logs.text) { model.serviceLogs = nil } }
+    }
+}
+
+/// The project's services: one row per service (name, image, ports; state as glyph + word with health; Open per port
+/// into the built-in browser, Logs, Terminal, Restart, Delete Data…), what the definition left out (ignored and
+/// refused keys), and the definition itself (the compose file's path, or an editor for services defined here).
+struct ServicesSectionView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+
+    static func footer(_ environment: ProjectEnvironment) -> String {
+        switch environment.servicesSource {
+        case .file(let path): "Defined in \((path as NSString).lastPathComponent) (checked in). Services share the project's own network: reach them by name (db:5432). Nothing is published; Open forwards a port to this Mac's loopback only."
+        case .pane: "Defined here (compose subset). Services share the project's own network: reach them by name (db:5432). Nothing is published; Open forwards a port to this Mac's loopback only."
+        case .none: "Supporting containers (databases, caches, queues) for this project, from a checked-in compose.yaml or defined below. They start and stop with the project's container."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if environment.services.isEmpty, environment.servicesParse?.isUsable != false {
+                SettingsRow("No services", detail: "Add a compose.yaml to the project, or define services below.", divided: false) { EmptyView() }
+            }
+            ForEach(environment.servicesParse?.errors ?? [], id: \.self) { error in
+                SettingsRow("The definition cannot be used", detail: error, divided: false) {
+                    DSPillView("Not used", tone: .danger, symbolName: "xmark.octagon")
+                }
+            }
+            ForEach(Array(environment.services.enumerated()), id: \.element.id) { index, service in
+                ServiceRowView(model: model, environment: environment, service: service, divided: index > 0)
+            }
+            if let parse = environment.servicesParse, !parse.rejected.isEmpty || !parse.ignored.isEmpty {
+                VStack(alignment: .leading, spacing: DS.Space.s4) {
+                    if !parse.rejected.isEmpty {
+                        Text("Refused (the service does not start): " + parse.rejected.map { "\($0.path): \($0.reason)" }.joined(separator: "; "))
+                            .font(.ds(.meta)).foregroundStyle(DSColor.dangerText).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !parse.ignored.isEmpty {
+                        Text("Ignored: " + parse.ignored.map { "\($0.path) (\($0.reason))" }.joined(separator: "; "))
+                            .font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, DS.Space.s12).padding(.vertical, DS.Space.s8)
+                .overlay(alignment: .top) { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+            }
+            if case .file = environment.servicesSource {
+                SettingsActionsRow {
+                    Spacer()
+                    Button("Reload") { model.service.reloadServices(environment.directory) }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        .help("Reads the compose file again and starts what changed")
+                }
+            } else {
+                VStack(alignment: .trailing, spacing: DS.Space.s8) {
+                    TextEditor(text: $model.servicesYAML).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                        .frame(height: 84).padding(DS.Space.s4)
+                        .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                        .accessibilityLabel("Services, in the compose file format")
+                    Button("Save Services") { Task { await model.saveServices() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+                }
+                .padding(DS.Space.s12)
+                .overlay(alignment: .top) { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+            }
+        }
+        .task(id: environment.directory) { await model.service.refreshServices(environment.directory) }
+    }
+}
+
+struct ServiceRowView: View {
+    @ObservedObject var model: EnvironmentSettingsModel
+    let environment: ProjectEnvironment
+    let service: ServiceState
+    let divided: Bool
+
+    var body: some View {
+        let detail = ([service.image.isEmpty ? nil : service.image,
+                       service.ports.isEmpty ? nil : service.ports.map { "\(service.name):\($0)" }.joined(separator: ", "),
+                       service.outdated ? "definition changed: Restart applies it" : nil, service.message]
+            .compactMap { $0 }).joined(separator: " · ")
+        SettingsRow(service.name, detail: detail, divided: divided) {
+            HStack(spacing: DS.Space.s2) {
+                DSPillView(service.label, tone: service.tone.ds, symbolName: service.symbolName).padding(.trailing, DS.Space.s4)
+                if service.phase == .running {
+                    ForEach(service.ports.prefix(2), id: \.self) { port in
+                        let forwarded = environment.serviceForwards.contains { $0.service == service.name && $0.port == port }
+                        Button(forwarded ? "Open :\(port) Again" : "Open :\(port)") { model.openServicePort(service.name, port: port) }
+                            .buttonStyle(DSButtonStyle(.outline, size: .small))
+                            .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
+                    }
+                    Button("Terminal") { model.openServiceTerminal(service.name, environment.directory) }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true)).help("A shell inside the service's container")
+                }
+                if service.containerID != nil {
+                    Button("Logs") { Task { await model.showServiceLogs(service.name) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                }
+                if service.phase != .refused {
+                    Button(service.phase == .running ? "Restart" : "Start") { Task { await model.restartService(service.name) } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    Button("Delete Data…") { Task { await model.confirmDeleteServiceData(service.name) } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        .help("Removes the service's container and its data volumes after listing them. Cannot be undone.")
+                }
+            }
+        }
     }
 }
 
