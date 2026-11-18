@@ -53,6 +53,8 @@ public final class EngineRoot {
     /// The session list of a project. Created on first request (from the cache, synchronously populated by the
     /// launch snapshot for known projects).
     public func project(_ id: ProjectID) -> ProjectModel? { projectModels[id] }
+    /// Every loaded project model (git parity: which threads share a directory).
+    var loadedProjects: [ProjectModel] { Array(projectModels.values) }
 
     fileprivate func setProjects(_ projects: [Project], registry entries: [ProjectEntry]) {
         projectsByID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
@@ -251,6 +253,7 @@ public final class Engine {
         // Every project's saved execution policy is in force before any project model can create, publish or use an
         // environment (S3 in docs/reviews/deep-review-1.md); the service also refuses until then.
         await environments.start()
+        await installCheckpoints()
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.

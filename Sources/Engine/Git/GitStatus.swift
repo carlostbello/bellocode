@@ -96,6 +96,41 @@ public struct GitFileChange: Sendable, Hashable, Identifiable {
     }
 }
 
+/// A multi-step git operation that stopped (usually on conflicts) and waits for the person.
+public enum GitOperation: String, Sendable, Hashable, Codable {
+    case merge, rebase, cherryPick, revert
+
+    public var label: String {
+        switch self {
+        case .merge: "Merge"
+        case .rebase: "Rebase"
+        case .cherryPick: "Cherry-pick"
+        case .revert: "Revert"
+        }
+    }
+
+    /// The git subcommand that continues or aborts it.
+    public var command: String {
+        switch self {
+        case .merge: "merge"
+        case .rebase: "rebase"
+        case .cherryPick: "cherry-pick"
+        case .revert: "revert"
+        }
+    }
+
+    /// Reads the marker files of `gitDirectory` (no git process).
+    public static func read(gitDirectory: String) -> GitOperation? {
+        let manager = FileManager.default
+        func exists(_ name: String) -> Bool { manager.fileExists(atPath: (gitDirectory as NSString).appendingPathComponent(name)) }
+        if exists("rebase-merge") || exists("rebase-apply") { return .rebase }
+        if exists("MERGE_HEAD") { return .merge }
+        if exists("CHERRY_PICK_HEAD") { return .cherryPick }
+        if exists("REVERT_HEAD") { return .revert }
+        return nil
+    }
+}
+
 /// A repository's state: branch, upstream, ahead/behind and changed files.
 public struct GitStatus: Sendable, Hashable {
     /// The branch name; nil for a detached HEAD.
@@ -108,6 +143,8 @@ public struct GitStatus: Sendable, Hashable {
     public var files: [GitFileChange]
     /// More files changed than `files` holds (the list was capped).
     public var truncated: Bool
+    /// A merge, rebase, cherry-pick or revert stopped half way (read from the git directory); nil otherwise.
+    public var operation: GitOperation?
 
     public init(
         branch: String? = nil, head: String? = nil, upstream: String? = nil, ahead: Int = 0, behind: Int = 0,
@@ -126,6 +163,8 @@ public struct GitStatus: Sendable, Hashable {
     public var stagedFiles: [GitFileChange] { files.filter { $0.staged != nil } }
     public var unstagedFiles: [GitFileChange] { files.filter { $0.unstaged != nil } }
     public var isDetached: Bool { branch == nil && head != nil }
+    public var conflictedFiles: [GitFileChange] { files.filter(\.isConflicted) }
+    public var hasConflicts: Bool { operation != nil || files.contains(where: \.isConflicted) }
 
     /// "3 changed · ↑2 ↓1" style summary (words for VoiceOver come from `accessibleSummary`).
     public var summary: String {
