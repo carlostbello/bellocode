@@ -47,6 +47,16 @@ Research this plan is built on (read these before implementing an area):
   signature verification stays off, and the registry allowlist applies to base images and pulled service images only.
 
 ### Owner direction (2026-11-18, later)
+- **Execution model (2026-11-18):** configurable per developer and per project. Default: a shared workspace container
+  that mounts one or more code roots (for this owner `~/Documents/Repos`, but configurable per developer) at the same
+  paths, so multi-repo work needs no per-request approval inside those roots. Options: a per-project container (dev
+  container or image) and a host-shell docker-only mode. Configured code roots count as "inside the project" for risk
+  and Auto policy.
+- **Secrets:** a built-in Keychain secret manager with brokered use, placeholder substitution (an egress proxy swaps
+  the real value in only for bound destinations) and an explicitly labelled visible use. The goal is to state
+  confidently that the agent cannot see a brokered or placeholder secret.
+- **Browser:** `browse` on the host is not acceptable; only Chrome running in a container with `browse` installed in
+  it (spike G7).
 - **Docker CLI (2026-11-18):** the `docker` CLI is allowed on the host (it is Rancher Desktop's, in `~/.rd/bin`). This
   replaces the earlier "no container CLI on the host" assumption. BelloCode may use `docker`, `docker compose` and
   `docker buildx` where that is simpler or more complete than the Engine API; agent commands still run in the container.
