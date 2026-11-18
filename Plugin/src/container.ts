@@ -10,6 +10,8 @@ export type Workspace = {
   readonly image?: string
   readonly inventory?: Inventory
   readonly blocked?: { readonly message: string; readonly fix?: string }
+  /** The workspace's creation settings; `egress` is set when BelloCode's egress proxy is enforced (secret manager). */
+  readonly spec?: { readonly egress?: { readonly network?: string } }
 }
 export type ExecConfig = {
   readonly workspaces: readonly Workspace[]
@@ -64,6 +66,11 @@ export function containerGuidance(config: ExecConfig | undefined, directory: str
     "- Host tools (Homebrew, the Mac's python, node, bun, npm, docker) are not available and must not be used.",
     "- Dev servers: listen on 127.0.0.1 or 0.0.0.0 inside the container; no ports are published. The user opens them from BelloCode's Ports list or built-in browser.",
     "- There is no Docker access inside the container.",
+    ...(workspace?.spec?.egress
+      ? [
+          "- Network: HTTP and HTTPS go only through BelloCode's proxy (HTTPS_PROXY is set; its CA is trusted). Direct connections, raw TCP, UDP, IPv6 and DNS for outside names do not work; use tools that honour HTTPS_PROXY (curl, npm, pip, git). A 403 or 502 whose body starts with \"BelloCode\" comes from the proxy and names the rule.",
+        ]
+      : []),
     '- A command that fails with "BelloCode: … The command was not run." did not run: tell the user the fix it names instead of retrying.',
   )
   const blocked = config?.runtimeBlocked ?? workspace?.blocked

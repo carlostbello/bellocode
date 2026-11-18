@@ -573,6 +573,15 @@ extension SecretManager {
         return Set(entries.compactMap(HostPort.init(authority:)))
     }
 
+    /// Projects with a container environment (for the raw-egress allowlist editor).
+    public var egressProjects: [String] { environments.map { Array($0.models.keys).sorted() } ?? [] }
+
+    /// The person's switch (takes effect at the next launch; an administrator's `EgressEnforced` wins).
+    public var enforceEgressSetting: Bool {
+        get { SecretManagerConfiguration.egressEnforced(userDefaults: .standard) }
+        set { UserDefaults.standard.set(newValue, forKey: "secrets.enforceEgress") }
+    }
+
     public func rawEgressAllowlist(projectDirectory: String) -> [String] {
         (UserDefaults.standard.array(forKey: "secrets.rawEgress.\(projectDirectory)") as? [String]) ?? []
     }

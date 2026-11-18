@@ -158,6 +158,9 @@ describe("container guidance", () => {
     expect(text).toContain("registry.corp/dev:1")
     expect(text).toContain("bash, node")
     expect(text).toContain("no ports are published")
+    expect(text).not.toContain("BelloCode's proxy")
+    const egress = { ...config, workspaces: config.workspaces.map((w) => ({ ...w, spec: { egress: { network: "bellocode-egress-x" } } })) }
+    expect(C.containerGuidance(egress, "/Users/me/app")).toContain("go only through BelloCode's proxy")
     expect(C.containerGuidance(config, "/tmp")).toContain("not inside a project")
     expect(C.containerGuidance({ ...config, runtimeBlocked: { message: "Rancher Desktop is not running." } }, "/Users/me/app")).toContain(
       "Right now commands cannot run: Rancher Desktop is not running.",

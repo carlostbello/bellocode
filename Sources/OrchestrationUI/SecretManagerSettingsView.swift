@@ -49,6 +49,7 @@ public struct SecretManagerSettingsView: View {
             }
             if let error = manager.lastError ?? state.error { Text(error).font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.dangerText) }
             builtIn
+            egressSettings
             visualHosts
         }
         .buttonStyle(DSButtonStyle(.outline))
@@ -132,6 +133,37 @@ public struct SecretManagerSettingsView: View {
         }
     }
 
+    @ViewBuilder private var egressSettings: some View {
+        SwiftUI.Color.ds.border.frame(height: 1)
+        Text("Container network").font(.ds(.title))
+        Toggle("Route all container traffic through BelloCode's proxy (needed for placeholder secrets)", isOn: Binding(
+            get: { manager.enforceEgressSetting }, set: { manager.enforceEgressSetting = $0; state.objectWillChange.send() }))
+            .disabled(SecretManagerConfiguration.egressForcedByAdministrator)
+        Text(SecretManagerConfiguration.egressForcedByAdministrator
+             ? "Set by your administrator."
+             : "Applies at the next launch. Off: containers reach the network directly and placeholder secrets are unavailable.")
+            .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
+        let projects = manager.egressProjects
+        if !projects.isEmpty {
+            HStack(spacing: DS.Space.s6) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.warningText).accessibilityHidden(true)
+                Text("Uninspected destinations: no secret protection").font(.ds(.labelEmph)).foregroundStyle(SwiftUI.Color.ds.warningText)
+            }
+            Text("Non-HTTP services a project needs (SSH, databases): host:port pairs reached by a raw tunnel through the proxy, never inspected and never given a secret. Everything else that is not HTTP stays blocked.")
+                .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: DS.Space.s6) {
+                DSMenuSelect("Project", options: projects.map { ($0, ($0 as NSString).lastPathComponent) },
+                             selection: Binding(get: { state.rawProject ?? projects[0] }, set: { state.rawProject = $0; state.rawText = manager.rawEgressAllowlist(projectDirectory: $0).joined(separator: ", ") }))
+                TextField("db.internal:5432, git.example.com:22", text: $state.rawText).textFieldStyle(DSTextFieldStyle())
+                Button("Save") {
+                    let project = state.rawProject ?? projects[0]
+                    manager.setRawEgressAllowlist(state.rawText.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init), projectDirectory: project)
+                    state.rawText = manager.rawEgressAllowlist(projectDirectory: project).joined(separator: ", ")
+                }
+            }
+        }
+    }
+
     @ViewBuilder private var visualHosts: some View {
         SwiftUI.Color.ds.border.frame(height: 1)
         Text("Network hosts HTML visuals may load from").font(.ds(.title))
@@ -181,6 +213,9 @@ final class SecretsSettingsState: ObservableObject {
     @Published var newHeader = "Authorization"
     @Published var newPrefix = "Bearer "
     @Published var newPath = ""
+    // Raw egress allowlist.
+    @Published var rawProject: String?
+    @Published var rawText = ""
 
     init(selected: String? = nil, adding: Bool = false) {
         self.selected = selected
