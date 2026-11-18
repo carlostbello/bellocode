@@ -116,6 +116,9 @@ public final class EnvironmentService {
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
     @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
     @ObservationIgnored var serviceForwarders: [String: [String: PortForwarder]] = [:]
+    /// The compose file last read per project (stat stamp and text) and the last parse per definition text.
+    @ObservationIgnored var servicesDefinitionCache: [String: (stamp: String, text: String)] = [:]
+    @ObservationIgnored var servicesParseCache: [String: (text: String, parse: ComposeParseResult)] = [:]
     /// The administrator's policy (managed preferences), nil when none is managed.
     public private(set) var managedPolicy: ManagedImagePolicy.Managed?
     /// Images BelloCode pulled that were not on this Mac before (image IDs): "Prune" may remove them when unused.
@@ -214,6 +217,8 @@ public final class EnvironmentService {
         writeChain?.cancel()
         for (_, ports) in forwarders { for forwarder in ports.values { forwarder.stop() } }
         forwarders.removeAll()
+        for (_, ports) in serviceForwarders { for forwarder in ports.values { forwarder.stop() } }
+        serviceForwarders.removeAll()
         for bridge in bridges.values { bridge.stop() }
         bridges.removeAll()
         started = false

@@ -100,15 +100,22 @@ extension EnvironmentService {
     func loadServices(_ model: ProjectEnvironment) -> ComposeParseResult? {
         var source = ServicesSource.none
         var text: String?
+        // The file is read and parsed only when its size or modification date changed (a stat otherwise), so refreshes
+        // on the main actor stay cheap.
         for name in ComposeParser.fileNames {
             let path = (model.directory as NSString).appendingPathComponent(name)
-            if let data = FileManager.default.contents(atPath: path), data.count <= 1 << 20 {
-                source = .file(path)
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { continue }
+            let stamp = "\(path)|\((attributes[.size] as? NSNumber)?.intValue ?? -1)|\((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+            source = .file(path)
+            if let cached = servicesDefinitionCache[model.directory], cached.stamp == stamp {
+                text = cached.text
+            } else if let data = FileManager.default.contents(atPath: path), data.count <= 1 << 20 {
                 text = String(decoding: data, as: UTF8.self)
-                break
+                servicesDefinitionCache[model.directory] = (stamp, text ?? "")
             }
+            break
         }
-        if text == nil, let yaml = model.settings.servicesYAML, !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if case .none = source, let yaml = model.settings.servicesYAML, !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             source = .pane
             text = yaml
         }
@@ -118,7 +125,13 @@ extension EnvironmentService {
             if !model.services.isEmpty { model.services = [] }
             return nil
         }
-        let parse = ComposeParser.parse(text)
+        let parse: ComposeParseResult
+        if let cached = servicesParseCache[model.directory], cached.text == text {
+            parse = cached.parse
+        } else {
+            parse = ComposeParser.parse(text)
+            servicesParseCache[model.directory] = (text, parse)
+        }
         if model.servicesParse != parse { model.servicesParse = parse }
         var states: [ServiceState] = []
         for service in parse.services {
