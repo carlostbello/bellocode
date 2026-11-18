@@ -21,6 +21,7 @@ enum MainMenu {
         mainMenu.addItem(submenu: threadMenu())
         mainMenu.addItem(submenu: terminalMenu())
         mainMenu.addItem(submenu: changesMenu())
+        mainMenu.addItem(submenu: gitLabMenu())
         mainMenu.addItem(submenu: BrowserMenu.make())
 
         let windowMenu = windowMenu()
@@ -254,6 +255,47 @@ enum MainMenu {
         menu.add(.chooseWorkspace)
         menu.add(.chooseBranch)
         menu.add(.removeWorktree)
+        return menu
+    }
+
+    /// GitLab 2: every GitLab action (review, merge request, pipeline, issues, to-dos) with a menu item; the palette
+    /// lists them too (keyboard access for those without a shortcut).
+    private static func gitLabMenu() -> NSMenu {
+        let menu = NSMenu(title: "GitLab")
+        menu.add(.showMergeRequests)
+        menu.add(.linkMergeRequest)
+        menu.add(.createMergeRequest)
+        menu.add(.refreshMergeRequests)
+        menu.add(.openMergeRequestInGitLab)
+        menu.add(.toggleBabysit)
+        menu.add(.unlinkMergeRequest)
+        menu.addItem(.separator())
+        menu.add(.reviewMergeRequest)
+        let review = NSMenu(title: "Review")
+        for command in [ShellCommand.nextReviewThread, .previousReviewThread, .replyToReviewThread, .toggleReviewThreadResolved, .addReviewThreadToAgent] {
+            review.add(command)
+        }
+        review.addItem(.separator())
+        review.add(.submitReview)
+        review.add(.discardReviewDrafts)
+        review.add(.closeReview)
+        menu.addItem(submenu: review, title: "Review")
+        menu.addItem(.separator())
+        menu.add(.showFailingJobLog)
+        menu.add(.sendFailureToAgent)
+        menu.add(.retryFailedJob)
+        menu.add(.playManualJob)
+        menu.addItem(.separator())
+        menu.add(.approveMergeRequest)
+        menu.add(.mergeMergeRequest)
+        menu.addItem(.separator())
+        menu.add(.showIssues)
+        menu.add(.startThreadFromIssue)
+        menu.add(.linkIssueToThread)
+        menu.addItem(.separator())
+        menu.add(.showTodos)
+        menu.add(.openTodo)
+        menu.add(.markTodoDone)
         return menu
     }
 

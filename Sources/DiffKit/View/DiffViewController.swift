@@ -43,6 +43,20 @@ public struct DiffReviewComment: Sendable, Hashable, Identifiable {
     }
 }
 
+/// An action the owner offers on an inline review thread (menu item, keyboard, accessibility).
+public struct DiffAnnotationAction: Sendable, Hashable {
+    /// The owner's identifier ("reply", "resolve", "agent" …).
+    public var id: String
+    public var title: String
+    public var isEnabled: Bool
+
+    public init(id: String, title: String, isEnabled: Bool = true) {
+        self.id = id
+        self.title = title
+        self.isEnabled = isEnabled
+    }
+}
+
 /// What the diff view asks its owner to do.
 @MainActor
 public protocol DiffViewControllerDelegate: AnyObject {
@@ -80,6 +94,27 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         get { content.commentMarks }
         set { content.commentMarks = newValue }
     }
+    /// Review threads and drafts shown inline (GitLab 2). Setting them rebuilds the rows off the main actor and keeps
+    /// the first visible row in place.
+    public var annotations: [DiffAnnotation] = [] {
+        didSet {
+            guard annotations != oldValue else { return }
+            expandedAnnotations.formIntersection(Set(annotations.map(\.id)))
+            rebuild(keepPosition: true)
+        }
+    }
+    /// Threads shown expanded (notes and bodies).
+    public private(set) var expandedAnnotations: Set<String> = []
+    /// The actions the owner offers on a thread (context menu, keys, accessibility).
+    public var annotationActions: ((DiffAnnotation) -> [DiffAnnotationAction])?
+    public var onAnnotationAction: ((DiffAnnotationAction, DiffAnnotation) -> Void)?
+    /// Called when the current thread changes (keyboard or click).
+    public var onCurrentAnnotationChange: ((DiffAnnotation?) -> Void)?
+    /// Keys the diff handles for threads: N / P next and previous thread, o expand or collapse, r reply.
+    public var annotationKeys = true
+    /// The comment popover's hint and button (the Changes panel's comments go to the composer; a review's are drafts).
+    public var commentHint = "Goes to the composer as context."
+    public var commentActionTitle = "Add Comment"
 
     let content: DiffContentView
     private let scrollView = DiffScrollView()
@@ -135,6 +170,13 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         content.onExpandGap = { [weak self] row, all in self?.expand(row, all: all) }
         content.onRevertHunk = { [weak self] file, hunk in self?.requestRevert(file: file, hunk: hunk) }
         content.onComment = { [weak self] in self?.beginComment() }
+        content.onToggleAnnotation = { [weak self] id in self?.toggleAnnotation(id) }
+        content.annotationAccessibilityActions = { [weak self] id in
+            guard let self, let annotation = self.annotations.first(where: { $0.id == id }) else { return [] }
+            return (self.annotationActions?(annotation) ?? []).filter(\.isEnabled).map { action in
+                (action.title, { [weak self] in self?.onAnnotationAction?(action, annotation) })
+            }
+        }
         content.onSelectionChange = { [weak self] in self?.view.window?.toolbar?.validateVisibleItems() }
         content.contextMenuProvider = { [weak self] row, _ in self?.contextMenu(row: row) }
         content.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }
@@ -254,10 +296,13 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         syntaxTask?.cancel()
         isBuilding = true
         let anchor = keepPosition ? topAnchorRow() : nil
+        if let id = currentAnnotation?.id { pendingCurrentAnnotation = id }
         var rowOptions = DiffRowOptions()
         rowOptions.layout = options.layout
         rowOptions.collapsedFiles = collapsedFiles
         rowOptions.expansions = expansions
+        rowOptions.annotations = annotations
+        rowOptions.expandedAnnotations = expandedAnnotations
         let files = files
         let ignoreWhitespace = options.ignoreWhitespace
         updateEmptyState()
@@ -297,6 +342,12 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         let revertable = Set(shown.enumerated().filter { revertablePaths.contains($0.element.path) }.map(\.offset))
         content.revertableFiles = revertable
         content.setContent(files: shown, rows: rows, syntax: [:], layout: layout)
+        if let id = pendingCurrentAnnotation {
+            pendingCurrentAnnotation = nil
+            content.currentAnnotationRow = rows.rows.indices.first { row in
+                if case .annotation(let index) = rows.rows[row].kind { rows.annotations[index].id == id } else { false }
+            }
+        }
         if let (id, offset) = anchor, let index = rows.rows.firstIndex(where: { $0.id >= id }) {
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: max(0, content.rowRect(index).minY + offset)))
         } else if anchor == nil {
@@ -443,7 +494,7 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         case 123: content.horizontalOffset -= content.theme.charWidth * 8; updateIndicator(); return true
         case 124: content.horizontalOffset += content.theme.charWidth * 8; updateIndicator(); return true
         case 53:
-            if !findBar.isHidden { closeFind(nil) } else { content.selection = nil }
+            if !findBar.isHidden { closeFind(nil) } else if content.selection != nil { content.selection = nil } else { return false }
             return true
         default: break
         }
@@ -453,8 +504,90 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         case "]": nextFile(); return true
         case "[": previousFile(); return true
         case "c": beginComment(); return true
+        case "N" where annotationKeys && !annotations.isEmpty: nextAnnotation(); return true
+        case "P" where annotationKeys && !annotations.isEmpty: previousAnnotation(); return true
+        case "o" where annotationKeys && currentAnnotation != nil: toggleAnnotation(currentAnnotation!.id); return true
+        case "r" where annotationKeys && currentAnnotation != nil:
+            let annotation = currentAnnotation!
+            if let reply = annotationActions?(annotation).first(where: { $0.id == "reply" && $0.isEnabled }) { onAnnotationAction?(reply, annotation) } else { NSSound.beep() }
+            return true
         default: return false
         }
+    }
+
+    // MARK: Review threads
+
+    /// The thread keyboard actions apply to.
+    public var currentAnnotation: DiffAnnotation? {
+        guard let row = content.currentAnnotationRow, content.rows.rows.indices.contains(row), case .annotation(let index) = content.rows.rows[row].kind,
+            content.rows.annotations.indices.contains(index)
+        else { return nil }
+        return content.rows.annotations[index]
+    }
+
+    /// Rows of placed threads, in order.
+    private var annotationRows: [Int] {
+        content.rows.rows.indices.filter { if case .annotation = content.rows.rows[$0].kind { true } else { false } }
+    }
+
+    public func toggleAnnotation(_ id: String) {
+        if expandedAnnotations.contains(id) { expandedAnnotations.remove(id) } else { expandedAnnotations.insert(id) }
+        pendingCurrentAnnotation = id
+        rebuild(keepPosition: true)
+        pendingCurrentAnnotation = id
+        onCurrentAnnotationChange?(annotations.first { $0.id == id })
+    }
+
+    public func setExpanded(_ ids: Set<String>) {
+        guard ids != expandedAnnotations else { return }
+        expandedAnnotations = ids
+        rebuild(keepPosition: true)
+    }
+
+    public func nextAnnotation() { moveAnnotation(forward: true) }
+    public func previousAnnotation() { moveAnnotation(forward: false) }
+
+    private func moveAnnotation(forward: Bool) {
+        let rows = annotationRows
+        guard !rows.isEmpty else { return NSSound.beep() }
+        let reference = content.currentAnnotationRow ?? content.rowIndex(atY: scrollView.contentView.bounds.minY + 1) ?? 0
+        let target = forward ? (rows.first { $0 > reference } ?? rows.first!) : (rows.last { $0 < reference } ?? rows.last!)
+        content.currentAnnotationRow = target
+        scroll(toRow: target, margin: content.theme.rowHeight * 3)
+        onCurrentAnnotationChange?(currentAnnotation)
+    }
+
+    /// Makes a thread current and scrolls to it.
+    public func reveal(annotation id: String) {
+        guard let row = annotationRows.first(where: { row in
+            if case .annotation(let index) = content.rows.rows[row].kind { content.rows.annotations[index].id == id } else { false }
+        }) else { return }
+        content.currentAnnotationRow = row
+        scroll(toRow: row, margin: content.theme.rowHeight * 3)
+        onCurrentAnnotationChange?(currentAnnotation)
+    }
+
+    /// Opens the comment editor popover by a thread's row (or the selection when `annotationID` is nil): the owner
+    /// decides the title, hint and button, and receives the text.
+    public func showEditor(annotationID: String?, title: String, hint: String, actionTitle: String, initial: String = "", onSubmit: @escaping (String) -> Void) {
+        let row: Int? = annotationID.flatMap { id in
+            annotationRows.first { row in
+                if case .annotation(let index) = content.rows.rows[row].kind { content.rows.annotations[index].id == id } else { false }
+            }
+        } ?? content.selection?.end.row
+        let editor = CommentEditorController(location: title, title: title, hint: hint, actionTitle: actionTitle)
+        editor.text = initial
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = editor
+        editor.onSubmit = { [weak popover] text in
+            popover?.close()
+            onSubmit(text)
+        }
+        editor.onCancel = { [weak popover] in popover?.close() }
+        let rect = row.map { content.rowRect($0) } ?? CGRect(x: 0, y: scrollView.contentView.bounds.minY, width: 200, height: 20)
+        popover.show(relativeTo: NSRect(x: rect.minX + 80, y: rect.minY, width: 40, height: min(rect.height, 30)), of: content, preferredEdge: .maxY)
+        pendingCommentPopover = popover
     }
 
     func updateIndicator() {
@@ -513,7 +646,9 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     /// Opens the comment popover for the selected lines (beeps without a selection).
     public func beginComment() {
         guard let target = commentTarget, let selection = content.selection else { return NSSound.beep() }
-        let editor = CommentEditorController(location: "\(target.file.path):\(target.lines.lowerBound)\(target.lines.count > 1 ? "–\(target.lines.upperBound)" : "")")
+        let editor = CommentEditorController(
+            location: "\(target.file.path):\(target.lines.lowerBound)\(target.lines.count > 1 ? "–\(target.lines.upperBound)" : "")", hint: commentHint,
+            actionTitle: commentActionTitle)
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = editor
@@ -532,12 +667,28 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     }
 
     private var pendingCommentPopover: NSPopover?
+    private var pendingCurrentAnnotation: String?
 
     private func contextMenu(row: Int?) -> NSMenu? {
         let menu = NSMenu()
         menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "")
         let comment = menu.addItem(withTitle: "Add Comment…", action: #selector(addCommentAction(_:)), keyEquivalent: "")
         comment.target = self
+        if let row, content.rows.rows.indices.contains(row), case .annotation(let index) = content.rows.rows[row].kind, content.rows.annotations.indices.contains(index) {
+            let annotation = content.rows.annotations[index]
+            content.currentAnnotationRow = row
+            let thread = NSMenu()
+            let toggle = thread.addItem(withTitle: expandedAnnotations.contains(annotation.id) ? "Collapse Thread" : "Expand Thread", action: #selector(annotationMenuAction(_:)), keyEquivalent: "")
+            toggle.target = self
+            toggle.representedObject = AnnotationMenuItem(action: DiffAnnotationAction(id: "toggle", title: ""), annotation: annotation)
+            for action in annotationActions?(annotation) ?? [] {
+                let item = thread.addItem(withTitle: action.title, action: action.isEnabled ? #selector(annotationMenuAction(_:)) : nil, keyEquivalent: "")
+                item.target = self
+                item.isEnabled = action.isEnabled
+                item.representedObject = AnnotationMenuItem(action: action, annotation: annotation)
+            }
+            return thread
+        }
         if let row, content.rows.rows.indices.contains(row) {
             let item = content.rows.rows[row]
             let file = content.files[item.fileIndex]
@@ -555,6 +706,11 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     }
 
     @objc private func addCommentAction(_ sender: Any?) { beginComment() }
+
+    @objc private func annotationMenuAction(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? AnnotationMenuItem else { return }
+        if item.action.id == "toggle" { toggleAnnotation(item.annotation.id) } else { onAnnotationAction?(item.action, item.annotation) }
+    }
 
     @objc private func revertHunkAction(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [Int], pair.count == 2 else { return }
@@ -686,6 +842,16 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     public var focusView: NSView { content }
 }
 
+/// A thread menu item's payload.
+final class AnnotationMenuItem: NSObject {
+    let action: DiffAnnotationAction
+    let annotation: DiffAnnotation
+    init(action: DiffAnnotationAction, annotation: DiffAnnotation) {
+        self.action = action
+        self.annotation = annotation
+    }
+}
+
 /// The diff's root view: tells the controller when the appearance changes.
 @MainActor
 final class DiffContainerView: NSView {
@@ -728,12 +894,18 @@ final class HorizontalIndicatorView: NSView {
 @MainActor
 public final class CommentEditorController: NSViewController, NSTextViewDelegate {
     let location: String
+    let titleText: String
+    let hintText: String
+    let actionTitle: String
     public var onSubmit: ((String) -> Void)?
     public var onCancel: (() -> Void)?
     private let textView = NSTextView()
 
-    public init(location: String) {
+    public init(location: String, title: String? = nil, hint: String = "Goes to the composer as context.", actionTitle: String = "Add Comment") {
         self.location = location
+        titleText = title ?? "Comment on \(location)"
+        hintText = hint
+        self.actionTitle = actionTitle
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -743,7 +915,7 @@ public final class CommentEditorController: NSViewController, NSTextViewDelegate
     /// The comment popover's content (§6 menus/popovers recipe): title `title`, a `canvas` text box with the
     /// `borderStrong` ring and `r.md`, the hint in `label text3`, ghost Cancel and primary "Add Comment ⌘↩".
     public override func loadView() {
-        let title = NSTextField(labelWithString: "Comment on \(location)")
+        let title = NSTextField(labelWithString: titleText)
         title.font = DS.TextRole.title.font
         title.textColor = DS.Color.text
         title.lineBreakMode = .byTruncatingMiddle
@@ -769,11 +941,11 @@ public final class CommentEditorController: NSViewController, NSTextViewDelegate
         scroll.documentView = textView
         scroll.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(scroll)
-        let hint = NSTextField(labelWithString: "Goes to the composer as context.")
+        let hint = NSTextField(labelWithString: hintText)
         hint.font = DS.TextRole.label.font
         hint.textColor = DS.Color.text3
         let cancel = DSButton(title: "Cancel", variant: .ghost, size: .small, target: self, action: #selector(cancel(_:)))
-        let add = DSButton(title: "Add Comment", variant: .primary, size: .small, shortcutHint: "⌘↩", target: self, action: #selector(submit(_:)))
+        let add = DSButton(title: actionTitle, variant: .primary, size: .small, shortcutHint: "⌘↩", target: self, action: #selector(submit(_:)))
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         let buttons = NSStackView(views: [hint, spacer, cancel, add])

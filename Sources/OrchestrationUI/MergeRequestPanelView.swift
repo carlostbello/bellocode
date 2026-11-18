@@ -18,10 +18,20 @@ public struct MergeRequestPanelView: View {
             if let open = model.openLog {
                 JobLogPane(model: model, open: open)
             } else {
-                header
-                notices
-                SwiftUI.Color.ds.border.frame(height: 1)
-                content
+                if model.work != nil { sectionPicker }
+                switch model.section {
+                case .mergeRequests:
+                    header
+                    notices
+                    SwiftUI.Color.ds.border.frame(height: 1)
+                    content
+                case .issues:
+                    notices
+                    IssuesView(model: model)
+                case .todos:
+                    notices
+                    TodosView(model: model)
+                }
             }
         }
         .buttonStyle(DSButtonStyle(.outline, size: .small))
@@ -29,6 +39,17 @@ public struct MergeRequestPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SwiftUI.Color.ds.canvas)
         .transaction { $0.animation = nil }
+    }
+
+    /// Merge Requests · Issues · To-dos (GitLab 2). Keyboard: the GitLab menu's Show Issues / Show To-dos.
+    private var sectionPicker: some View {
+        HStack {
+            DSSegmentedPicker(options: MergeRequestPanelModel.Section.allCases.map { ($0, $0.title) }, selection: Bindable(model).section)
+                .accessibilityLabel("GitLab section")
+            Spacer()
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.top, DS.Space.s8)
     }
 
     private var header: some View {
@@ -188,9 +209,10 @@ struct MergeRequestCard: View {
             if expanded {
                 if let snapshot {
                     OverviewSection(snapshot: snapshot, link: link)
-                    ApprovalsSection(model: model, snapshot: snapshot)
+                    ApprovalsSection(model: model, snapshot: snapshot).id("approvals")
                     PipelineSection(model: model, snapshot: snapshot).id("pipeline")
                     DiscussionsSection(snapshot: snapshot).id("discussions")
+                    if model.work != nil { DependenciesSection(model: model, snapshot: snapshot).id("dependencies") }
                 } else if model.service.problems[link.ref.url] == nil {
                     Text("Checking GitLab…").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
                 }
@@ -249,6 +271,12 @@ struct MergeRequestCard: View {
 
     private func actions(_ snapshot: MergeRequestSnapshot?) -> some View {
         HStack(spacing: DS.Space.s6) {
+            if model.openReview != nil {
+                let drafts = model.draftCount(link.ref)
+                Button(drafts > 0 ? "Review Diff (\(drafts) draft\(drafts == 1 ? "" : "s"))" : "Review Diff") { model.review(link.ref) }
+                    .buttonStyle(DSButtonStyle(.primary, size: .small))
+                    .help("Review the merge request's diff with its threads inline (GitLab ▸ Review Merge Request Diff)")
+            }
             Button("Open in GitLab") { if let url = URL(string: snapshot?.webURL ?? link.ref.url) { model.openURL(url, false) } }
                 .help("Open on GitLab in your default browser")
             Button("Open in BelloCode") { if let url = URL(string: snapshot?.webURL ?? link.ref.url) { model.openURL(url, true) } }
@@ -313,13 +341,14 @@ struct ApprovalsSection: View {
     var body: some View {
         let service = model.service
         let rules = service.approvalRules[snapshot.ref.url]
-        let support = service.capabilities(snapshot.ref.instance).support(.approvalRules)
         let settings = service.settings(for: snapshot.ref.instance)
         VStack(alignment: .leading, spacing: DS.Space.s4) {
             SectionTitle(title: "Approvals", trailing: MergeRequestText.approvalCount(snapshot))
             Label(snapshot.approvals.label, systemImage: snapshot.approvals.approved ? "checkmark.seal" : "seal")
                 .foregroundStyle(snapshot.approvals.approved ? SwiftUI.Color.ds.successText : SwiftUI.Color.ds.text2)
-            if let rules, !rules.isEmpty {
+            if let explanation = model.work?.approvalExplanations[snapshot.ref.url] {
+                ApprovalExplanationView(explanation: explanation)
+            } else if let rules, !rules.isEmpty {
                 ForEach(rules) { rule in
                     HStack(spacing: DS.Space.s6) {
                         Text(rule.approved ? "✓" : "○").foregroundStyle(rule.approved ? SwiftUI.Color.ds.successText : SwiftUI.Color.ds.text3)
@@ -329,10 +358,8 @@ struct ApprovalsSection: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-            } else if case .unavailable = support {
-                Text("Approvals are optional on this instance; required rules and Code Owners are not reported.").foregroundStyle(SwiftUI.Color.ds.text3)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            if let work = model.work { CodeOwnersView(summary: work.codeOwners[snapshot.ref.url], note: work.codeOwnersNotes[snapshot.ref.url]) }
             if settings.approveAndMergeEnabled && snapshot.state == .opened {
                 HStack(spacing: DS.Space.s6) {
                     Button("Approve at \(snapshot.sha.prefix(8))") { Task { await model.approve(snapshot) } }

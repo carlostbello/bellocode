@@ -28,6 +28,8 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     private var agentsIsChild = false
     /// Linked merge requests (M3-B): "#42 Open · ✓ Check passed"; shows the Merge Requests tab.
     private let mergeRequestButton = DSButton(title: "", variant: .ghost, size: .small, symbolName: "arrow.triangle.pull")
+    /// Linked GitLab issues (GitLab 2): "#12 Launch checklist"; shows the Issues section.
+    private let issueButton = DSButton(title: "", variant: .ghost, size: .small, symbolName: "smallcircle.circle")
     private var loop: ObservationLoop?
     private var editingOriginal: String?
     /// An editable field has no intrinsic width: the title takes its text's width (and truncates first when short).
@@ -51,7 +53,7 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         titleField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         titleField.setAccessibilityLabel("Thread title")
         titleField.toolTip = "Click to rename"
-        for button in [agentsButton, mergeRequestButton] {
+        for button in [agentsButton, mergeRequestButton, issueButton] {
             button.isMuted = true
             button.target = self
             button.isHidden = true
@@ -59,11 +61,12 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         }
         agentsButton.action = #selector(agentsStripClicked)
         mergeRequestButton.action = #selector(mergeRequestsClicked)
+        issueButton.action = #selector(issuesClicked)
         placeCrumb.setContentCompressionResistancePriority(.init(235), for: .horizontal)
         containerCrumb.setContentCompressionResistancePriority(.init(225), for: .horizontal)
         let stack = NSStackView(views: [
             titleField, projectCrumb, slash, branchCrumb, dot, placeCrumb, statusDot, statusCrumb, containerCrumb, agentsButton,
-            mergeRequestButton,
+            mergeRequestButton, issueButton,
         ])
         stack.spacing = DS.Space.s6
         stack.setCustomSpacing(DS.Space.s10, after: titleField)
@@ -115,9 +118,11 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
             }
             renderAgentsStrip(thread.sessionID)
             renderMergeRequests(thread.sessionID)
+            renderIssues(thread.sessionID)
         } else {
             agentsButton.isHidden = true
             mergeRequestButton.isHidden = true
+            issueButton.isHidden = true
             titleField.isEditable = false
             titleField.stringValue = "New Thread"
             status = context.isCreatingThread ? "Creating…" : "Draft, created when you send"
@@ -198,6 +203,23 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func mergeRequestsClicked() { context.onShowMergeRequests?() }
+
+    private func renderIssues(_ id: SessionID) {
+        guard let issues = context.engine.extras?.gitLabWork.issues(for: id), let first = issues.first else {
+            issueButton.isHidden = true
+            return
+        }
+        let title = first.title.count > 28 ? String(first.title.prefix(27)) + "…" : first.title
+        issueButton.title = "#\(first.iid) \(title)" + (issues.count > 1 ? " +\(issues.count - 1)" : "")
+        issueButton.toolTip = issues.map { "Issue \($0.reference): \($0.title)" }.joined(separator: "\n") + "\nShow the Issues panel"
+        issueButton.accessibilityTitle = issues.map { "Linked issue \($0.reference): \($0.title)" }.joined(separator: "; ")
+        issueButton.isHidden = false
+    }
+
+    @objc private func issuesClicked() { context.onShowIssues?() }
+
+    /// The issue chip's text when shown (tests).
+    var issueChipTitle: String? { issueButton.isHidden ? nil : issueButton.title }
 
     @objc private func agentsStripClicked() {
         guard let id = context.thread?.sessionID else { return }

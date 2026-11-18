@@ -108,7 +108,27 @@ enum PaletteSourceBuilder {
                 symbolName: project.isPinned ? "pin" : "folder")
             return PaletteCandidate(item, secondary: project.directory)
         }
+        if let work = workspace.engine.extras?.gitLabWork {
+            sources.todos = todoItems(work.allTodos, now: now)
+            // Refresh in the background (bounded by the service's two-minute cache); the next keystroke shows it.
+            let service = work.mergeRequests
+            Task { @MainActor in
+                for instance in service.instances where service.instancesWithToken.contains(instance.baseURL) { await work.loadTodos(instance) }
+            }
+        }
         return sources
+    }
+
+    /// GitLab to-dos as palette rows: "Review requested: !42 Add launch checklist" · project · author · age.
+    static func todoItems(_ todos: [(instance: String, todo: GitLabTodo)], now: Date) -> [PaletteCandidate] {
+        todos.map { entry in
+            let todo = entry.todo
+            let detail = [todo.projectPath, todo.author.isEmpty ? nil : "@\(todo.author)", todo.created.map { RelativeTime.short($0, now: now) }].compactMap { $0 }
+            let item = PaletteItem(
+                id: "todo:\(entry.instance)#\(todo.id)", kind: .todo, payload: .todo(instance: entry.instance, id: todo.id),
+                title: "\(todo.actionLabel): \(todo.targetLabel) \(todo.targetTitle)", subtitle: detail.joined(separator: " · "), symbolName: "checklist")
+            return PaletteCandidate(item, keywords: ["todo", "gitlab"], secondary: todo.projectPath)
+        }
     }
 
     static func fileItems(_ paths: [String], directory: String) -> [PaletteCandidate] {

@@ -368,7 +368,8 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         case .command: [("↑↓", "Navigate"), ("↩", "Run"), ("⌘↩", "Run and keep open")]
         case .file: [("↑↓", "Navigate"), ("↩", "Open"), ("⌘↩", "Open in background")]
         case .thread, .project, .message: [("↑↓", "Navigate"), ("↩", "Open"), ("⌘↩", "Open in new window")]
-        case nil: mode == .commands ? [(">", "Actions"), ("@", "Threads"), ("#", "Projects"), ("/", "Files")] : []
+        case .todo: [("↑↓", "Navigate"), ("↩", "Open")]
+        case nil: mode == .commands ? [(">", "Actions"), ("@", "Threads"), ("#", "Projects"), ("/", "Files"), ("+", "To-dos")] : []
         }
         if parts.isEmpty, mode == .quickOpen, let directory = currentDirectory, query.scope != .threads, query.scope != .projects {
             parts.append("Files in \(WorkspaceController.name(of: directory))")
@@ -458,6 +459,9 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
             configuration.activates = !background
             if !background { hide(restoreFocus: false) }
             NSWorkspace.shared.open(url, configuration: configuration)
+        case .todo(let instance, let id):
+            hide()
+            window.openTodo(instance: instance, id: id)
         case .message(_, let session, let message):
             let reveal = PendingReveal(sessionID: session, messageID: message, query: query.text)
             if background {

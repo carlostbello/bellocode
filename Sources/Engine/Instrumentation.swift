@@ -13,6 +13,8 @@ enum EngineSignposts {
     static let database = OSSignposter(subsystem: subsystem, category: "Database")
     /// Resync from the list endpoints.
     static let sync = OSSignposter(subsystem: subsystem, category: "Sync")
+    /// GitLab 2: review loads (versions, diff, discussions) and submits.
+    static let gitLab = OSSignposter(subsystem: subsystem, category: "GitLab")
     static let log = Logger(subsystem: subsystem, category: "Engine")
 }
 

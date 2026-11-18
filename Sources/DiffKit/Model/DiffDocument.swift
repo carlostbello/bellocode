@@ -136,6 +136,9 @@ public struct DiffRow: Sendable, Hashable, Identifiable {
         case gap(hidden: Int, expandable: Bool)
         /// A placeholder (binary, image, empty, large-file notice).
         case notice
+        /// A review thread or draft (`DiffRows.annotations[index]`), below the line it is anchored to, or below the
+        /// file header when it is outdated or not on a shown line.
+        case annotation(Int)
     }
 
     public var id: DiffRowID
@@ -180,9 +183,114 @@ public struct GapKey: Sendable, Hashable, Codable {
     }
 }
 
+/// A review thread (or a draft) shown inline in the diff. The owner builds these from its own model (GitLab
+/// discussions, local drafts); the diff only places, draws and reports actions on them. Identity is the owner's
+/// stable ID (the server's discussion ID, a draft's ID), never an index.
+public struct DiffAnnotation: Sendable, Hashable, Identifiable {
+    public enum Placement: Sendable, Hashable {
+        /// Below a line of one side (unified rows show both numbers of unchanged lines).
+        case line(path: String, side: DiffSide, line: Int)
+        /// Below the file's header: outdated, file-level, or a line not in the shown diff (`note` says which).
+        case file(path: String)
+    }
+
+    /// Status in words and glyph, never colour alone.
+    public enum State: String, Sendable, Hashable {
+        case unresolved, resolved, comment, draft, outdated
+
+        public var word: String {
+            switch self {
+            case .unresolved: "Unresolved"
+            case .resolved: "Resolved"
+            case .comment: "Comment"
+            case .draft: "Draft, not sent"
+            case .outdated: "Outdated"
+            }
+        }
+
+        public var symbolName: String {
+            switch self {
+            case .unresolved: "bubble.left"
+            case .resolved: "checkmark.circle"
+            case .comment: "text.bubble"
+            case .draft: "pencil"
+            case .outdated: "clock.arrow.circlepath"
+            }
+        }
+    }
+
+    public struct Note: Sendable, Hashable {
+        public var author: String
+        /// "2 h ago", "Nov 17".
+        public var time: String
+        public var body: String
+        public var isDraft: Bool
+
+        public init(author: String, time: String, body: String, isDraft: Bool = false) {
+            self.author = author
+            self.time = time
+            self.body = body
+            self.isDraft = isDraft
+        }
+    }
+
+    public var id: String
+    public var placement: Placement
+    public var state: DiffAnnotationStateSet
+    /// "Lines 10–14", "Outdated: Sources/A.swift:12 at head 1a2b3c" (shown beside the author).
+    public var note: String?
+    public var notes: [Note]
+
+    public init(id: String, placement: Placement, state: DiffAnnotationStateSet, note: String? = nil, notes: [Note]) {
+        self.id = id
+        self.placement = placement
+        self.state = state
+        self.note = note
+        self.notes = notes
+    }
+
+    public var path: String {
+        switch placement {
+        case .line(let path, _, _), .file(let path): path
+        }
+    }
+
+    /// One line for the collapsed row and accessibility: "@mara · Unresolved · 2 replies · Why 3?".
+    public var summary: String {
+        let first = notes.first
+        let replies = notes.count > 1 ? " · \(notes.count - 1) repl\(notes.count == 2 ? "y" : "ies")" : ""
+        let excerpt = (first?.body ?? "").split(separator: "\n").first.map(String.init) ?? ""
+        return "@\(first?.author ?? "") · \(state.words)\(replies) · \(excerpt)"
+    }
+}
+
+/// A thread's states (a resolved thread can also be outdated, a thread can carry a draft reply).
+public struct DiffAnnotationStateSet: Sendable, Hashable {
+    public var primary: DiffAnnotation.State
+    public var outdated: Bool
+    public var hasDraft: Bool
+
+    public init(_ primary: DiffAnnotation.State, outdated: Bool = false, hasDraft: Bool = false) {
+        self.primary = primary
+        self.outdated = outdated
+        self.hasDraft = hasDraft
+    }
+
+    public var words: String {
+        var parts = [primary.word]
+        if outdated, primary != .outdated { parts.append("Outdated") }
+        if hasDraft, primary != .draft { parts.append("Draft reply") }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// The rows of a document for one layout. Immutable and `Sendable`: built off the main actor.
 public struct DiffRows: Sendable {
     public var rows: [DiffRow]
+    /// The annotations placed (in row order); `.annotation(i)` rows index this.
+    public var annotations: [DiffAnnotation] = []
+    /// Annotation IDs shown expanded (notes and bodies); others show one summary line.
+    public var expandedAnnotations: Set<String> = []
     public var pairs: [DiffPair]
     /// Longest line (in columns, tabs at 4) per layout column: unified uses `left`.
     public var maxColumnsLeft: Int
@@ -204,6 +312,9 @@ public struct DiffRowOptions: Sendable, Hashable {
     public var expansions: [GapKey: GapExpansion] = [:]
     /// Show file header rows (off for a single-file view).
     public var showsFileHeaders = true
+    /// Review threads and drafts to place inline.
+    public var annotations: [DiffAnnotation] = []
+    public var expandedAnnotations: Set<String> = []
     public init() {}
 }
 
@@ -219,6 +330,7 @@ public enum DiffRowBuilder {
 
     public static func build(_ files: [DiffFile], options: DiffRowOptions) -> DiffRows {
         var result = DiffRows.empty
+        result.expandedAnnotations = options.expandedAnnotations
         var maxLeft = 0
         var maxRight = 0
         var maxNumber = 0
@@ -348,7 +460,73 @@ public enum DiffRowBuilder {
         result.maxColumnsLeft = maxLeft
         result.maxColumnsRight = options.layout == .split ? maxRight : maxLeft
         result.maxLineNumber = maxNumber
+        if !options.annotations.isEmpty { placeAnnotations(&result, files: files, annotations: options.annotations) }
         return result
+    }
+
+    /// Inserts annotation rows: below the line row they name (either side of a unified unchanged line), else below
+    /// their file's header (outdated, file-level, or a line not shown). Annotations of files not in the document, or of
+    /// collapsed files, are not placed (the owner lists them elsewhere). Header indices are remapped.
+    static func placeAnnotations(_ result: inout DiffRows, files: [DiffFile], annotations: [DiffAnnotation]) {
+        struct Key: Hashable {
+            var file: Int
+            var side: DiffSide
+            var line: Int
+        }
+        let fileIndex = Dictionary(files.enumerated().map { ($1.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let oldPaths = Dictionary(files.enumerated().compactMap { index, file in file.oldPath.map { ($0, index) } }, uniquingKeysWith: { a, _ in a })
+        var byLine: [Key: [Int]] = [:]
+        var byFile: [Int: [Int]] = [:]
+        for (index, annotation) in annotations.enumerated() {
+            guard let file = fileIndex[annotation.path] ?? oldPaths[annotation.path] else { continue }
+            switch annotation.placement {
+            case .line(_, let side, let line): byLine[Key(file: file, side: side, line: line), default: []].append(index)
+            case .file: byFile[file, default: []].append(index)
+            }
+        }
+        // Which row each line annotation follows (the first row showing that line).
+        var after: [Int: [Int]] = [:]
+        var placed = Set<Int>()
+        for (rowIndex, row) in result.rows.enumerated() {
+            guard case .line = row.kind else { continue }
+            var keys: [Key] = []
+            for cell in [row.left, row.right].compactMap({ $0 }) {
+                keys.append(Key(file: row.fileIndex, side: cell.side, line: cell.number))
+                if cell.kind == .context, let other = cell.otherNumber { keys.append(Key(file: row.fileIndex, side: cell.side == .new ? .old : .new, line: other)) }
+            }
+            for key in keys {
+                for index in byLine[key] ?? [] where placed.insert(index).inserted { after[rowIndex, default: []].append(index) }
+            }
+        }
+        // Unplaced line annotations fall back to the file (never a guessed line).
+        for (key, list) in byLine {
+            for index in list where !placed.contains(index) { byFile[key.file, default: []].append(index) }
+        }
+        var firstRowOfFile: [Int: Int] = [:]
+        for (file, row) in result.fileHeaderRows.enumerated() where row < result.rows.count && result.rows[row].fileIndex == file { firstRowOfFile[row] = file }
+        var rows: [DiffRow] = []
+        rows.reserveCapacity(result.rows.count + annotations.count)
+        var placedAnnotations: [DiffAnnotation] = []
+        var remap = [Int](repeating: 0, count: result.rows.count + 1)
+        for (rowIndex, row) in result.rows.enumerated() {
+            remap[rowIndex] = rows.count
+            rows.append(row)
+            var list = after[rowIndex] ?? []
+            if let file = firstRowOfFile[rowIndex] {
+                let collapsedHeader = row.kind == .fileHeader && (rowIndex + 1 >= result.rows.count || result.rows[rowIndex + 1].fileIndex != file)
+                if !collapsedHeader { list = (byFile[file] ?? []).sorted() + list }
+            }
+            for (ordinal, index) in list.enumerated() {
+                let id = DiffRowID(file: row.id.file, hunk: row.id.hunk, line: row.id.line, tag: UInt8(min(255, 100 + ordinal)))
+                rows.append(DiffRow(id: id, kind: .annotation(placedAnnotations.count), fileIndex: row.fileIndex, hunkIndex: row.hunkIndex, text: ""))
+                placedAnnotations.append(annotations[index])
+            }
+        }
+        remap[result.rows.count] = rows.count
+        result.fileHeaderRows = result.fileHeaderRows.map { remap[$0] }
+        result.hunkHeaderRows = result.hunkHeaderRows.map { remap[$0] }
+        result.rows = rows
+        result.annotations = placedAnnotations
     }
 
     /// Hidden unchanged lines `oldFrom...oldTo` (new numbering starts at `newFrom`): revealed lines per the expansion,

@@ -96,4 +96,35 @@ extension ProjectionStore {
     public func deleteMergeRequestWakes(sessionID: SessionID) async throws {
         try await writer.write { db in try db.execute(sql: "DELETE FROM app_mr_wake WHERE session_id = ?", arguments: [sessionID.rawValue]) }
     }
+
+    // MARK: Review drafts (migration `v10-gitlab-review`)
+
+    /// Drafts kept per merge request (oldest dropped beyond this, after the person was told by the review's limit).
+    public static let reviewDraftLimit = 200
+
+    public func reviewDrafts(mrURL: String) async throws -> [ReviewDraft] {
+        let rows = try await writer.read { db in
+            try Data.fetchAll(db, sql: "SELECT json FROM app_review_draft WHERE mr_url = ? ORDER BY created", arguments: [mrURL])
+        }
+        return rows.compactMap { try? Self.gitLabDecoder.decode(ReviewDraft.self, from: $0) }
+    }
+
+    public func saveReviewDraft(_ draft: ReviewDraft) async throws {
+        let data = try Self.gitLabEncoder.encode(draft)
+        try await writer.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO app_review_draft (id, mr_url, created, json) VALUES (?, ?, ?, ?)",
+                arguments: [draft.id, draft.mrURL, draft.created.timeIntervalSince1970, data])
+            try db.execute(
+                sql: """
+                    DELETE FROM app_review_draft WHERE mr_url = ? AND id NOT IN
+                    (SELECT id FROM app_review_draft WHERE mr_url = ? ORDER BY created DESC LIMIT ?)
+                    """,
+                arguments: [draft.mrURL, draft.mrURL, Self.reviewDraftLimit])
+        }
+    }
+
+    public func deleteReviewDraft(id: String) async throws {
+        try await writer.write { db in try db.execute(sql: "DELETE FROM app_review_draft WHERE id = ?", arguments: [id]) }
+    }
 }

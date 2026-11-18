@@ -20,8 +20,35 @@ public final class MergeRequestPanelModel {
         public var job: PipelineJob
     }
 
+    /// The tab's sections (GitLab 2): the thread's merge requests, the project's issues, the person's to-dos.
+    public enum Section: String, CaseIterable, Sendable {
+        case mergeRequests, issues, todos
+
+        public var title: String {
+            switch self {
+            case .mergeRequests: "Merge Requests"
+            case .issues: "Issues"
+            case .todos: "To-dos"
+            }
+        }
+    }
+
     public let service: MergeRequestService
+    /// GitLab 2 services (issues, to-dos, approvals, dependencies, Code Owners; inline review). Nil in older hosts.
+    public let work: GitLabWorkService?
+    public let reviews: MergeRequestReviewService?
     public private(set) var threadID: SessionID?
+    public var section: Section = .mergeRequests
+    // Issues view
+    public var issueFilter: IssueFilter = .assignedToMe
+    public var issueSearch = ""
+    /// The selected issue (its URL) in the Issues view.
+    public var selectedIssue: String?
+    /// The project the Issues view lists (the displayed thread's or draft's project on a configured instance).
+    public private(set) var issueProject: ForgeProject?
+    public private(set) var issueProjectProblem: String?
+    /// The selected to-do (its ID) in the To-dos view.
+    public var selectedTodo: Int?
     public var linkText = ""
     public private(set) var message: String?
     public private(set) var notice: String?
@@ -50,8 +77,19 @@ public final class MergeRequestPanelModel {
     /// Builds the create form's context for the thread (checkout, commits, model generation); set by the app.
     @ObservationIgnored public var makeCreateContext: ((SessionID) -> CreateMergeRequestContext?)?
 
-    public init(service: MergeRequestService) {
+    /// Opens the inline review of an MR's diff in this tab (set by the app; nil hides "Review Diff").
+    @ObservationIgnored public var openReview: ((MergeRequestRef) -> Void)?
+    /// The displayed thread's (or draft's) project folder.
+    @ObservationIgnored public var projectDirectory: () -> String? = { nil }
+    /// The project's GitLab project from the folder's `origin` (git); set by the app.
+    @ObservationIgnored public var resolveProject: ((String) async -> ForgeProject?)?
+    /// Starts a thread from an issue in the project (draft with the issue quoted; the person picks branch and worktree).
+    @ObservationIgnored public var startThreadFromIssue: ((GitLabIssue, String, String?) -> Void)?
+
+    public init(service: MergeRequestService, work: GitLabWorkService? = nil, reviews: MergeRequestReviewService? = nil) {
         self.service = service
+        self.work = work
+        self.reviews = reviews
     }
 
     public func display(_ id: SessionID?) {
@@ -69,6 +107,7 @@ public final class MergeRequestPanelModel {
                     await service.loadWakeLog(id, link.ref.url)
                     await service.loadApprovalRules(link.ref)
                 }
+                if let first = service.links(for: id).first { await loadDetails(first.ref) }
             }
         }
     }
@@ -83,6 +122,7 @@ public final class MergeRequestPanelModel {
             Task {
                 await service.loadWakeLog(threadID, link.ref.url)
                 await service.loadApprovalRules(link.ref)
+                await loadDetails(link.ref)
             }
         }
     }
@@ -266,5 +306,129 @@ public final class MergeRequestPanelModel {
         }
         create = model
         Task { await model.prepare() }
+    }
+}
+
+// MARK: - GitLab 2: review, approvals, dependencies, Code Owners, issues, to-dos
+
+extension MergeRequestPanelModel {
+    /// Approvals explained, dependencies and Code Owners of an expanded MR (each where the instance reports it).
+    public func loadDetails(_ ref: MergeRequestRef) async {
+        guard let work else { return }
+        await work.loadApprovals(ref)
+        await work.loadDependencies(ref)
+        guard let directory = projectDirectory() else { return }
+        var paths = reviews?.states[ref.url]?.diff.files.map(\.newPath) ?? []
+        if paths.isEmpty { paths = await service.changedPaths(ref) }
+        guard !paths.isEmpty else { return }
+        await work.loadCodeOwners(ref, directory: directory, paths: paths)
+    }
+
+    /// Local review drafts of an MR (the card shows "Review Diff (2 drafts)").
+    public func draftCount(_ ref: MergeRequestRef) -> Int { reviews?.drafts(for: ref).count ?? 0 }
+
+    public func review(_ ref: MergeRequestRef) {
+        guard let openReview else {
+            message = "Inline review is not available here."
+            return
+        }
+        openReview(ref)
+    }
+
+    // MARK: Issues
+
+    /// Resolves the project and loads the first page for the current filter and search.
+    public func loadIssues(more: Bool = false) async {
+        guard let work else { return }
+        if issueProject == nil || !more {
+            guard let directory = projectDirectory() else {
+                issueProject = nil
+                issueProjectProblem = "Select a thread or project to see its issues."
+                return
+            }
+            issueProject = await resolveProject?(directory)
+            issueProjectProblem = issueProject == nil
+                ? "This project's origin remote is not on a configured GitLab instance (Settings ▸ GitLab)." : nil
+        }
+        guard let project = issueProject else { return }
+        await work.loadIssues(project, filter: issueFilter, search: issueSearch.trimmingCharacters(in: .whitespaces), more: more)
+    }
+
+    public var issueList: GitLabWorkService.IssueList? { issueProject.flatMap { work?.issueLists[GitLabWorkService.key($0)] } }
+    public var issueProblem: String? { issueProjectProblem ?? issueProject.flatMap { work?.issueProblems[GitLabWorkService.key($0)] } }
+    public var isLoadingIssues: Bool { issueProject.map { work?.issueLoading.contains(GitLabWorkService.key($0)) ?? false } ?? false }
+
+    public func selectIssue(_ issue: GitLabIssue) async {
+        selectedIssue = issue.webURL
+        guard let project = issueProject, let work else { return }
+        do {
+            try await work.loadIssue(project, iid: issue.iid)
+        } catch {
+            message = "The issue could not be read: \(ExtrasError.message(error))"
+        }
+    }
+
+    /// The selected issue, with its description once read.
+    public var issueDetail: GitLabIssue? {
+        guard let url = selectedIssue else { return nil }
+        return work?.issueDetails[url] ?? issueList?.issues.first { $0.webURL == url }
+    }
+
+    /// "Start Thread": a new thread in this project with the issue linked and its text (or `selection`) quoted.
+    public func startThread(_ issue: GitLabIssue, selection: String? = nil) {
+        guard let project = issueProject else { return }
+        guard let start = startThreadFromIssue else {
+            message = "Open the project's window to start a thread."
+            return
+        }
+        start(work?.issueDetails[issue.webURL] ?? issue, project.instance.baseURL, selection)
+        notice = "A new thread draft holds \(issue.reference): choose its branch and workspace, then send."
+    }
+
+    /// Links the issue to the displayed thread (shown in its header).
+    public func linkIssue(_ issue: GitLabIssue) async {
+        guard let threadID, let project = issueProject, let work else { return }
+        do {
+            try await work.link(issue, instance: project.instance.baseURL, to: threadID)
+            notice = "Linked \(issue.reference) to this thread."
+        } catch {
+            message = ExtrasError.message(error)
+        }
+    }
+
+    public var linkedIssues: [LinkedIssue] { threadID.map { work?.issues(for: $0) ?? [] } ?? [] }
+
+    // MARK: To-dos
+
+    public func loadTodos(force: Bool = false) async {
+        guard let work else { return }
+        for instance in service.instances where service.instancesWithToken.contains(instance.baseURL) {
+            await work.loadTodos(instance, force: force)
+        }
+    }
+
+    public var todos: [(instance: String, todo: GitLabTodo)] { work?.allTodos ?? [] }
+
+    public func openTodo(_ todo: GitLabTodo) {
+        selectedTodo = todo.id
+        // A merge request linked to this thread opens in place; anything else in the built-in browser.
+        if todo.targetType == "MergeRequest", let link = links.first(where: { $0.ref.url == todo.targetURL || todo.targetURL.hasPrefix($0.ref.url) }) {
+            section = .mergeRequests
+            expanded = link.ref.url
+            return
+        }
+        if let url = URL(string: todo.targetURL) { openURL(url, true) }
+    }
+
+    /// Marks a to-do done on GitLab (needs write actions on for the instance).
+    public func markDone(_ todo: GitLabTodo, instance: String) async {
+        guard let work else { return }
+        do {
+            try await work.markDone(todo, instance: instance)
+            notice = "Marked “\(todo.targetTitle)” done on GitLab. To restore it, use GitLab's To-Do List (Done)."
+            message = nil
+        } catch {
+            message = ExtrasError.message(error)
+        }
     }
 }

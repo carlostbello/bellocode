@@ -83,6 +83,11 @@ public struct ForgeProject: Hashable, Sendable {
     public var instance: GitLabInstance
     public var projectPath: String
 
+    public init(instance: GitLabInstance, projectPath: String) {
+        self.instance = instance
+        self.projectPath = projectPath
+    }
+
     /// `git@host:group/proj.git`, `ssh://git@host:2222/group/proj.git`, `https://host/prefix/group/proj(.git)`.
     ///
     /// Matching (m1 in docs/reviews/M3-M6-review.md): an HTTP(S) remote matches an instance with the same scheme, host

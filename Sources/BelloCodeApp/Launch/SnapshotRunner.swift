@@ -34,6 +34,7 @@ struct SnapshotRunner {
         if name == "orch" { return await runOrchestration() }
         if name == "extras" { return await runExtras() }
         if name == "gitlab" { return await runGitLab() }
+        if name == "gitlab2" { return await runGitLab2() }
         if name == "containers" { return await runContainers() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

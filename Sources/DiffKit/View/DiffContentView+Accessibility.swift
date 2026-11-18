@@ -61,7 +61,8 @@ extension DiffContentView {
             let element = DiffRowAccessibilityElement(view: self, row: row)
             let item = rows.rows[row]
             element.setAccessibilityRole(Self.accessibilityRole(item))
-            element.setAccessibilityLabel(Self.accessibilityText(item, files: files, layout: layoutMode))
+            element.setAccessibilityLabel(Self.accessibilityText(item, files: files, layout: layoutMode, annotations: rows.annotations))
+            if case .annotation = item.kind { element.setAccessibilityRoleDescription("review thread") }
             element.setAccessibilityIndex(row)
             if case .fileHeader = item.kind { element.setAccessibilityRoleDescription("file header") }
             if case .hunkHeader = item.kind { element.setAccessibilityRoleDescription("change header") }
@@ -74,6 +75,7 @@ extension DiffContentView {
         case .fileHeader: .button
         case .gap(_, let expandable): expandable ? .button : .staticText
         case .hunkHeader, .line, .notice: .staticText
+        case .annotation: .button
         }
     }
 
@@ -173,6 +175,10 @@ extension DiffContentView {
             return true
         case .line, .notice:
             return false
+        case .annotation(let annotation):
+            guard rows.annotations.indices.contains(annotation) else { return false }
+            onToggleAnnotation?(rows.annotations[annotation].id)
+            return true
         }
     }
 
@@ -213,6 +219,15 @@ extension DiffContentView {
             })
         case .notice:
             break
+        case .annotation(let annotation):
+            guard rows.annotations.indices.contains(annotation) else { break }
+            let id = rows.annotations[annotation].id
+            actions.append(NSAccessibilityCustomAction(name: rows.expandedAnnotations.contains(id) ? "Collapse Thread" : "Expand Thread") { [weak self] in
+                self?.performAccessibilityPress(row: index) ?? false
+            })
+            for (name, action) in annotationAccessibilityActions?(id) ?? [] {
+                actions.append(NSAccessibilityCustomAction(name: name) { action(); return true })
+            }
         }
         return actions
     }

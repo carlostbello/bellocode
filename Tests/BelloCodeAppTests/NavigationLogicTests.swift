@@ -191,6 +191,7 @@ enum RequestCommandAll { static let all = RequestCommand.allCases }
         case .project: .project(directory: id, isArchived: false)
         case .file: .file(directory: "/p", path: title)
         case .message: .thread(SessionID(id))
+        case .todo: .todo(instance: "i", id: 1)
         }
         return PaletteCandidate(
             PaletteItem(id: "\(kind.rawValue):\(id)", kind: kind, payload: payload, title: title, disabledReason: disabled, symbolName: "x"))

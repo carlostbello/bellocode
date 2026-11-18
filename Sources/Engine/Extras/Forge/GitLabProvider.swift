@@ -245,6 +245,9 @@ public struct GitLabProvider: ForgeProvider {
             guard let entry = await cache.entry(key) else { throw ForgeError.unexpected("GitLab answered 304 without a cached copy.") }
             // The cached pagination headers, unless the 304 carries its own.
             return ForgeResponse(status: 200, headers: entry.headers.merging(response.headers) { _, fresh in fresh }, body: entry.body)
+        case 400:
+            // A request GitLab refuses as it stands (an invalid diff position, a missing field): its message says why.
+            throw ForgeError.unexpected("GitLab refused the request (HTTP 400): \(Self.message(response.body) ?? "no reason given").")
         case 401: throw ForgeError.tokenInvalid(instance.baseURL)
         case 403: throw ForgeError.forbidden
         case 404: throw ForgeError.notFound

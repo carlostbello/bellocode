@@ -149,6 +149,11 @@ extension MergeRequestService {
         return ref
     }
 
+    /// The MR's changed paths (bounded like `changes`), for Code Owners.
+    public func changedPaths(_ ref: MergeRequestRef) async -> [String] {
+        ((try? await provider.changes(ref))?.files ?? []).map(\.newPath)
+    }
+
     /// Project info (default branch) for the create form.
     public func projectInfo(_ project: ForgeProject) async throws -> GitLabProjectInfo { try await provider.project(project) }
     public func branches(_ project: ForgeProject, search: String) async throws -> [String] { try await provider.branches(project, search: search) }
