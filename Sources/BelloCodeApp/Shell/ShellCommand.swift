@@ -99,6 +99,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showMergeRequests, showScheduledTasks
     // M6-A: containerised execution (Settings ▸ Containers / Environment, docs/features/containers.md).
     case showContainers, showEnvironment, verifyIsolation
+    /// Containers 3: Settings ▸ MCP Servers (docs/features/containers.md).
+    case showMCPServers
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
 
@@ -194,6 +196,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showScheduledTasks: #selector(AppDelegate.showScheduledTasks(_:))
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
+        case .showMCPServers: #selector(AppDelegate.showMCPServers(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .pruneContainerResources: #selector(AppDelegate.pruneContainerResources(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
@@ -308,6 +311,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showScheduledTasks: "Scheduled Tasks…"
         case .showContainers: "Containers…"
         case .showEnvironment: "Project Environment…"
+        case .showMCPServers: "MCP Servers…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
         case .nextChange: "Next Change"
@@ -419,7 +423,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openParentThread: ("u", [.command, .control])
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
-        case .showContainers, .showEnvironment, .verifyIsolation: ("", [])
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: ("", [])
         case .pruneContainerResources: ("", [])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
@@ -600,7 +604,7 @@ struct CommandContext: Equatable, Sendable {
         case .openParentThread: return agents.hasParent
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
-        case .showContainers, .showEnvironment, .verifyIsolation: return true
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: return true
         case .pruneContainerResources: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1

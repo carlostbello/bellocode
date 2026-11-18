@@ -124,9 +124,13 @@ final class ContainersSettingsModel: ObservableObject {
 
     /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
     static weak var last: ContainersSettingsModel?
+    /// Corporate network, diagnostics and the GitLab registry (Containers 3).
+    let network: NetworkSettingsModel
 
     init(engine: Engine) {
         self.engine = engine
+        network = NetworkSettingsModel(engine: engine)
+        NetworkSettingsModel.last = network
         engine.environments.reloadManagedPolicy()
         defaultImage = engine.environments.defaultImage ?? ""
         let policy = engine.environments.imagePolicy
@@ -300,6 +304,16 @@ struct ContainersSettingsView: View {
                         .disabled(model.registry.isEmpty || model.username.isEmpty || model.password.isEmpty)
                 }
             }
+            SettingsGroup("GitLab registry", footer: "Suggestions only: which host your GitLab serves its registry on is your administrator's choice (GitLab supports its own domain on port 5050, or a separate registry domain). Sign-in uses the access token saved in Settings ▸ GitLab, which needs the read_registry scope (GitLab: “Authenticate with the container registry”).") {
+                GitLabRegistryView(model: model.network, containers: model, service: service)
+                if let message = model.network.message { SettingsNote(message).padding(DS.Space.s12) }
+            }
+            SettingsGroup("Corporate network", footer: "A transparent proxy needs no settings. If it inspects TLS with your organisation's root certificate, the Mac trusts it but containers do not until it is added here. Applies to new containers (existing ones are recreated on next use).") {
+                CorporateNetworkSettingsView(model: model.network, service: service)
+            }
+            SettingsGroup("Network diagnostics", footer: "Fetches each URL from inside a running project container and from this Mac, as opencode would (its built-in roots plus the selected enterprise roots), and shows the certificate issuer and any proxy headers.") {
+                NetworkDiagnosticsView(model: model.network, service: service)
+            }
             SettingsGroup("Isolation") {
                 IsolationReportView(report: service.isolation, running: service.isVerifyingIsolation) {
                     Task { await service.verifyIsolation(full: true) }
@@ -323,7 +337,10 @@ struct ContainersSettingsView: View {
             if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
             if let message = model.message { SettingsNote(message) }
         }
-        .task { await model.reload() }
+        .task {
+            await model.reload()
+            await service.refreshCorporateNetwork()
+        }
     }
 
     private var runtimeDetail: String? {
