@@ -99,6 +99,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showMergeRequests, showScheduledTasks
     // M6-A: containerised execution (Settings ▸ Containers / Environment, docs/features/containers.md).
     case showContainers, showEnvironment, verifyIsolation
+    // GitLab 2 (docs/features/gitlab.md, MainWindowController+GitLab.swift): inline review, issues, to-dos, and GitLab 1's
+    // panel-only actions (babysit, jobs, approve, merge, unlink).
+    case reviewMergeRequest, submitReview, discardReviewDrafts, closeReview, nextReviewThread, previousReviewThread
+    case replyToReviewThread, toggleReviewThreadResolved, addReviewThreadToAgent
+    case refreshMergeRequests, toggleBabysit, showFailingJobLog, sendFailureToAgent, retryFailedJob, playManualJob
+    case openMergeRequestInGitLab, unlinkMergeRequest, approveMergeRequest, mergeMergeRequest
+    case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
 
     @MainActor var selector: Selector {
         switch self {
@@ -188,6 +195,31 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .stopAgentTree: #selector(MainWindowController.stopSelectedAgentTree(_:))
         case .openParentThread: #selector(MainWindowController.openParentThread(_:))
         case .showMergeRequests: #selector(MainWindowController.showMergeRequests(_:))
+        case .reviewMergeRequest: #selector(MainWindowController.gitLabReviewMergeRequest(_:))
+        case .submitReview: #selector(MainWindowController.gitLabSubmitReview(_:))
+        case .discardReviewDrafts: #selector(MainWindowController.gitLabDiscardReviewDrafts(_:))
+        case .closeReview: #selector(MainWindowController.gitLabCloseReview(_:))
+        case .nextReviewThread: #selector(MainWindowController.gitLabNextReviewThread(_:))
+        case .previousReviewThread: #selector(MainWindowController.gitLabPreviousReviewThread(_:))
+        case .replyToReviewThread: #selector(MainWindowController.gitLabReplyToReviewThread(_:))
+        case .toggleReviewThreadResolved: #selector(MainWindowController.gitLabToggleReviewThreadResolved(_:))
+        case .addReviewThreadToAgent: #selector(MainWindowController.gitLabAddReviewThreadToAgent(_:))
+        case .refreshMergeRequests: #selector(MainWindowController.gitLabRefreshMergeRequests(_:))
+        case .toggleBabysit: #selector(MainWindowController.gitLabToggleBabysit(_:))
+        case .showFailingJobLog: #selector(MainWindowController.gitLabShowFailingJobLog(_:))
+        case .sendFailureToAgent: #selector(MainWindowController.gitLabSendFailureToAgent(_:))
+        case .retryFailedJob: #selector(MainWindowController.gitLabRetryFailedJob(_:))
+        case .playManualJob: #selector(MainWindowController.gitLabPlayManualJob(_:))
+        case .openMergeRequestInGitLab: #selector(MainWindowController.gitLabOpenMergeRequest(_:))
+        case .unlinkMergeRequest: #selector(MainWindowController.gitLabUnlinkMergeRequest(_:))
+        case .approveMergeRequest: #selector(MainWindowController.gitLabApproveMergeRequest(_:))
+        case .mergeMergeRequest: #selector(MainWindowController.gitLabMergeMergeRequest(_:))
+        case .showIssues: #selector(MainWindowController.gitLabShowIssues(_:))
+        case .startThreadFromIssue: #selector(MainWindowController.gitLabStartThreadFromIssue(_:))
+        case .linkIssueToThread: #selector(MainWindowController.gitLabLinkIssueToThread(_:))
+        case .showTodos: #selector(MainWindowController.gitLabShowTodos(_:))
+        case .openTodo: #selector(MainWindowController.gitLabOpenTodo(_:))
+        case .markTodoDone: #selector(MainWindowController.gitLabMarkTodoDone(_:))
         // Answered by the app delegate (works with no window open).
         case .showScheduledTasks: #selector(AppDelegate.showScheduledTasks(_:))
         case .showContainers: #selector(AppDelegate.showContainers(_:))
@@ -324,6 +356,31 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .chooseWorkspace: "Choose Workspace…"
         case .chooseBranch: "Choose Branch…"
         case .removeWorktree: "Remove Worktree…"
+        case .reviewMergeRequest: "Review Merge Request Diff"
+        case .submitReview: "Submit Review…"
+        case .discardReviewDrafts: "Discard Review Drafts"
+        case .closeReview: "Close Review"
+        case .nextReviewThread: "Next Review Thread"
+        case .previousReviewThread: "Previous Review Thread"
+        case .replyToReviewThread: "Reply to Thread…"
+        case .toggleReviewThreadResolved: "Resolve Thread"
+        case .addReviewThreadToAgent: "Add Thread to Agent Context"
+        case .refreshMergeRequests: "Refresh Merge Requests"
+        case .toggleBabysit: "Babysit Merge Request"
+        case .showFailingJobLog: "Show Failing Job Log"
+        case .sendFailureToAgent: "Send Failure to Agent"
+        case .retryFailedJob: "Retry Failed Job"
+        case .playManualJob: "Run Manual Job…"
+        case .openMergeRequestInGitLab: "Open Merge Request in GitLab"
+        case .unlinkMergeRequest: "Unlink Merge Request"
+        case .approveMergeRequest: "Approve Merge Request"
+        case .mergeMergeRequest: "Merge…"
+        case .showIssues: "Show Issues"
+        case .startThreadFromIssue: "Start Thread from Issue…"
+        case .linkIssueToThread: "Link Issue to Thread"
+        case .showTodos: "Show To-dos"
+        case .openTodo: "Open To-do"
+        case .markTodoDone: "Mark To-do Done"
         }
     }
 
@@ -424,6 +481,17 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openInEditor: ("o", .command)
         case .chooseWorkspace: ("e", [.command, .shift])
         case .chooseBranch: ("b", [.command, .shift])
+        // GitLab 2: the review and the panel's sections; the rest are menu and palette actions.
+        case .reviewMergeRequest: ("r", [.command, .control])
+        case .submitReview: ("\r", [.command, .control])
+        case .nextReviewThread: ("]", [.command, .control, .option])
+        case .previousReviewThread: ("[", [.command, .control, .option])
+        case .showIssues: ("i", [.command, .control])
+        case .showTodos: ("y", [.command, .control])
+        case .discardReviewDrafts, .closeReview, .replyToReviewThread, .toggleReviewThreadResolved, .addReviewThreadToAgent, .refreshMergeRequests,
+            .toggleBabysit, .showFailingJobLog, .sendFailureToAgent, .retryFailedJob, .playManualJob, .openMergeRequestInGitLab, .unlinkMergeRequest,
+            .approveMergeRequest, .mergeMergeRequest, .startThreadFromIssue, .linkIssueToThread, .openTodo, .markTodoDone:
+            ("", [])
         // Reverting is never a single keystroke (research 03, section D); the rest are menu and panel actions.
         case .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .createMergeRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .removeWorktree:
@@ -543,6 +611,8 @@ struct CommandContext: Equatable, Sendable {
     var changes = ChangesCommandState()
     /// The Agents panel's state (M3-A).
     var agents = AgentsCommandState()
+    /// The Merge Requests tab's state (GitLab 2).
+    var gitLab = GitLabCommandState()
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -607,6 +677,22 @@ struct CommandContext: Equatable, Sendable {
         case .pushBranch, .createMergeRequest: return changes.hasBranch
         case .chooseWorkspace, .chooseBranch: return changes.isDraft && changes.isRepository
         case .removeWorktree: return changes.isWorktree && !changes.isDraft
+        case .reviewMergeRequest, .openMergeRequestInGitLab, .unlinkMergeRequest, .refreshMergeRequests: return gitLab.hasMergeRequest
+        case .submitReview: return gitLab.reviewOpen && gitLab.reviewSendable && gitLab.writes
+        case .discardReviewDrafts: return gitLab.reviewOpen && gitLab.reviewHasDrafts
+        case .closeReview: return gitLab.reviewOpen
+        case .nextReviewThread, .previousReviewThread, .replyToReviewThread, .addReviewThreadToAgent: return gitLab.reviewOpen && gitLab.reviewHasThreads
+        case .toggleReviewThreadResolved: return gitLab.reviewOpen && gitLab.currentThreadResolvable && gitLab.writes
+        case .toggleBabysit: return gitLab.hasMergeRequest && gitLab.hasThread
+        case .showFailingJobLog, .sendFailureToAgent: return gitLab.hasFailedJob
+        case .retryFailedJob: return gitLab.hasFailedJob && gitLab.writes
+        case .playManualJob: return gitLab.hasManualJob && gitLab.writes
+        case .approveMergeRequest, .mergeMergeRequest: return gitLab.hasMergeRequest && gitLab.approveAndMerge
+        case .showIssues, .showTodos: return gitLab.configured && agents.available
+        case .startThreadFromIssue: return gitLab.issueSelected
+        case .linkIssueToThread: return gitLab.issueSelected && gitLab.hasThread
+        case .openTodo: return gitLab.todoSelected
+        case .markTodoDone: return gitLab.todoSelected && gitLab.todoWrites
         }
     }
 
@@ -642,6 +728,20 @@ struct CommandContext: Equatable, Sendable {
         case .goBack: return "No earlier thread"
         case .goForward: return "No later thread"
         case .reopenClosedThread: return "No thread was closed"
+        case .reviewMergeRequest, .openMergeRequestInGitLab, .unlinkMergeRequest, .refreshMergeRequests, .toggleBabysit, .approveMergeRequest,
+            .mergeMergeRequest:
+            if command == .approveMergeRequest || command == .mergeMergeRequest, gitLab.hasMergeRequest { return "Approve and Merge are off (Settings ▸ GitLab)" }
+            return "Open a thread with a linked merge request"
+        case .submitReview, .discardReviewDrafts, .closeReview, .nextReviewThread, .previousReviewThread, .replyToReviewThread,
+            .toggleReviewThreadResolved, .addReviewThreadToAgent:
+            if !gitLab.reviewOpen { return "Open a review (Review Merge Request Diff)" }
+            if command == .submitReview || command == .toggleReviewThreadResolved, !gitLab.writes { return "GitLab write actions are off (Settings ▸ GitLab)" }
+            return command == .submitReview ? "No drafts to send" : "No review threads"
+        case .showFailingJobLog, .sendFailureToAgent, .retryFailedJob: return gitLab.hasFailedJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No failed job"
+        case .playManualJob: return gitLab.hasManualJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No manual job"
+        case .showIssues, .showTodos: return "Connect GitLab in Settings ▸ GitLab"
+        case .startThreadFromIssue, .linkIssueToThread: return "Select an issue in Issues"
+        case .openTodo, .markTodoDone: return gitLab.todoSelected ? "GitLab write actions are off (Settings ▸ GitLab)" : "Select a to-do"
         default: return "Not available now"
         }
     }
@@ -663,6 +763,8 @@ struct CommandContext: Equatable, Sendable {
         case .toggleDiffLayout: changes.isSplit ? "Unified Diff" : "Side-by-Side Diff"
         case .toggleDiffWhitespace: changes.ignoresWhitespace ? "Show Whitespace Changes" : "Ignore Whitespace"
         case .toggleDiffWrap: changes.wraps ? "Don’t Wrap Lines" : "Wrap Lines"
+        case .toggleBabysit: gitLab.babysitting ? "Stop Babysitting" : command.title
+        case .toggleReviewThreadResolved: gitLab.currentThreadResolved ? "Reopen Thread" : command.title
         default: command.title
         }
     }
@@ -674,6 +776,32 @@ func nextAttention(after current: SessionID?, in items: [SessionID]) -> SessionI
     guard !items.isEmpty else { return nil }
     guard let current, let index = items.firstIndex(of: current) else { return items.first }
     return items[(index + 1) % items.count]
+}
+
+/// What the GitLab commands can act on now: the Merge Requests tab's expanded MR, its open review, the selected issue
+/// and to-do (gathered by the window; pure, so validation is tested).
+struct GitLabCommandState: Equatable, Sendable {
+    /// At least one GitLab instance is configured.
+    var configured = false
+    var hasThread = false
+    /// The tab's focused (expanded or only) linked MR.
+    var hasMergeRequest = false
+    var babysitting = false
+    var hasFailedJob = false
+    var hasManualJob = false
+    /// Write actions are on for the MR's instance.
+    var writes = false
+    var approveAndMerge = false
+    var reviewOpen = false
+    var reviewHasDrafts = false
+    var reviewSendable = false
+    var reviewHasThreads = false
+    var currentThreadResolvable = false
+    var currentThreadResolved = false
+    var issueSelected = false
+    var todoSelected = false
+    /// Write actions are on for the selected to-do's instance.
+    var todoWrites = false
 }
 
 /// What the Changes commands can act on now (gathered by the window; pure, so validation is tested).

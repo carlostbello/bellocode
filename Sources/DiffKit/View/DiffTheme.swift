@@ -34,6 +34,16 @@ public struct DiffTheme: Equatable {
     public var hoverFill: CGColor
     public var focusBar: CGColor
     public var commentMark: CGColor
+    /// Review threads (GitLab 2): the card (`raised` + `border`), text, and status tones (glyph + word, colour third).
+    public var cardFill: CGColor
+    public var cardBorder: CGColor
+    public var text: CGColor
+    public var warningText: CGColor
+    public var successText: CGColor
+    public var infoText: CGColor
+    /// `body` 13 for note bodies, `meta` 11 for times and states.
+    public var proseFont: CTFont
+    public var metaFont: CTFont
 
     public var font: CTFont
     public var boldFont: CTFont
@@ -95,6 +105,9 @@ public struct DiffTheme: Equatable {
                 emptyCellFill: c(DS.Color.fillSubtle), gutterText: c(DS.Color.text4),
                 background: c(DS.Color.canvas), border: c(DS.Color.border), text2: c(DS.Color.text2), text3: c(DS.Color.text3),
                 hoverFill: c(DS.Color.fillHover), focusBar: c(DS.Color.accent), commentMark: c(DS.Color.infoText),
+                cardFill: c(DS.Color.raised), cardBorder: c(DS.Color.borderStrong), text: c(DS.Color.text), warningText: c(DS.Color.warningText),
+                successText: c(DS.Color.successText), infoText: c(DS.Color.infoText),
+                proseFont: DS.TextRole.body.font(base: baseSize) as CTFont, metaFont: DS.TextRole.meta.font(base: baseSize) as CTFont,
                 font: chosen, boldFont: bold,
                 gutterFont: NSFont.monospacedDigitSystemFont(ofSize: size - 1, weight: .regular) as CTFont,
                 uiFont: DS.TextRole.label.font(base: baseSize) as CTFont,

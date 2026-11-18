@@ -138,6 +138,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         mergeRequests?.showPanel = { [weak self] in self?.showMergeRequestsPanel() }
         mergeRequests?.bind(engine: workspace.engine)
         wireCreateMergeRequest()
+        wireStartThreadFromIssue()
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
     }
 
@@ -325,6 +326,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     func commandContext(target: CommandTarget? = nil) -> CommandContext {
         var context = baseCommandContext(target: target)
         context.agents = agentsCommandState()
+        context.gitLab = gitLabCommandState
         return context
     }
 
@@ -541,6 +543,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             performAgents(command)
         case .showMergeRequests:
             showMergeRequestsPanel()
+        // GitLab 2: the tab's commands (MainWindowController+GitLab.swift).
+        case .reviewMergeRequest, .submitReview, .discardReviewDrafts, .closeReview, .nextReviewThread, .previousReviewThread, .replyToReviewThread,
+            .toggleReviewThreadResolved, .addReviewThreadToAgent, .refreshMergeRequests, .toggleBabysit, .showFailingJobLog, .sendFailureToAgent,
+            .retryFailedJob, .playManualJob, .openMergeRequestInGitLab, .unlinkMergeRequest, .approveMergeRequest, .mergeMergeRequest, .showIssues,
+            .startThreadFromIssue, .linkIssueToThread, .showTodos, .openTodo, .markTodoDone:
+            mergeRequests?.perform(command)
         case .showScheduledTasks:
             (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
         case .showContainers, .showEnvironment, .verifyIsolation:

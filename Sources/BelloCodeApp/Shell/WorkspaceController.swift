@@ -27,6 +27,8 @@ final class WorkspaceController {
         }
     }
     private(set) var selection: ShellSelection?
+    /// GitLab 2: issues waiting for their project draft's thread to exist (Start Thread), by project directory.
+    var pendingIssueLinks: [String: PendingIssueLink] = [:]
     /// Threads marked unread by the user (local).
     private(set) var manualUnread: Set<SessionID> = []
     /// Threads deleted in the last few seconds: hidden now, deleted on the server when their Undo window ends. Shared
@@ -151,7 +153,10 @@ final class WorkspaceController {
                 self?.state.newThreadDrafts[directory] = text
                 self?.scheduleSave()
             }
-            context.onThreadCreated = { [weak self] id in self?.select(.thread(id)) }
+            context.onThreadCreated = { [weak self] id in
+                self?.linkPendingIssue(directory: directory, to: id)
+                self?.select(.thread(id))
+            }
             return context
         }
     }
@@ -222,6 +227,16 @@ final class WorkspaceController {
     }
 
     // MARK: - Commands
+
+    /// GitLab 2, Start Thread: a draft in `directory` holding `text` (appended to any draft text already there),
+    /// remembering the issue to link once the first send creates the thread.
+    func startThread(from issue: GitLabIssue, instance: String, text: String, in directory: String) {
+        pendingIssueLinks[directory] = PendingIssueLink(issue: issue, instance: instance)
+        let existing = state.newThreadDrafts[directory] ?? ""
+        state.newThreadDrafts[directory] = existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? text : existing + "\n\n" + text
+        scheduleSave()
+        select(.draft(directory: directory))
+    }
 
     /// New thread: a draft in `directory`, else the selected thread's project, else the first project.
     func newThread(in directory: String? = nil) {

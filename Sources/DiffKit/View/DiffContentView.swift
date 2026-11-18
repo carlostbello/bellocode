@@ -81,6 +81,13 @@ final class DiffContentView: NSView {
     var onCurrentHunkChange: ((Int?) -> Void)?
     /// Opens the comment editor for the current selection (the accessibility "Add Comment" action selects a row first).
     var onComment: (() -> Void)?
+    /// A thread's header was clicked (or pressed through accessibility): expand or collapse it.
+    var onToggleAnnotation: ((String) -> Void)?
+    /// Named actions on a thread for accessibility (Reply, Resolve, Add to Agent Context …), by thread ID.
+    var annotationAccessibilityActions: ((String) -> [(String, () -> Void)])?
+    /// The thread row keyboard actions apply to (drawn with the focus bar).
+    var currentAnnotationRow: Int? { didSet { if currentAnnotationRow != oldValue { redrawRows([oldValue, currentAnnotationRow]) } } }
+    var annotationCache = BoundedCache<DiffAnnotationLayoutKey, DiffAnnotationLayout>(limit: 512)
     var contextMenuProvider: ((Int?, NSEvent) -> NSMenu?)?
     var keyHandler: ((NSEvent) -> Bool)?
 
@@ -150,6 +157,8 @@ final class DiffContentView: NSView {
         rowColumns = rows.rows.map { row in (row.left.map { DiffRowBuilder.columns($0.text) } ?? 0, row.right.map { DiffRowBuilder.columns($0.text) } ?? 0) }
         if let selection, selection.end.row >= rows.rows.count { self.selection = nil }
         if let row = currentHunkRow, row >= rows.rows.count { currentHunkRow = nil }
+        currentAnnotationRow = nil
+        annotationCache.removeAll()
         accessibilityRowElements.removeAll()
         invalidateGeometry()
         announcePendingAccessibilityChange()
@@ -166,6 +175,7 @@ final class DiffContentView: NSView {
     private func themeChanged() {
         generation += 1
         lineCache.removeAll()
+        annotationCache.removeAll()
         numberCache.removeAll()
         invalidateGeometry()
     }
@@ -196,6 +206,7 @@ final class DiffContentView: NSView {
         case .hunkHeader: return theme.hunkHeaderHeight
         case .gap: return theme.gapHeight
         case .notice: return theme.rowHeight + 12
+        case .annotation(let annotation): return annotationHeight(annotation)
         case .line:
             guard wraps else { return theme.rowHeight }
             let columns = rowColumns[index]
@@ -291,14 +302,15 @@ final class DiffContentView: NSView {
         case .gap(let hidden, let expandable): drawGap(hidden: hidden, expandable: expandable, rect: rect, in: context, index: index)
         case .notice: drawNotice(row.text, rect: rect, in: context)
         case .line: drawLine(row, index: index, rect: rect, in: context)
+        case .annotation(let annotation): drawAnnotation(annotation, index: index, rect: rect, in: context)
         }
     }
 
-    private func uiLine(_ text: String, font: CTFont, color: CGColor) -> CTLine {
+    func uiLine(_ text: String, font: CTFont, color: CGColor) -> CTLine {
         CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color]))
     }
 
-    private func draw(_ line: CTLine, x: CGFloat, rect: CGRect, in context: CGContext) {
+    func draw(_ line: CTLine, x: CGFloat, rect: CGRect, in context: CGContext) {
         var ascent: CGFloat = 0
         var descent: CGFloat = 0
         _ = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
@@ -360,7 +372,7 @@ final class DiffContentView: NSView {
         return badgeRect.width
     }
 
-    private func drawSymbol(_ image: NSImage, in rect: CGRect, color: CGColor, context: CGContext) {
+    func drawSymbol(_ image: NSImage, in rect: CGRect, color: CGColor, context: CGContext) {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         DSDraw.draw(template: image, in: rect, color: NSColor(cgColor: color) ?? .labelColor)
@@ -439,7 +451,7 @@ final class DiffContentView: NSView {
     }
 
     /// A one-line label cut with "…" to `width`.
-    private func truncated(_ text: String, font: CTFont, color: CGColor, width: CGFloat) -> CTLine {
+    func truncated(_ text: String, font: CTFont, color: CGColor, width: CGFloat) -> CTLine {
         let line = uiLine(text, font: font, color: color)
         guard CTLineGetTypographicBounds(line, nil, nil, nil) > width else { return line }
         return CTLineCreateTruncatedLine(line, max(20, width), .end, uiLine("…", font: font, color: color)) ?? line
@@ -610,7 +622,7 @@ final class DiffContentView: NSView {
         }
     }
 
-    private func redrawRows(_ indices: [Int?]) {
+    func redrawRows(_ indices: [Int?]) {
         for index in indices.compactMap({ $0 }) where index < rows.rows.count { setNeedsDisplay(rowRect(index)) }
     }
 
@@ -695,6 +707,11 @@ final class DiffContentView: NSView {
             }
         case .notice:
             selection = nil
+        case .annotation(let annotation):
+            selection = nil
+            guard rows.annotations.indices.contains(annotation) else { return }
+            currentAnnotationRow = index
+            if point.y - rowRect(index).minY < Self.annotationHeaderHeight + 6 { onToggleAnnotation?(rows.annotations[annotation].id) }
         case .line:
             guard let (position, side) = self.position(at: point) else { return }
             let inGutter: Bool = {
@@ -832,7 +849,7 @@ final class DiffContentView: NSView {
 
     // MARK: Accessibility
 
-    static func accessibilityText(_ row: DiffRow, files: [DiffFile], layout: DiffLayout) -> String {
+    static func accessibilityText(_ row: DiffRow, files: [DiffFile], layout: DiffLayout, annotations: [DiffAnnotation] = []) -> String {
         func describe(_ cell: DiffCell?) -> String {
             guard let cell else { return "no line" }
             let kind = cell.kind == .added ? "added" : cell.kind == .removed ? "removed" : "unchanged"
@@ -846,6 +863,11 @@ final class DiffContentView: NSView {
         case .gap(let hidden, _): return "\(hidden) unchanged lines hidden"
         case .notice: return row.text
         case .line: return layout == .unified ? describe(row.cell) : "Old: \(describe(row.left)). New: \(describe(row.right))"
+        case .annotation(let index):
+            guard annotations.indices.contains(index) else { return "Review thread" }
+            let annotation = annotations[index]
+            return "Review thread by " + annotation.summary.replacingOccurrences(of: " · ", with: ", ") + (annotation.note.map { ". \($0)" } ?? "")
+                + (annotation.notes.count > 1 ? ". \(annotation.notes.count) notes" : "")
         }
     }
 }
