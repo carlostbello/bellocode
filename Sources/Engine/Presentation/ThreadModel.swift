@@ -75,8 +75,10 @@ public final class MessageModel: Identifiable {
 /// questions, the follow-up queue, and composer-relevant state.
 ///
 /// Threading and ownership: `@MainActor`. Created by `Engine.openThread(_:)`, which returns the same instance while it
-/// is open; call `close()` when the thread leaves the screen (the engine closes any left open at `stop()`). It
-/// subscribes to its own `.thread` topic only, so other threads' traffic never wakes it.
+/// is open. Every `openThread` call takes one lease and every `close()` releases one; the subscription is torn down
+/// only when the last lease is released (or at `Engine.stop()`), so one window closing or evicting a thread never
+/// freezes another window showing it. It subscribes to its own `.thread` topic only, so other threads' traffic never
+/// wakes it. View-local state (scroll position, focus, follow-tail) belongs to each window's views, not this model.
 ///
 /// Invalidation: `messageIDs` changes only when a message is added, removed or reordered; streaming changes reach only
 /// the affected `MessageModel` (`message(_:)`). Follow-tail and scroll position are the view's concern and live
@@ -151,6 +153,10 @@ public final class ThreadModel: Identifiable {
     @ObservationIgnored private var didPage = false
     @ObservationIgnored private var subscription: ChangeSubscription?
     @ObservationIgnored private weak var engine: Engine?
+    /// Outstanding `Engine.openThread` leases (one per holder, typically one per window).
+    @ObservationIgnored private(set) var leaseCount = 0
+    /// Torn down: the subscription is cancelled and the engine no longer returns this instance.
+    @ObservationIgnored public private(set) var isClosed = false
 
     init(sessionID: SessionID, core: EngineCore, store: ProjectionStore, engine: Engine) {
         self.sessionID = sessionID
@@ -370,8 +376,23 @@ public final class ThreadModel: Identifiable {
         }
     }
 
-    /// Unsubscribes, saves the draft and tells the engine the thread is no longer shown.
+    func acquireLease() { leaseCount += 1 }
+
+    /// Releases one lease (taken by `Engine.openThread`). The draft is saved each time; the last release unsubscribes
+    /// and tells the engine the thread is no longer shown. Extra releases are ignored.
     public func close() {
+        guard !isClosed else { return }
+        saveDraftNow()
+        leaseCount = max(0, leaseCount - 1)
+        guard leaseCount == 0 else { return }
+        tearDown()
+    }
+
+    /// Ends the model regardless of outstanding leases (engine stop).
+    func tearDown() {
+        guard !isClosed else { return }
+        isClosed = true
+        leaseCount = 0
         saveDraftNow()
         subscription?.cancel()
         subscription = nil

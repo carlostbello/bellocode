@@ -263,7 +263,7 @@ public final class Engine {
         await browser.shutdown()
         await orchestration.shutdown()
         extras.stop()
-        for thread in Array(openThreads.values) { thread.close() }
+        for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }
         trackedTasks.removeAll()
@@ -287,10 +287,15 @@ public final class Engine {
     }
 
     /// Opens a thread: returns its model at once (filled from the cache within milliseconds, then reconciled with the
-    /// server). The same instance is returned while it is open; call `ThreadModel.close()` when done.
+    /// server). The same instance is returned while it is open. Each call takes a lease that the caller releases with
+    /// `ThreadModel.close()`; the model stays live until its last lease is released.
     public func openThread(_ id: SessionID) -> ThreadModel {
-        if let model = openThreads[id] { return model }
+        if let model = openThreads[id] {
+            model.acquireLease()
+            return model
+        }
         let model = ThreadModel(sessionID: id, core: core, store: store, engine: self)
+        model.acquireLease()
         openThreads[id] = model
         let core = self.core
         track(Task { await core.openThread(id) })
