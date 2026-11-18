@@ -111,7 +111,9 @@ protocol ComposerSurface: FocusableSurface {
 struct DraftThreadOptions: Hashable, Sendable {
     var agent: String?
     var model: ModelSelection?
-    var permissionMode: PermissionMode?
+    /// New threads start in Full access: the owner's stated choice (docs/PLAN.md §0, 2026-11-18), with risky actions
+    /// surfaced as notices (docs/features/auto-mode.md). The picker changes it per draft.
+    var permissionMode: PermissionMode? = .fullAccess
     /// Where the thread is created when not the project's main checkout (a worktree prepared by the workspace picker).
     var directory: String?
 }

@@ -355,10 +355,20 @@ public enum PermissionModeRules {
                 PermissionRule(action: "shell", resource: "*", effect: .ask),
                 PermissionRule(action: "external_directory", resource: "*", effect: .ask),
             ]
+        case .auto:
+            // The marker first (the plugin's `permission.evaluate` hook recognises Auto by it and turns saved grants'
+            // `allow` back into `ask`), then everything asks: BelloCode's policy answers each request `once`.
+            [
+                PermissionRule(action: autoMarker, resource: "*", effect: .ask),
+                PermissionRule(action: "*", resource: "*", effect: .ask),
+            ]
         case .fullAccess:
             [PermissionRule(action: "*", resource: "*", effect: .allow)]
         }
     }
+
+    /// The rule action that marks an Auto session (`Plugin/src/auto.ts` `AUTO_MARKER_ACTION`). No tool asserts it.
+    public static let autoMarker = "bellocode_auto"
 
     /// The session rules for `mode` with the agent's restrictions re-applied last, so a mode never loosens what the
     /// agent itself denies (plan stays read-only in every mode).

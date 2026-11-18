@@ -2,6 +2,7 @@ import BelloCore
 import CryptoKit
 import Foundation
 import OpenCodeKit
+import Synchronization
 
 /// The isolated, tool-less reviewer for Auto (docs/features/auto-mode.md).
 ///
@@ -171,19 +172,23 @@ public actor AutoReviewer {
         let prompt = Self.prompt(for: input)
         let backend = self.backend
         let timeout = settings.timeout
-        enum Reply: Sendable { case text(String), failed, timedOut }
-        let reply: Reply = await withTaskGroup(of: Reply.self) { group in
-            group.addTask {
-                do { return .text(try await backend.generate(prompt: prompt, model: model)) } catch { return .failed }
+        // First of: the model's answer, the deadline, or cancellation. A task group would wait for a backend that
+        // ignores cancellation; this returns at the deadline whatever the backend does (and cancels it).
+        let race = ReplyRace()
+        let reply: Reply = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Reply, Never>) in
+                race.arm(continuation)
+                race.attach(Task {
+                    do { race.finish(.text(try await backend.generate(prompt: prompt, model: model))) } catch { race.finish(.failed) }
+                })
+                race.attach(Task {
+                    // ContinuousClock-based sleep (AGENTS.md rule 21).
+                    try? await Task.sleep(for: timeout)
+                    race.finish(.timedOut)
+                })
             }
-            group.addTask {
-                // ContinuousClock-based sleep (AGENTS.md rule 21).
-                try? await Task.sleep(for: timeout)
-                return .timedOut
-            }
-            let first = await group.next() ?? .timedOut
-            group.cancelAll()
-            return first
+        } onCancel: {
+            race.finish(.timedOut)
         }
         if Task.isCancelled { return .escalate(reasonCode: "cancelled", explanation: "The review was cancelled.") }
         switch reply {
@@ -305,5 +310,45 @@ struct OpenCodeReviewModel: AutoReviewer.Model {
 
     func generate(prompt: String, model: ModelRef?) async throws -> String {
         try await client().generateText(prompt: prompt, model: model, timeout: .seconds(60))
+    }
+}
+
+enum Reply: Sendable { case text(String), failed, timedOut }
+
+/// Resumes once with the first result and cancels the losers.
+final class ReplyRace: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Reply, Never>?
+        var result: Reply?
+        var tasks: [Task<Void, Never>] = []
+    }
+    private let state = Mutex(State())
+
+    func arm(_ continuation: CheckedContinuation<Reply, Never>) {
+        let ready: Reply? = state.withLock { state in
+            if let result = state.result { return result }
+            state.continuation = continuation
+            return nil
+        }
+        if let ready { continuation.resume(returning: ready) }
+    }
+
+    func attach(_ task: Task<Void, Never>) {
+        let finished = state.withLock { state in
+            state.tasks.append(task)
+            return state.result != nil
+        }
+        if finished { task.cancel() }
+    }
+
+    func finish(_ reply: Reply) {
+        let (continuation, tasks): (CheckedContinuation<Reply, Never>?, [Task<Void, Never>]) = state.withLock { state in
+            guard state.result == nil else { return (nil, []) }
+            state.result = reply
+            defer { state.continuation = nil }
+            return (state.continuation, state.tasks)
+        }
+        for task in tasks { task.cancel() }
+        continuation?.resume(returning: reply)
     }
 }

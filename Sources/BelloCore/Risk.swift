@@ -151,3 +151,30 @@ public struct ToolRisk: Hashable, Sendable, Codable {
 
     public var isEmpty: Bool { notices.isEmpty && autoApproval == nil }
 }
+
+/// Why Auto put a request in front of the person (shown on the approval card; the card is the existing one).
+public struct AutoEscalation: Hashable, Sendable, Codable {
+    /// Mandatory findings (empty when the reviewer escalated).
+    public var findings: [RiskFinding]
+    public var source: AutoDecisionSource
+    public var reasonCode: String
+    public var explanation: String
+    public var policyVersion: String
+
+    public init(findings: [RiskFinding], source: AutoDecisionSource, reasonCode: String, explanation: String, policyVersion: String) {
+        self.findings = findings
+        self.source = source
+        self.reasonCode = reasonCode
+        self.explanation = explanation
+        self.policyVersion = policyVersion
+    }
+
+    /// One line for the card: "Auto asks you: Reads a secret-looking file: .env".
+    public var summary: String {
+        if let first = findings.first {
+            let more = findings.count > 1 ? " (+\(findings.count - 1) more)" : ""
+            return "Auto asks you: " + first.askingText + more
+        }
+        return "Auto asks you: " + explanation
+    }
+}

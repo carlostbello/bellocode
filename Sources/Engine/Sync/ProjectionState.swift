@@ -8,6 +8,14 @@ struct ProjectionState: Sendable {
     var registry: [String: ProjectEntry] = [:]
     var sessions: [SessionID: Session] = [:]
     var pending: [String: PendingRequest] = [:]
+    /// Permission requests of Auto sessions awaiting BelloCode's policy (docs/features/auto-mode.md): not shown and not
+    /// counted until the policy escalates them (then they move to `pending` with their escalation) or the server
+    /// resolves them. Never persisted: after a relaunch the server lists them again and they are triaged again.
+    var autoTriage: [String: PermissionRequest] = [:]
+    /// Triage entries handed to the Auto service (each is handed over once).
+    var autoDispatched: Set<String> = []
+    /// Why Auto escalated a request, kept so a resync re-lists it with its reason.
+    var autoEscalations: [String: AutoEscalation] = [:]
     var queue: [MessageID: QueuedPrompt] = [:]
     var threadUI: [SessionID: ThreadUIState] = [:]
     var messages: MessageCache
@@ -131,14 +139,20 @@ struct Reduction: Sendable {
     var effects: [SyncEffect] = []
     /// Sessions whose derived status may have changed.
     var statusDirty: Set<SessionID> = []
+    /// A permission request entered Auto triage: wake the Auto service.
+    var autoTriage = false
+    /// Full-access risk notices found on tool calls (for the audit log and Needs you).
+    var riskNotices: [RiskNoticeEvent] = []
 
-    var isEmpty: Bool { changes.isEmpty && writes.isEmpty && effects.isEmpty && statusDirty.isEmpty }
+    var isEmpty: Bool { changes.isEmpty && writes.isEmpty && effects.isEmpty && statusDirty.isEmpty && !autoTriage && riskNotices.isEmpty }
 
     mutating func merge(_ other: Reduction) {
         changes += other.changes
         writes.merge(other.writes)
         effects += other.effects
         statusDirty.formUnion(other.statusDirty)
+        autoTriage = autoTriage || other.autoTriage
+        riskNotices += other.riskNotices
     }
 }
 
@@ -267,7 +281,53 @@ extension ProjectionState {
         id == ancestor || ancestors(of: id).contains(ancestor)
     }
 
+    /// A permission request from the server: Auto sessions' requests go to triage first (hidden until escalated); a
+    /// request already shown, or already escalated, stays shown.
+    mutating func putPermission(_ request: PermissionRequest, into reduction: inout Reduction) {
+        let id = request.id.rawValue
+        if let escalation = autoEscalations[id] {
+            var shown = request
+            shown.autoEscalation = escalation
+            autoTriage[id] = nil
+            putPending(.permission(shown), into: &reduction)
+            return
+        }
+        if case .permission(let existing)? = pending[id] {
+            var shown = request
+            shown.autoEscalation = existing.autoEscalation
+            putPending(.permission(shown), into: &reduction)
+            return
+        }
+        if sessions[request.sessionID]?.permissionMode == .auto {
+            if autoTriage[id] == nil {
+                autoTriage[id] = request
+                reduction.autoTriage = true
+            }
+            return
+        }
+        putPending(.permission(request), into: &reduction)
+    }
+
+    /// Moves a triaged request into the visible pending list (Auto escalated it, or the session left Auto).
+    mutating func escalateTriage(_ id: String, _ escalation: AutoEscalation?, into reduction: inout Reduction) {
+        guard var request = autoTriage.removeValue(forKey: id) else { return }
+        autoDispatched.remove(id)
+        if let escalation {
+            autoEscalations[id] = escalation
+            if autoEscalations.count > 1_000, let first = autoEscalations.keys.first { autoEscalations[first] = nil }
+            request.autoEscalation = escalation
+        }
+        putPending(.permission(request), into: &reduction)
+    }
+
+    mutating func dropTriage(_ id: String) {
+        autoTriage[id] = nil
+        autoDispatched.remove(id)
+    }
+
     mutating func resolvePending(_ id: String, into reduction: inout Reduction) {
+        dropTriage(id)
+        autoEscalations[id] = nil
         guard let request = pending.removeValue(forKey: id) else { return }
         reduction.changes.append(
             .pendingResolved(id: id, sessionID: request.sessionID, ancestors: ancestors(of: request.sessionID)))
@@ -327,5 +387,36 @@ extension ProjectionState {
         if previous != state.organisation { reduction.changes.append(.organisation(state.sessionID, state.organisation)) }
         reduction.writes.threadUI.append(state)
         reduction.statusDirty.insert(state.sessionID)
+    }
+}
+
+/// A risk notice on a tool call, from the reducer to the Auto service.
+struct RiskNoticeEvent: Sendable, Equatable {
+    enum Stage: String, Sendable { case attempted, completed, failed }
+    var sessionID: SessionID
+    var messageID: MessageID
+    var callID: String
+    var tool: String
+    var findings: [RiskFinding]
+    var stage: Stage
+    var projectDirectory: String?
+}
+
+/// Reading tool input and the plugin's stamped evaluations for the risk detectors.
+enum RiskNoticeInput {
+    static func object(_ raw: RawJSON) -> [String: Any?]? {
+        guard let data = raw.text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object.mapValues { Optional($0) }
+    }
+
+    /// `metadata.bellocode_permissions` (Plugin/src/auto.ts `PERMISSIONS_METADATA_KEY`).
+    static func evaluations(_ raw: RawJSON) -> [(action: String, resources: [String])]? {
+        guard let data = raw.text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let list = object["bellocode_permissions"] as? [[String: Any]]
+        else { return nil }
+        return list.compactMap { item in
+            guard let action = item["action"] as? String else { return nil }
+            return (action, (item["resources"] as? [String]) ?? [])
+        }
     }
 }

@@ -348,8 +348,8 @@ public final class ExtrasHub {
 
     private func mode(_ raw: String?, _ caller: ExtrasCaller) throws -> PermissionMode? {
         guard let raw, !raw.isEmpty else { return nil }
-        guard let mode = PermissionMode(rawValue: raw) else { throw ExtrasError("permissionMode is ask, autoEdit or fullAccess.") }
-        let order: [PermissionMode] = [.ask, .autoEdit, .fullAccess]
+        guard let mode = PermissionMode(rawValue: raw) else { throw ExtrasError("permissionMode is ask, autoEdit, auto or fullAccess.") }
+        let order: [PermissionMode] = [.ask, .autoEdit, .auto, .fullAccess]
         let own = caller.permissionMode ?? .ask
         guard order.firstIndex(of: mode)! <= order.firstIndex(of: own)! else {
             throw ExtrasError("A scheduled task cannot get a broader permission mode (\(mode.rawValue)) than this thread's (\(own.rawValue)).")

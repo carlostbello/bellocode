@@ -99,6 +99,12 @@ actor EngineCore {
     private var nextTaskID = 0
     private var pendingWrites = StoreBatch()
     private var effectQueue: [SyncEffect] = []
+    /// Wakes the Auto service when requests enter triage (a signal only: the requests stay in the projection state, so
+    /// nothing is lost when signals coalesce).
+    private var autoTriageSignal: AsyncStream<Void>.Continuation?
+    /// Risk notices not yet taken by the Auto service (bounded; overflow is counted and shown, never silent).
+    private var riskNoticeOutbox: [RiskNoticeEvent] = []
+    private var riskNoticesDropped = 0
     private let effectLimit = 512
     private var openThreads: [SessionID: Int] = [:]
     /// Optimistic sessions not yet acknowledged; a resync must not delete them.
@@ -545,6 +551,14 @@ actor EngineCore {
         }
         if statusDirty { organise() }
         if !reduction.effects.isEmpty { enqueue(reduction.effects) }
+        if !reduction.riskNotices.isEmpty {
+            riskNoticeOutbox += reduction.riskNotices
+            if riskNoticeOutbox.count > 500 {
+                riskNoticesDropped += riskNoticeOutbox.count - 500
+                riskNoticeOutbox.removeFirst(riskNoticeOutbox.count - 500)
+            }
+        }
+        if reduction.autoTriage || !reduction.riskNotices.isEmpty { autoTriageSignal?.yield() }
     }
 
     private func scheduleDeltaFlush() {
@@ -996,6 +1010,9 @@ actor EngineCore {
         serverPending += permissions.map { .permission(Mapping.permission($0, received: state.pending[$0.id]?.received ?? now)) }
         serverPending += forms.map { .question(Mapping.question($0, received: state.pending[$0.id]?.received ?? now)) }
         let keep = Set(serverPending.map(\.id))
+        if !onlyReadDirectories, otherGaps.permissionDirectories.isEmpty {
+            for id in state.autoTriage.keys where !keep.contains(id) { state.dropTriage(id) }
+        }
         for (id, request) in state.pending where !keep.contains(id) && !id.hasPrefix(AppRequest.idPrefix) {
             // App requests are BelloCode's own (never on the server): a resync keeps them.
             let read: Set<String>
@@ -1020,7 +1037,10 @@ actor EngineCore {
             if onlyReadDirectories, !read.contains(session.directory) { continue }
             state.resolvePending(id, into: &reduction)
         }
-        for request in serverPending { state.putPending(request, into: &reduction) }
+        for request in serverPending {
+            if case .permission(let permission) = request { state.putPermission(permission, into: &reduction) }
+            else { state.putPending(request, into: &reduction) }
+        }
     }
 
     /// Applies inbox reads (only sessions whose inbox was read).
@@ -2352,3 +2372,107 @@ extension EngineCore {
     private func commitAppRequestChange(_ reduction: Reduction) { commitExternal(reduction) }
 }
 
+
+// MARK: - Auto triage (docs/features/auto-mode.md)
+
+/// What the Auto service needs to judge one request, read from the projection in one hop.
+struct AutoRequestContext: Sendable {
+    var request: BelloCore.PermissionRequest
+    var session: Session
+    /// The project root, its other session directories (worktrees) and the session's own directory.
+    var roots: [String]
+    var threadTitle: String?
+    /// The tool call that asked, when it is in the message cache.
+    var tool: BelloCore.ToolCall?
+}
+
+extension EngineCore {
+    /// A coalescing signal (newest only): each element means "triage has new entries"; call `takeAutoTriage()`.
+    func autoTriageSignals() -> AsyncStream<Void> {
+        autoTriageSignal?.finish()
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        autoTriageSignal = continuation
+        if !pipeline.state.autoTriage.isEmpty { continuation.yield() }
+        return stream
+    }
+
+    /// Triage entries not handed out yet (each once), oldest first.
+    func takeAutoTriage() -> [BelloCore.PermissionRequest] {
+        let fresh = pipeline.state.autoTriage.values.filter { !pipeline.state.autoDispatched.contains($0.id.rawValue) }
+        for request in fresh { pipeline.state.autoDispatched.insert(request.id.rawValue) }
+        return fresh.sorted { ($0.received, $0.id.rawValue) < ($1.received, $1.id.rawValue) }
+    }
+
+    /// Risk notices since the last call, and how many were dropped because the outbox was full.
+    func takeRiskNotices() -> (events: [RiskNoticeEvent], dropped: Int) {
+        defer {
+            riskNoticeOutbox.removeAll()
+            riskNoticesDropped = 0
+        }
+        return (riskNoticeOutbox, riskNoticesDropped)
+    }
+
+    /// The project of a pending request's session.
+    func pendingSessionProject(_ id: PermissionRequestID) -> ProjectID? {
+        guard let request = pipeline.state.pending[id.rawValue] else { return nil }
+        return pipeline.state.sessions[request.sessionID]?.projectID
+    }
+
+    func isInAutoTriage(_ id: PermissionRequestID) -> Bool { pipeline.state.autoTriage[id.rawValue] != nil }
+
+    /// Requests in triage now (diagnostics and tests).
+    var autoTriageCount: Int { pipeline.state.autoTriage.count }
+
+    func autoContext(for id: PermissionRequestID) -> AutoRequestContext? {
+        let state = pipeline.state
+        guard let request = state.autoTriage[id.rawValue], let session = state.sessions[request.sessionID] else { return nil }
+        var roots = [session.directory]
+        if let project = state.projects[session.projectID]?.directory { roots.append(project) }
+        for other in state.sessions.values where other.projectID == session.projectID && !roots.contains(other.directory) {
+            roots.append(other.directory)
+            if roots.count > 64 { break }
+        }
+        var tool: BelloCore.ToolCall?
+        if let messageID = request.toolMessageID, let callID = request.toolCallID, let message = state.messages[messageID] {
+            tool = message.parts.lazy.compactMap(\.content.toolCall).first { $0.callID == callID }
+        }
+        return AutoRequestContext(request: request, session: session, roots: roots, threadTitle: session.title, tool: tool)
+    }
+
+    /// Shows a triaged request to the person (Auto escalated it, or its session left Auto).
+    func escalateAutoRequest(_ id: PermissionRequestID, _ escalation: AutoEscalation?) {
+        var reduction = Reduction()
+        pipeline.state.escalateTriage(id.rawValue, escalation, into: &reduction)
+        commit(reduction)
+    }
+
+    /// Replies to a request still in triage (Auto's own `once` or `reject`). Removed when the server acknowledges.
+    func replyAutoRequest(_ id: PermissionRequestID, reply: PermissionReply, message: String?) async throws {
+        guard reply != .always else { throw EngineError.conflict("Auto never replies always.") }
+        guard let request = pipeline.state.autoTriage[id.rawValue] else { throw EngineError.conflict("The request is no longer waiting for Auto.") }
+        do {
+            try await call {
+                try await $0.replyPermission(
+                    sessionID: request.sessionID.rawValue, requestID: id.rawValue,
+                    decision: PermissionDecision(rawValue: reply.rawValue), message: message)
+            }
+        } catch EngineError.notFound(let detail) {
+            resolve(id.rawValue)
+            throw EngineError.conflict(detail)
+        }
+        resolve(id.rawValue)
+    }
+
+    /// Attaches risk notices or an Auto approval to a tool call (creating the part if its events have not arrived).
+    func annotateTool(_ sessionID: SessionID, messageID: MessageID, callID: String, _ body: @Sendable (inout ToolRisk) -> Void) {
+        var reduction = Reduction()
+        pipeline.state.updateMessage(messageID, persist: true, into: &reduction, create: { nil }) { message in
+            EventReducer.mutateTool(&message, callID: callID, name: nil, at: .now) { call in
+                var risk = call.risk ?? ToolRisk()
+                body(&risk)
+                call.risk = risk.isEmpty ? nil : risk
+            }
+        }
+        commit(reduction)
+    }
+}
