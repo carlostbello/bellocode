@@ -74,22 +74,26 @@ public enum HostGit {
     /// configuration for network operations (`trustedValues`).
     public static func invocation(
         arguments: [String], directory: String, mode: Mode, environment base: [String: String],
-        writableRoots extra: [String] = [], trusted: TrustedConfiguration = TrustedConfiguration()
+        writableRoots extra: [String] = [], trusted: TrustedConfiguration = TrustedConfiguration(),
+        credentials: GitCredentialSetup? = nil
     ) -> Invocation? {
         guard FileManager.default.isExecutableFile(atPath: sandboxExecutable), let git = realGit(environment: base) else { return nil }
         let execPath = execPath(forGit: git)
         let roots = writableRoots(directory: directory, environment: base, extra: extra, mode: mode)
-        var sandboxArguments = ["-p", profile(mode: mode, rootCount: roots.count)]
+        // The app's credential helper may run only for network operations (never for local ones).
+        let credentials = mode == .network ? credentials : nil
+        var sandboxArguments = ["-p", profile(mode: mode, rootCount: roots.count, allowsCredentialHelper: credentials != nil)]
         sandboxArguments += ["-D", "GIT=\(git)", "-D", "EXEC_PATH=\(execPath)"]
         for (index, root) in roots.enumerated() { sandboxArguments += ["-D", "ROOT\(index)=\(root)"] }
         if mode == .network, let home = base["HOME"] { sandboxArguments += ["-D", "SSH_DIR=\(canonical(home + "/.ssh"))"] }
+        if let credentials { sandboxArguments += ["-D", "CREDENTIAL_HELPER=\(canonical(credentials.helperPath))"] }
         return Invocation(
             executable: sandboxExecutable, arguments: sandboxArguments + [git] + arguments,
-            environment: environment(base: base, mode: mode, execPath: execPath, trusted: trusted))
+            environment: environment(base: base, mode: mode, execPath: execPath, trusted: trusted, credentials: credentials))
     }
 
     /// The sandbox profile. Paths come in as parameters (`-D`), so nothing in a path needs quoting.
-    static func profile(mode: Mode, rootCount: Int) -> String {
+    static func profile(mode: Mode, rootCount: Int, allowsCredentialHelper: Bool = false) -> String {
         var lines = [
             "(version 1)",
             "(allow default)",
@@ -103,6 +107,8 @@ public enum HostGit {
             lines.append(#"(allow process-exec* (literal "/usr/bin/ssh") (literal "/bin/sh") (literal "/bin/bash") (literal "/bin/zsh") (literal "/bin/dash"))"#)
             // Remote helpers that run arbitrary commands (also refused by the protocol allowlist).
             lines.append(#"(deny process-exec* (literal (string-append (param "EXEC_PATH") "/git-remote-ext")) (literal (string-append (param "EXEC_PATH") "/git-remote-fd")))"#)
+            // BelloCode's own credential helper (`bellocode-exec --git-credential`), only when the app granted one.
+            if allowsCredentialHelper { lines.append(#"(allow process-exec* (literal (param "CREDENTIAL_HELPER")))"#) }
         }
         lines.append("(deny file-write*)")
         lines.append(#"(allow file-write* (subpath "/dev"))"#)
@@ -149,7 +155,9 @@ public enum HostGit {
         "GIT_COMMITTER_DATE",
     ]
 
-    static func environment(base: [String: String], mode: Mode, execPath: String, trusted: TrustedConfiguration) -> [String: String] {
+    static func environment(
+        base: [String: String], mode: Mode, execPath: String, trusted: TrustedConfiguration, credentials: GitCredentialSetup? = nil
+    ) -> [String: String] {
         var environment = base.filter { passedThrough.contains($0.key) }
         if mode == .network, let agent = base["SSH_AUTH_SOCK"] { environment["SSH_AUTH_SOCK"] = agent }
         environment["PATH"] = fixedPath
@@ -169,6 +177,12 @@ public enum HostGit {
             }
         }
         pairs += overrides(mode: mode, trusted: trusted)
+        // Per-URL settings for the app's GitLab remotes come last (they must win over everything above).
+        if let credentials {
+            pairs += credentials.overrides
+            environment[GitCredentialHelper.socketVariable] = credentials.socketPath
+            environment[GitCredentialHelper.grantVariable] = credentials.grant
+        }
         environment["GIT_CONFIG_COUNT"] = String(pairs.count)
         for (index, pair) in pairs.enumerated() {
             environment["GIT_CONFIG_KEY_\(index)"] = pair.0

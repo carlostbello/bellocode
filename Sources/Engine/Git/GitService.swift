@@ -99,7 +99,7 @@ public final class GitService {
     /// Repository models kept (least recently used dropped beyond this; their watchers stop).
     public static let repositoryLimit = 24
 
-    public let runner: GitRunner
+    public private(set) var runner: GitRunner
     /// Settable inside the module so tests can route removed worktree files away from the real Trash.
     public internal(set) var worktrees: WorktreeService
     let client: @Sendable () async throws -> OpenCodeClient
@@ -130,6 +130,15 @@ public final class GitService {
         model.refresh()
         return model
     }
+
+    /// Git parity: HTTPS authentication to the configured GitLab instances with the Keychain token, through the app's
+    /// credential helper (docs/features/git-parity.md). Applies to every git process started afterwards.
+    public func configureCredentials(_ credentials: GitCredentials?) {
+        runner.credentials = credentials
+        worktrees.runner.credentials = credentials
+    }
+
+    public var credentials: GitCredentials? { runner.credentials }
 
     /// Refreshes every cached model of `directory` and below (after a turn, a commit or a worktree change).
     public func refreshAll(under directory: String? = nil) {

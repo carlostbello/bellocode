@@ -44,7 +44,9 @@ public enum MergeRequestPause: Sendable, Equatable {
 @MainActor
 @Observable
 public final class MergeRequestService {
-    public private(set) var instances: [GitLabInstance] = []
+    public private(set) var instances: [GitLabInstance] = [] { didSet { onInstancesChanged?(instances) } }
+    /// Git parity: keeps the git credential broker's instance list current (Engine wires it).
+    @ObservationIgnored public var onInstancesChanged: (@MainActor ([GitLabInstance]) -> Void)?
     /// Instances with a token in the Keychain (never the token).
     public private(set) var instancesWithToken: Set<String> = []
     /// Per instance: "token invalid or expired" and the like (cleared when the token is replaced or works again).

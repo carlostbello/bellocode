@@ -1,3 +1,4 @@
+import BelloCore
 import ContainerKit
 import Foundation
 import Testing
@@ -90,6 +91,29 @@ struct HostGitIsolationTests {
             #expect(roundTrips == 2, "worktree create/remove/restore did not complete under the sandbox")
             #expect(repository.fired.isEmpty, "\(strict ? "strict" : "permissive") runner executed: \(repository.fired)")
         }
+    }
+
+    /// Git parity: the same matrix with BelloCode's credential helper configured for the repository's remotes (an
+    /// HTTPS GitLab remote is added, so every network operation runs with the helper allowed in the sandbox). Nothing
+    /// a repository names may run, and the helper never answers (no grant matches an unreachable host).
+    @Test func hostGitRunsNoRepositoryProgramWithTheCredentialHelperPresent() async throws {
+        let helper = try #require(Self.helper, "bellocode-exec is not built")
+        let repository = try HostileRepository.make()
+        defer { repository.remove() }
+        try repository.plain(["remote", "add", "gitlab", "https://gitlab.example.invalid/group/project.git"], in: repository.root)
+        let vault = InMemorySecretVault()
+        try vault.store(account: "https://gitlab.example.invalid", label: "t", value: SecretValue("glpat-never"))
+        let broker = try GitCredentialBroker(tokens: vault)
+        broker.setInstances([GitLabInstance(baseURL: "https://gitlab.example.invalid")!])
+        for strict in [true, false] {
+            var runner = strict ? Self.strictRunner(repository) : Self.permissiveRunner(repository)
+            runner.credentials = GitCredentials(broker: broker, helperPath: helper)
+            _ = await Self.exerciseBelloCode(repository, runner: runner)
+            _ = try? await runner.run(["fetch", "gitlab"], in: repository.root, timeout: .seconds(30), allowFailure: true)
+            _ = try? await runner.run(["push", "gitlab", "main"], in: repository.root, timeout: .seconds(30), allowFailure: true)
+            #expect(repository.fired.isEmpty, "\(strict ? "strict" : "permissive") runner with the helper executed: \(repository.fired)")
+        }
+        #expect(broker.inspect { $0.grants.isEmpty })
     }
 
     @Test func belloCodesGitStillWorksInAHostileRepository() async throws {

@@ -198,6 +198,15 @@ public final class Engine {
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
         git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
+        // Git parity: HTTPS git to the configured GitLab instances authenticates with the Keychain token through
+        // `bellocode-exec --git-credential` (only with the bundled helper; tests configure their own).
+        if let helper = configuration.gitCredentialHelper ?? configuration.containers?.helperURL,
+           let broker = try? GitCredentialBroker(tokens: configuration.forgeTokens)
+        {
+            git.configureCredentials(GitCredentials(broker: broker, helperPath: helper.path))
+            mergeRequests.onInstancesChanged = { [broker] instances in broker.setInstances(instances) }
+            broker.setInstances(mergeRequests.instances)
+        }
     }
 
     /// The model of a thread that is open now, without opening it.
