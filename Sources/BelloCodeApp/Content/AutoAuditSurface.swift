@@ -32,18 +32,25 @@ final class AutoAuditSurfaces {
 
     func display(_ context: ThreadSurfaceContext?) {
         self.context = context
-        state.sessionID = context?.thread?.session?.id
-        state.mode = context?.thread?.session?.permissionMode
+        state.thread = context?.thread
         state.expanded = nil
-        if let id = state.sessionID, let auto = context?.engine.auto { Task { await auto.loadAudit(id) } }
+        if let thread = context?.thread, let auto = context?.engine.auto {
+            Task {
+                // The session may still be loading: wait (bounded) for its ID, then read the stored log.
+                for _ in 0..<50 where thread.session == nil { try? await Task.sleep(for: .milliseconds(100)) }
+                if let id = thread.session?.id { await auto.loadAudit(id) }
+            }
+        }
     }
 }
 
 @MainActor
 final class AutoAuditViewState: ObservableObject {
-    @Published var sessionID: SessionID?
-    @Published var mode: PermissionMode?
+    /// The displayed thread (observed: its session and mode load after it is shown).
+    @Published var thread: ThreadModel?
     @Published var expanded: String?
+    var sessionID: SessionID? { thread?.session?.id }
+    var mode: PermissionMode? { thread?.session?.permissionMode }
 }
 
 struct AutoAuditView: View {
