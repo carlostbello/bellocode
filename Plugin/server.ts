@@ -31,6 +31,13 @@ const seenEvents = new Set<string>()
 const cascading = new Map<string, number>()
 const guided = new Set<string>()
 const CASCADE_WINDOW_MS = 15_000
+/** Session list page size, pages per parent and sessions per tree walk (beyond these a walk reports incomplete). */
+const PAGE_SIZE = 200
+const CHILD_PAGES = 25
+const TREE_LIMIT = 2_000
+/** How long a stop reads back interrupted sessions to confirm they settled. */
+const CONFIRM_MS = 5_000
+const CONFIRM_POLL_MS = 150
 
 function remember(id: string | undefined): boolean {
   if (!id) return true
@@ -117,20 +124,56 @@ export default {
       return chain
     }
 
-    const children = async (sessionID: string): Promise<Session[]> =>
-      list<Session>(await ctx.session.list({ parentID: sessionID, limit: 200 }))
+    /** A session's children, every page (`complete` is false when the page limit ends the listing first). */
+    const childPages = async (sessionID: string): Promise<{ sessions: Session[]; complete: boolean }> => {
+      const out: Session[] = []
+      const seen = new Set<string>()
+      let cursor: unknown
+      for (let page = 0; page < CHILD_PAGES; page++) {
+        const value = await ctx.session.list({ parentID: sessionID, limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) })
+        const batch = list<Session>(value)
+        const fresh = batch.filter((item) => !seen.has(item.id))
+        for (const item of fresh) seen.add(item.id)
+        out.push(...fresh)
+        cursor = (value?.cursor ?? value?.data?.cursor)?.next
+        // A short page, no cursor, or a page with nothing new (a cursor the API ignored) ends the listing.
+        if (batch.length < PAGE_SIZE || !cursor || fresh.length === 0) return { sessions: out, complete: true }
+      }
+      return { sessions: out, complete: false }
+    }
 
-    /** Every descendant, parents before children. */
-    const descendants = async (sessionID: string): Promise<Session[]> => {
+    const children = async (sessionID: string): Promise<Session[]> => (await childPages(sessionID)).sessions
+
+    /** Every descendant, parents before children. `unexamined` counts listed sessions whose children were not read
+     *  (the traversal limit, or a list that failed), so a caller never mistakes a partial walk for the whole tree. */
+    const walk = async (sessionID: string): Promise<{ sessions: Session[]; complete: boolean; unexamined: number }> => {
       const out: Session[] = []
       const queue = [sessionID]
-      while (queue.length && out.length < 500) {
-        const next = await children(queue.shift() as string)
-        out.push(...next)
-        queue.push(...next.map((child) => child.id))
+      let complete = true
+      let unexamined = 0
+      while (queue.length) {
+        if (out.length >= TREE_LIMIT) {
+          unexamined += queue.length
+          complete = false
+          break
+        }
+        const parent = queue.shift() as string
+        let next: { sessions: Session[]; complete: boolean }
+        try {
+          next = await childPages(parent)
+        } catch {
+          unexamined += 1
+          complete = false
+          continue
+        }
+        if (!next.complete) complete = false
+        out.push(...next.sessions)
+        queue.push(...next.sessions.map((child) => child.id))
       }
-      return out
+      return { sessions: out, complete, unexamined }
     }
+
+    const descendants = async (sessionID: string): Promise<Session[]> => (await walk(sessionID)).sessions
 
     /** Creates a worktree and returns its directory, or fails (nothing usable was returned). */
     const createWorktree = async (projectID: string, already: { threads: string[]; worktrees: string[] }) => {
@@ -199,17 +242,55 @@ export default {
       }
     }
 
-    /** Interrupts `sessionID`'s running descendants (deepest first) and then the session. */
-    const cascadeStop = async (sessionID: string, includeSelf: boolean) => {
-      const below = (await descendants(sessionID)).filter(L.isRunning)
+    /** Interrupts `sessionID`'s running descendants (deepest first) and then the session, then reads each back until
+     *  it is no longer running (or `CONFIRM_MS` passes). Reports requested, acknowledged, failed, settled, still running
+     *  and unexamined separately: a count never includes a task that is still running. */
+    const cascadeStop = async (
+      sessionID: string,
+      includeSelf: boolean,
+      signal?: AbortSignal,
+      confirm = true,
+    ): Promise<L.StopReport> => {
+      const tree = await walk(sessionID)
+      const below = tree.sessions.filter(L.isRunning)
       const until = Date.now() + CASCADE_WINDOW_MS
       if (below.length) cascading.set(sessionID, until)
-      for (const child of below.reverse()) {
-        cascading.set(child.id, until)
-        await ctx.session.interrupt({ sessionID: child.id }).catch(() => undefined)
+      const targets = below.reverse().map((child) => child.id)
+      if (includeSelf) targets.push(sessionID)
+      const acknowledged: string[] = []
+      const failed: Array<{ id: string; error: string }> = []
+      for (const id of targets) {
+        if (id !== sessionID) cascading.set(id, until)
+        try {
+          await ctx.session.interrupt({ sessionID: id })
+          acknowledged.push(id)
+        } catch (error) {
+          failed.push({ id, error: L.oneLine(String((error as any)?.message ?? error), 160) })
+        }
       }
-      if (includeSelf) await ctx.session.interrupt({ sessionID }).catch(() => undefined)
-      return below.length
+      const settled: string[] = []
+      let pending = confirm ? [...acknowledged] : []
+      const deadline = Date.now() + CONFIRM_MS
+      while (pending.length) {
+        const still: string[] = []
+        for (const id of pending) {
+          const session = await get(id).catch(() => undefined)
+          if (session && !L.isRunning(session)) settled.push(id)
+          else still.push(id)
+        }
+        pending = still
+        if (!pending.length || Date.now() >= deadline || signal?.aborted) break
+        await sleep(Math.min(CONFIRM_POLL_MS, Math.max(10, deadline - Date.now())), signal)
+      }
+      return {
+        requested: targets,
+        acknowledged,
+        failed,
+        settled,
+        stillRunning: confirm ? pending : acknowledged,
+        unexamined: tree.unexamined,
+        complete: tree.complete,
+      }
     }
 
     const summaryOf = async (sessionID: string) => L.clip(L.lastReply(await messages(sessionID)), 2_000)
@@ -219,12 +300,19 @@ export default {
       const deadline = Date.now() + seconds * 1000
       while (!signal.aborted) {
         const session = await get(sessionID)
-        const busy = L.isRunning(session) || (includeChildren && (await descendants(sessionID)).some(L.isRunning))
-        if (!busy) return { settled: true, session }
-        if (Date.now() >= deadline) return { settled: false, session }
+        let busy = L.isRunning(session)
+        let complete = true
+        if (!busy && includeChildren) {
+          // A tree that could not be fully listed cannot be confirmed idle.
+          const tree = await walk(sessionID)
+          busy = tree.sessions.some(L.isRunning)
+          complete = tree.complete
+        }
+        if (!busy && complete) return { settled: true, session }
+        if (Date.now() >= deadline) return { settled: false, session, ...(complete ? {} : { incomplete: true }) }
         await sleep(Math.min(750, Math.max(50, deadline - Date.now())), signal)
       }
-      return { settled: false, session: await get(sessionID) }
+      return { settled: false, session: await get(sessionID) } as { settled: boolean; session: Session; incomplete?: boolean }
     }
 
     const putGuidance = async (session: Session) => {
@@ -382,8 +470,8 @@ export default {
         execute: async (input: any, tool: ToolContext) => {
           const { target, scope } = await reach(tool, String(input.taskID), "task_cancel")
           if (scope !== "descendant") fail("task_cancel stops your own child tasks. Use thread_interrupt for other threads.")
-          const stopped = await cascadeStop(target.id, true)
-          return { content: `Stopped ${target.id}${stopped ? ` and ${stopped} task(s) below it` : ""}.` }
+          const report = await cascadeStop(target.id, true, tool.signal)
+          return { content: L.describeStop(target.id, report, true), metadata: { stop: report } }
         },
       },
       {
@@ -573,7 +661,12 @@ export default {
           const waited = await waitIdle(target.id, seconds, input.includeChildren !== false, tool.signal)
           const state = L.taskState(waited.session, await children(target.id))
           const summary = waited.settled ? await summaryOf(target.id) : ""
-          const output = describe(waited.session, { settled: waited.settled, state, summary })
+          const output = describe(waited.session, {
+            settled: waited.settled,
+            state,
+            summary,
+            ...(waited.incomplete ? { note: "The task tree was too large to list completely, so it could not be confirmed idle." } : {}),
+          })
           return { content: JSON.stringify(output, null, 1) }
         },
       },
@@ -591,8 +684,8 @@ export default {
               resources: [target.id],
               metadata: { title: target.title ?? target.id },
             })
-          const stopped = await cascadeStop(target.id, true)
-          return { content: `Stopped ${target.id}${stopped ? ` and ${stopped} task(s) below it` : ""}.` }
+          const report = await cascadeStop(target.id, true, tool.signal)
+          return { content: L.describeStop(target.id, report, true), metadata: { stop: report } }
         },
       },
       {
@@ -729,7 +822,7 @@ export default {
           return
         }
         case "session.execution.interrupted":
-          if (event.data.reason === "user") await cascadeStop(sessionID, false)
+          if (event.data.reason === "user") await cascadeStop(sessionID, false, undefined, false)
           await onSettled(sessionID, "interrupted")
           return
         case "session.execution.succeeded":
