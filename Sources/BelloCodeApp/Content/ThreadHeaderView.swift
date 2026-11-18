@@ -218,6 +218,9 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
 
     @objc private func issuesClicked() { context.onShowIssues?() }
 
+    /// The issue chip's text when shown (tests).
+    var issueChipTitle: String? { issueButton.isHidden ? nil : issueButton.title }
+
     @objc private func agentsStripClicked() {
         guard let id = context.thread?.sessionID else { return }
         if agentsIsChild, let parent = context.engine.orchestration?.node(id)?.node.parentID {
