@@ -798,8 +798,11 @@ export default {
       const session = await get(sessionID)
       if (!session.parentID && !L.belloMeta(session).kind) return
       const summary = L.oneLine(L.lastReply(await messages(sessionID)), 280)
-      const metadata = { ...(session.metadata ?? {}) }
-      metadata.bellocode = { ...L.belloMeta(session), summary, outcome, settledAt: Date.now() }
+      // Read the metadata again just before writing and change only the `bellocode` key, so keys other writers set
+      // meanwhile (BelloCode's merge-request links) are not replaced with the copy read before the transcript.
+      const fresh = await get(sessionID)
+      const metadata = { ...(fresh.metadata ?? {}) }
+      metadata.bellocode = { ...L.belloMeta(fresh), summary, outcome, settledAt: Date.now() }
       await ctx.session.update({ sessionID, metadata })
     }
 

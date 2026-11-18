@@ -126,6 +126,9 @@ actor EngineCore {
     /// Sends recorded in the durable outbox (`app_outbox`) and not yet settled: in flight, unknown or not sent.
     private var outbox: [MessageID: OutboxEntry] = [:]
     let outboxLimit = 64
+    /// Sessions whose metadata this app is updating, and updates waiting their turn (C9).
+    private var metadataBusy: Set<SessionID> = []
+    private var metadataWaiters: [SessionID: [CheckedContinuation<Void, Never>]] = [:]
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -2203,7 +2206,11 @@ extension EngineCore {
     }
 
     /// Merges top-level keys into a session's metadata (read from the server first, so other writers' keys survive).
+    /// Updates of one session's metadata from this app run one at a time (deep review 1, C9): a second update reads
+    /// what the first wrote, so concurrent link edits never drop each other.
     func mergeSessionMetadata(_ sessionID: SessionID, _ update: @Sendable (RawJSON?) -> [String: Any]) async throws {
+        await lockMetadata(sessionID)
+        defer { unlockMetadata(sessionID) }
         let dto = try await call { try await $0.session(sessionID.rawValue) }
         let current = Mapping.session(dto).metadata
         let object = update(current)
@@ -2214,6 +2221,21 @@ extension EngineCore {
         pipeline.state.updateSession(sessionID, into: &reduction) { $0.metadata = RawJSON(String(decoding: data, as: UTF8.self)) }
         commitAppRequestChange(reduction)
     }
+
+    private func lockMetadata(_ sessionID: SessionID) async {
+        while metadataBusy.contains(sessionID) {
+            await withCheckedContinuation { metadataWaiters[sessionID, default: []].append($0) }
+        }
+        metadataBusy.insert(sessionID)
+    }
+
+    private func unlockMetadata(_ sessionID: SessionID) {
+        metadataBusy.remove(sessionID)
+        for waiter in metadataWaiters.removeValue(forKey: sessionID) ?? [] { waiter.resume() }
+    }
+
+    /// For tests: metadata updates of a session waiting for an earlier one.
+    func metadataWaiterCount(_ sessionID: SessionID) -> Int { metadataWaiters[sessionID]?.count ?? 0 }
 
     private func commitAppRequestChange(_ reduction: Reduction) { commitExternal(reduction) }
 }
