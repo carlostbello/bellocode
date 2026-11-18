@@ -405,6 +405,16 @@ public final class SecretManager {
         for session in Set(grants.values.map(\.sessionID)).sorted().prefix(500) { await applyEnvironment(session) }
     }
 
+    /// Snapshot harness only: shows the proxy as running (mock mode has no containers) so the UI's placeholder states
+    /// render. Never called by the app.
+    public func showEgressRunningForSnapshots(port: UInt16, fingerprint: String) {
+        egressStatus = .ready(port: port)
+        authorityFingerprint = fingerprint
+    }
+
+    /// Snapshot harness only: an audit entry as the proxy would record it.
+    public func recordForSnapshots(_ entry: SecretAuditEntry) async { await record(entry) }
+
     // MARK: Values (off the main actor)
 
     nonisolated static func read(_ vault: any SecretVault, account: String) async -> SecretValue? {

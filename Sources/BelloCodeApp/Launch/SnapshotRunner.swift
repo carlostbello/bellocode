@@ -33,6 +33,7 @@ struct SnapshotRunner {
         if name == "nav" { return await runNavigation() }
         if name == "orch" { return await runOrchestration() }
         if name == "extras" { return await runExtras() }
+        if name == "secrets" { return await runSecrets() }
         if name == "gitlab" { return await runGitLab() }
         if name == "gitlab2" { return await runGitLab2() }
         if name == "git" { return await runGit() }

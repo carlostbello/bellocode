@@ -315,8 +315,8 @@ public enum SecretClaims {
 
     public static let hiddenGuarantee = """
         BelloCode never supplies this value to the model or to any process the agent controls. It stays in your \
-        Keychain; BelloCode itself sends it only to the destinations bound below, over TLS, and checks what comes back \
-        before the agent sees it.
+        Keychain; BelloCode itself sends it only to the secret's bound destinations, over TLS, and checks what comes \
+        back before the agent sees it.
         """
 
     public static let hiddenLimits = """

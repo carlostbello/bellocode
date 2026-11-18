@@ -56,6 +56,9 @@ public struct SecretManagerSettingsView: View {
         .toggleStyle(DSToggleStyle(.checkbox))
         .padding(20)
         .frame(width: 620, alignment: .topLeading)
+        .task {
+            if let selected = state.selected, state.audit.isEmpty { state.audit = await manager.audit(account: selected, limit: 20) }
+        }
     }
 
     private var header: some View {
@@ -125,6 +128,7 @@ public struct SecretManagerSettingsView: View {
                     Spacer()
                     SecretClaimBadge(kind: .hidden, headline: SecretClaims.hiddenHeadline, explanation: SecretClaims.hiddenGuarantee,
                                      limits: SecretClaims.hiddenLimits)
+                        .fixedSize()
                 }
                 .padding(.vertical, DS.Space.s4)
             }
@@ -240,16 +244,18 @@ struct SecretRow: View {
             Image(systemName: secret.revoked ? "key.slash" : "key.fill").foregroundStyle(SwiftUI.Color.ds.text3).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: DS.Space.s2) {
                 HStack(spacing: DS.Space.s6) {
-                    Text(secret.label).font(.ds(.bodyEmph))
-                    Text(secret.name).font(.ds(.codeSmall)).foregroundStyle(SwiftUI.Color.ds.text2)
-                    DSPillView(secret.mode == .visible && !secret.visibleConfirmed ? "Approved commands" : secret.mode.title,
+                    Text(secret.label).font(.ds(.bodyEmph)).lineLimit(1)
+                    DSPillView(secret.mode == .visible && !secret.visibleConfirmed ? "Commands only" : secret.mode.title,
                                tone: secret.mode == .visible ? .warning : .neutral)
-                    if secret.revoked { DSPillView("Revoked", tone: .danger, symbolName: "nosign") }
+                        .fixedSize()
+                    if secret.revoked { DSPillView("Revoked", tone: .danger, symbolName: "nosign").fixedSize() }
                 }
-                Text(summary).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(2)
+                (Text(secret.name).font(.ds(.codeSmall)).foregroundStyle(SwiftUI.Color.ds.text2)
+                    + Text(" · " + summary).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3))
+                    .lineLimit(2)
             }
             Spacer(minLength: DS.Space.s8)
-            SecretModeClaim(secret: secret)
+            SecretModeClaim(secret: secret).fixedSize()
             Image(systemName: selected ? "chevron.down" : "chevron.right").foregroundStyle(SwiftUI.Color.ds.text4).accessibilityHidden(true)
         }
         .padding(.vertical, DS.Space.s6)
