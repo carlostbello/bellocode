@@ -41,7 +41,10 @@ Research this plan is built on (read these before implementing an area):
 - **MCP servers:** global MCP servers are wanted. The owner's existing ones are Docker images or separate compose
   stacks that expose an MCP endpoint; a company-wide MCP gateway will be integrated later.
 - **Network:** an internal proxy transparently intercepts dependency traffic on the network; users do not configure it.
-- **Still open:** whether container images are signed today and with what; which registry hosts the approved images.
+- **Images (2026-11-18):** images are not signed, and there is no internal registry used for distribution. For most
+  projects the image is built from source locally (a Dockerfile in the repository); base images come from public
+  registries through the transparent proxy. So BelloCode must build images natively through the Docker Engine API,
+  signature verification stays off, and the registry allowlist applies to base images and pulled service images only.
 
 ## 1. Facts that shape the plan
 
