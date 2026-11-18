@@ -92,6 +92,16 @@ enum SmokeTest {
             }
         }
 
+        if container != nil, ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_EXEC"] == "1" {
+            let passed = await ExecModesEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root, log: log)
+            log(passed ? "execution modes end-to-end passed" : "FAIL execution modes end-to-end")
+            guard passed else {
+                if !keep, let containerProject { await purgeScratch(engine, containerProject) }
+                await engine.stop()
+                return false
+            }
+        }
+
         if let containerProject, ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_E2E"] == "1" {
             let passed = await ContainerEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject, log: log)
             log(passed ? "container end-to-end passed" : "FAIL container end-to-end")
@@ -239,6 +249,9 @@ enum SmokeTest {
         }
         var settings = ProjectEnvironmentSettings()
         settings.image = image
+        // The isolation check runs in a project container (the behaviour it was written for); the shared workspace is
+        // covered by `make e2e-exec`.
+        settings.executionMode = .projectContainer
         await engine.environments.update(project, settings: settings)
         let environment = engine.environments.environment(for: project)
         let ready = await waitUntil(timeout: .seconds(60)) {

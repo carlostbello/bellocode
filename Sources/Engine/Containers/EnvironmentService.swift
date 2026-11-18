@@ -84,6 +84,7 @@ public final class ProjectEnvironment {
         settings = stored.settings
         record = stored.record
         containerName = WorkspaceSpec.containerName(for: directory)
+        containerKey = WorkspaceSpec.projectKey(for: directory)
     }
 
     /// The banner for threads and terminals in this project, or nil while commands can run.
@@ -94,7 +95,7 @@ public final class ProjectEnvironment {
     /// Where the project's commands run (resolved from its setting and the app default).
     public internal(set) var mode: ExecutionMode = .projectContainer
     /// The key of the resources the container actions act on (the shared workspace's in shared mode).
-    public var containerKey: String { mode == .sharedWorkspace ? WorkspaceSpec.sharedProjectKey : projectKey }
+    public internal(set) var containerKey: String
 }
 
 /// Containerised execution for every project (docs/features/containers.md): the runtime's state, each project's
@@ -169,6 +170,9 @@ public final class EnvironmentService {
     }
     /// The folders the person added as projects (the first-run code-roots suggestion is derived from them).
     @ObservationIgnored var projectDirectories: Set<String> = []
+    /// The shared workspace's identity (one per developer). The smoke test uses its own, never the developer's.
+    @ObservationIgnored public var sharedKeySeed = WorkspaceSpec.sharedSeed
+    var sharedKey: String { WorkspaceSpec.projectKey(for: sharedKeySeed) }
     /// Dev container plans by project (file stamp and plan), read again when the file changes.
     @ObservationIgnored var devContainerCache: [String: (stamp: String, plan: DevContainerPlan?)] = [:]
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
@@ -431,7 +435,9 @@ public final class EnvironmentService {
     func refreshImageAndPhase(_ model: ProjectEnvironment, recreate: Bool = false) {
         let mode = mode(for: model)
         if model.mode != mode { model.mode = mode }
-        let containerName = mode == .sharedWorkspace ? WorkspaceSpec.sharedContainerName : WorkspaceSpec.containerName(for: model.directory)
+        let key = mode == .sharedWorkspace ? sharedKey : model.projectKey
+        if model.containerKey != key { model.containerKey = key }
+        let containerName = "bellocode-ws-\(key)"
         if model.containerName != containerName { model.containerName = containerName }
         model.image = mode == .hostDocker ? nil : mode == .sharedWorkspace ? defaultImage
             : devContainerPlan(model).flatMap { $0.image ?? $0.buildTag(projectKey: model.projectKey) } ?? model.settings.image ?? defaultImage
@@ -1130,10 +1136,10 @@ public final class EnvironmentService {
             let spec = sharedSpec()
             let blocked = sharedModels.compactMap { $0.phase.blocked }.first ?? (spec == nil ? EnvironmentPhase.noImage.blocked : nil)
             workspaces.append(ExecHelperConfig.Workspace(
-                roots: spec?.workspaceRoots ?? codeRootsValidation.roots, container: WorkspaceSpec.sharedContainerName,
+                roots: spec?.workspaceRoots ?? codeRootsValidation.roots, container: "bellocode-ws-\(sharedKey)",
                 user: spec?.user ?? "\(getuid()):\(getgid())", shell: shell(first), blocked: blocked,
                 spec: spec, mountIdentity: first.record.mountIdentity, image: spec?.image, inventory: first.record.inventory,
-                mode: .sharedWorkspace, docker: containerDockerAccess(scope: WorkspaceSpec.sharedProjectKey, spec: spec)))
+                mode: .sharedWorkspace, docker: containerDockerAccess(scope: sharedKey, spec: spec)))
         }
         var config = ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
         config.trustedRoots = codeRootsValidation.roots.isEmpty ? nil : codeRootsValidation.roots
@@ -1229,12 +1235,12 @@ public final class EnvironmentService {
     public func prunePlan() async throws -> PrunePlan {
         guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
         guard runtime?.isReady == true else { throw EnvironmentBlockedError(message: runtime?.userMessage ?? "Rancher Desktop is not ready.") }
-        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey) + [WorkspaceSpec.sharedProjectKey]), pulledImageIDs: pulledImageIDs)
+        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey) + [sharedKey]), pulledImageIDs: pulledImageIDs)
     }
 
     /// Removes exactly the confirmed items that still qualify. Cannot be undone.
     public func prune(_ plan: PrunePlan) async throws -> PruneResult {
-        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey) + [WorkspaceSpec.sharedProjectKey]), pulledImageIDs: pulledImageIDs)
+        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey) + [sharedKey]), pulledImageIDs: pulledImageIDs)
         let removedImages = Set(plan.images.filter { result.removed.contains($0.name) }.map(\.id))
         if !removedImages.isEmpty {
             pulledImageIDs.subtract(removedImages)

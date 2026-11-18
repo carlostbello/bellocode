@@ -172,7 +172,9 @@ extension EnvironmentService {
     func sharedSpec() -> WorkspaceSpec? {
         let roots = codeRootsValidation.roots
         guard !roots.isEmpty, let image = defaultImage, imageRefusal(image) == nil else { return nil }
-        return WorkspaceSpec.shared(roots: roots, extraMounts: sharedExtraMounts(), image: image)
+        var spec = WorkspaceSpec.shared(roots: roots, extraMounts: sharedExtraMounts(), image: image)
+        spec.sharedKeySeed = sharedKeySeed
+        return spec
     }
 
     /// Roots whose marker file, written on the Mac, is not visible in the container (Rancher Desktop does not share
