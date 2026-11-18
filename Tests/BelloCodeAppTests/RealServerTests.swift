@@ -11,14 +11,8 @@ import Testing
 
 enum ShellRepo {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    static var version: String? {
-        try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    static var opencode: URL? {
-        guard let version else { return nil }
-        let url = root.appending(path: "Vendor/opencode/\(version)/opencode")
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
-    }
+    static var version: String? { OpenCodePin.repositoryVersion(root: root) }
+    static var opencode: URL? { OpenCodePin.vendoredBinary(root: root) }
     static var enabled: Bool { ProcessInfo.processInfo.environment["BELLOCODE_SHELL_E2E"] == "1" && opencode != nil }
 }
 

@@ -36,7 +36,7 @@ enum MainMenu {
 
     private static func applicationMenu(appName: String) -> NSMenu {
         let menu = NSMenu(title: appName)
-        menu.addItem(title: "About \(appName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), key: "")
+        menu.addItem(title: "About \(appName)", action: #selector(NSApplication.orderFrontBelloCodeAboutPanel(_:)), key: "")
         menu.addItem(.separator())
         menu.add(.showSettings)
         menu.add(.connectProvider)

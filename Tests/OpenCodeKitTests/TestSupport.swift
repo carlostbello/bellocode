@@ -1,3 +1,4 @@
+import BelloCore
 import Foundation
 import Synchronization
 import Testing
@@ -8,23 +9,17 @@ enum Repo {
     static let root: URL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
-    static let contracts = root.appending(path: "Contracts/opencode-2.3.0")
+    /// `Contracts/opencode-<pin>` (the candidate's under `make opencode-verify`).
+    static var contracts: URL { OpenCodePin.contractsDirectory(root: root) ?? root.appending(path: "Contracts") }
 
     static var eventsSample: Data {
         get throws { try Data(contentsOf: contracts.appending(path: "events-sample.sse")) }
     }
 
-    static var pinnedVersion: String? {
-        try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    static var pinnedVersion: String? { OpenCodePin.repositoryVersion(root: root) }
 
     /// The vendored opencode binary, if `Scripts/fetch-opencode.sh` has run in this checkout.
-    static var vendoredOpencode: URL? {
-        guard let version = pinnedVersion else { return nil }
-        let url = root.appending(path: "Vendor/opencode/\(version)/opencode")
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
-    }
+    static var vendoredOpencode: URL? { OpenCodePin.vendoredBinary(root: root) }
 }
 
 /// A clock that only moves when the test advances it.

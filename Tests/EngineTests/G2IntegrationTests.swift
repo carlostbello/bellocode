@@ -10,16 +10,9 @@ enum EngineRepo {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent()
 
-    static var pinnedVersion: String? {
-        try? String(contentsOf: root.appending(path: "Scripts/opencode-version"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    static var pinnedVersion: String? { OpenCodePin.repositoryVersion(root: root) }
 
-    static var vendoredOpencode: URL? {
-        guard let version = pinnedVersion else { return nil }
-        let url = root.appending(path: "Vendor/opencode/\(version)/opencode")
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
-    }
+    static var vendoredOpencode: URL? { OpenCodePin.vendoredBinary(root: root) }
 
     /// Gate G2 is opt-in: it sends one real prompt (on a zero-cost model) and needs network.
     static var g2Enabled: Bool { ProcessInfo.processInfo.environment["BELLOCODE_G2"] == "1" && vendoredOpencode != nil }

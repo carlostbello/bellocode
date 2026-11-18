@@ -1,3 +1,4 @@
+import BelloCore
 import Foundation
 import Testing
 @testable import MockOpenCode
@@ -13,11 +14,10 @@ struct RealBinaryContractTests {
     static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent()
 
+    /// The pinned binary (the candidate's under `make opencode-verify`, `BELLOCODE_OPENCODE_VERSION`).
     static func binary() throws -> URL {
-        let vendor = root.appendingPathComponent("Vendor/opencode")
-        let versions = try FileManager.default.contentsOfDirectory(atPath: vendor.path).sorted()
-        guard let version = versions.last(where: { $0.hasPrefix("2.3") }) else { throw TestError("run Scripts/fetch-opencode.sh") }
-        return vendor.appendingPathComponent(version).appendingPathComponent("opencode")
+        guard let binary = OpenCodePin.vendoredBinary(root: root) else { throw TestError("run Scripts/fetch-opencode.sh") }
+        return binary
     }
 
     /// The pinned server in an isolated sandbox.

@@ -1,3 +1,4 @@
+import BelloCore
 import Foundation
 
 /// Everything the mock serves at start: data, catalog, scripts and the defaults new turns use.
@@ -103,12 +104,12 @@ public struct MockServerOptions: Sendable {
     /// Frames a single event-stream subscriber may have waiting before the mock drops that connection, like the real
     /// server's 4,096-frame queue. Overflow ends the connection; it is never silent loss.
     public var subscriberQueueLimit: Int
-    /// Reported by `GET /api/info`.
+    /// Reported by `GET /api/info`: the pinned opencode version (`OpenCodePin`) unless a test sets another.
     public var version: String
 
     public init(
         password: String? = "mock-password", clock: Clock = .realTime, heartbeatInterval: Duration? = .seconds(15),
-        subscriberQueueLimit: Int = 4096, version: String = "2.3.0"
+        subscriberQueueLimit: Int = 4096, version: String = OpenCodePin.current ?? "unknown"
     ) {
         self.password = password
         self.clock = clock

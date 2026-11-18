@@ -216,6 +216,7 @@ struct GeneralSettingsView: View {
                 SettingsSliderRow(
                     title: "Text size", range: AppSettings.fontSizeRange, accessibilityLabel: "Text size", value: $settings.baseFontSize)
             }
+            AboutSettingsGroup()
         }
     }
 }
