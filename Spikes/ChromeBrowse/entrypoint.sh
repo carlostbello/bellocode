@@ -37,33 +37,41 @@ browse serve >/tmp/bellocode/relay.out 2>&1 &
 until curl -s -o /dev/null "http://127.0.0.1:19988/"; do sleep 0.05; done
 log "relay ready +$(( $(date +%s%3N) - t0 ))ms"
 
-# 4. Pairing, without a person: when no browser is paired with this relay yet, mint a one-time code and open the
-#    extension's own setup page with it in the fragment (what `browse install` does on a desktop). The key it gets is
-#    kept in the profile (extension storage) and the relay's data, both in /data, so later starts are already paired.
-#    The link is opened in the running Chromium only once policy has installed the extension (opened earlier, the
-#    page does not exist yet and the code is never spent).
+# 4. Pairing, without a person: once policy has installed the extension, if it does not connect as a paired browser
+#    within a few seconds, mint a one-time code and open the extension's own setup page with it in the fragment (what
+#    `browse install` does on a desktop). The key it gets is kept in the profile (extension storage) and the relay's
+#    data, both in /data, so later starts are already paired. Checked against the live extension, not the relay's
+#    list: a different extension ID (new packing key) is a new, unpaired extension in the same profile.
 START=${BELLOCODE_START_URL:-about:blank}
-if browse pair --list 2>/dev/null | grep -q '^No paired browsers'; then
-  code=$(browse pair --wait-seconds 1 2>/dev/null | sed -n 's/^Pairing code: //p' | tr -d '-')
-  (
-    until [ -f "/data/profile/Default/Extensions/$EXT_ID/"*/manifest.json ] 2>/dev/null; do sleep 0.1; done
-    sleep 0.5
-    chromium --user-data-dir=/data/profile "chrome-extension://$EXT_ID/welcome.html#code=$code" >/dev/null 2>&1
-    log "pairing: one-time code handed to the extension's setup page +$(( $(date +%s%3N) - t0 ))ms"
-  ) &
-else
-  log "pairing: already paired"
-fi
+(
+  until [ -f "/data/profile/Default/Extensions/$EXT_ID/"*/manifest.json ] 2>/dev/null; do sleep 0.1; done
+  n=0
+  until browse status 2>/dev/null | grep -q '^Extension: connected'; do
+    n=$((n + 1))
+    if [ "$n" = 30 ]; then
+      code=$(browse pair --wait-seconds 1 2>/dev/null | sed -n 's/^Pairing code: //p' | tr -d '-')
+      chromium --user-data-dir=/data/profile "chrome-extension://$EXT_ID/welcome.html#code=$code" >/dev/null 2>&1
+      log "pairing: one-time code handed to the extension's setup page +$(( $(date +%s%3N) - t0 ))ms"
+    fi
+    sleep 0.1
+  done
+  log "extension connected +$(( $(date +%s%3N) - t0 ))ms"
+) &
 
 # 5. Chromium, headful on :1. Extra flags (e.g. --remote-debugging-port for the screencast experiment) via BELLOCODE_CHROMIUM_FLAGS.
 # One container owns this profile; a lock left by a previous container (other hostname) is stale.
 rm -f /data/profile/SingletonLock /data/profile/SingletonSocket /data/profile/SingletonCookie
 SANDBOX=""; [ "${BELLOCODE_NO_SANDBOX:-0}" = 1 ] && SANDBOX="--no-sandbox"
-while :; do
+# docker stop / idle stop: let Chromium close its profile cleanly (no "Restore pages?" bubble, no lost cookies).
+stopping=0; cpid=""
+trap 'stopping=1; [ -n "$cpid" ] && kill -TERM "$cpid"; while [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; do sleep 0.05; done; log "chromium closed"; exit 0' TERM INT
+while [ "$stopping" = 0 ]; do
   # shellcheck disable=SC2086
   chromium --user-data-dir=/data/profile --no-first-run --no-default-browser-check \
     --password-store=basic --ozone-platform=x11 --window-position=0,0 --window-size="$W,$H" --start-maximized \
-    --disable-dev-shm-usage $SANDBOX ${BELLOCODE_CHROMIUM_FLAGS:-} "$START" \
-    >>/tmp/bellocode/chromium.log 2>&1 || true
+    --disable-dev-shm-usage --hide-crash-restore-bubble $SANDBOX ${BELLOCODE_CHROMIUM_FLAGS:-} "$START" \
+    >>/tmp/bellocode/chromium.log 2>&1 &
+  cpid=$!
+  wait "$cpid" || true
   log "chromium exited; restarting"; sleep 1
 done
