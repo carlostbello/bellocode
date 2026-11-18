@@ -15,6 +15,13 @@ public protocol MergeRequestHost: AnyObject {
     func pause(_ sessionID: SessionID) -> MergeRequestPause
     /// The thread checkout's `origin` remote and branch.
     func checkout(of sessionID: SessionID) async -> (remote: String, branch: String)?
+    /// Whether a wake with this ID is already in the thread (true/false), or unknown (nil: the server cannot be asked).
+    /// Used after a relaunch or a lost answer, so an observed event is not posted twice.
+    func wakeDelivered(_ sessionID: SessionID, wakeID: String) async -> Bool?
+}
+
+extension MergeRequestHost {
+    public func wakeDelivered(_ sessionID: SessionID, wakeID: String) async -> Bool? { false }
 }
 
 public enum MergeRequestPause: Sendable, Equatable {
@@ -46,6 +53,18 @@ public final class MergeRequestService {
     public private(set) var snapshots: [String: MergeRequestSnapshot] = [:]
     public private(set) var problems: [String: String] = [:]
     public private(set) var watches: [String: MergeRequestWatchRecord] = [:]
+    /// Per instance: user, version, edition, probed capabilities, token scopes and expiry (persisted; never the token).
+    public private(set) var instanceStatus: [String: GitLabInstanceStatus] = [:]
+    /// Per instance: write actions and approve/merge switches (Settings ▸ GitLab; off by default).
+    public private(set) var instanceSettings: [String: GitLabInstanceSettings] = [:]
+    public private(set) var babysitPolicy = BabysitPolicy()
+    /// Per MR URL: the family of the last failure (the panel and chips say "Offline", "Token invalid", … beside the
+    /// cached data, which stays).
+    public private(set) var failureKinds: [String: ForgeErrorKind] = [:]
+    /// Visible wake log per watch key (`session|url`), newest first, loaded on demand.
+    public private(set) var wakeLogs: [String: [MergeRequestWakeLogEntry]] = [:]
+    /// Approval rules per MR URL (Premium/Ultimate instances only; loaded on demand).
+    public private(set) var approvalRules: [String: [ApprovalRuleDigest]] = [:]
 
     public static let maxFailures = 8
     public static let refreshTTL: TimeInterval = 60
@@ -55,17 +74,23 @@ public final class MergeRequestService {
     static let plainHTTPKey = "gitlab.plainHTTPAllowed"
     /// Addresses the person removed (S7): a token found for one of them is never reused; only a new token is.
     static let removedKey = "gitlab.removedInstances"
+    static let settingsKey = "gitlab.instanceSettings"
+    static let policyKey = "gitlab.babysitPolicy"
+    /// Distinct merge requests read per polling pass (the rest follow seconds later): bounded work per wake-up.
+    static let maxMergeRequestsPerPass = 8
     @ObservationIgnored private var removedAccounts: Set<String> = []
     @ObservationIgnored public let plainHTTPAllowed = PlainHTTPAllowList()
 
     @ObservationIgnored public weak var host: (any MergeRequestHost)?
-    @ObservationIgnored private let store: ProjectionStore
-    @ObservationIgnored private let clock: any WallClock
-    @ObservationIgnored private let provider: any ForgeProvider
-    @ObservationIgnored private let tokens: any SecretVault
-    @ObservationIgnored private let baseInterval: TimeInterval
-    @ObservationIgnored private let maxBackoff: TimeInterval
-    @ObservationIgnored private let autoPoll: Bool
+    @ObservationIgnored let store: ProjectionStore
+    @ObservationIgnored let clock: any WallClock
+    @ObservationIgnored let provider: GitLabProvider
+    @ObservationIgnored private var snapshotWrites: Task<Void, Never>?
+    @ObservationIgnored private var statusTask: Task<Void, Never>?
+    @ObservationIgnored let tokens: any SecretVault
+    @ObservationIgnored let baseInterval: TimeInterval
+    @ObservationIgnored let maxBackoff: TimeInterval
+    @ObservationIgnored let autoPoll: Bool
     @ObservationIgnored private var nextPoll: [String: Date] = [:]
     @ObservationIgnored private var interval: [String: TimeInterval] = [:]
     @ObservationIgnored private var lastFetch: [String: Date] = [:]
@@ -80,7 +105,7 @@ public final class MergeRequestService {
     @ObservationIgnored private var watchGenerations: [String: Int] = [:]
     @ObservationIgnored private var nextWatchGeneration = 0
     @ObservationIgnored private var loop: Task<Void, Never>?
-    @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "merge-requests")
+    @ObservationIgnored let log = Logger(subsystem: "app.bellocode", category: "merge-requests")
 
     public init(
         store: ProjectionStore, clock: any WallClock, transport: any ForgeTransport, tokens: any SecretVault, baseInterval: TimeInterval = 120,
@@ -89,7 +114,7 @@ public final class MergeRequestService {
         self.store = store
         self.clock = clock
         self.tokens = tokens
-        provider = GitLabProvider(transport: transport, tokens: tokens, plainHTTPAllowed: plainHTTPAllowed)
+        provider = GitLabProvider(transport: transport, tokens: tokens, plainHTTPAllowed: plainHTTPAllowed, now: { [clock] in clock.now() })
         self.baseInterval = baseInterval
         self.maxBackoff = maxBackoff
         self.autoPoll = autoPoll
@@ -104,15 +129,32 @@ public final class MergeRequestService {
         plainHTTPAllowed.set(Set(allowed).intersection(instances.map(\.baseURL)))
         removedAccounts = Set((try? await store.preference(Self.removedKey, as: [String].self)) ?? [])
         refreshTokenPresence()
+        instanceStatus = ((try? await store.gitLabInstanceStatuses()) ?? [:]).filter { key, _ in instances.contains { $0.baseURL == key } }
+        instanceSettings = (try? await store.preference(Self.settingsKey, as: [String: GitLabInstanceSettings].self)) ?? [:]
+        babysitPolicy = (try? await store.preference(Self.policyKey, as: BabysitPolicy.self)) ?? BabysitPolicy()
+        // Cached first: the panel and chips show the last snapshot (with its time) before anything is fetched.
+        for snapshot in (try? await store.mergeRequestSnapshots()) ?? [] where snapshots[snapshot.ref.url] == nil { snapshots[snapshot.ref.url] = snapshot }
         for record in (try? await store.mergeRequestWatches()) ?? [] { watches[Self.key(record.sessionID, record.url)] = record }
         if let host { ingest(await host.allSessions()) }
         for (key, record) in watches where record.stoppedReason == nil { nextPoll[key] = clock.now() }
         restartLoop()
+        if autoPoll {
+            // Version, edition and token expiry, once per launch per instance with a token (off the launch path).
+            let targets = instances.filter { instancesWithToken.contains($0.baseURL) }
+            statusTask = Task { [weak self] in
+                for instance in targets {
+                    guard !Task.isCancelled else { return }
+                    _ = await self?.refreshInstanceStatus(instance)
+                }
+            }
+        }
     }
 
     public func shutdown() {
         loop?.cancel()
         loop = nil
+        statusTask?.cancel()
+        statusTask = nil
         for task in fetches.values { task.cancel() }
         fetches.removeAll()
         fetchIDs.removeAll()
@@ -140,8 +182,10 @@ public final class MergeRequestService {
                 bumpGeneration(key)
                 watches[key] = nil
                 nextPoll[key] = nil
+                wakeLogs[key] = nil
                 Task { [store] in try? await store.deleteMergeRequestWatch(sessionID: id, url: record.url) }
             }
+            Task { [store] in try? await store.deleteMergeRequestWakes(sessionID: id) }
         }
     }
 
@@ -208,21 +252,69 @@ public final class MergeRequestService {
             try? await store.setPreference(Self.plainHTTPKey, plainHTTPAllowed.all.sorted())
         }
         instanceProblems[instance.baseURL] = nil
+        instanceStatus[instance.baseURL] = nil
+        instanceSettings[instance.baseURL] = nil
+        try? await store.deleteGitLabInstanceStatus(instance.baseURL)
+        try? await store.setPreference(Self.settingsKey, instanceSettings)
         try? await store.setPreference(Self.instancesKey, instances.map(\.baseURL))
         refreshTokenPresence()
     }
 
-    /// The token's user name ("Test Connection"); records a problem on failure.
+    /// The token's user name ("Test Connection"), with version, edition and token scopes/expiry refreshed; records a
+    /// problem on failure.
     public func testConnection(_ instance: GitLabInstance) async -> Result<String, ForgeError> {
+        switch await refreshInstanceStatus(instance) {
+        case .success(let status): return .success(status.user ?? "unknown")
+        case .failure(let error): return .failure(error)
+        }
+    }
+
+    /// Reads who the token is, the instance's version and edition, and the token's scopes and expiry (each optional).
+    @discardableResult
+    public func refreshInstanceStatus(_ instance: GitLabInstance) async -> Result<GitLabInstanceStatus, ForgeError> {
+        let previous = instanceStatus[instance.baseURL]?.capabilities ?? GitLabCapabilities()
         do {
-            let user = try await provider.currentUser(instance)
+            let status = try await provider.instanceStatus(instance, previous: previous, now: clock.now())
+            guard instances.contains(instance) else { return .success(status) }
+            instanceStatus[instance.baseURL] = status
             instanceProblems[instance.baseURL] = nil
-            return .success(user)
+            try? await store.saveGitLabInstanceStatus(instance.baseURL, status)
+            return .success(status)
         } catch {
             let failure = error as? ForgeError ?? .network(error.localizedDescription)
             if failure.needsPerson { instanceProblems[instance.baseURL] = failure.description }
             return .failure(failure)
         }
+    }
+
+    /// The expiry warning for an instance's token (30, 7 and 1 days before; expired), from the last check.
+    public func tokenWarning(_ baseURL: String) -> GitLabTokenInfo.ExpiryWarning? {
+        instanceStatus[baseURL]?.token?.expiryWarning(now: clock.now())
+    }
+
+    public func settings(for baseURL: String) -> GitLabInstanceSettings { instanceSettings[baseURL] ?? GitLabInstanceSettings() }
+
+    public func setSettings(_ settings: GitLabInstanceSettings, for baseURL: String) async {
+        instanceSettings[baseURL] = settings
+        try? await store.setPreference(Self.settingsKey, instanceSettings)
+    }
+
+    public func setBabysitPolicy(_ policy: BabysitPolicy) async {
+        var bounded = policy
+        bounded.wakesPerHour = min(60, max(1, policy.wakesPerHour))
+        babysitPolicy = bounded
+        try? await store.setPreference(Self.policyKey, bounded)
+    }
+
+    public func capabilities(_ baseURL: String) -> GitLabCapabilities { instanceStatus[baseURL]?.capabilities ?? GitLabCapabilities() }
+
+    /// Records a probe result (an optional endpoint answered or was missing) for the instance.
+    func recordProbe(_ baseURL: String, _ feature: GitLabFeature, _ available: Bool) {
+        var status = instanceStatus[baseURL] ?? GitLabInstanceStatus()
+        guard status.capabilities.probed[feature.rawValue] != available else { return }
+        status.capabilities.record(feature, available)
+        instanceStatus[baseURL] = status
+        Task { [store] in try? await store.saveGitLabInstanceStatus(baseURL, status) }
     }
 
     private func refreshTokenPresence() {
@@ -313,7 +405,9 @@ public final class MergeRequestService {
             nextPoll[key] = clock.now()
             interval[key] = baseInterval
             restartLoop()
+            await appendLog(key, record, .started, "Babysitting started. " + babysitPolicy.summary)
         } else {
+            await appendLog(key, watches[key] ?? MergeRequestWatchRecord(sessionID: id, url: ref.url), .stopped, "Babysitting stopped.")
             await dropWatch(id, ref.url)
         }
     }
@@ -396,12 +490,24 @@ public final class MergeRequestService {
     private func record(_ ref: MergeRequestRef, _ result: Result<MergeRequestSnapshot, ForgeError>) {
         switch result {
         case .success(let snapshot):
+            let changed = snapshots[ref.url] != snapshot
             snapshots[ref.url] = snapshot
             problems[ref.url] = nil
+            failureKinds[ref.url] = nil
             instanceProblems[ref.instance] = nil
             lastFetch[ref.url] = clock.now()
+            if changed {
+                // Cached for the next launch, written in order (never an older snapshot over a newer one).
+                let previous = snapshotWrites
+                snapshotWrites = Task { [store] in
+                    await previous?.value
+                    try? await store.saveMergeRequestSnapshot(snapshot)
+                }
+            }
         case .failure(let error):
+            // The cached snapshot stays (marked stale by its time and this problem); never replaced by nothing.
             problems[ref.url] = error.description
+            failureKinds[ref.url] = error.kind
             if error.needsPerson { instanceProblems[ref.instance] = error.description }
         }
     }
@@ -446,33 +552,60 @@ public final class MergeRequestService {
         }
     }
 
+    /// Polls every due watch. Watches of the same MR (several threads) share one read; at most
+    /// `maxMergeRequestsPerPass` distinct MRs per pass, the rest a few seconds later.
     public func pollDue() async {
         let now = clock.now()
-        for (key, date) in nextPoll where date <= now && !polling.contains(key) {
+        var due: [String: [String]] = [:]
+        var order: [String] = []
+        for (key, date) in nextPoll.sorted(by: { $0.value < $1.value }) where date <= now && !polling.contains(key) {
             guard let record = watches[key], record.stoppedReason == nil else {
                 nextPoll[key] = nil
                 continue
             }
-            polling.insert(key)
-            await poll(key, record)
-            polling.remove(key)
+            if due[record.url] == nil { order.append(record.url) }
+            due[record.url, default: []].append(key)
+        }
+        for url in order.dropFirst(Self.maxMergeRequestsPerPass) {
+            for key in due[url] ?? [] { nextPoll[key] = now.addingTimeInterval(5) }
+        }
+        for url in order.prefix(Self.maxMergeRequestsPerPass) {
+            let keys = due[url] ?? []
+            polling.formUnion(keys)
+            await poll(url: url, keys: keys)
+            polling.subtract(keys)
         }
     }
 
-    private func poll(_ key: String, _ start: MergeRequestWatchRecord) async {
-        guard let ref = MergeRequestRef.parse(start.url, instances: instances) else {
-            nextPoll[key] = clock.now().addingTimeInterval(maxBackoff)  // its instance was removed: wait for it to return
+    private func poll(url: String, keys: [String]) async {
+        guard let ref = MergeRequestRef.parse(url, instances: instances) else {
+            for key in keys { nextPoll[key] = clock.now().addingTimeInterval(maxBackoff) }  // its instance was removed: wait for it to return
             return
         }
-        let generation = watchGenerations[key]
-        let base = interval[key] ?? baseInterval
-        if (host?.pause(start.sessionID) ?? .none) == .archived {
-            nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
-            return
+        var active: [(key: String, generation: Int?, start: MergeRequestWatchRecord)] = []
+        for key in keys {
+            guard let record = watches[key] else { continue }
+            let generation = watchGenerations[key]
+            if (host?.pause(record.sessionID) ?? .none) == .archived {
+                nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
+                continue
+            }
+            // A wake recorded but not confirmed (relaunch, lost answer) goes first; new events wait behind it.
+            if record.pending != nil {
+                await deliverPending(key, generation: generation, ref: ref)
+                if watches[key]?.pending != nil { continue }
+            }
+            if let current = watches[key], current.stoppedReason == nil { active.append((key, generation, current)) }
         }
+        guard !active.isEmpty else { return }
         let fetched = await fetch(ref)
+        for entry in active { await process(entry.key, entry.start, ref: ref, fetched: fetched, generation: entry.generation) }
+    }
+
+    private func process(_ key: String, _ start: MergeRequestWatchRecord, ref: MergeRequestRef, fetched: Result<MergeRequestSnapshot, ForgeError>, generation: Int?) async {
         // Unwatched, unlinked or re-added while the request was out: this result belongs to nobody.
         guard isCurrent(key, generation) else { return }
+        let base = interval[key] ?? baseInterval
         // The thread may have been archived or snoozed while GitLab answered.
         let pause = host?.pause(start.sessionID) ?? .none
         if pause == .archived {
@@ -486,7 +619,7 @@ public final class MergeRequestService {
         case .failure(let error):
             var record = watches[key] ?? start
             switch error {
-            case .tokenInvalid, .noToken, .noInstance, .forbidden:
+            case .tokenInvalid, .noToken, .noInstance, .forbidden, .tls, .insecureInstance, .redirected:
                 // Nothing a retry fixes: hold until the person updates Settings ▸ GitLab (saving a token re-arms it).
                 nextPoll[key] = clock.now().addingTimeInterval(maxBackoff)
             case .rateLimited(let after):
@@ -512,51 +645,161 @@ public final class MergeRequestService {
         nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
         var record = watches[key] ?? start
         record.consecutiveFailures = 0
+        record.lastChecked = clock.now()
         guard let baseline = record.baseline else {
             record.baseline = .initial(snapshot)
             watches[key] = record
             try? await store.saveMergeRequestWatch(record)
             return
         }
-        let (events, next) = baseline.diff(snapshot)
+        let policy = babysitPolicy
+        let own = policy.ignoreOwnNotes ? Set([instanceStatus[ref.instance]?.user].compactMap { $0 }) : []
+        var (events, next) = baseline.diff(snapshot, ignoreAuthors: own)
+        if !policy.wakeOnPipelineSuccess { events.removeAll { $0.isPipelineSuccess } }
         guard !events.isEmpty else {
-            if next != baseline {
+            if next != baseline || record != start {
                 record.baseline = next
                 watches[key] = record
                 try? await store.saveMergeRequestWatch(record)
             }
             return
         }
-        let terminal = events.contains { if case .closed = $0 { true } else { false } }
-        if pause == .none, let host {
-            do {
-                try await host.wake(start.sessionID, text: MergeRequestWakeText.message(snapshot, events: events), url: start.url)
-                // Withdrawn while the wake was being posted: record nothing for the old watch.
-                guard isCurrent(key, generation) else { return }
-                record.wakes += 1
-                record.lastWake = clock.now()
-                record.lastWakeText = events.map(\.text).joined(separator: " ")
-                log.info("merge request wake posted")
-            } catch {
-                if isCurrent(key, generation) { watches[key] = record }  // not delivered: the same events wake at the next poll
-                return
+        let terminal = events.contains(where: \.isTerminal)
+        let summary = events.map(\.text).joined(separator: " ")
+        guard pause == .none, host != nil else {
+            // Settled: recorded and visible in the log, but the thread is not woken (no replay on unsettle).
+            record.baseline = next
+            if terminal { stop(&record, key, snapshot.state) }
+            watches[key] = record
+            try? await store.saveMergeRequestWatch(record)
+            await appendLog(key, record, .absorbed, summary)
+            if terminal { await clearWatchingFlag(ref, record.sessionID, key, generation) }
+            return
+        }
+        // Budget: at most `wakesPerHour`; later events wait (the baseline is not advanced, so they arrive together).
+        let hourAgo = clock.now().addingTimeInterval(-3_600)
+        record.recentWakes = (record.recentWakes ?? []).filter { $0 > hourAgo }
+        if !terminal, let recent = record.recentWakes, recent.count >= policy.wakesPerHour, let oldest = recent.min() {
+            let until = oldest.addingTimeInterval(3_600)
+            let firstDeferral = record.deferredUntil == nil
+            record.deferredUntil = until
+            nextPoll[key] = max(nextPoll[key] ?? until, until)
+            watches[key] = record
+            try? await store.saveMergeRequestWatch(record)
+            if firstDeferral { await appendLog(key, record, .deferred, "Budget of \(policy.wakesPerHour) wakes an hour reached; waiting: \(summary)") }
+            return
+        }
+        record.deferredUntil = nil
+        // A failed pipeline brings a bounded, sanitised excerpt of its first failing job's log.
+        var failing: (job: PipelineJob, excerpt: JobLogExcerpt)?
+        if events.contains(where: \.isPipelineFailure), let job = snapshot.pipeline?.failedJobs.first, let instance = GitLabInstance(baseURL: ref.instance) {
+            let project = ForgeProject(instance: instance, projectPath: ref.projectPath)
+            if let chunk = try? await provider.jobLog(project, jobID: job.id, maxBytes: Self.excerptBytes, tryRange: capabilities(ref.instance).support(.jobLogRange).mayTry) {
+                if let honoured = chunk.rangeHonoured { recordProbe(ref.instance, .jobLogRange, honoured) }
+                failing = (job, JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: knownSecrets(ref.instance)))
             }
+            guard isCurrent(key, generation) else { return }
         }
-        record.baseline = next
-        if terminal {
-            record.stoppedReason = snapshot.state == .merged ? "merged" : "closed"
-            nextPoll[key] = nil
-        }
+        let wakeID = "w_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
+        let text = MergeRequestWakeText.message(snapshot, events: events, wakeID: wakeID, failingJob: failing, known: knownSecrets(ref.instance))
+        record.pending = PendingWake(id: wakeID, text: text, summary: summary, next: next, terminal: terminal, created: clock.now())
         watches[key] = record
         try? await store.saveMergeRequestWatch(record)
-        if terminal, let host, isCurrent(key, generation) {
-            _ = try? await host.writeLinks(start.sessionID) { list in
-                list.map { link in
-                    var link = link
-                    if link.ref == ref { link.watching = false }
-                    return link
-                }
+        await deliverPending(key, generation: generation, ref: ref, terminalState: terminal ? snapshot.state : nil)
+    }
+
+    /// Bytes of a failing job's log read for an excerpt.
+    static let excerptBytes = 64 << 10
+
+    /// Values never shown to a model even if GitLab echoes them (the instance's token).
+    func knownSecrets(_ baseURL: String) -> [String] {
+        guard let token = try? tokens.read(account: baseURL), !token.isEmpty else { return [] }
+        return [String(decoding: token.utf8, as: UTF8.self)]
+    }
+
+    /// Posts a recorded wake once: after an earlier attempt (a relaunch, a lost answer) it first asks whether the
+    /// thread already has it.
+    private func deliverPending(_ key: String, generation: Int?, ref: MergeRequestRef, terminalState: MergeRequestState? = nil) async {
+        guard var record = watches[key], var pending = record.pending, let host else { return }
+        if pending.attempts > 0 {
+            switch await host.wakeDelivered(record.sessionID, wakeID: pending.id) {
+            case true?:
+                await finishDelivery(key, generation: generation, ref: ref, pending, terminalState: terminalState)
+                return
+            case nil:
+                nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
+                return
+            case false?:
+                break
+            }
+            guard isCurrent(key, generation) else { return }
+            record = watches[key] ?? record
+        }
+        pending.attempts += 1
+        record.pending = pending
+        watches[key] = record
+        try? await store.saveMergeRequestWatch(record)
+        do {
+            try await host.wake(record.sessionID, text: pending.text, url: record.url)
+        } catch {
+            // Not confirmed: tried again at the next poll (which first checks whether it arrived after all).
+            guard isCurrent(key, generation) else { return }
+            nextPoll[key] = clock.now().addingTimeInterval(min(maxBackoff, (interval[key] ?? baseInterval) * 2))
+            if pending.attempts == 1 { await appendLog(key, record, .failed, "Could not wake the thread (\(ExtrasError.message(error))); retrying: \(pending.summary)") }
+            return
+        }
+        // Withdrawn while the wake was being posted: record nothing for the old watch.
+        guard isCurrent(key, generation) else { return }
+        await finishDelivery(key, generation: generation, ref: ref, pending, terminalState: terminalState)
+    }
+
+    private func finishDelivery(_ key: String, generation: Int?, ref: MergeRequestRef, _ pending: PendingWake, terminalState: MergeRequestState?) async {
+        guard var record = watches[key] else { return }
+        record.baseline = pending.next
+        record.pending = nil
+        record.wakes += 1
+        record.lastWake = clock.now()
+        record.lastWakeText = pending.summary
+        record.recentWakes = (record.recentWakes ?? []) + [clock.now()]
+        if pending.terminal { stop(&record, key, terminalState ?? pending.next.terminalReported ?? .closed) }
+        watches[key] = record
+        try? await store.saveMergeRequestWatch(record)
+        log.info("merge request wake posted")
+        await appendLog(key, record, .delivered, pending.summary, id: pending.id)
+        if pending.terminal { await clearWatchingFlag(ref, record.sessionID, key, generation) }
+    }
+
+    private func stop(_ record: inout MergeRequestWatchRecord, _ key: String, _ state: MergeRequestState) {
+        record.stoppedReason = state == .merged ? "merged" : "closed"
+        nextPoll[key] = nil
+    }
+
+    private func clearWatchingFlag(_ ref: MergeRequestRef, _ sessionID: SessionID, _ key: String, _ generation: Int?) async {
+        guard let host, isCurrent(key, generation) else { return }
+        _ = try? await host.writeLinks(sessionID) { list in
+            list.map { link in
+                var link = link
+                if link.ref == ref { link.watching = false }
+                return link
             }
         }
+    }
+
+    // MARK: Wake log
+
+    /// Loads a watch's log for display (newest first).
+    public func loadWakeLog(_ id: SessionID, _ url: String) async {
+        let entries = (try? await store.mergeRequestWakeLog(sessionID: id, url: url)) ?? []
+        wakeLogs[Self.key(id, url)] = entries
+    }
+
+    public func wakeLog(_ id: SessionID, _ url: String) -> [MergeRequestWakeLogEntry] { wakeLogs[Self.key(id, url)] ?? [] }
+
+    func appendLog(_ key: String, _ record: MergeRequestWatchRecord, _ outcome: MergeRequestWakeLogEntry.Outcome, _ summary: String, id: String? = nil) async {
+        let entry = MergeRequestWakeLogEntry(
+            id: id ?? "l_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased(), sessionID: record.sessionID,
+            url: record.url, at: clock.now(), outcome: outcome, summary: String(summary.prefix(400)))
+        wakeLogs[key] = Array(([entry] + (wakeLogs[key] ?? [])).prefix(ProjectionStore.mergeRequestWakeLogLimit))
+        try? await store.appendMergeRequestWake(entry)
     }
 }

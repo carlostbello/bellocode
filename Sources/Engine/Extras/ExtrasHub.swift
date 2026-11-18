@@ -731,6 +731,17 @@ extension ExtrasHub: MergeRequestHost {
             sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("merge_request"), "url": .string(url)])]))
     }
 
+    /// Looks for the wake's ID in the thread's recent synthetic messages on the server.
+    public func wakeDelivered(_ sessionID: SessionID, wakeID: String) async -> Bool? {
+        guard let client = try? await core.currentClient(),
+            let page = try? await client.messages(sessionID: sessionID.rawValue, MessageListQuery(limit: 100, order: .descending, type: "synthetic"))
+        else { return nil }
+        return page.data.contains { message in
+            guard case .other(_, _, let raw) = message else { return false }
+            return raw["text"]?.stringValue?.contains(wakeID) == true
+        }
+    }
+
     public func pause(_ sessionID: SessionID) -> MergeRequestPause {
         if archived.contains(sessionID) { return .archived }
         if engine?.root.organisation[sessionID]?.settled == true { return .settled }

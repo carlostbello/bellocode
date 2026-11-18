@@ -7,13 +7,14 @@ import GRDB
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
 /// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
 /// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`, `app_environment`,
-/// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them), `app_outbox` (sends not yet settled).
+/// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them), `app_outbox` (sends not yet settled),
+/// `app_gitlab_instance`, `app_mr_snapshot`, `app_mr_wake` (GitLab, migration `v9-gitlab`).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 8
+    static let currentVersion = 9
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -212,6 +213,32 @@ enum ProjectionSchema {
                     created REAL NOT NULL,
                     json BLOB NOT NULL
                 );
+                """)
+        }
+        // GitLab 1 (docs/features/gitlab.md): what BelloCode learned about each instance (user, version, edition, probed
+        // capabilities, token scopes and expiry; never the token), the last snapshot of each linked merge request (the
+        // panel and chips show it at once, marked with its time, before and without the network), and the log of
+        // babysit wakes per thread and MR (bounded). App-owned, kept by `rebuild()`.
+        migrator.registerMigration("v9-gitlab") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_gitlab_instance (
+                    base_url TEXT PRIMARY KEY NOT NULL,
+                    checked REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE TABLE app_mr_snapshot (
+                    url TEXT PRIMARY KEY NOT NULL,
+                    fetched REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE TABLE app_mr_wake (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    session_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE INDEX app_mr_wake_by_watch ON app_mr_wake(session_id, url, at DESC);
                 """)
         }
         return migrator

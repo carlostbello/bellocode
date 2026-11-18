@@ -24,14 +24,25 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
     case insecureInstance(String)
     /// The server redirected to another scheme, host or port; the token was not sent there.
     case redirected(from: String, to: String)
+    /// 409 or 405: the merge request (or job) changed, or GitLab refused the operation in its current state.
+    case conflict(String)
+    /// The TLS handshake failed (untrusted or expired certificate, private CA not trusted).
+    case tls(String)
+    /// The instance's version or edition does not offer this (`minimum`: the first version that does, when known).
+    case unsupported(feature: String, minimum: String?)
+    /// A write was asked for while GitLab write actions are off for the instance (Settings ▸ GitLab), or the token's
+    /// scopes do not allow it.
+    case writesDisabled(String)
+    /// A write's outcome is unknown (timeout or lost connection after sending): read back before retrying.
+    case outcomeUnknown(String)
 
     public var description: String {
         switch self {
         case .noInstance(let host): "\(host) is not a configured GitLab instance. Add it in Settings ▸ GitLab."
         case .noToken(let instance): "No access token for \(instance). Add one in Settings ▸ GitLab."
         case .tokenInvalid(let instance): "The GitLab token for \(instance) is invalid or expired. Replace it in Settings ▸ GitLab."
-        case .forbidden: "GitLab refused access: the token needs the read_api scope and access to this project."
-        case .notFound: "Not found on GitLab (or the token cannot see it)."
+        case .forbidden: "GitLab refused access (403): the token lacks a scope (read_api for reading, api for changes) or your role does not allow this in the project."
+        case .notFound: "Not found on GitLab (404), or hidden from this token: GitLab answers 404 for projects and merge requests you cannot see."
         case .rateLimited(let after): "GitLab's rate limit was reached; BelloCode retries\(after.map { " in \(Int($0)) s" } ?? " later")."
         case .network(let reason): "GitLab could not be reached: \(reason)"
         case .unexpected(let reason): reason
@@ -39,14 +50,58 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
             "\(instance) uses plain HTTP, so the token would cross the network unencrypted. Use its https:// address, or allow HTTP for it explicitly in Settings ▸ GitLab."
         case .redirected(let from, let to):
             "GitLab at \(from) redirected to \(to); BelloCode does not send the token to another address. Use the address it redirects to as the instance URL if that is intended."
+        case .conflict(let reason): "GitLab refused the change because the merge request or job changed (409/405): \(reason) Refresh and check before trying again."
+        case .tls(let reason): "The TLS connection to GitLab failed: \(reason)"
+        case .unsupported(let feature, let minimum):
+            "\(feature) is not available on this GitLab instance" + (minimum.map { " (needs GitLab \($0) or later)" } ?? " (its version or edition does not offer it)") + "."
+        case .writesDisabled(let reason): reason
+        case .outcomeUnknown(let what):
+            "GitLab did not confirm \(what) (the connection failed after sending). It may or may not have happened: refresh and check before retrying."
+        }
+    }
+
+    /// The failure family the interface explains (auth, permission, not found or hidden, conflict, throttled, offline,
+    /// TLS, configuration, unsupported). Status alone is never proof: a 404 may be a hidden project.
+    public var kind: ForgeErrorKind {
+        switch self {
+        case .noInstance, .noToken, .insecureInstance, .redirected, .writesDisabled: .configuration
+        case .tokenInvalid: .authentication
+        case .forbidden: .permission
+        case .notFound: .notFoundOrHidden
+        case .conflict, .outcomeUnknown: .conflict
+        case .rateLimited: .throttled
+        case .network: .offline
+        case .tls: .tls
+        case .unsupported: .unsupported
+        case .unexpected: .other
         }
     }
 
     /// The person must act (no retry helps).
     public var needsPerson: Bool {
         switch self {
-        case .noInstance, .noToken, .tokenInvalid, .forbidden, .insecureInstance, .redirected: true
+        case .noInstance, .noToken, .tokenInvalid, .forbidden, .insecureInstance, .redirected, .tls: true
         default: false
+        }
+    }
+}
+
+public enum ForgeErrorKind: String, Sendable, Hashable, Codable {
+    case configuration, authentication, permission, notFoundOrHidden, conflict, throttled, offline, tls, unsupported, other
+
+    /// Short state word for chips and banners ("Offline", "Token expired", …).
+    public var label: String {
+        switch self {
+        case .configuration: "Not configured"
+        case .authentication: "Token invalid or expired"
+        case .permission: "No access"
+        case .notFoundOrHidden: "Not found or hidden"
+        case .conflict: "Changed on GitLab"
+        case .throttled: "Rate limited"
+        case .offline: "Offline"
+        case .tls: "TLS problem"
+        case .unsupported: "Not supported"
+        case .other: "GitLab error"
         }
     }
 }
@@ -63,6 +118,21 @@ public protocol ForgeProvider: Sendable {
 public struct ForgeRequest: Sendable, Hashable {
     public var url: URL
     public var headers: [String: String]
+    /// GET, POST, PUT (GitLab REST v4).
+    public var method: String
+    /// A JSON body for POST/PUT.
+    public var body: Data?
+    /// Keep only the last `tailLimit` bytes of the body (job logs on servers that ignore byte ranges); the response
+    /// then carries `x-bellocode-total-bytes` and, when bytes were dropped, `x-bellocode-truncated: 1`.
+    public var tailLimit: Int?
+
+    public init(url: URL, headers: [String: String], method: String = "GET", body: Data? = nil, tailLimit: Int? = nil) {
+        self.url = url
+        self.headers = headers
+        self.method = method
+        self.body = body
+        self.tailLimit = tailLimit
+    }
 }
 
 public struct ForgeResponse: Sendable {
@@ -78,7 +148,7 @@ public struct ForgeResponse: Sendable {
     }
 }
 
-/// One HTTP GET.
+/// One HTTP request.
 public protocol ForgeTransport: Sendable {
     func send(_ request: ForgeRequest) async throws -> ForgeResponse
 }
@@ -122,9 +192,39 @@ public struct URLSessionForgeTransport: ForgeTransport {
 
     public func send(_ request: ForgeRequest) async throws -> ForgeResponse {
         var urlRequest = URLRequest(url: request.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        urlRequest.httpMethod = request.method
+        urlRequest.httpBody = request.body
         for (name, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: name) }
         do {
-            let (data, response) = try await Self.session.data(for: urlRequest)
+            var data: Data
+            let response: URLResponse
+            var extra: [String: String] = [:]
+            if let limit = request.tailLimit {
+                // Streams and keeps only the end: a 50 MB log never sits in memory whole. Reading stops at 32 MB.
+                let (bytes, streamed) = try await Self.session.bytes(for: urlRequest)
+                response = streamed
+                data = Data()
+                var total = 0
+                var chunk = Data()
+                chunk.reserveCapacity(64 << 10)
+                for try await byte in bytes {
+                    chunk.append(byte)
+                    if chunk.count >= 64 << 10 {
+                        total += chunk.count
+                        data.append(chunk)
+                        chunk.removeAll(keepingCapacity: true)
+                        if data.count > limit * 2 { data = data.suffix(limit) }
+                        if total >= 32 << 20 { break }
+                    }
+                }
+                total += chunk.count
+                data.append(chunk)
+                if data.count > limit { data = data.suffix(limit) }
+                extra["x-bellocode-total-bytes"] = String(total)
+                if total > data.count { extra["x-bellocode-truncated"] = "1" }
+            } else {
+                (data, response) = try await Self.session.data(for: urlRequest)
+            }
             guard let http = response as? HTTPURLResponse else { throw ForgeError.unexpected("No HTTP response.") }
             if (300..<400).contains(http.statusCode), http.statusCode != 304 {
                 let location = http.value(forHTTPHeaderField: "Location").flatMap { URL(string: $0, relativeTo: request.url)?.absoluteURL }
@@ -133,11 +233,15 @@ public struct URLSessionForgeTransport: ForgeTransport {
             }
             var headers: [String: String] = [:]
             for (key, value) in http.allHeaderFields { headers[String(describing: key).lowercased()] = String(describing: value) }
+            headers.merge(extra) { _, ours in ours }
             return ForgeResponse(status: http.statusCode, headers: headers, body: data)
         } catch let error as URLError {
             switch error.code {
-            case .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .secureConnectionFailed:
-                throw ForgeError.network("its TLS certificate is not trusted by this Mac. Trust the instance's CA in Keychain Access.")
+            case .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .secureConnectionFailed,
+                .clientCertificateRejected, .clientCertificateRequired:
+                throw ForgeError.tls("\(request.url.host() ?? "the server")'s certificate is not trusted by this Mac (expired, or signed by a private CA). Trust the instance's CA in Keychain Access (System trust store); BelloCode never bypasses certificate checks.")
+            case .timedOut where request.method != "GET", .networkConnectionLost where request.method != "GET":
+                throw ForgeError.outcomeUnknown("the change")
             default:
                 throw ForgeError.network(error.localizedDescription)
             }
@@ -153,6 +257,10 @@ public final class FixtureForgeTransport: ForgeTransport {
         public var url: String
         public var etag: String?
         public var hadToken: Bool
+        public var method: String = "GET"
+        public var body: String?
+        /// Request headers other than the token (never recorded).
+        public var range: String?
     }
 
     private let state = Mutex<(responses: [String: [ForgeResponse]], requests: [Recorded])>(([:], []))
@@ -170,10 +278,14 @@ public final class FixtureForgeTransport: ForgeTransport {
     public var requests: [Recorded] { state.withLock { $0.requests } }
 
     public func send(_ request: ForgeRequest) async throws -> ForgeResponse {
-        let key = request.url.absoluteString
+        let url = request.url.absoluteString
+        let key = request.method == "GET" ? url : request.method + " " + url
         return try state.withLock { state in
             let etag = request.headers["If-None-Match"]
-            state.requests.append(Recorded(url: key, etag: etag, hadToken: request.headers["PRIVATE-TOKEN"] != nil))
+            state.requests.append(
+                Recorded(
+                    url: url, etag: etag, hadToken: request.headers["PRIVATE-TOKEN"] != nil, method: request.method,
+                    body: request.body.map { String(decoding: $0, as: UTF8.self) }, range: request.headers["Range"]))
             guard var queue = state.responses[key], let first = queue.first else { return ForgeResponse(status: 404, body: Data(#"{"message":"404 Not found"}"#.utf8)) }
             if queue.count > 1 {
                 queue.removeFirst()
