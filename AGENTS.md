@@ -58,6 +58,9 @@ Read [docs/PLAN.md](docs/PLAN.md) first, then the research file for the area you
 18. Secrets go in Keychain. The local server is loopback-only with a per-launch password.
 19. SQLite migrations are versioned and tested. Local data is a cache of opencode's state.
 20. Add `os_signpost` intervals around event receipt, publish, parse, layout and database reads. Never log content.
+21. Time only on `ContinuousClock`: uptime-clock timers (`asyncAfter(deadline:)`, `Timer`, `run(until:)`, `afterDelay:`,
+    `SuspendingClock`, periodic `TimelineView`) may not fire in an idle process (macOS 27). Use BelloCore's
+    `ContinuousDeadline` / `ContinuousTicker`, DesignSystem's `ContinuousTimeline` or `Task.sleep(for:)`; `TimerGuardTests` enforces it.
 
 ## UX rules
 

@@ -84,9 +84,10 @@ func pinnedVersion(_ root: URL) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? "2.3.0"
 }
 
-// Watchdog: the demo never outlives a hung run (an opencode child is cleaned up by its stdin lease closing).
+// Watchdog: the demo never outlives a hung run (an opencode child is cleaned up by its stdin lease closing). Wall
+// deadline: an uptime-clock timer source may not fire while the process is idle (macOS 27), exactly when it is needed.
 let watchdog = DispatchSource.makeTimerSource(queue: .global())
-watchdog.schedule(deadline: .now() + (arguments.contains("--e2e") ? 900 : 300))
+watchdog.schedule(wallDeadline: .now() + (arguments.contains("--e2e") ? 900 : 300))
 watchdog.setEventHandler { @Sendable in print("watchdog: timed out"); exit(3) }
 watchdog.resume()
 
