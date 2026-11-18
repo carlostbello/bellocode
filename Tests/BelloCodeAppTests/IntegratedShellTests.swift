@@ -193,6 +193,8 @@ import Testing
                 message.parts.contains { if case .file(let file) = $0.content { file.name == "shot.png" } else { false } }
             }
         }, "the sent attachment shows in the user message")
+        // The user message shows at once as `.sending` (before the server answers): wait for the server's own record.
+        #expect(await waitUntilAsync(timeout: .seconds(10)) { await !shell.server.promptBodies().isEmpty })
         let body = try #require(await shell.server.promptBodies().last)
         let files = body["files"]?.arrayValue ?? []
         #expect(files.count == 2)

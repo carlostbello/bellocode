@@ -85,7 +85,7 @@ struct HTMLVisualSandboxTests {
             __r.webkit = typeof window.webkit;
             const w = window.open("\(base)/popup"); __r.open = w === null ? "null" : "window";
             setTimeout(() => { try { location.href = "\(base)/nav"; } catch (e) {} }, 20);
-            setTimeout(() => { document.getElementById("link").click(); }, 40);
+            setTimeout(() => { document.getElementById("link").click(); __r.clicked = "yes"; }, 40);
             </script></body></html>
             """
         let sandbox = HTMLVisualWebView()
@@ -97,16 +97,18 @@ struct HTMLVisualSandboxTests {
         window.orderFrontRegardless()
         defer { window.close() }
         await sandbox.load(page, theme: .light, allowedHosts: [])
-        // Let the page's timers and blocked loads play out.
-        // Wait for the page's scripted navigation to be refused (a condition, not a fixed delay: under a loaded
-        // machine the page's timer can fire well after a second).
-        for _ in 0..<400 {
-            if sandbox.refusedNavigations.contains(where: { $0.hasSuffix("/nav") }) { break }
+        // Wait until the page has made every attempt: the scripted navigation refused, the fetch settled and the
+        // scripted click done (conditions, not fixed delays: under a loaded machine the page's timers can fire well
+        // after a second).
+        var values: [String: String] = [:]
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now < deadline {
+            let result = try await sandbox.webView.evaluateJavaScript("JSON.stringify(window.__r)") as? String ?? "{}"
+            values = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: String] ?? [:]
+            if sandbox.refusedNavigations.contains(where: { $0.hasSuffix("/nav") }), values["fetch"] != nil, values["clicked"] == "yes" { break }
             try await Task.sleep(for: .milliseconds(25))
         }
-        try await Task.sleep(for: .milliseconds(200))
-        let result = try await sandbox.webView.evaluateJavaScript("JSON.stringify(window.__r)") as? String ?? "{}"
-        let values = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: String] ?? [:]
+        #expect(values["clicked"] == "yes", "the page's scripted click ran")
         print("M3-B sandbox: \(values); refused \(sandbox.refusedNavigations); windows \(sandbox.refusedWindows); opened \(opened); connections \(counter.count)")
         #expect(sandbox.rulesInstalled, "the content rule list compiled and is installed")
         #expect(counter.count == 0, "no request reached the network")

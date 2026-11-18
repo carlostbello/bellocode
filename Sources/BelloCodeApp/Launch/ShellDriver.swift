@@ -47,7 +47,7 @@ struct ShellDriver {
     /// Lets observation loops, layout and SwiftUI updates run.
     func settle(_ rounds: Int = 6) {
         for _ in 0..<rounds {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.03))
+            MainRunLoop.run(for: .milliseconds(30))
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
         }
