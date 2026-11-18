@@ -49,7 +49,8 @@ Research this plan is built on (read these before implementing an area):
 ### Owner direction (2026-11-18, later)
 - **Browser (2026-11-18):** spike G7 passed (Chromium + `browse` fully in a container). Production uses ONE shared
   browser container for all sessions (efficiency over per-project isolation), each thread with its own `browse`
-  session (tab group). Networking: the browser reaches project dev servers and services only through a BelloCode
+  session (tab group). It behaves like a developer's own browser: one persistent profile, sign-ins kept and shared by
+  every thread (owner decision; `browse` already supports several agents on one browser). Networking: the browser reaches project dev servers and services only through a BelloCode
   routing proxy addressed by project-qualified host names; internet traffic goes through the same egress path as the
   workspace (company CA, transparent proxy).
 - **Execution model (2026-11-18):** configurable per developer and per project. Default: a shared workspace container
