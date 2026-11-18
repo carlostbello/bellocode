@@ -53,6 +53,8 @@ recorded turn, bridge and plugin versions, built-ins, permission-effect changes 
 A run sends at most 22 prompts, all on zero-cost built-in models. Skipped opt-in tests fail their area. The report is
 `build/opencode-verify/<v>/REPORT.md` (+ `report.json`, `logs/<area>.log`): a table per area, then every contract
 change that touches BelloCode with its consumers. Fix, rerun, bump when all green; then `make test` and `make smoke`.
+The zero-cost models share a usage quota: once it is spent every turn fails at once with `provider.free-limit` (429)
+and the prompting areas time out. That is not a regression; rerun those areas when the quota returns.
 
 ## Still needs a human
 
