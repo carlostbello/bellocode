@@ -169,6 +169,8 @@ public final class EnvironmentService {
     }
     /// The folders the person added as projects (the first-run code-roots suggestion is derived from them).
     @ObservationIgnored var projectDirectories: Set<String> = []
+    /// Dev container plans by project (file stamp and plan), read again when the file changes.
+    @ObservationIgnored var devContainerCache: [String: (stamp: String, plan: DevContainerPlan?)] = [:]
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
     /// BelloCode's filtered Docker endpoint (nil until started, and in tests that do not use it).
     @ObservationIgnored public internal(set) var dockerEndpoint: DockerEndpoint?
@@ -431,7 +433,8 @@ public final class EnvironmentService {
         if model.mode != mode { model.mode = mode }
         let containerName = mode == .sharedWorkspace ? WorkspaceSpec.sharedContainerName : WorkspaceSpec.containerName(for: model.directory)
         if model.containerName != containerName { model.containerName = containerName }
-        model.image = mode == .hostDocker ? nil : mode == .sharedWorkspace ? defaultImage : model.settings.image ?? defaultImage
+        model.image = mode == .hostDocker ? nil : mode == .sharedWorkspace ? defaultImage
+            : devContainerPlan(model).flatMap { $0.image ?? $0.buildTag(projectKey: model.projectKey) } ?? model.settings.image ?? defaultImage
         guard isEnabled, started else { return }
         loadServices(model)
         if let message = policyBlock(model) {
@@ -484,6 +487,10 @@ public final class EnvironmentService {
                 let image = try await runtimeRef.image(spec.image)
                 guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 guard let image else {
+                    if let plan = self.devContainerPlan(model), plan.build != nil {
+                        self.buildDevImage(model, plan: plan, tag: spec.image)
+                        return
+                    }
                     if self.imagePolicy.pullPolicy == .never {
                         model.phase = .imageRefused("The image \(spec.image) is not on this Mac, and the image policy does not allow pulling. Load it by other means, or ask your administrator.")
                         self.scheduleConfigWrite()
@@ -576,6 +583,8 @@ public final class EnvironmentService {
             defer { Self.signposter.endInterval("ensureRunning", interval) }
             do {
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
+                let previousID = model.record.containerID
+                let wasStopped = model.phase == .starting
                 let id = try await runtimeRef.ensureRunning(spec)
                 // The shared workspace mounts code roots outside the folders Rancher Desktop is known to share: check
                 // each is really visible in the container (a marker written on the Mac), once per container.
@@ -599,6 +608,7 @@ public final class EnvironmentService {
                 self.scheduleConfigWrite()
                 self.syncMCPServers(model)
                 self.startServices(model)
+                self.devContainerStarted(model, container: id, user: spec.user, created: previousID != id, wasStopped: wasStopped)
             } catch {
                 guard let self, self.generations[model.directory] == generation else { return }
                 if case WorkspaceError.unmountable(let paths) = error { model.phase = .unmountable(paths) } else {
@@ -1057,13 +1067,19 @@ public final class EnvironmentService {
         case .sharedWorkspace: return outsideRootsMessage(model) == nil ? sharedSpec() : nil
         case .projectContainer: break
         }
-        guard let image = model.settings.image ?? defaultImage, imageRefusal(image) == nil else { return nil }
+        let dev = devContainerPlan(model)
+        guard let image = dev.flatMap({ $0.image ?? $0.buildTag(projectKey: model.projectKey) }) ?? model.settings.image ?? defaultImage,
+              dev?.build != nil || imageRefusal(image) == nil else { return nil }
         let roots = workspaceRoots(model, create: true)
         var spec = WorkspaceSpec(
             projectRoot: model.directory, extraMounts: Array(roots.dropFirst()), userMounts: model.settings.userMounts,
             image: image, network: model.settings.network, resources: model.settings.resources,
             environment: model.settings.environment)
         spec.serviceNetwork = serviceNetwork(model)
+        if let dev {
+            spec.environment.merge(dev.containerEnv.merging(dev.remoteEnv) { _, remote in remote }) { own, _ in own }
+            if let user = dev.remoteUser, !user.isEmpty { spec.user = user }
+        }
         let caches = model.settings.cacheMounts(imageDeclared: model.record.imageCaches ?? [:])
         spec.cacheMounts = caches.isEmpty ? nil : caches
         return spec

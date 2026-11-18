@@ -249,3 +249,49 @@ struct DockerRefusalsView: View {
         }
     }
 }
+
+/// Project Settings ▸ Environment ▸ Dev container (Project container mode, when the project has a devcontainer.json):
+/// use it or not, what is refused or ignored and why, and the lifecycle commands to review before they run.
+struct DevContainerSectionView: View {
+    let service: EnvironmentService
+    let environment: ProjectEnvironment
+    let plan: DevContainerPlan
+
+    var body: some View {
+        let using = environment.settings.useDevContainer
+        SettingsToggleRow("Use \(CodeRoots.display(plan.file.replacingOccurrences(of: environment.directory + "/", with: "")))",
+                          detail: plan.isUsable ? (plan.image.map { "Image \($0)" } ?? "Built from \((plan.build?.dockerfile ?? "") .replacingOccurrences(of: environment.directory + "/", with: "")) with Rancher Desktop's docker buildx")
+                              : "Cannot be used until the refused settings below are removed; the project's own image is used meanwhile.",
+                          divided: false,
+                          isOn: Binding(get: { using }, set: { value in
+                              var settings = environment.settings
+                              settings.useDevContainer = value
+                              Task { await service.update(environment.directory, settings: settings) }
+                          }))
+        ForEach(plan.refused, id: \.self) { refusal in
+            SettingsRow(refusal.key, detail: refusal.reason) { DSPillView("Refused", tone: .danger, symbolName: "hand.raised") }
+        }
+        if !plan.ignored.isEmpty {
+            SettingsRow("Ignored: \(plan.ignored.joined(separator: ", "))", detail: "Editor and host settings have no effect here.") {
+                DSPillView("Ignored", tone: .neutral, symbolName: "minus.circle")
+            }
+        }
+        let details = [plan.remoteUser.map { "user \($0)" }, plan.forwardPorts.isEmpty ? nil : "forwards \(plan.forwardPorts.map(String.init).joined(separator: ", "))",
+                       (plan.containerEnv.count + plan.remoteEnv.count) > 0 ? "\(plan.containerEnv.count + plan.remoteEnv.count) variables" : nil].compactMap { $0 }
+        if !details.isEmpty {
+            SettingsRow("Applied", detail: details.joined(separator: " · ")) { DSPillView("Supported", tone: .success, symbolName: "checkmark") }
+        }
+        if let digest = plan.lifecycleDigest {
+            let approved = environment.settings.approvedDevLifecycle == digest
+            SettingsRow("Lifecycle commands", detail: [plan.postCreate.map { "After create: \($0)" }, plan.postStart.map { "After start: \($0)" }].compactMap { $0 }.joined(separator: "\n")) {
+                if approved {
+                    DSPillView("Reviewed", tone: .success, symbolName: "checkmark")
+                } else {
+                    Button("Approve and Run on Next Start") { Task { await service.approveDevLifecycle(environment.directory) } }
+                        .buttonStyle(DSButtonStyle(.outline, size: .small))
+                        .help("These commands come from the repository. They run inside the container, as shown, until the file changes.")
+                }
+            }
+        }
+    }
+}

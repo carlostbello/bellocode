@@ -894,6 +894,11 @@ struct EnvironmentSettingsView: View {
                 DockerRefusalsView(refusals: service.dockerRefusals.filter { $0.scope == environment.containerKey })
             }
         }
+        if environment.mode == .projectContainer, let plan = service.devContainerFile(environment.directory) {
+            SettingsGroup("Dev container", footer: "A safe subset of the Dev Container specification: image or build, environment, user, forwarded ports and post-create/start commands after review. Commands that would run on this Mac, Features, privileges and extra mounts are refused.") {
+                DevContainerSectionView(service: service, environment: environment, plan: plan)
+            }
+        }
         if environment.mode == .sharedWorkspace {
             SettingsNote("The shared workspace uses the default image (Settings ▸ Containers). The project's own image, services and caches below apply only in Project container mode.")
         }

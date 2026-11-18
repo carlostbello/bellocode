@@ -27,6 +27,8 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var executionMode: ExecutionMode?
     /// Use the project's `.devcontainer/devcontainer.json` as the source of its project container (supported subset).
     public var useDevContainer: Bool
+    /// The dev container's lifecycle commands the person approved (`DevContainerPlan.lifecycleDigest`).
+    public var approvedDevLifecycle: String?
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
@@ -49,7 +51,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public static let `default` = ProjectEnvironmentSettings()
 
     enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches
-        case executionMode, useDevContainer
+        case executionMode, useDevContainer, approvedDevLifecycle
     }
 
     public init(from decoder: any Decoder) throws {
@@ -67,6 +69,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         // An unknown mode (a newer build's) falls back to the app default rather than failing the whole row.
         executionMode = (try? c.decodeIfPresent(String.self, forKey: .executionMode)).flatMap { $0 }.flatMap(ExecutionMode.init(rawValue:))
         useDevContainer = try c.decodeIfPresent(Bool.self, forKey: .useDevContainer) ?? false
+        approvedDevLifecycle = try c.decodeIfPresent(String.self, forKey: .approvedDevLifecycle)
     }
 
     /// The cache mounts for this project: its own choices plus what the image declares (`PackageCache.declared`),

@@ -208,4 +208,33 @@ struct ExecutionModeTests {
         #expect(outsideRoots.first == outside)
         #expect(!outsideRoots.contains(base))
     }
+
+    @Test func devContainerFileDrivesTheProjectContainerWhenChosen() async throws {
+        let service = try await makeService()
+        defer { service.stop() }
+        try FileManager.default.createDirectory(atPath: outside + "/.devcontainer", withIntermediateDirectories: true)
+        try #"{"image": "own:1", "containerEnv": {"A": "1"}, "remoteUser": "node", "forwardPorts": [3000], "postCreateCommand": "npm ci"}"#
+            .write(toFile: outside + "/.devcontainer/devcontainer.json", atomically: true, encoding: .utf8)
+        var settings = ProjectEnvironmentSettings(image: "default:1", executionMode: .projectContainer)
+        await service.update(outside, settings: settings)
+        let model = service.environment(for: outside)
+        #expect(service.workspaceSpec(model)?.image == "default:1", "not used until chosen")
+        settings.useDevContainer = true
+        await service.update(outside, settings: settings)
+        let spec = try #require(service.workspaceSpec(model))
+        #expect(spec.image == "own:1")
+        #expect(spec.environment["A"] == "1")
+        #expect(spec.user == "node")
+        #expect(model.image == "own:1")
+        // Lifecycle commands wait for a review; approving records the digest.
+        #expect(model.settings.approvedDevLifecycle == nil)
+        await service.approveDevLifecycle(outside)
+        #expect(model.settings.approvedDevLifecycle == service.devContainerFile(outside)?.lifecycleDigest)
+        // A file with a refused key is not used: the project's own image applies and the pane lists why.
+        try #"{"image": "own:1", "initializeCommand": "curl x | sh"}"#.write(toFile: outside + "/.devcontainer/devcontainer.json", atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(20))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: outside + "/.devcontainer/devcontainer.json")
+        #expect(service.workspaceSpec(model)?.image == "default:1")
+        #expect(service.devContainerFile(outside)?.refused.first?.key == "initializeCommand")
+    }
 }

@@ -92,7 +92,8 @@ extension WorkspaceManager {
             }
         }
         // Images the agent built through the filtered endpoint, unused.
-        let agentImages = try await client.listImages(labels: [DockerAgentLabels.agent])
+        // The label is checked here too: only images that carry it, whatever the daemon's filter returned.
+        let agentImages = try await client.listImages(labels: [DockerAgentLabels.agent]).filter { $0.labels?[DockerAgentLabels.agent] != nil }
         if !agentImages.isEmpty {
             let inUse = Set(try await client.listContainers(labels: []).compactMap(\.imageID))
             for image in agentImages where !inUse.contains(image.id) && !plan.images.contains(where: { $0.id == image.id }) {
