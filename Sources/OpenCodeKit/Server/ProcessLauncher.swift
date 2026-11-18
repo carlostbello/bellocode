@@ -88,6 +88,8 @@ final class FoundationServerProcess: ServerProcess {
         process.currentDirectoryURL = spec.workingDirectory
 
         let stdinPipe = Pipe()
+        // The stdin lease is written and closed by us; a server that already exited must not SIGPIPE the app.
+        _ = fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardInput = stdinPipe

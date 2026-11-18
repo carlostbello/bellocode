@@ -230,6 +230,8 @@ public struct GitRunner: Sendable {
         let stdout = Pipe()
         let stderr = Pipe()
         let stdin = Pipe()
+        // Writing input to a git that already exited must fail with EPIPE, not deliver SIGPIPE to the process.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = input == nil ? FileHandle.nullDevice : stdin
