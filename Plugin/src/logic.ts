@@ -60,6 +60,26 @@ export interface SessionLike {
   readonly time?: { readonly created?: number; readonly busy?: number | null; readonly idle?: number | null }
   readonly metadata?: Record<string, unknown> | null
   readonly location?: { readonly directory?: string } | null
+  readonly permissions?: readonly PermissionRuleLike[] | null
+}
+
+export interface PermissionRuleLike {
+  readonly action: string
+  readonly resource: string
+  readonly effect: string
+}
+
+/**
+ * Whether a created session carries exactly the rules it was meant to (S2 in docs/reviews/deep-review-1.md): the
+ * first prompt of a delegated or fanned-out thread is sent only then. No intended rules: nothing to confirm.
+ */
+export function rulesConfirmed(intended: readonly PermissionRuleLike[] | null | undefined, actual: readonly PermissionRuleLike[] | null | undefined): boolean {
+  if (!intended || intended.length === 0) return true
+  if (!actual || actual.length !== intended.length) return false
+  return intended.every((rule, index) => {
+    const other = actual[index]
+    return other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect
+  })
 }
 
 /** What BelloCode records on a session it created (`metadata.bellocode`). */

@@ -28,7 +28,9 @@ with the same minutes (02:30 → 03:30); a repeated time runs at its first occur
 late is on time; later (quit, asleep) → one catch-up run if the task allows it, else one "skipped" record; never a
 burst. Ticks on launch, timer (injected `WallClock`), and `NSWorkspace.didWake`. Destination: a new thread per run in
 the project, or a message into a thread (queued if running; a deleted thread disables the task). Prompts are prefixed
-`[Scheduled task “name”]`. An agent's first task in a project is paused behind an approval card (Allow Once / Always in
+`[Scheduled task “name”]`. **Permission mode first (S2):** a new-thread run creates the thread with the approved mode's
+rules in the create request, confirmed by the server; if creation or confirmation fails the run fails and nothing is
+sent (no fallback to default rules). An agent's first task in a project is paused behind an approval card (Allow Once / Always in
 This Project / Deny = delete); agents may only change agent-created tasks of their own project and never request a
 permission mode broader than their own. **Approval binding (M6-B, review C2):** a task stores the definition the user
 approved (name, prompt, rule, time zone, project, destination, agent, model, permission mode, catch-up) and runs (timer,

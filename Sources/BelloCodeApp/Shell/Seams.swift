@@ -212,9 +212,10 @@ final class ThreadSurfaceContext {
         isCreatingThread = true
         defer { isCreatingThread = false }
         do {
-            let session = try await engine.createThread(in: options.directory ?? projectDirectory, agent: options.agent, model: options.model)
+            // The chosen mode is part of the creation and confirmed by the server before anything is sent (S2).
+            let session = try await engine.createThread(
+                in: options.directory ?? projectDirectory, agent: options.agent, model: options.model, permissionMode: options.permissionMode)
             guard let model = openThread?(session.id) else { return nil }
-            if let mode = options.permissionMode { await model.setPermissionMode(mode) }
             newThreadDraft = ""
             onNewThreadDraftChange?("")
             onThreadCreated?(session.id)

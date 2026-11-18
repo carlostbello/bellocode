@@ -324,11 +324,14 @@ public final class Engine {
     // MARK: - Commands: threads
 
     /// Creates a thread in `directory`. It appears in the sidebar at once when the project is known.
+    /// Creates a thread. With `permissionMode` the mode's rules are part of the create request and confirmed by the
+    /// server before this returns (S2): a thread is never left running its first prompt under default rules.
     public func createThread(
         in directory: String, title: String? = nil, agent: String? = nil, model: ModelSelection? = nil,
-        parent: SessionID? = nil
+        parent: SessionID? = nil, permissionMode: PermissionMode? = nil
     ) async throws -> Session {
-        try await core.createSession(directory: directory, title: title, agent: agent, model: model, parentID: parent)
+        try await core.createSession(
+            directory: directory, title: title, agent: agent, model: model, parentID: parent, permissionMode: permissionMode)
     }
 
     public func renameThread(_ id: SessionID, to title: String) async throws { try await core.renameSession(id, title: title) }

@@ -164,3 +164,18 @@ describe("container guidance", () => {
     )
   })
 })
+
+describe("permission rules of created threads", () => {
+  const ask = [
+    { action: "edit", resource: "*", effect: "ask" },
+    { action: "shell", resource: "*", effect: "ask" },
+  ]
+  test("confirmed only when the created session carries the caller's rules in order", () => {
+    expect(L.rulesConfirmed(undefined, undefined)).toBe(true)
+    expect(L.rulesConfirmed([], null)).toBe(true)
+    expect(L.rulesConfirmed(ask, ask.map((rule) => ({ ...rule })))).toBe(true)
+    expect(L.rulesConfirmed(ask, undefined)).toBe(false)
+    expect(L.rulesConfirmed(ask, [ask[1], ask[0]])).toBe(false)
+    expect(L.rulesConfirmed(ask, [{ action: "*", resource: "*", effect: "allow" }])).toBe(false)
+  })
+})

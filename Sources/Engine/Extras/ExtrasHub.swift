@@ -660,8 +660,8 @@ extension ExtrasHub: ScheduleRunner {
         directory: String, title: String, prompt: String, agent: String?, model: ModelSelection?, permissionMode: PermissionMode?
     ) async throws -> SessionID {
         guard let engine else { throw ExtrasError("BelloCode is shutting down.") }
-        let session = try await engine.createThread(in: directory, title: title, agent: agent, model: model)
-        if let permissionMode { try? await engine.setPermissionMode(permissionMode, for: session.id) }
+        // The approved mode is part of the creation and confirmed by the server; on any failure nothing is sent (S2).
+        let session = try await engine.createThread(in: directory, title: title, agent: agent, model: model, permissionMode: permissionMode)
         _ = try await engine.send(prompt, to: session.id)
         return session.id
     }
