@@ -89,7 +89,7 @@ response if any form of the value appears.
 `BELLOCODE_SECRET_LIVE=1 swift test --filter LiveEgress`: real proxy, gateway and an egress-enforced workspace built
 from `WorkspaceSpec` on Rancher Desktop; loopback "bound" and "attacker" servers. Every output, a `docker export` of
 the workspace (362 MB), `docker inspect` of workspace and gateway and everything the attackers received are scanned for
-the canary in every encoding. **58 attempts, canary absent in all; every claimed path held.**
+the canary in every encoding. **57 attempts, canary absent in all; every claimed path held.**
 
 | Attempt | Outcome |
 | --- | --- |
