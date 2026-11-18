@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import SwiftUI
 import DesignSystem
+import SecretKit
 
 // Cards for BelloCode's own requests (docs/features/orchestration-extras.md): a secret the agent asked for, and app
 // approvals (an agent's first scheduled task in a project, network hosts for an HTML visual). Same visual family as
@@ -10,6 +11,7 @@ import DesignSystem
 extension PendingRequestSource {
     public func respond(to request: AppRequest, _ response: AppRequestResponse) async {}
     public func savedSecretExists(label: String) -> Bool { false }
+    public var placeholderSecretsAvailable: Bool { false }
 }
 
 extension PendingRequestStackModel {
@@ -20,8 +22,10 @@ extension PendingRequestStackModel {
     }
 }
 
-/// The secret card: label, why, an optional setup link, a secure field. The typed value goes straight to the
-/// Keychain through `respond`; the field is cleared at once and the value is never shown again.
+/// The secret card: label, why, an optional setup link, a secure field, and how the value will be used (secret
+/// manager, docs/features/secrets.md): Placeholder, Brokered, Approved command or Visible, with the destination it is
+/// bound to and what BelloCode claims about it. The typed value goes straight to the Keychain through `respond`; the
+/// field is cleared at once and the value is never shown again.
 struct SecretRequestCard: View {
     let model: PendingRequestStackModel
     let request: AppRequest
@@ -29,9 +33,20 @@ struct SecretRequestCard: View {
     let count: Int
     @Bindable var draft: SecretDraft
 
+    static func modeTitle(_ mode: SecretChoice.Mode) -> String {
+        switch mode {
+        case .placeholder: "Placeholder"
+        case .brokered: "Brokered"
+        case .command: "Approved command"
+        case .visible: "Visible"
+        }
+    }
+
     var body: some View {
         let submitting = model.isSubmitting(.app(request))
         let saved = model.source.savedSecretExists(label: prompt.label)
+        let placeholders = model.source.placeholderSecretsAvailable
+        let _ = draft.seed(from: prompt, placeholdersAvailable: placeholders)
         CardChrome(tone: .warning) {
             RequestHeader(
                 model: model, symbol: "key", tone: .warning, title: prompt.label, reason: "The agent asks for a secret",
@@ -60,17 +75,14 @@ struct SecretRequestCard: View {
                         .help("Opens \(link.host ?? link.absoluteString) in your browser")
                     }
                 }
-                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
-                    Image(systemName: "lock").font(.system(size: DS.Size.iconPointMeta)).foregroundStyle(SwiftUI.Color.ds.text3)
-                    Text(
-                        prompt.delivery == .file
-                            ? "Saved in your Keychain. The agent gets a path that yields the value once to the first command that reads it; that command, which the agent chooses, can reveal it."
-                            : "Saved in your Keychain. The agent gets a one-use reference, not the value. In a container project you approve the exact command that receives it; any command that receives it can reveal it."
-                    )
-                    .font(.ds(.label))
-                    .foregroundStyle(SwiftUI.Color.ds.text3)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: DS.Space.s8) {
+                    Text("Use").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text2)
+                    DSSegmentedPicker(
+                        options: SecretChoice.Mode.allCases.filter { $0 != .placeholder || placeholders }.map { ($0, Self.modeTitle($0)) },
+                        selection: $draft.choice.mode)
+                        .accessibilityLabel("How the value is used")
                 }
+                modeDetail
                 if let error = model.replyError, !submitting { ReplyErrorLabel(text: error) }
                 HStack(spacing: DS.Space.s8) {
                     Spacer(minLength: DS.Space.s8)
@@ -88,12 +100,12 @@ struct SecretRequestCard: View {
                             Task { await model.respond(request, .useSavedSecret) }
                         }
                         .buttonStyle(DSButtonStyle(.outline))
-                        .help("Give the agent a new reference to the value already saved as “\(prompt.label)”")
+                        .help("Give this thread the value already saved as “\(prompt.label)”, in the mode it was saved with")
                     }
                     Button("Save Securely") { save() }
                         .buttonStyle(DSButtonStyle(.primary, hint: AgentShortcut.submitAnswer.display))
                         .keyboardShortcut(.submitAnswer)
-                        .disabled(draft.text.isEmpty)
+                        .disabled(!canSave)
                 }
                 .disabled(submitting)
             }
@@ -104,11 +116,71 @@ struct SecretRequestCard: View {
         .accessibilityLabel("The agent asks for a secret: \(prompt.label)")
     }
 
+    private var canSave: Bool {
+        guard !draft.text.isEmpty else { return false }
+        switch draft.choice.mode {
+        case .placeholder, .brokered: return !draft.choice.destination.trimmingCharacters(in: .whitespaces).isEmpty
+        case .visible: return draft.choice.confirmVisible
+        case .command: return true
+        }
+    }
+
+    @ViewBuilder private var modeDetail: some View {
+        switch draft.choice.mode {
+        case .placeholder, .brokered:
+            VStack(alignment: .leading, spacing: DS.Space.s6) {
+                HStack(spacing: DS.Space.s6) {
+                    TextField("https://api.example.com", text: $draft.choice.destination)
+                        .textFieldStyle(DSTextFieldStyle()).frame(minWidth: 180)
+                        .accessibilityLabel("Destination the value may be sent to")
+                    TextField("Header", text: $draft.choice.headerName)
+                        .textFieldStyle(DSTextFieldStyle()).frame(width: 110)
+                        .accessibilityLabel("Header that carries it")
+                    TextField("Prefix", text: $draft.choice.headerPrefix)
+                        .textFieldStyle(DSTextFieldStyle()).frame(width: 70)
+                        .accessibilityLabel("Text before the value in the header")
+                    TextField("/path", text: $draft.choice.pathPrefix)
+                        .textFieldStyle(DSTextFieldStyle()).frame(width: 70)
+                        .accessibilityLabel("Allowed path prefix")
+                }
+                HStack(spacing: DS.Space.s8) {
+                    SecretClaimBadge(kind: .hidden, headline: SecretClaims.hiddenHeadline,
+                                     explanation: SecretClaims.hiddenGuarantee, limits: SecretClaims.hiddenLimits)
+                    Toggle("This project only", isOn: $draft.choice.projectOnly)
+                        .toggleStyle(DSToggleStyle(.checkbox)).font(.ds(.label))
+                }
+                Text(draft.choice.mode == .placeholder
+                     ? "The agent's commands get a placeholder in $\(handle). BelloCode's proxy puts the value in only for this destination and header; anywhere else the request is refused."
+                     : "Only BelloCode sends it, for this destination and header (the agent asks BelloCode to make the request).")
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .command:
+            VStack(alignment: .leading, spacing: DS.Space.s6) {
+                SecretClaimBadge(kind: .command, headline: SecretClaims.commandHeadline, explanation: SecretClaims.commandExplanation)
+                Text(prompt.delivery == .file
+                     ? "Saved in your Keychain. The agent gets a path that yields the value once to the first command that reads it; that command can reveal it."
+                     : "Saved in your Keychain. You approve the exact command that receives it; that command can reveal it.")
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .visible:
+            VStack(alignment: .leading, spacing: DS.Space.s6) {
+                SecretClaimBadge(kind: .visible, headline: SecretClaims.visibleHeadline, explanation: SecretClaims.visibleExplanation)
+                Toggle("I understand the agent can see, print and send this value", isOn: $draft.choice.confirmVisible)
+                    .toggleStyle(DSToggleStyle(.checkbox)).font(.ds(.label))
+            }
+        }
+    }
+
+    private var handle: String { draft.choice.name.isEmpty ? ManagedSecret.handle(from: prompt.label) : draft.choice.name }
+
     private func save() {
-        guard !draft.text.isEmpty else { return }
+        guard canSave else { return }
         let secret = SecretValue(draft.text)
         draft.text = ""
-        Task { await model.respond(request, .saveSecret(secret)) }
+        let choice = draft.choice
+        Task { await model.respond(request, .saveManagedSecret(secret, choice)) }
     }
 }
 
@@ -218,7 +290,7 @@ struct AppApprovalCard: View {
         case .network:
             "Hosts: \(approval.scope). “Always” lets HTML visuals load from these hosts without asking again."
         case .secretCommand:
-            "Project: \(approval.scope). The command receives the value and can reveal it (print, encode, send or save it): allow only a command you trust with it. “Always” runs exactly this command with this secret, in this project, without asking again (deleting the secret revokes it)."
+            "Project: \(approval.scope). The command can reveal this value: it receives the value and can print, encode, send or save it. Allow only a command you trust with it. “Always” runs exactly this command with this secret, in this project, without asking again (deleting the secret revokes it)."
         case .gitlabBabysit:
             "Project: \(approval.scope). Babysitting reads the merge request with your GitLab token and wakes this thread on its events (within the wake budget). “Always” lets agents babysit merge requests in this project without asking again."
         case .gitlabWrite:

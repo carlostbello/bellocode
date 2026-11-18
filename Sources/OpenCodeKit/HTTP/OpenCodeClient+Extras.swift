@@ -37,3 +37,17 @@ extension OpenCodeClient {
         return try await send("session.generate", request, as: GenerateResponse.self).data.text
     }
 }
+
+struct SessionEnvironmentBody: Encodable, Sendable {
+    var variables: [String: String]
+}
+
+extension OpenCodeClient {
+    /// `PUT /api/session/{id}/environment` (session.environment): replaces the process environment opencode gives this
+    /// session's shell commands (in memory; lost when the server restarts, so the app sets it again after a reconnect).
+    /// The secret manager uses it for per-thread placeholders (docs/features/secrets.md); it never carries a hidden value.
+    public func setSessionEnvironment(sessionID: String, variables: [String: String]) async throws {
+        let request = try makeRequest(.put, ["api", "session", sessionID, "environment"], body: SessionEnvironmentBody(variables: variables))
+        try await sendIgnoringBody("session.environment", request)
+    }
+}

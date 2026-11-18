@@ -9,13 +9,14 @@ import GRDB
 /// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`, `app_environment`,
 /// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them), `app_outbox` (sends not yet settled),
 /// `app_gitlab_instance`, `app_mr_snapshot`, `app_mr_wake` (GitLab, migration `v9-gitlab`), `app_review_draft` (GitLab 2
-/// review drafts, migration `v10-gitlab-review`).
+/// review drafts, migration `v10-gitlab-review`), `app_managed_secret`, `app_secret_placeholder`, `app_secret_audit`
+/// (secret manager, migration `v11-secret-manager`).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 10
+    static let currentVersion = 11
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -254,6 +255,34 @@ enum ProjectionSchema {
                     json BLOB NOT NULL
                 );
                 CREATE INDEX app_review_draft_by_mr ON app_review_draft(mr_url, created);
+                """)
+        }
+        // Secret manager (docs/features/secrets.md): each secret's use mode, scope and bindings (never its value, which is
+        // in the Keychain), the per-thread placeholders of placeholder-mode secrets (opaque capabilities, not secrets),
+        // and the bounded audit of uses and refusals. Named distinctly (`v11-secret-manager`): another branch may add
+        // its own eleventh migration; GRDB applies migrations by name, so only `currentVersion` needs reconciling.
+        migrator.registerMigration("v11-secret-manager") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_managed_secret (
+                    account TEXT PRIMARY KEY NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE TABLE app_secret_placeholder (
+                    placeholder TEXT PRIMARY KEY NOT NULL,
+                    account TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    project TEXT NOT NULL,
+                    created REAL NOT NULL
+                );
+                CREATE UNIQUE INDEX app_secret_placeholder_by_grant ON app_secret_placeholder(account, session_id);
+                CREATE TABLE app_secret_audit (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    account TEXT NOT NULL,
+                    at REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE INDEX app_secret_audit_by_account ON app_secret_audit(account, at DESC);
                 """)
         }
         return migrator

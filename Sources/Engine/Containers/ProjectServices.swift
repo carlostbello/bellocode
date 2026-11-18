@@ -228,6 +228,7 @@ extension EnvironmentService {
             }
             guard let self, !Task.isCancelled else { return }
             await self.refreshServices(model.directory)
+            self.egress?.servicesStarted(model)
         })
     }
 

@@ -127,6 +127,11 @@ public struct WorkspaceManager: Sendable {
                 status = try await self.status(spec)
                 guard status.imageID != nil else { throw WorkspaceError.imageMissing(spec.image) }
             }
+            // Enforced egress: the internal network must exist before the container can be created on it. Without the
+            // gateway (started by the app) the container then simply has no way out: fail closed.
+            if let egress = spec.egress, status.phase == .absent || status.phase == .outdated {
+                try await EgressGateway(client: client).ensureNetwork(scopeKey: egress.scopeKey)
+            }
             switch status.phase {
             case .running:
                 return status.containerID!

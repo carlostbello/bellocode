@@ -135,6 +135,9 @@ public final class Engine {
     public private(set) var orchestration: OrchestrationService!
     /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
     public private(set) var extras: ExtrasHub!
+    /// Secrets by label with brokered, placeholder and visible use; the egress proxy and its audit
+    /// (docs/features/secrets.md).
+    public private(set) var secretManager: SecretManager!
     /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
     /// (docs/features/containers.md).
     public let environments: EnvironmentService
@@ -200,7 +203,20 @@ public final class Engine {
         orchestration = OrchestrationService(core: core, store: store, engine: self)
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
         if configuration.containers != nil { extras.environments = environments }
+        secretManager = SecretManager(store: store, vault: configuration.secretVault, legacy: extras.secrets, clock: configuration.wallClock,
+                                      configuration: configuration.containers != nil ? configuration.secretManager : nil)
+        secretManager.engine = self
+        if configuration.containers != nil { secretManager.environments = environments }
+        extras.secretManager = secretManager
         let mergeRequests = extras.mergeRequests
+        secretManager.builtInBrokered = { [weak mergeRequests] in
+            guard let mergeRequests else { return [] }
+            return mergeRequests.instances.filter { mergeRequests.instancesWithToken.contains($0.baseURL) }.map { instance in
+                BuiltInBrokeredSecret(label: "GitLab token", destination: instance.baseURL,
+                                      operations: "GitLab API (merge requests, issues, pipelines) and git over HTTPS (credential helper)",
+                                      problem: mergeRequests.instanceProblems[instance.baseURL])
+            }
+        }
         git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
         git.tokenScopes = { [weak mergeRequests] base in mergeRequests?.instanceStatus[base]?.token?.scopes }
         gitProjects = GitProjectService(
@@ -267,6 +283,7 @@ public final class Engine {
         await environments.writeConfigNow()
         orchestration.start()
         await extras.start(store: store)
+        await secretManager.start()
         await modelPreferences.load()
         await frecency.load()
         await core.start()
@@ -295,6 +312,7 @@ public final class Engine {
         await browser.shutdown()
         await orchestration.shutdown()
         extras.stop()
+        secretManager.stop()
         for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
         for task in trackedTasks.values { await task.value }

@@ -129,6 +129,8 @@ public final class EnvironmentService {
     @ObservationIgnored let configuration: ContainerConfiguration?
     @ObservationIgnored let store: ProjectionStore
     @ObservationIgnored var models: [String: ProjectEnvironment] = [:]
+    /// Enforced egress (secret manager, docs/features/secrets.md): set by the engine when BelloCode's egress proxy runs.
+    @ObservationIgnored public var egress: EgressHooks?
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
     @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
@@ -562,11 +564,13 @@ public final class EnvironmentService {
         // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed.
         let pullFirst = imagePolicy.pullPolicy == .always && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
         let auth = pullFirst ? registryAuth(for: spec.image) : nil
+        let egressPreflight = egress?.preflight
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
             let interval = Self.signposter.beginInterval("ensureRunning")
             defer { Self.signposter.endInterval("ensureRunning", interval) }
             do {
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
+                if let egressPreflight { try await egressPreflight(spec) }
                 let id = try await runtimeRef.ensureRunning(spec)
                 var inventory: ContainerProbes.ToolInventory?
                 if firstInventory { inventory = try? await runtimeRef.inventory(container: id, user: spec.user) }
@@ -998,6 +1002,7 @@ public final class EnvironmentService {
         if let message = policyBlock(model) { throw EnvironmentBlockedError(message: message) }
         if let blocked = model.phase.blocked { throw EnvironmentBlockedError(message: blocked.message) }
         guard let spec = workspaceSpec(model) else { throw EnvironmentBlockedError(message: EnvironmentPhase.noImage.blocked?.message ?? "No image is set.") }
+        if let egressPreflight = egress?.preflight { try await egressPreflight(spec) }
         let id = try await activeRuntime.ensureRunning(spec)
         model.record.containerID = id
         if model.phase != .ready { refreshImageAndPhase(model) }
@@ -1047,6 +1052,10 @@ public final class EnvironmentService {
         }
         let caches = model.settings.cacheMounts(imageDeclared: model.record.imageCaches ?? [:])
         spec.cacheMounts = caches.isEmpty ? nil : caches
+        if let egress, let (attachment, corporate) = egress.attachment(model) {
+            spec.egress = attachment
+            spec.corporateNetwork = corporate
+        }
         return spec
     }
 
@@ -1266,3 +1275,21 @@ final class PullAggregator: Sendable {
 }
 
 import Synchronization
+
+/// How the secret manager's enforced egress plugs into workspace containers (docs/features/secrets.md "Egress"):
+/// which attachment and certificate bundle a project's container gets, what must run before it starts (the gateway),
+/// and what to do once its services run (join them to the internal network).
+@MainActor
+public struct EgressHooks {
+    public var attachment: @MainActor (ProjectEnvironment) -> (EgressAttachment, CorporateNetwork?)?
+    public var preflight: @Sendable (WorkspaceSpec) async throws -> Void
+    public var servicesStarted: @MainActor (ProjectEnvironment) -> Void
+
+    public init(attachment: @escaping @MainActor (ProjectEnvironment) -> (EgressAttachment, CorporateNetwork?)?,
+                preflight: @escaping @Sendable (WorkspaceSpec) async throws -> Void,
+                servicesStarted: @escaping @MainActor (ProjectEnvironment) -> Void) {
+        self.attachment = attachment
+        self.preflight = preflight
+        self.servicesStarted = servicesStarted
+    }
+}

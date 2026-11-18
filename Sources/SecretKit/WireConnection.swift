@@ -94,17 +94,14 @@ actor WireConnection {
         }
     }
 
-    /// One CRLF-terminated line (without the CRLF).
+    /// One line ending at the first LF (a preceding CR is dropped). The gateway's preamble ends with a bare LF and can
+    /// share a segment with the client's first CRLF line, so the first LF, not the first CRLF, ends the line.
     func readLine(limit: Int = 8 * 1024) async throws -> String {
         while true {
-            if let range = buffer.range(of: Data("\r\n".utf8)) {
-                let line = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                buffer.removeSubrange(buffer.startIndex..<range.upperBound)
-                return String(decoding: line, as: UTF8.self)
-            }
-            if let range = buffer.range(of: Data("\n".utf8)) {
-                let line = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                buffer.removeSubrange(buffer.startIndex..<range.upperBound)
+            if let index = buffer.firstIndex(of: 0x0A) {
+                var line = Data(buffer[buffer.startIndex..<index])
+                buffer.removeSubrange(buffer.startIndex...index)
+                if line.last == 0x0D { line.removeLast() }
                 return String(decoding: line, as: UTF8.self)
             }
             if buffer.count > limit { throw WireError.tooLarge }

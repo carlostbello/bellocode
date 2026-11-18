@@ -48,12 +48,64 @@ public struct SecretPrompt: Hashable, Sendable, Codable {
     /// A sign-in or setup page, shown as a button (opened only on the user's click).
     public var setupURL: String?
     public var delivery: Delivery
+    /// Secret manager (docs/features/secrets.md): what the agent proposes; the person decides on the card.
+    public var suggestion: SecretChoice?
+    /// The asking thread's project root (a "this project only" scope binds to it).
+    public var projectDirectory: String?
 
-    public init(label: String, reason: String, setupURL: String? = nil, delivery: Delivery = .reference) {
+    public init(label: String, reason: String, setupURL: String? = nil, delivery: Delivery = .reference, suggestion: SecretChoice? = nil,
+                projectDirectory: String? = nil) {
         self.label = label
         self.reason = reason
         self.setupURL = setupURL
         self.delivery = delivery
+        self.suggestion = suggestion
+        self.projectDirectory = projectDirectory
+    }
+}
+
+/// How a requested secret will be used, as chosen on the card (docs/features/secrets.md). Holds no value.
+public struct SecretChoice: Hashable, Sendable, Codable {
+    public enum Mode: String, Hashable, Sendable, Codable, CaseIterable {
+        /// BelloCode performs the operation (`bellocode_app_http_request`); the agent gets a handle.
+        case brokered
+        /// The agent's programs get a placeholder; the proxy substitutes it for the bound destination.
+        case placeholder
+        /// The agent receives the value (needs `confirmVisible`).
+        case visible
+        /// Only commands the person approves verbatim receive it (`secret_exec`); such a command can reveal it.
+        case command
+    }
+
+    public var mode: Mode
+    /// The handle (`{{secret:NAME}}`, `$NAME`).
+    public var name: String
+    /// The bound destination, `https://host[:port]`.
+    public var destination: String
+    /// Header carrying it (e.g. `Authorization`), with an optional prefix (`Bearer `); or a query parameter.
+    public var headerName: String
+    public var headerPrefix: String
+    public var queryName: String
+    /// Allowed path prefix (`/v1`); empty: any path.
+    public var pathPrefix: String
+    /// Allowed methods, e.g. `GET,POST`; empty: any.
+    public var methods: String
+    /// True: only this project; false: all projects.
+    public var projectOnly: Bool
+    public var confirmVisible: Bool
+
+    public init(mode: Mode, name: String = "", destination: String = "", headerName: String = "", headerPrefix: String = "",
+                queryName: String = "", pathPrefix: String = "", methods: String = "", projectOnly: Bool = true, confirmVisible: Bool = false) {
+        self.mode = mode
+        self.name = name
+        self.destination = destination
+        self.headerName = headerName
+        self.headerPrefix = headerPrefix
+        self.queryName = queryName
+        self.pathPrefix = pathPrefix
+        self.methods = methods
+        self.projectOnly = projectOnly
+        self.confirmVisible = confirmVisible
     }
 }
 
@@ -106,6 +158,8 @@ public struct AppApproval: Hashable, Sendable, Codable {
 /// The user's answer to an app request. A secret value travels only inside `SecretValue`, which never prints.
 public enum AppRequestResponse: Sendable {
     case saveSecret(SecretValue)
+    /// Secret manager: save with the mode and binding chosen on the card.
+    case saveManagedSecret(SecretValue, SecretChoice)
     /// Use the value already stored under the same label.
     case useSavedSecret
     case approve(always: Bool)

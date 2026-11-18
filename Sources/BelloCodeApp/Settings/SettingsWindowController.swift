@@ -102,7 +102,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     controller.sizingOptions = [.preferredContentSize]
                     return controller
                 })
-            if let extras = engine.extras {
+            if let extras = engine.extras, let secretManager = engine.secretManager {
                 // M3-B (docs/features/orchestration-extras.md).
                 panes.append(
                     SettingsPane(id: "schedules", title: "Scheduled Tasks", symbolName: "calendar.badge.clock") {
@@ -139,13 +139,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     })
                 panes.append(
                     SettingsPane(id: "secrets", title: "Secrets", symbolName: "key") {
-                        let view = SecretsSettingsView(secrets: extras.secrets, visuals: extras.visuals) { label in
+                        let view = SecretManagerSettingsView(manager: secretManager, visuals: extras.visuals) { title, detail, button in
                             let alert = NSAlert()
-                            alert.messageText = "Delete “\(label.label)”?"
-                            alert.informativeText = "The value is removed from your Keychain. Agents holding a reference to it can no longer use it. This cannot be undone."
-                            alert.addButton(withTitle: "Delete")
+                            alert.messageText = title
+                            alert.informativeText = detail
+                            alert.addButton(withTitle: button)
                             alert.addButton(withTitle: "Cancel")
-                            alert.buttons.first?.hasDestructiveAction = true
+                            alert.buttons.first?.hasDestructiveAction = button == "Delete"
                             return alert.runModal() == .alertFirstButtonReturn
                         }
                         let controller = NSHostingController(rootView: view)

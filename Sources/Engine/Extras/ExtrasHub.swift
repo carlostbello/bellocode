@@ -54,6 +54,8 @@ public final class ExtrasHub {
     /// container (`secret_exec`) instead of through a pipe on the Mac.
     @ObservationIgnored weak var environments: EnvironmentService?
     @ObservationIgnored private let containerSecrets = ContainerSecretReferences()
+    /// The secret manager (docs/features/secrets.md); set by `Engine`.
+    @ObservationIgnored weak var secretManager: SecretManager?
     @ObservationIgnored private let secretVault: any SecretVault
     @ObservationIgnored private let wallClock: any WallClock
     @ObservationIgnored let store: ProjectionStore
@@ -206,6 +208,12 @@ public final class ExtrasHub {
                 return ClientMCPResult(
                     text: "Path for “\(label)”: \(path)\nIt yields the value once, to the first process that reads it, then disappears (10 minutes at most). Use it in one command (--token-file \(path) or \"$(cat \(path))\"). Never print, echo or log it.")
             case ExtrasTools.secretExec: return try await secretExec(arguments, caller)
+            case ExtrasTools.httpRequest:
+                guard let secretManager else { throw ExtrasError("The secret manager is not running.") }
+                return await secretManager.httpRequest(arguments, caller: caller)
+            case ExtrasTools.listSecrets:
+                guard let secretManager else { throw ExtrasError("The secret manager is not running.") }
+                return secretManager.listSecrets(caller: caller)
             case ExtrasTools.htmlPreview:
                 let html = try visuals.document(
                     html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory, roots: visualRoots(caller))
@@ -456,7 +464,14 @@ public final class ExtrasHub {
         var url = arguments["url"]?.stringValue
         if let raw = url, URL(string: raw)?.scheme?.lowercased() != "https" { url = nil }
         let delivery = SecretPrompt.Delivery(rawValue: arguments["delivery"]?.stringValue ?? "reference") ?? .reference
-        let prompt = SecretPrompt(label: String(label.prefix(80)), reason: String(reason.prefix(400)), setupURL: url, delivery: delivery)
+        func field(_ key: String, _ limit: Int = 200) -> String { String((arguments[key]?.stringValue ?? "").prefix(limit)) }
+        let destination = field("destination")
+        let proposed = SecretChoice.Mode(rawValue: field("mode")) ?? (destination.isEmpty ? .command : .placeholder)
+        let suggestion = SecretChoice(
+            mode: proposed == .visible ? .command : proposed, name: field("name", 64), destination: destination, headerName: field("header", 64),
+            headerPrefix: field("prefix", 32), queryName: field("query", 64), pathPrefix: field("path"), projectOnly: true)
+        let prompt = SecretPrompt(label: String(label.prefix(80)), reason: String(reason.prefix(400)), setupURL: url, delivery: delivery,
+                                  suggestion: suggestion, projectDirectory: caller.projectDirectory)
         let request = AppRequest(id: AppRequest.makeID("sec"), sessionID: caller.sessionID, kind: .secret(prompt), received: .now)
         await core.putAppRequest(request)
         return ClientMCPResult(
@@ -575,9 +590,27 @@ public final class ExtrasHub {
     private func respondSecret(_ request: AppRequest, _ prompt: SecretPrompt, _ response: AppRequestResponse) async throws {
         let account: String
         switch response {
+        case .saveManagedSecret(let value, let choice):
+            guard let secretManager else { throw ExtrasError("The secret manager is not running.") }
+            let text = try await secretManager.saveFromCard(prompt, value: value, choice: choice, sessionID: request.sessionID)
+            if !text.isEmpty {
+                try await core.postSynthetic(
+                    request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
+                log.info("managed secret saved; the thread got a handle or placeholder (value not logged)")
+                return
+            }
+            // Command mode: the approved-command path below, with the value already saved.
+            guard let saved = secrets.account(forLabel: prompt.label) else { throw ExtrasError("“\(prompt.label)” was not saved.") }
+            account = saved
         case .saveSecret(let value):
             account = try await secrets.save(label: prompt.label, value: value)
+            await secretManager?.reload()
         case .useSavedSecret:
+            if let secretManager, let text = try await secretManager.useSaved(label: prompt.label, sessionID: request.sessionID, projectDirectory: prompt.projectDirectory) {
+                try await core.postSynthetic(
+                    request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
+                return
+            }
             guard let saved = secrets.account(forLabel: prompt.label) else { throw ExtrasError("Nothing is saved as “\(prompt.label)”.") }
             account = saved
             await secrets.touch(account: saved)
@@ -592,7 +625,7 @@ public final class ExtrasHub {
         if let environments, environments.isEnabled {
             // Containerised project: a pipe on the Mac is unreachable from the container, whatever delivery was asked.
             let reference = containerSecrets.issue(account: account, label: prompt.label, for: request.sessionID, now: wallClock.now())
-            text = "[BelloCode secret] The user saved “\(prompt.label)”. secretRef: \(reference) (one use, this thread, 1 hour). Commands run in this project's container: pass it to bellocode_app_secret_exec with the variable name and the one command that needs it; the user approves that exact command before it receives the value. Never print the value."
+            text = "[BelloCode secret] The user saved “\(prompt.label)” for approved commands only. secretRef: \(reference) (one use, this thread, 1 hour). Commands run in this project's container: pass it to bellocode_app_secret_exec with the variable name and the one command that needs it; the user approves that exact command before it receives the value (that command can see it). Never print the value."
             try await core.postSynthetic(
                 request.sessionID, text: text, metadata: .object(["bellocode": .object(["wake": .string("secret"), "outcome": .string("saved")])]))
             log.info("secret delivered by container reference (value not logged)")
