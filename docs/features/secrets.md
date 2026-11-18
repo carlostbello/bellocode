@@ -135,7 +135,13 @@ timing or size side channels. Visible secrets, approved commands and the host pi
 placeholder bound to a loopback test API. Without a model (session shell, the session environment set by
 `PUT /api/session/{id}/environment`): the script's call reached the API with the real key, `printf $ANSWER_API_KEY`
 showed the placeholder, the audit recorded destination and thread, opencode's data held no form of the key: **pass**.
-With a model: see the final report (free-tier limits). Installs, fresh caches, `LiveEgressPerf`: npm (4 packages)
+With a model (`opencode/glm-5.3-flash-free`, 2 prompts): asked to script the call, then to print and recover the key,
+the agent never showed it; the transcript (9 KB, tool inputs and outputs), opencode's data, the project, the
+workspace's environments and the audit held no form of it: **pass**. That run shared its thread with the shell leg, so
+it did not prove the agent's *own* call was substituted; the harness now uses separate threads and checks the audit's
+thread, but the rerun was refused by the free tier (as were 5 earlier requests, before any generation). Rerun:
+`BELLOCODE_SMOKE_MODEL=… BELLOCODE_SMOKE_SECRETS=1 …`.
+Installs, fresh caches, `LiveEgressPerf`: npm (4 packages)
 3.7 s direct, 3.6 s through the proxy; pip (3 packages) 4.5 s direct, 3.3 s through the proxy.
 
 ## Administrators

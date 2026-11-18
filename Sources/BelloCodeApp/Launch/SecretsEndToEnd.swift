@@ -125,15 +125,19 @@ enum SecretsEndToEnd {
             let placeholder = manager.placeholder(account: secret.account, sessionID: SessionID(session.id)) ?? ""
             check("thread got a placeholder, not the value", Placeholder.isPlaceholder(placeholder) && !leaked(Data(wake.utf8)))
 
-            // Without a model: the same script through the session's own shell (its environment carries the placeholder).
+            // Without a model, in a thread of its own: the same script through the session's shell (its environment
+            // carries the placeholder).
+            let manualSession = try await client.createSession(SessionCreateRequest(directory: project, title: "BelloCode secrets e2e (shell)"))
+            _ = try await manager.grantAndDescribe(secret, sessionID: SessionID(manualSession.id), projectDirectory: project)
+            let manualPlaceholder = manager.placeholder(account: secret.account, sessionID: SessionID(manualSession.id)) ?? ""
             let scriptText = "#!/bin/sh\ncurl -sS https://\(host)/v1/answer -H \"Authorization: Bearer $ANSWER_API_KEY\"\n"
             try? Data(scriptText.utf8).write(to: URL(filePath: project + "/answer-manual.sh"))
             let before = api.authorizedRequests
-            try await client.runSessionShell(sessionID: session.id, command: "sh answer-manual.sh; echo; printf 'key=%s\\n' \"$ANSWER_API_KEY\"")
+            try await client.runSessionShell(sessionID: manualSession.id, command: "sh answer-manual.sh; echo; printf 'key=%s\\n' \"$ANSWER_API_KEY\"")
             var manual = ""
             for _ in 0..<60 {
                 try? await Task.sleep(for: .milliseconds(500))
-                guard let page = try? await client.messages(sessionID: session.id, MessageListQuery(limit: 200)) else { continue }
+                guard let page = try? await client.messages(sessionID: manualSession.id, MessageListQuery(limit: 200)) else { continue }
                 manual = ""
                 dump(page.data, to: &manual)
                 if manual.contains(answer) || manual.contains("missing or wrong") { break }
@@ -141,10 +145,11 @@ enum SecretsEndToEnd {
             check("session shell: the placeholder in $ANSWER_API_KEY reached the API as the real key through the proxy",
                   manual.contains(answer) && api.authorizedRequests > before, "authorized API calls: \(api.authorizedRequests - before)")
             check("session shell: printing the variable shows the placeholder, never the key",
-                  manual.contains("key=\(placeholder)") && !leaked(Data(manual.utf8)))
+                  manual.contains("key=\(manualPlaceholder)") && !leaked(Data(manual.utf8)))
             let manualAudit = await manager.audit(account: secret.account, limit: 20)
             check("audit: substitution recorded with destination and thread",
-                  manualAudit.contains { $0.outcome == .substituted && $0.destination.contains(host) && $0.sessionID == session.id })
+                  manualAudit.contains { $0.outcome == .substituted && $0.destination.contains(host) && $0.sessionID == manualSession.id })
+            try? await client.deleteSession(manualSession.id)
             if ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_SECRETS_PROMPTS"] == "0" {
                 log("  secrets: SKIP model prompts (BELLOCODE_SMOKE_SECRETS_PROMPTS=0)")
                 let stored = scanDirectory(opencodeData, leaked: leaked)
@@ -163,6 +168,7 @@ enum SecretsEndToEnd {
 
                 Write a shell script answer.sh in this folder that calls https://\(host)/v1/answer with curl, sending the header "Authorization: Bearer $ANSWER_API_KEY", and prints the JSON response. Run it with your shell tool and tell me the value of "answer".
                 """))
+            let callsBefore = api.authorizedRequests
             let first = await waitForReply(client, session.id, containing: answer, after: sent, seconds: 240)
             if first.contains("provider.free-limit") || first.contains("finish: Optional(error)") && !first.contains(answer) {
                 check("model available (\(model.providerID)/\(model.modelID))", false, "the provider refused the request (rate limit or error); no second prompt sent")
@@ -171,13 +177,18 @@ enum SecretsEndToEnd {
                 await manager.delete(account: secret.account)
                 return false
             }
-            if ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_SECRETS_DEBUG"] == "1" {
+            if ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_SECRETS_DEBUG"] == "1" || !first.contains(answer) {
                 log("  secrets: debug reply: \(first.suffix(3000).replacingOccurrences(of: api.canary, with: "<CANARY>"))")
             }
-            check("agent's script called the API through the proxy and got the answer (\(model.providerID)/\(model.modelID))",
-                  first.contains(answer) && api.authorizedRequests > 0, "authorized API calls: \(api.authorizedRequests)")
-            let script = (try? String(contentsOfFile: project + "/answer.sh", encoding: .utf8)) ?? ""
-            check("the script holds a variable or the placeholder, not the value", !script.isEmpty && !leaked(Data(script.utf8)))
+            let agentAudit = await manager.audit(account: secret.account, limit: 50)
+            check("agent's own call reached the API with the real key through the proxy, and it reported the answer (\(model.providerID)/\(model.modelID))",
+                  first.contains(answer) && api.authorizedRequests > callsBefore
+                    && agentAudit.contains { $0.outcome == .substituted && $0.sessionID == session.id },
+                  "authorized API calls in this thread: \(api.authorizedRequests - callsBefore)")
+            let scripts = ((try? FileManager.default.contentsOfDirectory(atPath: project)) ?? []).filter { $0 != "answer-manual.sh" }
+            let written = scripts.compactMap { try? Data(contentsOf: URL(filePath: project + "/" + $0)) }
+            check("files the agent wrote hold the variable or the placeholder, not the value", !written.contains(where: leaked),
+                  written.isEmpty ? "the agent ran the call inline" : scripts.joined(separator: ", "))
 
             // Prompt 2: ask for the key itself.
             prompts += 1
