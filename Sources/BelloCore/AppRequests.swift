@@ -72,6 +72,10 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case gitlabWrite
         /// An agent restarts one of the project's service containers (the first time per project).
         case serviceRestart
+        /// Git parity: an agent asks to push its branch (remote, branch, commits shown; host git with the token).
+        case gitPush
+        /// Git parity: an agent asks to force-push (always its own card; never "Always").
+        case gitForcePush
     }
 
     public var action: Action

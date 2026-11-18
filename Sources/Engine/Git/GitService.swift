@@ -151,6 +151,14 @@ public final class GitService {
 
     public var credentials: GitCredentials? { runner.credentials }
 
+    /// Tests: another runner environment (a test CA, local remotes), keeping the configured credentials.
+    func replaceRunner(_ replacement: GitRunner) {
+        var next = replacement
+        next.credentials = runner.credentials
+        runner = next
+        worktrees.runner = next
+    }
+
     /// Refreshes every cached model of `directory` and below (after a turn, a commit or a worktree change).
     public func refreshAll(under directory: String? = nil) {
         for (key, model) in models where directory == nil || key == directory || key.hasPrefix(directory! + "/") { model.refresh() }
