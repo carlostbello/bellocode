@@ -374,11 +374,17 @@ public final class DockerFilterProxy: Sendable {
         if streamBody {
             text += "Transfer-Encoding: chunked\r\n\r\n"
             try await daemon.write(Data(text.utf8))
-            while let piece = try await reader.next() {
-                if piece.isEmpty { continue }
-                try await daemon.write(Data(String(piece.count, radix: 16).utf8) + Data("\r\n".utf8) + piece + Data("\r\n".utf8))
-            }
-            try await daemon.write(Data("0\r\n\r\n".utf8))
+            // The daemon may answer (and close) before the whole context is sent, e.g. a refused Dockerfile: its
+            // answer is still relayed below.
+            do {
+                while let piece = try await reader.next() {
+                    if piece.isEmpty { continue }
+                    try await daemon.write(Data(String(piece.count, radix: 16).utf8) + Data("\r\n".utf8) + piece + Data("\r\n".utf8))
+                }
+                try await daemon.write(Data("0\r\n\r\n".utf8))
+            } catch let error as HTTPParseError {
+                throw error
+            } catch {}
         } else {
             let body = request.body ?? Data()
             if !body.isEmpty || ["POST", "PUT"].contains(request.method) { text += "Content-Length: \(body.count)\r\n" }

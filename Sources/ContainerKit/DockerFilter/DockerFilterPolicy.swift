@@ -218,6 +218,7 @@ public struct DockerFilterPolicy: Sendable {
             case ("GET", "json"): return withScopeFilter(request, scope: scope)
             case ("POST", "create"): return await createContainer(request, scope: scope)
             case ("POST", "prune"): return withScopeFilter(request, scope: scope)
+            case ("GET", _), ("DELETE", _): break  // GET/DELETE /containers/{name}: checked below
             default: return unknown(request)
             }
         }
@@ -565,6 +566,15 @@ public struct DockerFilterPolicy: Sendable {
 
     func images(_ request: DockerAPIRequest, segments: [String], scope: DockerScope) async -> DockerDecision {
         let plain = DockerDecision.forward(request, streamBody: false, hijack: false, after: nil)
+        // DELETE /images/{name}: the name may itself contain slashes.
+        if request.method == "DELETE", segments.count >= 2 {
+            let full = segments.dropFirst().joined(separator: "/")
+            guard let image = await lookup.image(full) else { return .refuse(status: 404, message: "No such image: \(full)") }
+            guard owns(image, scope: scope) else {
+                return Self.refuse("only images this workspace built or pulled can be removed; \(full) is not one of them.")
+            }
+            return plain
+        }
         if segments.count == 2 {
             switch (request.method, segments[1]) {
             case ("GET", "json"): return plain
