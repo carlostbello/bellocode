@@ -63,7 +63,7 @@ let targets: [Target] =
     library("BelloCore")
     + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
     + library(
-        "Engine", dependencies: ["BelloCore", "OpenCodeKit", "ContainerKit", .product(name: "GRDB", package: "GRDB.swift")],
+        "Engine", dependencies: ["BelloCore", "OpenCodeKit", "ContainerKit", "SecretKit", .product(name: "GRDB", package: "GRDB.swift")],
         testDependencies: ["MockOpenCode"]
     )
     + library("DesignSystem", dependencies: ["BelloCore"])
@@ -93,6 +93,8 @@ let targets: [Target] =
     + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
     // M6-A: Docker Engine API client over Rancher Desktop's socket, workspace containers (docs/features/containers.md).
     + library("ContainerKit")
+    // Secret manager (docs/features/secrets.md): binding rules, value scanner, the placeholder egress proxy and its CA.
+    + library("SecretKit", dependencies: ["BelloCore", "ContainerKit"], testDependencies: ["ContainerKit"])
     + [
         // M6-A: the shell opencode is configured with; forwards every command into the workspace container. Bundled in
         // Contents/Helpers.
