@@ -124,3 +124,24 @@ extension Engine {
             directory: session.directory, projectDirectory: projectDirectory, projectID: session.projectID, deleteBranch: false, force: false)
     }
 }
+
+extension Engine {
+    /// T3 Code "worktree branch naming": the thread's model proposes a branch name from the first prompt; the
+    /// temporary slug branch is renamed only if it has no upstream yet and the proposal is valid and unused.
+    /// Returns the new name, or nil when the slug stays.
+    @discardableResult
+    public func renameGeneratedBranch(_ id: SessionID, created: CreatedWorktree, firstPrompt: String) async -> String? {
+        // The temporary name is `<prefix><slug>`; the proposal keeps the same prefix.
+        let prefix = created.branch.lastIndex(of: "/").map { String(created.branch[...$0]) } ?? ""
+        guard let reply = try? await generateText(in: id, prompt: GitTextGeneration.branchPrompt(firstPrompt: firstPrompt, prefix: prefix)),
+              let proposal = GitTextGeneration.branchName(from: reply, prefix: prefix), proposal != created.branch
+        else { return nil }
+        let repository = GitRepository(directory: created.directory, runner: git.runner)
+        guard let status = try? await repository.status(limit: 1), status.branch == created.branch, status.upstream == nil,
+              (try? await repository.resolves("refs/heads/\(proposal)")) == false
+        else { return nil }
+        guard (try? await repository.git(["branch", "-m", created.branch, proposal])) != nil else { return nil }
+        git.refreshAll(under: created.directory)
+        return proposal
+    }
+}

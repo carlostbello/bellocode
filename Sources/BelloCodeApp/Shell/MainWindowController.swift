@@ -46,6 +46,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private(set) var terminals: TerminalSurfaces?
     /// The window's "Changes" tab (M2-C; MainWindowController+Changes.swift).
     private(set) var changes: ChangesSurfaces?
+    /// Git parity: the git actions models and open popovers (MainWindowController+Git.swift).
+    let gitUI = GitUIState()
     /// The window's built-in browser ("Browser" tab).
     private(set) var browser: BrowserSurfaces?
     /// The window's Agents panel ("Agents" tab, M3-A; MainWindowController+Agents.swift).
@@ -218,6 +220,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             rightPanel.setCount(nil, for: "agents")
             header.openButton.isHidden = true
             header.commitButton.isHidden = true
+            header.gitMenuButton.isHidden = true
             header.needsLayout = true
             return
         }
@@ -239,7 +242,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         let hiddenChanged = header.openButton.isHidden || header.commitButton.isHidden != !isRepository
         header.openButton.isHidden = false
         header.commitButton.isHidden = !isRepository
-        if hiddenChanged || hint != nil { header.needsLayout = true }
+        header.gitMenuButton.isHidden = !isRepository
+        if updateGitHeader(repository) || hiddenChanged || hint != nil { header.needsLayout = true }
     }
 
     @objc func openProjectInTerminal(_ sender: Any?) {
@@ -325,6 +329,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     func commandContext(target: CommandTarget? = nil) -> CommandContext {
         var context = baseCommandContext(target: target)
         context.agents = agentsCommandState()
+        context.git = gitCommandState()
         return context
     }
 
@@ -534,9 +539,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             // Answered by the app delegate (they reach it through the responder chain before this window).
             NSApp.sendAction(command.selector, to: nil, from: nil)
         case .showChanges, .nextChange, .previousChange, .nextChangedFile, .previousChangedFile, .addReviewComment, .openInEditor,
-            .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .createMergeRequest, .toggleDiffLayout,
+            .revertHunk, .revertFile, .revertTurn, .commitChanges, .createMergeRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .chooseWorkspace, .chooseBranch, .removeWorktree:
             performChanges(command)
+        case .pushBranch, .gitQuickAction, .showGitActions, .commitAndPush, .pullBranch, .pullRebase, .fetchRemote, .syncBranch, .publishToGitLab,
+            .switchRemoteToHTTPS, .abortGitOperation, .restoreStashedChanges, .cloneFromGitLab, .newGitProject, .moveToNewWorktree, .editFromHere,
+            .toggleAutoPull, .toggleCleanupOnSettle, .toggleCleanupOnArchive:
+            performGit(command)
         case .showAgents, .nextAgent, .previousAgent, .openAgent, .followUpAgent, .stopAgentTree, .openParentThread:
             performAgents(command)
         case .showMergeRequests:

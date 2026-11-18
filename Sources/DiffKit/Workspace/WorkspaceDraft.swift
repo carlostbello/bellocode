@@ -166,6 +166,7 @@ public final class WorkspaceDraft {
                     phase = .failed("The worktree was created, but its setup script failed (exit \(setup.exitCode))\(setup.omittedBytes > 0 ? ", output shortened" : ""): \(first.prefix(160))")
                 }
                 branchName = ""
+                autoNamed = requested.isEmpty && preferences.generateBranchNames != false ? created : nil
                 await reloadWorktrees()
                 return (created.directory, created)
             } catch {
@@ -176,4 +177,11 @@ public final class WorkspaceDraft {
     }
 
     public func clearFailure() { if case .failed = phase { phase = .idle } }
+
+    /// Git parity: the worktree just created with a branch named from the prompt's slug (once).
+    @ObservationIgnored private var autoNamed: CreatedWorktree?
+    public func takeAutoNamedWorktree() -> CreatedWorktree? {
+        defer { autoNamed = nil }
+        return autoNamed
+    }
 }

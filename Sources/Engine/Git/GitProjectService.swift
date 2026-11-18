@@ -78,7 +78,8 @@ public final class GitProjectService {
     }
 
     /// Starts cloning `url` into `destination` (which must not exist or be empty) and returns at once. The project is
-    /// added to the sidebar when the clone finishes; `job(for:)` lets the composer wait.
+    /// added to the sidebar at once (T3 Code: it opens right away); `job(for:)` lets the composer's send wait for the
+    /// files. A failed clone leaves the project listed with the job's error and Retry.
     @discardableResult
     public func clone(url: String, into destination: String) throws -> GitCloneJob {
         let manager = FileManager.default
@@ -91,22 +92,32 @@ public final class GitProjectService {
         clones.append(job)
         if clones.count > 16 { clones.removeFirst(clones.count - 16) }
         let runner = git.runner
+        try manager.createDirectory(atPath: destination, withIntermediateDirectories: true)
+        let add = addProject
+        Task { await add(destination) }
         job.task = Task { [weak self, weak job] in
             let result: GitCloneJob.State
             do {
                 _ = try await runner.run(["clone", "--quiet", "--", url, destination], in: parent, timeout: .seconds(1_800), writableRoots: [parent])
                 result = .finished
             } catch is CancellationError {
-                try? FileManager.default.removeItem(atPath: destination)
+                Self.empty(destination)
                 result = .cancelled
             } catch {
-                try? FileManager.default.removeItem(atPath: destination)
+                Self.empty(destination)
                 result = .failed((error as? GitError)?.userMessage ?? "The clone failed.")
             }
-            if result == .finished { await self?.addProject(destination) }
+            if result == .finished { self?.git.refreshAll(under: destination) }
             job?.finish(result)
         }
         return job
+    }
+
+    /// Removes what a failed clone left inside `destination`, keeping the (listed) folder itself.
+    nonisolated static func empty(_ destination: String) {
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: destination)) ?? [] {
+            try? FileManager.default.removeItem(atPath: (destination as NSString).appendingPathComponent(name))
+        }
     }
 
     /// Starts the same clone again after a failure or cancel.

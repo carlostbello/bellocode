@@ -248,6 +248,7 @@ final class WorkspaceController {
                     if selected != nil { self.select(fallback) }
                     self.noteClosed(ids)
                     for id in ids { self.run { try await engine.setArchived(id, true) } }
+                    self.applyWorktreeCleanup(ids, trigger: .archived)
                 },
                 revert: { [weak self] in
                     for id in ids { self?.run { try await engine.setArchived(id, false) } }

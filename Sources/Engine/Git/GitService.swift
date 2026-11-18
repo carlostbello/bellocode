@@ -159,6 +159,9 @@ public final class GitService {
         worktrees.runner = next
     }
 
+    /// The model of `directory` only if it is already cached (sidebar rows never create models).
+    public func cachedRepository(for directory: String) -> GitRepositoryModel? { models[directory] }
+
     /// Refreshes every cached model of `directory` and below (after a turn, a commit or a worktree change).
     public func refreshAll(under directory: String? = nil) {
         for (key, model) in models where directory == nil || key == directory || key.hasPrefix(directory! + "/") { model.refresh() }

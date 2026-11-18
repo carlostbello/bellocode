@@ -33,6 +33,9 @@ struct GitProjectTests {
         let job = try service.clone(url: setup.remote, into: destination)
         #expect(job.state == .cloning)
         #expect(service.job(for: destination) === job)
+        // The project is listed at once (the person can start typing).
+        for _ in 0..<100 where added.paths.withLock(\.isEmpty) { await Task.yield() }
+        #expect(added.paths.withLock { $0 } == [destination])
         // The person types and presses Send: the send waits here.
         let typed = "Explain the README"
         await job.waitUntilDone()
@@ -54,7 +57,7 @@ struct GitProjectTests {
         let job = try service.clone(url: setup.server.url + "/group/missing.git", into: destination)
         await job.waitUntilDone()
         guard case .failed = job.state else { Issue.record("expected failure, got \(job.state)"); return }
-        #expect(!FileManager.default.fileExists(atPath: destination) && added.paths.withLock(\.isEmpty))
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: destination)) ?? []).isEmpty)
         try setup.server.makeRepository("group/missing.git")
         _ = try await setup.runner.run(["push", "-q", setup.server.url + "/group/missing.git", "main"], in: setup.repo.path)
         let again = try service.retry(job)

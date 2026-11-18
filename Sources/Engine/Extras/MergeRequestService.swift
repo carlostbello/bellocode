@@ -191,6 +191,9 @@ public final class MergeRequestService {
         }
     }
 
+    /// Git parity: namespaces a project can be published into (Publish to GitLab).
+    public func namespaces(_ instance: GitLabInstance) async throws -> [GitLabNamespace] { try await provider.namespaces(instance) }
+
     // MARK: Instances and tokens (Settings ▸ GitLab)
 
     /// Adds (or updates the token of) an instance. The token goes straight to the Keychain.
