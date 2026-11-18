@@ -130,7 +130,7 @@
 
 ## Built-ins
 
-- agents: {"added": [], "removed": [], "permissionsChanged": ["build", "compaction", "explore", "general", "plan", "summary", "title"]}
+- agents: {"added": [], "removed": [], "permissionsChanged": []}
 - skills: {"added": [], "removed": []}
 - commands: {"added": [], "removed": []}
 - plugins: {"added": ["opencode.tool.automation"], "removed": ["opencode.tool.schedule"]}

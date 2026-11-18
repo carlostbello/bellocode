@@ -29,6 +29,16 @@
      "question",
      "*",
      "allow"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
+     "deny"
     ]
    ]
   },
@@ -56,6 +66,16 @@
      "read",
      "*.env.example",
      "allow"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
+     "deny"
     ]
    ]
   },
@@ -143,6 +163,16 @@
      "external_directory",
      "*",
      "allow"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
+     "deny"
     ]
    ]
   },
@@ -179,6 +209,16 @@
     [
      "subagent",
      "*",
+     "deny"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
      "deny"
     ]
    ]
@@ -222,6 +262,16 @@
      "edit",
      "<sandbox>/home/.opencode/plan/*",
      "allow"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
+     "deny"
     ]
    ]
   },
@@ -254,6 +304,16 @@
      "*",
      "*",
      "deny"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
+     "deny"
     ]
    ]
   },
@@ -285,6 +345,16 @@
     [
      "*",
      "*",
+     "deny"
+    ],
+    [
+     "browser",
+     "*",
+     "deny"
+    ],
+    [
+     "skill",
+     "browser",
      "deny"
     ]
    ]

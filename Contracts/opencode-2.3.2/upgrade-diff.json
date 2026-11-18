@@ -17,15 +17,7 @@
  "builtins": {
   "agents": {
    "added": [],
-   "permissionsChanged": [
-    "build",
-    "compaction",
-    "explore",
-    "general",
-    "plan",
-    "summary",
-    "title"
-   ],
+   "permissionsChanged": [],
    "removed": []
   },
   "commands": {

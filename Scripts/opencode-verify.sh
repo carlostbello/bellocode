@@ -116,7 +116,7 @@ if grep -q $'^build\tPASS' "$RESULTS"; then
     run_area orchestration-real 5 BELLOCODE_ORCH_REAL=1 -- "${T[@]}" --filter "OrchestrationRealBinary"
     run_area extras-real 7 BELLOCODE_EXTRAS_REAL=1 -- "${T[@]}" --filter "ExtrasRealBinary"
     run_area gitlab-real 3 BELLOCODE_GITLAB_REAL=1 -- "${T[@]}" --filter "GitLabRealBinary"
-    run_area shell-e2e 2 BELLOCODE_SHELL_E2E=1 -- "${T[@]}" --filter "RealServer"
+    run_area shell-e2e 2 BELLOCODE_SHELL_E2E=1 -- "${T[@]}" --filter "BelloCodeAppTests.RealServerTests"
   else
     for area in g2-kill-resync prompt-retry orchestration-real extras-real gitlab-real shell-e2e; do skip_area "$area" "--quick"; done
   fi

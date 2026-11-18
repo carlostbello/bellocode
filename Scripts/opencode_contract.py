@@ -165,6 +165,17 @@ class Server:
             time.sleep(0.25)
         return (body.get("data") if isinstance(body, dict) else body) or []
 
+    def stable_list(self, path, attempts=20):
+        """`warm_list` until two reads half a second apart agree (plugins keep adding to a list as they load)."""
+        previous = self.warm_list(path)
+        for _ in range(attempts):
+            time.sleep(0.5)
+            current = self.warm_list(path)
+            if current == previous:
+                return current
+            previous = current
+        return previous
+
     def close(self):
         try:
             if self.process.stdin:
@@ -288,11 +299,8 @@ def capture(args):
             raise RuntimeError("no /openapi.json")
         with open(os.path.join(out_dir, "openapi.json"), "w") as f:
             json.dump(openapi, f, separators=(",", ":"))
-        agents = server.warm_list("/api/agent")
-        surface["agents"] = sorted(
-            [{"id": a.get("id"), "mode": a.get("mode"), "hidden": a.get("hidden"),
-              "permissions": [[r.get("action"), server.normalize(r.get("resource") or ""), r.get("effect")] for r in (a.get("permissions") or a.get("permission") or [])]}
-             for a in agents], key=lambda a: a["id"] or "")
+        agents = server.stable_list("/api/agent")
+        surface["agents"] = agent_list(server, agents)
         surface["skills"] = sorted(s.get("id") for s in server.warm_list("/api/skill"))
         surface["commands"] = sorted(c.get("name") for c in server.warm_list("/api/command"))
         surface["plugins"] = sorted(p.get("id") or p.get("name") or json.dumps(p, sort_keys=True) for p in (server.get("/api/plugin").get("data") or []))
@@ -322,6 +330,9 @@ def capture(args):
             json.dump(catalog, f, indent=1, sort_keys=True)
         surface["permissions"] = permission_matrix(server, {a["id"]: a for a in surface["agents"]})
         surface["browser"] = browser_probe(server, surface.get("browserBridgeVersion"))
+        # Built-in plugins add agent rules as they load (the browser plugin's denies), so the first list of a cold
+        # location can be incomplete: record the list once the location has served everything above.
+        surface["agents"] = agent_list(server, server.stable_list("/api/agent"))
     finally:
         server.close()
 
@@ -353,6 +364,14 @@ def capture(args):
     with open(os.path.join(out_dir, "surface.json"), "w") as f:
         json.dump(surface, f, indent=1, sort_keys=True)
     log("captured %s into %s (%d model prompt%s)" % (surface.get("version"), out_dir, surface["prompts"], "" if surface["prompts"] == 1 else "s"))
+
+
+def agent_list(server, agents):
+    return sorted(
+        [{"id": a.get("id"), "mode": a.get("mode"), "hidden": a.get("hidden"),
+          "permissions": [[r.get("action"), server.normalize(r.get("resource") or ""), r.get("effect")]
+                          for r in (a.get("permissions") or a.get("permission") or [])]}
+         for a in agents], key=lambda a: a["id"] or "")
 
 
 def permission_matrix(server, agents):
