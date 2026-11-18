@@ -1098,6 +1098,28 @@ public final class EnvironmentService {
         for model in models.values where model.phase == .ready { refreshImageAndPhase(model) }
     }
 
+    // MARK: Housekeeping
+
+    /// What "Prune BelloCode Resources…" would remove now (listed before anything is removed). Volumes of projects
+    /// BelloCode still has are kept, and only images BelloCode itself pulled are candidates.
+    public func prunePlan() async throws -> PrunePlan {
+        guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
+        guard runtime?.isReady == true else { throw EnvironmentBlockedError(message: runtime?.userMessage ?? "Rancher Desktop is not ready.") }
+        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+    }
+
+    /// Removes exactly the confirmed items that still qualify. Cannot be undone.
+    public func prune(_ plan: PrunePlan) async throws -> PruneResult {
+        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+        let removedImages = Set(plan.images.filter { result.removed.contains($0.name) }.map(\.id))
+        if !removedImages.isEmpty {
+            pulledImageIDs.subtract(removedImages)
+            try? await store.setPreference(Self.pulledImagesKey, Array(pulledImageIDs).sorted())
+        }
+        for model in models.values { refreshImageAndPhase(model) }
+        return result
+    }
+
     // MARK: Image policy
 
     /// The policy in force: the administrator's (managed) or the one set in Settings.

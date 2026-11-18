@@ -238,6 +238,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await engine.environments.verifyIsolation(full: true) }
     }
 
+    /// Window ▸ Prune BelloCode Resources…: opens Settings ▸ Containers and lists what would be removed.
+    @objc func pruneContainerResources(_ sender: Any?) {
+        openSettings(pane: "containers")
+        Task { @MainActor in await ContainersSettingsModel.last?.confirmPrune() }
+    }
+
     @objc func connectProvider(_ sender: Any?) { openConnect(nil) }
 
     @objc func showWelcome(_ sender: Any?) { showOnboarding() }

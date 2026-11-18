@@ -266,6 +266,7 @@ enum MainMenu {
         menu.add(.showContainers)
         menu.add(.showEnvironment)
         menu.add(.verifyIsolation)
+        menu.add(.pruneContainerResources)
         menu.addItem(.separator())
         menu.addItem(title: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), key: "")
         return menu

@@ -294,6 +294,8 @@ public struct ContainerSummary: Decodable, Sendable, Equatable {
     public var labels: [String: String]
     /// Creation time, seconds since 1970.
     public var created: Int64?
+    /// The image the container runs (`sha256:…`).
+    public var imageID: String?
 
     public init(id: String, names: [String], image: String, state: String, status: String? = nil, labels: [String: String],
                 created: Int64? = nil) {
@@ -311,7 +313,7 @@ public struct ContainerSummary: Decodable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id = "Id", names = "Names", image = "Image", state = "State", status = "Status", labels = "Labels"
-        case created = "Created"
+        case created = "Created", imageID = "ImageID"
     }
 }
 

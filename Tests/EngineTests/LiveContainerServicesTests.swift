@@ -171,4 +171,54 @@ struct LiveContainerServicesTests {
             #expect(Set(caches.filter { $0.projectDirectory == project }.compactMap(\.cache)) == [.npm, .pnpm])
         }
     }
+
+    @Test func pruneRemovesOnlyTheListedBelloCodeResources() async throws {
+        guard try await client.inspectImage(Self.workspaceImage) != nil else { Issue.record("needs \(Self.workspaceImage)"); return }
+        let foreign = "bellocode-test-foreign-\(UUID().uuidString.prefix(6).lowercased())"
+        try await client.createVolume(name: foreign, labels: ["app.bellocode.test": "1"])
+        do {
+            try await pruneScenario(foreign: foreign)
+        } catch {
+            try? await client.removeVolume(foreign)
+            throw error
+        }
+        try? await client.removeVolume(foreign)
+    }
+
+    func pruneScenario(foreign: String) async throws {
+        try await withProject(["compose.yaml": "services:\n  cache:\n    image: \(Self.serviceImage)\n"]) { service, project in
+            var settings = service.environment(for: project).settings
+            settings.image = Self.workspaceImage
+            await service.update(project, settings: settings)
+            service.activate(project)
+            let model = service.environment(for: project)
+            try await waitUntil("ready", timeout: .seconds(120)) { model.phase == .ready }
+            let running = await waitUntilAsync(timeout: .seconds(120)) {
+                await service.refreshServices(project)
+                return model.services.first?.phase == .running
+            }
+            #expect(running)
+            // Stop everything: the workspace and the service are now stopped BelloCode containers.
+            service.stopServices(model)
+            service.stopContainer(project)
+            let stopped = await waitUntilAsync(timeout: .seconds(60)) {
+                let containers = (try? await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(model.projectKey)"])) ?? []
+                return containers.count == 2 && containers.allSatisfy { !$0.isRunning }
+            }
+            #expect(stopped)
+            // As if the project were gone from BelloCode; confirm only this project's items (other sessions' stay).
+            let full = try await service.activeRuntime.prunePlan(keepProjectKeys: [], pulledImageIDs: [])
+            var plan = PrunePlan()
+            plan.containers = full.containers.filter { $0.name.contains(model.projectKey) }
+            plan.networks = full.networks.filter { $0.name.contains(model.projectKey) }
+            #expect(plan.containers.count == 2 && plan.networks.count == 1, "\(full)")
+            #expect(!full.volumes.contains { $0.name == foreign }, "an unlabelled volume is never a candidate")
+            let result = try await service.activeRuntime.prune(plan, keepProjectKeys: [], pulledImageIDs: [])
+            #expect(result.removed.count == 3 && result.kept.isEmpty, "\(result)")
+            #expect(try await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(model.projectKey)"]).isEmpty)
+            #expect(try await client.listVolumes(labels: []).contains(foreign), "nothing outside the confirmed list is touched")
+            #expect(try await client.listVolumes(labels: ["\(WorkspaceSpec.labelProjectKey)=\(model.projectKey)"]).contains("bellocode-\(model.projectKey)-home"),
+                    "a volume that was in use when listed is not removed")
+        }
+    }
 }

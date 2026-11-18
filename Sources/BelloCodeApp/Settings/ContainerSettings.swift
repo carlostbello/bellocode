@@ -122,6 +122,9 @@ final class ContainersSettingsModel: ObservableObject {
     @Published var pullPolicy: ImagePolicy.PullPolicy
     @Published var requireSignature: Bool
 
+    /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
+    static weak var last: ContainersSettingsModel?
+
     init(engine: Engine) {
         self.engine = engine
         engine.environments.reloadManagedPolicy()
@@ -167,6 +170,48 @@ final class ContainersSettingsModel: ObservableObject {
     func reload() async {
         containers = await service.managedContainers()
         caches = await service.cacheVolumes()
+    }
+
+    /// "Prune BelloCode Resources…": lists exactly what would be removed (stopped BelloCode containers, unused
+    /// BelloCode volumes of projects BelloCode no longer has, unattached BelloCode networks, unused images BelloCode
+    /// pulled), asks once (cannot be undone), then removes only those that still qualify.
+    func confirmPrune() async {
+        let plan: PrunePlan
+        do { plan = try await service.prunePlan() } catch {
+            message = "Could not list BelloCode's resources: \(error)"
+            return
+        }
+        guard !plan.isEmpty else {
+            message = "Nothing to prune: no stopped BelloCode containers, unused volumes, networks or pulled images."
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Remove \(plan.count) BelloCode resource\(plan.count == 1 ? "" : "s")?"
+        var sections: [String] = []
+        func section(_ title: String, _ items: [PrunePlan.Item]) {
+            guard !items.isEmpty else { return }
+            sections.append(title + ":\n" + items.map { "• \($0.name) (\($0.detail))" }.joined(separator: "\n"))
+        }
+        section("Stopped containers", plan.containers)
+        section("Unused volumes", plan.volumes)
+        section("Unused networks", plan.networks)
+        section("Unused images BelloCode pulled", plan.images)
+        sections.append("Only resources labelled as BelloCode's are listed; nothing else on Rancher Desktop is touched. Volume contents are lost. This cannot be undone.")
+        alert.informativeText = sections.joined(separator: "\n\n")
+        let remove = alert.addButton(withTitle: "Remove \(plan.count) Item\(plan.count == 1 ? "" : "s")")
+        remove.hasDestructiveAction = true
+        remove.keyEquivalent = ""
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            let result = try await service.prune(plan)
+            message = "Removed \(result.removed.count) item\(result.removed.count == 1 ? "" : "s")."
+                + (result.kept.isEmpty ? "" : " Kept \(result.kept.count) that changed since: \(result.kept.joined(separator: ", ")).")
+        } catch {
+            message = "Prune failed: \(error)"
+        }
+        await reload()
     }
 
     /// "Clean…" on a cache: confirms (the contents are deleted), then deletes the volume.
@@ -272,7 +317,13 @@ struct ContainersSettingsView: View {
                     }
                 }
             }
-            SettingsGroup("Containers") {
+            SettingsGroup("Containers", footer: "Prune removes stopped BelloCode containers, unused BelloCode volumes of projects no longer in BelloCode, unattached BelloCode networks and unused images BelloCode pulled, after listing them. Nothing else is touched.") {
+                SettingsActionsRow(divided: false) {
+                    Text("\(model.containers.count) container\(model.containers.count == 1 ? "" : "s")").font(.ds(.label)).foregroundStyle(DSColor.text2)
+                    Spacer()
+                    Button("Prune BelloCode Resources…") { Task { await model.confirmPrune() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                        .disabled(service.runtime?.isReady != true)
+                }
                 if model.containers.isEmpty {
                     SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs", divided: false) {
                         EmptyView()

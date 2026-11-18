@@ -62,6 +62,10 @@ public protocol WorkspaceRuntime: Sendable {
     // MARK: Caches
     func cacheVolumes() async throws -> [CacheVolume]
     func cleanCache(_ name: String) async throws
+
+    // MARK: Housekeeping
+    func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan
+    func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult
 }
 
 extension WorkspaceRuntime {
@@ -80,6 +84,8 @@ extension WorkspaceRuntime {
     }
     public func cacheVolumes() async throws -> [CacheVolume] { [] }
     public func cleanCache(_ name: String) async throws {}
+    public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan { PrunePlan() }
+    public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult { PruneResult() }
 }
 
 /// Rancher Desktop through ContainerKit.
@@ -178,4 +184,10 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     }
     public func cacheVolumes() async throws -> [CacheVolume] { try await manager.cacheVolumes() }
     public func cleanCache(_ name: String) async throws { try await manager.cleanCache(name) }
+    public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan {
+        try await manager.prunePlan(keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
+    }
+    public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult {
+        try await manager.prune(plan, keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
+    }
 }
