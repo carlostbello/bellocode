@@ -376,3 +376,28 @@ struct GitLabPollingTests {
         again.shutdown()
     }
 }
+
+@Suite
+struct MergeRequestDraftTests {
+    @Test func templateFromBranchAndCommits() {
+        #expect(MergeRequestTemplate.make(branch: "feat/launch-checklist", commits: ["a", "b"]).title == "Launch checklist")
+        #expect(MergeRequestTemplate.make(branch: "x", commits: ["Fix parser"]).title == "Fix parser")
+        #expect(MergeRequestTemplate.make(branch: "x", commits: ["a", "b"]).description.contains("- b"))
+        let parsed = MergeRequestTemplate.parse("Title: **Parser rewrite**\n\nBody line")
+        #expect(parsed?.title == "Parser rewrite")
+        #expect(parsed?.description == "Body line")
+    }
+
+    @Test func draftPayloadIsExactAndValidated() throws {
+        var draft = MergeRequestDraft(sourceBranch: "feat/x", targetBranch: "main", title: "Draft: Parser", draft: false, reviewerIDs: [11])
+        #expect(draft.effectiveTitle == "Parser", "a typed Draft: prefix is the draft switch's job")
+        draft.draft = true
+        #expect(draft.effectiveTitle == "Draft: Parser")
+        let object = try JSONSerialization.jsonObject(with: JSONLike.object(draft.payload).data) as? [String: Any]
+        #expect(object?["title"] as? String == "Draft: Parser")
+        #expect(object?["reviewer_ids"] as? [Int] == [11])
+        #expect(object?["assignee_ids"] == nil)
+        #expect(MergeRequestDraft(sourceBranch: "main", targetBranch: "main", title: "x").problems.contains { $0.contains("same") })
+        #expect(MergeRequestDraft(sourceBranch: "a", targetBranch: "main", title: "Draft:").problems.contains { $0.contains("title") })
+    }
+}

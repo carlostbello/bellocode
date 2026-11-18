@@ -6,23 +6,28 @@ import SwiftUI
 
 /// Words for MR chips and rows (status is never colour only: a glyph and words every time).
 public enum MergeRequestText {
-    /// "!42 Open · ✓ Pipeline passed" (header chip). Draft MRs say "Draft".
+    /// "!42 Draft · ✕ Pipeline failed · 1/2 approvals" (header chip). Status is a glyph and words, never colour only.
     public static func chip(_ link: LinkedMergeRequest, _ snapshot: MergeRequestSnapshot?) -> String {
-        guard let snapshot else { return "!\(link.ref.iid)" + (link.watching ? " · Watching" : "") }
+        guard let snapshot else { return "!\(link.ref.iid)" + (link.watching ? " · Babysitting" : "") }
         var parts = ["!\(link.ref.iid) \(snapshot.stateLabel)"]
         if snapshot.state == .opened {
             let pipeline = snapshot.pipelineSummary
             if pipeline != .none { parts.append("\(pipeline.glyph) \(pipeline.text)") }
+            if snapshot.approvals.required > 0 || !snapshot.approvals.approvedBy.isEmpty { parts.append(approvalCount(snapshot)) }
         }
         return parts.joined(separator: " · ")
     }
 
-    /// "!42 ✓" (sidebar: compact).
+    /// "!42 Draft ✕ 1/2" (sidebar: compact; the pipeline glyph, the approval count, Draft as a word).
     public static func compact(_ link: LinkedMergeRequest, _ snapshot: MergeRequestSnapshot?) -> String {
         guard let snapshot else { return "!\(link.ref.iid)" }
         if snapshot.state.isTerminal { return "!\(link.ref.iid) \(snapshot.state.label)" }
         let pipeline = snapshot.pipelineSummary
-        return "!\(link.ref.iid)" + (snapshot.draft ? " Draft" : "") + (pipeline == .none ? "" : " \(pipeline.glyph)")
+        var text = "!\(link.ref.iid)" + (snapshot.draft ? " Draft" : "") + (pipeline == .none ? "" : " \(pipeline.glyph)")
+        if snapshot.approvals.required > 0 { text += " \(snapshot.approvals.required - snapshot.approvals.left)/\(snapshot.approvals.required)" } else if !snapshot.approvals.approvedBy.isEmpty {
+            text += " ✓\(snapshot.approvals.approvedBy.count)"
+        }
+        return text
     }
 
     public static func accessibility(_ link: LinkedMergeRequest, _ snapshot: MergeRequestSnapshot?) -> String {

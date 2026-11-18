@@ -137,3 +137,19 @@ struct MergeRequestPanelModelTests {
         #expect(host.links[thread]?.contains { $0.ref.iid == 6 } == true, "linked after GitLab acknowledged it")
     }
 }
+
+@Suite
+struct MergeRequestChipTests {
+    @Test func chipsCarryGlyphWordsApprovalsAndDraft() {
+        let ref = MergeRequestRef(instance: "https://g.test", projectPath: "a/b", iid: 42)
+        let link = LinkedMergeRequest(ref: ref, source: .user, linked: .now)
+        var snapshot = MergeRequestSnapshot(
+            ref: ref, title: "T", state: .opened, draft: true, pipeline: Pipeline(id: 1, status: "failed", jobs: [PipelineJob(id: 1, name: "u", status: "failed")]),
+            approvals: MergeRequestApprovals(approved: false, required: 2, left: 1, approvedBy: ["mara"]), fetched: .now)
+        #expect(MergeRequestText.chip(link, snapshot) == "!42 Draft · ✕ Pipeline failed (1 job) · 1/2 approvals")
+        #expect(MergeRequestText.compact(link, snapshot) == "!42 Draft ✕ 1/2")
+        snapshot.state = .merged
+        #expect(MergeRequestText.compact(link, snapshot) == "!42 Merged")
+        #expect(MergeRequestText.chip(link, nil) == "!42")
+    }
+}
