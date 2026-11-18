@@ -269,7 +269,10 @@ public struct WorkspaceManager: Sendable {
         if let projectKey { return try await client.listContainers(labels: Self.projectOnly(projectKey)) }
         let workspaces = try await client.listContainers(labels: ["\(WorkspaceSpec.labelWorkspace)=1"])
         let services = try await client.listContainers(labels: [ServiceLabels.service])
-        return workspaces + services.filter { service in !workspaces.contains { $0.id == service.id } }
+        // Containers the agent created through the filtered Docker endpoint (docker run, docker compose).
+        let agent = try await client.listContainers(labels: [DockerAgentLabels.agent])
+        var seen = Set(workspaces.map(\.id))
+        return workspaces + (services + agent).filter { seen.insert($0.id).inserted }
     }
 
     /// Commands of the container that are still running (relayed programs such as local MCP servers are not counted:
