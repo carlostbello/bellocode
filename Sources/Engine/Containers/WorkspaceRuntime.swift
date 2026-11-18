@@ -66,6 +66,23 @@ public protocol WorkspaceRuntime: Sendable {
     // MARK: Housekeeping
     func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan
     func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult
+
+    // MARK: Global MCP servers (docs/features/containers.md, "Global MCP servers")
+
+    /// Runs Rancher Desktop's `docker compose` (at `executable`) against this runtime's socket.
+    func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                 timeout: Duration) async throws -> ComposeCLI.Result
+    /// Forwards the stack's MCP endpoint (a port of one of its services, by container name) to the Mac's loopback through
+    /// a relay in that service's container; `prepare` runs before each connection (starts the stack on first use).
+    func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder
+    /// Containers of global image servers.
+    func mcpContainers() async throws -> [ContainerSummary]
+    /// Removes stopped image-server containers and those of servers that no longer exist.
+    func removeMCPLeftovers(knownIDs: Set<String>) async
+    /// Fetches `urls` from inside a container (network diagnostics); nil when the container cannot run the probe.
+    func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult]
+    /// Runs the trust-store update as root in a new workspace container (`CorporateNetwork.trustStoreUpdateScript`).
+    func updateTrustStore(container: String) async -> String
 }
 
 extension WorkspaceRuntime {
@@ -84,6 +101,17 @@ extension WorkspaceRuntime {
     }
     public func cacheVolumes() async throws -> [CacheVolume] { [] }
     public func cleanCache(_ name: String) async throws {}
+    public func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                        timeout: Duration) async throws -> ComposeCLI.Result {
+        throw ContainerError.notFound("docker compose is not available here")
+    }
+    public func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
+        throw ContainerError.notFound("stack forwarding is not available here")
+    }
+    public func mcpContainers() async throws -> [ContainerSummary] { [] }
+    public func removeMCPLeftovers(knownIDs: Set<String>) async {}
+    public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] { [] }
+    public func updateTrustStore(container: String) async -> String { "skipped" }
     public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan { PrunePlan() }
     public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult { PruneResult() }
 }
@@ -189,5 +217,25 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     }
     public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult {
         try await manager.prune(plan, keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
+    }
+    public func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                        timeout: Duration) async throws -> ComposeCLI.Result {
+        try await ComposeCLI(executable: executable, socketPath: socketPath, configDirectory: configDirectory)
+            .run(project: project, files: files, workingDirectory: workingDirectory, command: command, timeout: timeout)
+    }
+    public func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
+        try PortForwarder(client: client, container: container, containerPort: port, containerHost: "127.0.0.1", hostPort: hostPort, prepare: prepare)
+    }
+    public func mcpContainers() async throws -> [ContainerSummary] { try await ImageMCPRunner(client: client).containers() }
+    public func removeMCPLeftovers(knownIDs: Set<String>) async { await ImageMCPRunner(client: client).removeLeftovers(knownIDs: knownIDs) }
+    public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] {
+        let result = try await ExecSession.run(client: client, container: container, argv: NetworkProbe.script(urls: urls), user: user,
+                                               wrap: true, limit: 256 * 1024, timeout: .seconds(20 + 12 * urls.count))
+        return NetworkProbe.parse(String(decoding: result.stdout, as: UTF8.self), urls: urls)
+    }
+    public func updateTrustStore(container: String) async -> String {
+        let result = try? await ExecSession.run(client: client, container: container, argv: CorporateNetwork.trustStoreUpdateScript, user: "0:0",
+                                                wrap: false, limit: 4096, timeout: .seconds(60))
+        return result.map { String(decoding: $0.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? "failed"
     }
 }

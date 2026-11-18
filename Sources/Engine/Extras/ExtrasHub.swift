@@ -45,7 +45,7 @@ public final class ExtrasHub {
     public let visuals: VisualService
 
     @ObservationIgnored let core: EngineCore
-    @ObservationIgnored private weak var engine: Engine?
+    @ObservationIgnored weak var engine: Engine?
     @ObservationIgnored private var archived: Set<SessionID> = []
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "extras")
@@ -64,6 +64,8 @@ public final class ExtrasHub {
     @ObservationIgnored var secretCommandGrants: Set<String> = []
     /// GitLab changes agents asked for, waiting on their cards (in memory; at most 16).
     @ObservationIgnored var pendingGitLabWrites: [String: PendingGitLabWrite] = [:]
+    /// Pushes agents asked for, waiting on their cards (git parity; in memory, at most 8).
+    @ObservationIgnored var pendingGitPushes: [String: PendingGitPush] = [:]
     /// Projects where agents may babysit merge requests without asking (`app_grant` kind gitlabBabysit).
     @ObservationIgnored var babysitGrants: Set<String> = []
 
@@ -212,6 +214,7 @@ public final class ExtrasHub {
             case ExtrasTools.htmlRender: return try await htmlRender(arguments, caller)
             case let tool where GitLabTools.all.contains(tool):
                 return try await handleGitLab(call, caller: caller)
+            case GitPushTool.push: return try await handleGitPush(arguments, caller)
             default:
                 return .error("Unknown tool \(call.tool).")
             }
@@ -539,6 +542,10 @@ public final class ExtrasHub {
             case (.gitlabWrite, _):
                 await core.resolveAppRequest(id)
                 try await respondGitLabWrite(approval, response)
+                return
+            case (.gitPush, _), (.gitForcePush, _):
+                await core.resolveAppRequest(id)
+                try await respondGitPush(approval, response)
                 return
             case (.gitlabBabysit, _):
                 try await respondBabysit(approval, response)

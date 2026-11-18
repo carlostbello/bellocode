@@ -27,7 +27,7 @@ public enum ExtrasTools {
         scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkMergeRequests,
         unlinkMergeRequests, listThreadMergeRequests, watchMergeRequest, unwatchMergeRequest, requestSecret, secretFile,
         secretExec, htmlPreview, htmlRender,
-    ] + GitLabTools.all
+    ] + GitLabTools.all + GitPushTool.all
 
     static func string(_ description: String) -> JSONValue { .object(["type": .string("string"), "description": .string(description)]) }
     static func number(_ description: String) -> JSONValue { .object(["type": .string("number"), "description": .string(description)]) }
@@ -136,5 +136,5 @@ public enum ExtrasTools {
                     "html": string("The document."), "path": string("Or an .html file."), "title": string("Short title shown above it."),
                     "allowNetwork": strings("Host names to load from (asks the user)."),
                 ], required: ["title"])),
-    ] + GitLabTools.definitions
+    ] + GitLabTools.definitions + GitPushTool.definitions
 }

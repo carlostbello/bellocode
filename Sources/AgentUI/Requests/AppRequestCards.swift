@@ -182,6 +182,8 @@ struct AppApprovalCard: View {
         case .gitlabBabysit: "eye"
         case .gitlabWrite: "arrow.triangle.pull"
         case .serviceRestart: "arrow.clockwise"
+        case .gitPush: "arrow.up"
+        case .gitForcePush: "exclamationmark.arrow.triangle.2.circlepath"
         }
     }
 
@@ -193,6 +195,7 @@ struct AppApprovalCard: View {
         case .gitlabBabysit: "Always in This Project"
         case .gitlabWrite: "Always"
         case .serviceRestart: "Always in This Project"
+        case .gitPush, .gitForcePush: "Always"
         }
     }
 
@@ -204,6 +207,7 @@ struct AppApprovalCard: View {
         case .gitlabBabysit: "The merge request stays linked but does not wake the thread."
         case .gitlabWrite: "Nothing is sent to GitLab; the agent is told."
         case .serviceRestart: "The service keeps running as it is."
+        case .gitPush, .gitForcePush: "Nothing is pushed; the agent is told."
         }
     }
 
@@ -221,6 +225,10 @@ struct AppApprovalCard: View {
             "GitLab: \(approval.scope). Sent once, with your token, exactly as shown; GitLab's own permissions and branch rules still apply. Agents can never approve, merge or close."
         case .serviceRestart:
             "Project: \(approval.scope). Restarting stops the service briefly; its data volumes are kept. “Always” lets agents restart this project's services without asking again."
+        case .gitPush:
+            "Remote: \(approval.scope). Pushed once from this Mac with your GitLab token, exactly as shown; GitLab's branch rules still apply."
+        case .gitForcePush:
+            "Remote: \(approval.scope). A force push replaces the remote branch's history: commits only on the remote are lost there. Sent with --force-with-lease, so it fails if the remote moved since this card."
         }
     }
 }

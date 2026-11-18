@@ -142,7 +142,7 @@ public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
 /// HEAD in a randomly named folder and cannot start a new branch from a chosen base or from origin; see
 /// docs/features/diff-git.md). Callers ask opencode to `refreshWorktrees` afterwards so it adopts the folder.
 public struct WorktreeService: Sendable {
-    public let runner: GitRunner
+    public internal(set) var runner: GitRunner
     /// Moves a folder somewhere recoverable and returns its new location. Defaults to the Trash; tests use a holding
     /// folder of their own.
     let recycle: @Sendable (URL) throws -> URL

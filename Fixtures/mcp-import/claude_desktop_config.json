@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "--network", "none", "-e", "PGPASSWORD=fixture-password", "-v", "/Users/me/sql:/sql:ro", "mcp/postgres", "postgresql://db/app"]
+    },
+    "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] },
+    "privileged": { "command": "docker", "args": ["run", "-i", "--privileged", "acme/root-tool"] }
+  }
+}

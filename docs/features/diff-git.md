@@ -39,7 +39,8 @@ Status: done 2026-11-16 against opencode 2.3.0, MockOpenCode and throwaway git r
 - **Scopes**: This Turn (pick any turn), Branch vs base, Uncommitted (HEAD → working tree, with per-file staged and unstaged checkboxes), Commit (newest 100).
 - **Revert**: menu titles state the scope ("Discard Uncommitted Changes to X", "Revert This Turn’s Changes to X"). Revert hunk, file or turn apply at once with Undo (toast and ⌘Z). The only confirmations are removing a worktree that holds files of its own, and turn revert when files changed after the turn.
 - **Removing a worktree**: "clean" means no uncommitted, untracked *or ignored* files (`WorktreeService.contents`; ignored folders count once). A clean worktree is removed at once with Undo. Otherwise the confirmation names the counts and up to five paths (`.env`, `build/`); on confirmation those files are moved to the Trash in a folder named after the worktree (`RemovedWorktree.heldContents`), and Undo re-checks out the branch and moves them back byte for byte (staged changes come back unstaged). If the Trash was emptied meanwhile, Undo restores the checkout and says the files are gone. Redo repeats the confirmed removal.
-- **Commands** (Changes menu): Show Changes ⇧⌘D, Next/Previous Change ⌃⌘↓/↑, Next/Previous File ⌃⌘→/←, Add Review Comment ⇧⌘K, Open in Editor ⌘O, Choose Workspace ⇧⌘E, Choose Branch ⇧⌘B. Revert Hunk/File/Turn, Commit, Push, Create Merge Request, Side-by-Side, Ignore Whitespace, Wrap Lines and Remove Worktree have no shortcut.
+- **Git menu and header** (Git parity, [git-parity.md](git-parity.md)): the header's Commit button is the suggested git action (⌃⌘↩) with a ⌄ actions popover (⌃⌘G); Push ⌃⌘P, Pull ⌃⌘L, Fetch ⌃⌘R, Sync, Pull with Rebase, Abort, Restore Stashed Changes, Move Changes to New Worktree, Edit Last Prompt from Here, Clone from GitLab, New Project, Publish to GitLab, Switch Remote to HTTPS and the cleanup/auto-pull switches. The branch picker pages by 100 and offers Stash and Switch.
+- **Commands** (Changes menu): Show Changes ⇧⌘D, Next/Previous Change ⌃⌘↓/↑, Next/Previous File ⌃⌘→/←, Add Review Comment ⇧⌘K, Open in Editor ⌘O, Choose Workspace ⇧⌘E, Choose Branch ⇧⌘B. Revert Hunk/File/Turn, Commit, Create Merge Request, Side-by-Side, Ignore Whitespace, Wrap Lines and Remove Worktree have no shortcut.
 - **Keys in a focused diff**: n/j and p/k move between hunks, ]/[ between files, c comments, ←/→ scroll long lines, ⌘F/⌘G/⌘E find, ⌘C copies, Escape closes find.
 - **Review comments**: ComposerKit has no review-comment chip, so a comment becomes a named text attachment chip ("Review path:12–14.md") with the quoted lines.
 - **Shared shell files**: additive, grouped edits only:
@@ -98,9 +99,9 @@ Other measurements:
 - Branch-scope and commit-scope diffs show only hunks (no full texts, so no context expansion).
 - Wrapping assumes one column per character, so CJK text wraps late.
 - The setup script and worktree folder have no settings UI (preferences API only).
-- "Generate message" is a plain default (the file names).
+- ~~"Generate message" is a plain default~~: the Git parity package generates it with the thread's model ([git-parity.md](git-parity.md)).
 - Comment marks are not saved.
-- Push uses the user's git credentials without prompting; a push that needs authentication fails with git's message.
+- ~~Push uses the user's git credentials~~: HTTPS remotes on a configured GitLab instance authenticate with the Keychain token through the app's credential helper ([git-parity.md](git-parity.md) "HTTPS credentials"); other remotes still use the person's own helpers.
 - The image placeholder has no preview.
 
 ## Needs a human at the screen

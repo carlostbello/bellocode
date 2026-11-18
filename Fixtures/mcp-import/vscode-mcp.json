@@ -1,0 +1,14 @@
+{
+  // VS Code mcp.json with an input placeholder (fixture)
+  "inputs": [{ "type": "promptString", "id": "gitlab-token", "description": "GitLab token", "password": true }],
+  "servers": {
+    "gitlab": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "GITLAB_TOKEN", "-e", "GITLAB_URL=https://gitlab.example.com", "registry.example.com/mcp/gitlab:1"],
+      "env": { "GITLAB_TOKEN": "${input:gitlab-token}" }
+    },
+    "docs": { "type": "http", "url": "https://docs.example.com/mcp" },
+    "broken": { "type": "stdio", "command": "docker", "args": ["run", "--env-file", "/Users/me/.env", "acme/x"] }
+  }
+}

@@ -69,7 +69,9 @@ final class AppRuntime {
                      environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> AppRuntime {
         if let scenario = options.mock {
             guard LaunchOptions.allowsDevelopmentModes else { throw LaunchError.developmentOnly("Mock mode") }
-            if case .snapshot("containers") = options.mode { return try await makeMock(scenario, containers: true) }
+            if case .snapshot(let name) = options.mode, name == "containers" || name == "containers3" {
+                return try await makeMock(scenario, containers: true)
+            }
             return try await makeMock(scenario)
         }
         #if BELLOCODE_DEVELOPMENT
@@ -135,7 +137,18 @@ final class AppRuntime {
             helperURL: helpers.appending(path: "bellocode-exec"),
             execConfigURL: root.appending(path: "bellocode-exec.json"),
             gitShimDirectory: root.appending(path: "git-shim", directoryHint: .isDirectory))
+        // Corporate network (docs/features/containers.md): opencode's Bun runtime trusts the selected enterprise roots
+        // and uses the administrator's or the Mac's proxies (Bun reads neither the Keychain nor macOS proxy settings).
+        let enterprise = certificateDirectory(dataRoot: root).appending(path: CorporateNetwork.enterpriseName)
+        configuration.launchEnvironment = {
+            EnvironmentService.serverEnvironment(enterpriseBundle: enterprise, proxy: SystemProxySettings.current(), managed: ManagedNetworkPolicy.read())
+        }
         return configuration
+    }
+
+    /// Where the corporate network's certificate bundles are written (mounted read-only into containers).
+    nonisolated static func certificateDirectory(dataRoot: URL) -> URL {
+        dataRoot.appending(path: "network/certs", directoryHint: .isDirectory)
     }
 
     /// The engine's side of containerised execution for a bundled server configuration.
@@ -145,6 +158,10 @@ final class AppRuntime {
             helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
             runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
         configuration.gitShim = execution.gitShimDirectory?.appending(path: "git")
+        configuration.mcpLogDirectory = server.dataRoot.appending(path: "mcp-logs", directoryHint: .isDirectory)
+        configuration.opencodeConfigDirectory = server.configDirectory
+        configuration.certificateDirectory = certificateDirectory(dataRoot: server.dataRoot)
+        configuration.stackDirectory = server.dataRoot.appending(path: "mcp-stacks", directoryHint: .isDirectory)
         return configuration
     }
 
@@ -197,6 +214,14 @@ final class AppRuntime {
                 .init(policy: ImagePolicy(allowedPrefixes: ["registry.acme.internal"], pullPolicy: .missing), defaultImage: nil,
                       source: "configuration profile")
             }
+            // Containers 3: global MCP secrets in memory, the scripted Mac's enterprise roots (never the real Keychain),
+            // no proxy (a transparent one), bundles and logs in the temporary folder.
+            configuration.containers?.mcpVault = InMemorySecretVault()
+            configuration.containers?.mcpLogDirectory = directory.appending(path: "mcp-logs", directoryHint: .isDirectory)
+            configuration.containers?.certificateSource = SnapshotCertificates()
+            configuration.containers?.certificateDirectory = directory.appending(path: "certs", directoryHint: .isDirectory)
+            configuration.containers?.managedNetwork = { nil }
+            configuration.containers?.systemProxy = { SystemProxySettings() }
         }
         let suite = "com.bellocode.app.mock"
         return AppRuntime(

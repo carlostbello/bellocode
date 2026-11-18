@@ -1,0 +1,9 @@
+{
+  "numStartups": 12,
+  "mcpServers": {
+    "sentry": { "type": "http", "url": "https://mcp.sentry.example/mcp", "headers": { "Authorization": "Bearer fixture-sentry-token" } },
+    "plain": { "type": "sse", "url": "http://tools.internal.example/sse" },
+    "compose": { "type": "stdio", "command": "docker", "args": ["compose", "-f", "/Users/me/mcp/compose.yaml", "run", "mcp"] }
+  },
+  "projects": { "/Users/me/src/app": { "mcpServers": {} } }
+}

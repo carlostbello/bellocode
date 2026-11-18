@@ -53,6 +53,8 @@ public final class EngineRoot {
     /// The session list of a project. Created on first request (from the cache, synchronously populated by the
     /// launch snapshot for known projects).
     public func project(_ id: ProjectID) -> ProjectModel? { projectModels[id] }
+    /// Every loaded project model (git parity: which threads share a directory).
+    var loadedProjects: [ProjectModel] { Array(projectModels.values) }
 
     fileprivate func setProjects(_ projects: [Project], registry entries: [ProjectEntry]) {
         projectsByID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
@@ -138,6 +140,8 @@ public final class Engine {
     /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
     /// (docs/features/containers.md).
     public let environments: EnvironmentService
+    /// Git parity: clone from GitLab, publish, new projects (docs/features/git-parity.md).
+    public private(set) var gitProjects: GitProjectService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -201,6 +205,19 @@ public final class Engine {
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
         git.forgeInstances = { [weak mergeRequests] in mergeRequests?.instances ?? [] }
+        git.tokenScopes = { [weak mergeRequests] base in mergeRequests?.instanceStatus[base]?.token?.scopes }
+        gitProjects = GitProjectService(
+            git: git, provider: { [weak mergeRequests] in mergeRequests?.provider },
+            addProject: { [weak self] directory in await self?.addProject(directory: directory) })
+        // Git parity: HTTPS git to the configured GitLab instances authenticates with the Keychain token through
+        // `bellocode-exec --git-credential` (only with the bundled helper; tests configure their own).
+        if let helper = configuration.gitCredentialHelper ?? configuration.containers?.helperURL,
+           let broker = try? GitCredentialBroker(tokens: configuration.forgeTokens)
+        {
+            git.configureCredentials(GitCredentials(broker: broker, helperPath: helper.path))
+            mergeRequests.onInstancesChanged = { [broker] instances in broker.setInstances(instances) }
+            broker.setInstances(mergeRequests.instances)
+        }
     }
 
     /// The model of a thread that is open now, without opening it.
@@ -245,6 +262,8 @@ public final class Engine {
         // Every project's saved execution policy is in force before any project model can create, publish or use an
         // environment (S3 in docs/reviews/deep-review-1.md); the service also refuses until then.
         await environments.start()
+        await installCheckpoints()
+        await git.loadGlobalPreferences()
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.

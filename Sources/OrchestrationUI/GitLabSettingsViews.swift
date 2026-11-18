@@ -18,7 +18,11 @@ public final class GitLabSettingsModel {
     public private(set) var results: [String: String] = [:]
     public private(set) var message: String?
 
-    public init(service: MergeRequestService) { self.service = service }
+    /// The owner's instance is suggested until one is configured (the person still pastes the token).
+    public init(service: MergeRequestService) {
+        self.service = service
+        if service.instances.isEmpty { baseURL = GitLabInstance.suggestedBaseURL }
+    }
 
     public func save() async {
         let secret = token.isEmpty ? nil : SecretValue(token)
@@ -121,6 +125,8 @@ public struct GitLabSettingsView: View {
             }
             if let message = model.message { Text(message).foregroundStyle(SwiftUI.Color.ds.dangerText) }
             BabysitPolicyEditor(service: model.service)
+            Text("Git uses this token over HTTPS for clone, fetch, pull and push (scopes read_repository and write_repository, or api). It never reaches the agent, its container or the repository.")
+                .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             Text("Self-managed instances with a private CA work once that CA is trusted in Keychain Access (System trust store).")
                 .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
         }

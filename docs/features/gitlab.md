@@ -82,7 +82,7 @@ arrives. Archived threads are not polled; settled threads absorb (logged "Quiet"
 (Started, Woke, Waiting, Quiet, Retrying, Stopped) is on the MR card; the transcript shows the wake's first line.
 
 ## Inline review (GitLab 2)
-"Review Diff" on an MR card (⌃⌘R) opens the review over the Merge Requests tab (Back/Escape returns): the MR's latest
+"Review Diff" on an MR card (⌃⌥⌘R) opens the review over the Merge Requests tab (Back/Escape returns): the MR's latest
 version in the CoreText diff (virtualised; threads are extra rows, laid out per width and cached; only visible rows
 draw), "Version 2 of 2 · head …". **Anchoring** (`ReviewAnchoring`, pure): a thread sits under its line only when its
 position's base, start and head SHA equal the version shown and that line (new side, or old for removed lines;
@@ -92,7 +92,7 @@ Resolved, Comment, Draft, Outdated), author, relative time, note count; click/`o
 per note, "longer on GitLab"). Keys in the diff: `N`/`P` threads, `o` expand, `r` reply, `c` comment on the selection.
 Menu/context/VoiceOver actions: Reply…, Resolve/Reopen, Add to Agent Context (composer, quoted untrusted), Open in
 GitLab; drafts: Edit, Send Now, Discard (Undo). **Drafts**: replies and line/range comments (with GitLab line codes
-`sha1(path)_old_new`) are saved locally and sent only by Submit Review (⌃⌘↩, confirms; says whether it is one review or
+`sha1(path)_old_new`) are saved locally and sent only by Submit Review (⌃⌥⌘↩, confirms; says whether it is one review or
 one by one, and counts the person's *other* GitLab draft notes that bulk publish would also send). With draft notes:
 staged then one `bulk_publish` (a failure deletes the staged ones; local drafts stay); without: single notes, each
 removed locally once accepted. **Moved MR**: every send and resolve re-reads the versions first; if the head moved,
@@ -117,8 +117,8 @@ HEAD, through confined git; sections, `^[optional]`, `[n]` counts, default owner
 
 ## Menus and keyboard
 GitLab menu (additive): Show Merge Requests ⌃⌘M, Link Merge Request…, Create Merge Request, Refresh, Open in GitLab,
-Babysit/Stop Babysitting, Unlink, Review Merge Request Diff ⌃⌘R, Review ▸ (Next/Previous Thread ⌃⌥⌘] / ⌃⌥⌘[, Reply,
-Resolve/Reopen, Add Thread to Agent Context, Submit Review… ⌃⌘↩, Discard Drafts, Close Review), Show Failing Job Log,
+Babysit/Stop Babysitting, Unlink, Review Merge Request Diff ⌃⌥⌘R, Review ▸ (Next/Previous Thread ⌃⌥⌘] / ⌃⌥⌘[, Reply,
+Resolve/Reopen, Add Thread to Agent Context, Submit Review… ⌃⌥⌘↩, Discard Drafts, Close Review), Show Failing Job Log,
 Send Failure to Agent, Retry Failed Job, Run Manual Job…, Approve, Merge…, Show Issues ⌃⌘I, Start Thread from Issue…,
 Link Issue to Thread, Show To-dos ⌃⌘Y, Open To-do, Mark To-do Done. All are in the palette with a reason when disabled;
 `everyCommandHasAUniqueSelectorAndShortcut` and the Browser-menu disjointness test pass.

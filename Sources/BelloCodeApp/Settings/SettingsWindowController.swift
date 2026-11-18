@@ -93,6 +93,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     controller.sizingOptions = [.preferredContentSize]
                     return controller
                 })
+            // Containers 3: MCP servers for all projects (docs/features/containers.md, "Global MCP servers").
+            panes.append(
+                SettingsPane(id: "mcp", title: "MCP Servers", symbolName: "server.rack") {
+                    let model = MCPServersSettingsModel(engine: engine)
+                    MCPServersSettingsModel.last = model
+                    let controller = NSHostingController(rootView: MCPServersSettingsView(model: model, service: engine.environments))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
             if let extras = engine.extras {
                 // M3-B (docs/features/orchestration-extras.md).
                 panes.append(

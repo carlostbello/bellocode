@@ -74,7 +74,7 @@ carry `ToolCall.risk.autoApproval`: the transcript shows "✓ Auto-approved · r
 under the call (routine reads, todos, questions, skills, sub-agents stay quiet; the audit lists them). Right panel **Auto**
 tab: per-thread audit (cached first, ↑/↓/Return expand), counts, policy and reviewer. Thread ▸ Set Permission Mode: Ask
 ⌃⌥⌘1, Auto-edit ⌃⌥⌘2, Auto ⌃⌥⌘3, Full access ⌃⌥⌘4; Show Auto Audit Log ⌃⌘J; Mark Risk Notices Reviewed; Resume
-Interrupted Thread ⌃⌘P (uniqueness tests pass). The picker (⇧⌘A) lists Auto with what runs and what always asks.
+Interrupted Thread ⌃⌥⌘P (uniqueness tests pass). The picker (⇧⌘A) lists Auto with what runs and what always asks.
 
 ## Full access (and opencode-default) risk notices
 The reducer runs the same detectors on each tool call's input plus the evaluations the plugin stamped on its result
@@ -94,7 +94,7 @@ stopped). Rate limits per caller (3/5 min) and per target (2/5 min); a thread an
 (`bellocode_other_project`, escalated in Auto). Reported: requested `stop` vs actual `stopped|still_running|failed|not_running`
 plus the cascade report. The target gets `metadata.bellocode_interrupt` (`held: true`) and a parked
 `[BelloCode interrupt]` note; the caller's transcript shows "✕ Stopped “X”: reason · requested stop, stopped". The target's
-tray shows "Stopped by “Y”: reason. Its queued work is held until you resume." with Open Thread and **Resume** (⌃⌘P):
+tray shows "Stopped by “Y”: reason. Its queued work is held until you resume." with Open Thread and **Resume** (⌃⌥⌘P):
 clears the hold and posts a resuming note that starts a run (opencode then delivers the parked queue). Resume is a
 continuation, not a rollback. `thread_send` to a held thread is queued, never steered.
 

@@ -61,6 +61,9 @@ public struct EngineConfiguration: Sendable {
     public var forgeTransport: any ForgeTransport = URLSessionForgeTransport()
     /// Where GitLab access tokens are kept: the Keychain under `GitLabProvider.tokenService`.
     public var forgeTokens: any SecretVault = KeychainSecretVault(service: GitLabProvider.tokenService)
+    /// Git parity: `bellocode-exec` used as git's credential helper when containers are not configured (tests, mock
+    /// mode). With containers, the bundled helper is used.
+    public var gitCredentialHelper: URL?
     /// MR watch polling: base interval, longest backoff after failures.
     public var mergeRequestPoll: Duration = .seconds(120)
     public var mergeRequestMaxBackoff: Duration = .seconds(1800)

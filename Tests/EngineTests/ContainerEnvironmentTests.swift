@@ -119,6 +119,23 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
         throw ContainerError.notFound("no forwarding in the fake")
     }
+
+    // Compose-stack MCP servers (GlobalMCPTests): `docker compose` is scripted (`config` answers `composeConfig`, `ps`
+    // reports nothing running, the rest succeeds); the forwarder listens for real on loopback, and its relay fails (no
+    // daemon), which closes the connection after `prepare` ran.
+    let composeCalls = Mutex<[(command: [String], files: [URL])]>([])
+    let composeConfig = Mutex(Data("{}".utf8))
+    func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                 timeout: Duration) async throws -> ComposeCLI.Result {
+        composeCalls.withLock { $0.append((command, files)) }
+        if command.first == "config" { return ComposeCLI.Result(status: 0, stdout: composeConfig.withLock { $0 }, stderr: Data()) }
+        return ComposeCLI.Result(status: 0, stdout: Data(), stderr: Data())
+    }
+    var composeCommands: [String] { composeCalls.withLock { $0.map { $0.command.first ?? "" } } }
+    func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
+        try PortForwarder(client: EngineClient(socketPath: "/nonexistent-bellocode-test.sock"), container: container, containerPort: port,
+                          hostPort: hostPort, prepare: prepare)
+    }
 }
 
 @MainActor

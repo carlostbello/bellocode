@@ -22,10 +22,17 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var servicesYAML: String?
     /// Package-manager caches chosen for this project (an image's declared caches apply unless turned off here).
     public var caches: [CacheSelection]
+    /// Register the global MCP servers (Settings ▸ MCP Servers) for this project.
+    public var useGlobalMCP: Bool
+    /// Global MCP servers (ids) this project turned off.
+    public var globalMCPOptOut: [String]
 
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
-                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = []) {
+                idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = [],
+                useGlobalMCP: Bool = true, globalMCPOptOut: [String] = []) {
+        self.useGlobalMCP = useGlobalMCP
+        self.globalMCPOptOut = globalMCPOptOut
         self.caches = caches
         self.mcpServers = mcpServers
         self.servicesYAML = servicesYAML
@@ -40,7 +47,10 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     public static let `default` = ProjectEnvironmentSettings()
 
-    enum CodingKeys: String, CodingKey { case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches }
+    enum CodingKeys: String, CodingKey {
+        case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches, useGlobalMCP,
+             globalMCPOptOut
+    }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -54,6 +64,8 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
         servicesYAML = try c.decodeIfPresent(String.self, forKey: .servicesYAML)
         caches = try c.decodeIfPresent([CacheSelection].self, forKey: .caches) ?? []
+        useGlobalMCP = try c.decodeIfPresent(Bool.self, forKey: .useGlobalMCP) ?? true
+        globalMCPOptOut = try c.decodeIfPresent([String].self, forKey: .globalMCPOptOut) ?? []
     }
 
     /// The cache mounts for this project: its own choices plus what the image declares (`PackageCache.declared`),

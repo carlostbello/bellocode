@@ -107,6 +107,11 @@ public struct GitRepository: Sendable {
         async let unstaged = git(["diff", "--numstat", "-z", "-M"], allowFailure: true)
         async let staged = git(["diff", "--cached", "--numstat", "-z", "-M"], allowFailure: true)
         var status = GitStatusParser.parse(try await porcelain.stdout, limit: limit)
+        if let gitDirectory = try? await git(["rev-parse", "--path-format=absolute", "--git-dir"], allowFailure: true).text
+            .trimmingCharacters(in: .whitespacesAndNewlines), !gitDirectory.isEmpty
+        {
+            status.operation = GitOperation.read(gitDirectory: gitDirectory)
+        }
         let unstagedStats = GitStatusParser.parseNumstat(try await unstaged.stdout)
         let stagedStats = GitStatusParser.parseNumstat(try await staged.stdout)
         for index in status.files.indices {

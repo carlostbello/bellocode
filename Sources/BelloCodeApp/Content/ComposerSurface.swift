@@ -186,6 +186,11 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         (host as? DraftComposerHost)?.prepareDirectory = { [weak workspace] prompt in
             try await workspace?.prepare(prompt: prompt).directory
         }
+        // Git parity: a worktree branch named from the prompt's slug gets a name proposed by the thread's model.
+        (host as? DraftComposerHost)?.afterFirstSend = { [weak workspace, engine] model, prompt in
+            guard let created = workspace?.takeAutoNamedWorktree() else { return }
+            Task { await engine.renameGeneratedBranch(model.sessionID, created: created, firstPrompt: prompt) }
+        }
         install(
             leading: [plan, model, AppStyle.host(WorkspacePickerButton(draft: workspace)), AppStyle.host(BranchPickerButton(draft: workspace))],
             trailing: [mode])
@@ -349,6 +354,8 @@ final class DraftComposerHost: ComposerHost {
     private let cache = ComposerDraftCache.shared
     /// Prepares the thread's directory before it is created (the workspace picker's new worktree); nil: the project.
     var prepareDirectory: (@MainActor (String) async throws -> String?)?
+    /// Git parity: runs after the first send created the thread (generated worktree branch names).
+    var afterFirstSend: (@MainActor (ThreadModel, String) -> Void)?
 
     init(context: ThreadSurfaceContext, source: DraftAgentSource, fileStore: AttachmentFileStore) {
         self.context = context
@@ -374,6 +381,12 @@ final class DraftComposerHost: ComposerHost {
     func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {
         if let created { return await created.send(submission) }
         var options = source.options
+        // Git parity: a project still cloning opens at once; its first send waits for the files (T3 Code).
+        if let job = context.engine.gitProjects?.job(for: context.projectDirectory), job.state == .cloning {
+            await job.waitUntilDone()
+            if case .failed(let message) = job.state { return .failed("The clone failed, so nothing was sent: \(message)") }
+            if job.state == .cancelled { return .failed("The clone was cancelled, so nothing was sent.") }
+        }
         if let prepareDirectory {
             do {
                 options.directory = try await prepareDirectory(submission.text)
@@ -387,7 +400,9 @@ final class DraftComposerHost: ComposerHost {
         let host = ThreadModelComposerHost(model, fileStore: fileStore)
         created = host
         cache.store(.empty, for: "draft:" + context.projectDirectory)
-        return await host.send(submission)
+        let outcome = await host.send(submission)
+        afterFirstSend?(model, submission.text)
+        return outcome
     }
 
     func stop() async { await created?.stop() }

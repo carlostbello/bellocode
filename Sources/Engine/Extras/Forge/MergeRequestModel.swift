@@ -22,6 +22,9 @@ public struct GitLabInstance: Hashable, Sendable, Codable, Identifiable {
         baseURL = "\(scheme)://\(host.lowercased())\(port)" + (path.isEmpty ? "" : "/" + path)
     }
 
+    /// The instance suggested in Settings ▸ GitLab before any is configured (the owner's, docs/PLAN.md §0).
+    public static let suggestedBaseURL = "https://gitlab.novacoast.com"
+
     public var id: String { baseURL }
     public var host: String { URL(string: baseURL)?.host() ?? baseURL }
     /// The path prefix ("gitlab" for `https://h/gitlab`), empty at the root.

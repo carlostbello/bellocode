@@ -48,6 +48,9 @@ final class FakeEngineServer: Sendable {
                 if poll(&pfd, 1, 100) <= 0 { continue }
                 let fd = accept(listener, nil, nil)
                 if fd < 0 { continue }
+                // A write after the client hung up must fail, not raise SIGPIPE (which ends the whole test process).
+                var on: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
                 let stream = FileStream(fd: fd, owned: true, isSocket: true)
                 Task { await self.serve(stream) }
             }

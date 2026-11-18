@@ -22,6 +22,7 @@ enum MainMenu {
         mainMenu.addItem(submenu: terminalMenu())
         mainMenu.addItem(submenu: changesMenu())
         mainMenu.addItem(submenu: gitLabMenu())
+        mainMenu.addItem(submenu: gitMenu())
         mainMenu.addItem(submenu: BrowserMenu.make())
 
         let windowMenu = windowMenu()
@@ -306,6 +307,34 @@ enum MainMenu {
         return menu
     }
 
+    /// Git parity (docs/features/git-parity.md): the git actions, clone/publish and workspace policies.
+    private static func gitMenu() -> NSMenu {
+        let menu = NSMenu(title: "Git")
+        menu.add(.gitQuickAction)
+        menu.add(.showGitActions)
+        menu.addItem(.separator())
+        menu.add(.commitAndPush)
+        menu.add(.pullBranch)
+        menu.add(.pullRebase)
+        menu.add(.fetchRemote)
+        menu.add(.syncBranch)
+        menu.addItem(.separator())
+        menu.add(.abortGitOperation)
+        menu.add(.restoreStashedChanges)
+        menu.add(.moveToNewWorktree)
+        menu.add(.editFromHere)
+        menu.addItem(.separator())
+        menu.add(.cloneFromGitLab)
+        menu.add(.newGitProject)
+        menu.add(.publishToGitLab)
+        menu.add(.switchRemoteToHTTPS)
+        menu.addItem(.separator())
+        menu.add(.toggleAutoPull)
+        menu.add(.toggleCleanupOnSettle)
+        menu.add(.toggleCleanupOnArchive)
+        return menu
+    }
+
     private static func windowMenu() -> NSMenu {
         let menu = NSMenu(title: "Window")
         menu.addItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), key: "m")
@@ -314,6 +343,7 @@ enum MainMenu {
         menu.add(.showScheduledTasks)
         menu.add(.showContainers)
         menu.add(.showEnvironment)
+        menu.add(.showMCPServers)
         menu.add(.verifyIsolation)
         menu.add(.pruneContainerResources)
         menu.addItem(.separator())

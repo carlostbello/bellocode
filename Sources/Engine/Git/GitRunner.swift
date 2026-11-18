@@ -26,6 +26,8 @@ public enum GitError: Error, Sendable, Equatable, CustomStringConvertible {
     case outputTooLarge(command: String)
     case launchFailed(String)
     case notARepository(String)
+    /// HTTPS authentication to a GitLab instance failed; the sentence says why (never contains the token).
+    case authenticationFailed(String)
 
     public var description: String {
         switch self {
@@ -34,6 +36,7 @@ public enum GitError: Error, Sendable, Equatable, CustomStringConvertible {
         case .outputTooLarge(let command): "git \(command) produced too much output"
         case .launchFailed(let reason): "git could not start: \(reason)"
         case .notARepository: "Not a git repository"
+        case .authenticationFailed(let reason): "git authentication failed: \(reason)"
         }
     }
 
@@ -45,6 +48,7 @@ public enum GitError: Error, Sendable, Equatable, CustomStringConvertible {
         case .outputTooLarge: "The result is too large to show."
         case .launchFailed: "Git could not be started. Install the Command Line Tools."
         case .notARepository: "This folder is not a git repository."
+        case .authenticationFailed(let reason): reason
         }
     }
 
@@ -56,6 +60,7 @@ public enum GitError: Error, Sendable, Equatable, CustomStringConvertible {
         case .outputTooLarge(let command): "git \(command) output limit"
         case .launchFailed: "git launch failed"
         case .notARepository: "not a repository"
+        case .authenticationFailed: "authentication failed"
         }
     }
 }
@@ -79,6 +84,8 @@ public struct GitRunner: Sendable {
     public var defaultTimeout: Duration
     /// Default stdout limit (bytes).
     public var outputLimit: Int
+    /// The app's GitLab credentials for HTTPS remotes (nil: git uses only the person's own helpers).
+    public var credentials: GitCredentials?
 
     static let log = Logger(subsystem: "dev.bellocode.engine", category: "git")
     static let signposter = OSSignposter(subsystem: "dev.bellocode.engine", category: .pointsOfInterest)
@@ -106,7 +113,10 @@ public struct GitRunner: Sendable {
     }
 
     /// The confined launch for `arguments` (nil when the sandbox or git is unavailable).
-    func invocation(_ arguments: [String], in directory: String, writableRoots extra: [String], trusted: HostGit.TrustedConfiguration) -> HostGit.Invocation? {
+    func invocation(
+        _ arguments: [String], in directory: String, writableRoots extra: [String], trusted: HostGit.TrustedConfiguration,
+        credentials setup: GitCredentialSetup? = nil
+    ) -> HostGit.Invocation? {
         var environment = environment
         if allowsLocalRemotes {
             let count = Int(environment["GIT_CONFIG_COUNT"] ?? "0") ?? 0
@@ -116,7 +126,7 @@ public struct GitRunner: Sendable {
         }
         return HostGit.invocation(
             arguments: arguments, directory: directory, mode: Self.mode(of: arguments), environment: environment,
-            writableRoots: writableRoots + extra, trusted: trusted)
+            writableRoots: writableRoots + extra, trusted: trusted, credentials: setup)
     }
 
     /// Network for fetch/push/clone/ls-remote and remote updates; local for everything else.
@@ -151,11 +161,43 @@ public struct GitRunner: Sendable {
                 trusted = HostGit.parseTrusted(output.stdout)
             }
         }
-        guard let launch = invocation(["-c", "core.quotePath=false", "-c", "color.ui=false"] + arguments, in: directory, writableRoots: extra, trusted: trusted)
+        // The app's GitLab remotes in this repository (and URLs on the command line) authenticate with the token.
+        var grant: GitCredentialBroker.Grant?
+        var setup: GitCredentialSetup?
+        if Self.mode(of: arguments) == .network, let credentials {
+            let targets = await authenticationTargets(arguments, in: directory, broker: credentials.broker)
+            if !targets.urls.isEmpty {
+                let origins = Set(targets.urls.compactMap { url in
+                    credentials.broker.instance(forURL: url).flatMap(GitCredentialBroker.Origin.init(instance:))
+                })
+                let granted = credentials.broker.grant(origins: origins)
+                grant = granted
+                setup = GitCredentialSetup(
+                    helperPath: credentials.helperPath, socketPath: credentials.broker.socketPath, grant: granted.identifier,
+                    urls: targets.urls, remoteNames: targets.remotes)
+            }
+        }
+        defer { if let grant, let credentials { credentials.broker.revoke(grant) } }
+        guard let launch = invocation(
+            ["-c", "core.quotePath=false", "-c", "color.ui=false"] + arguments, in: directory, writableRoots: extra, trusted: trusted,
+            credentials: setup)
         else { throw GitError.launchFailed("the git sandbox is unavailable") }
+        let broker = credentials?.broker
+        let boundGrant = grant
         let output = try await execute(
             URL(filePath: launch.executable), launch.arguments, environment: launch.environment, in: directory, input: input,
-            timeout: timeout ?? defaultTimeout, limit: outputLimit ?? self.outputLimit, name: name)
+            timeout: timeout ?? defaultTimeout, limit: outputLimit ?? self.outputLimit, name: name,
+            onLaunch: { pid in if let boundGrant { broker?.bind(boundGrant, pid: pid) } })
+        if output.status != 0, let grant, let broker {
+            let outcomes = broker.outcomes(grant)
+            if outcomes.contains(.rejected) {
+                throw GitError.authenticationFailed(
+                    "GitLab rejected your token. It may have expired or lack the read_repository/write_repository scope; replace it in Settings ▸ GitLab.")
+            }
+            for case .refused(let reason) in outcomes {
+                throw GitError.authenticationFailed("BelloCode did not send your GitLab token (\(reason)).")
+            }
+        }
         if output.status != 0, !allowFailure {
             if output.message.contains("not a git repository") { throw GitError.notARepository(directory) }
             throw GitError.failed(command: name, status: output.status, message: output.message)
@@ -178,7 +220,7 @@ public struct GitRunner: Sendable {
 
     private func execute(
         _ executable: URL, _ arguments: [String], environment: [String: String], in directory: String, input: Data?, timeout: Duration, limit: Int,
-        name: String
+        name: String, onLaunch: (@Sendable (pid_t) -> Void)? = nil
     ) async throws -> GitOutput {
         let process = Process()
         process.executableURL = executable
@@ -188,6 +230,8 @@ public struct GitRunner: Sendable {
         let stdout = Pipe()
         let stderr = Pipe()
         let stdin = Pipe()
+        // Writing input to a git that already exited must fail with EPIPE, not deliver SIGPIPE to the process.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = input == nil ? FileHandle.nullDevice : stdin
@@ -217,6 +261,7 @@ public struct GitRunner: Sendable {
                     collector.fail(GitError.launchFailed(String(describing: type(of: error))))
                     return
                 }
+                onLaunch?(process.processIdentifier)
                 collector.setProcess(process)
                 if let input {
                     let writer = stdin.fileHandleForWriting
@@ -345,6 +390,48 @@ public struct GitRunner: Sendable {
             }
             return (continuation, result)
         }
+    }
+}
+
+/// The app's side of HTTPS authentication for host git: the broker and the helper's path (`bellocode-exec`).
+public struct GitCredentials: Sendable {
+    public var broker: GitCredentialBroker
+    public var helperPath: String
+    public init(broker: GitCredentialBroker, helperPath: String) {
+        self.broker = broker
+        self.helperPath = helperPath
+    }
+}
+
+extension GitRunner {
+    /// Remote URLs (fetch and push, from the repository's configuration) and URL arguments that are on a configured
+    /// GitLab instance over HTTPS, with the names of those remotes. Read confined, without the network.
+    func authenticationTargets(_ arguments: [String], in directory: String, broker: GitCredentialBroker) async -> (urls: [String], remotes: [String]) {
+        var urls: [String] = []
+        var remotes: [String] = []
+        for argument in arguments where argument.lowercased().hasPrefix("https://") && broker.instance(forURL: argument) != nil {
+            urls.append(argument)
+        }
+        let query = ["config", "-z", "--get-regexp", #"^remote\..*\.(url|pushurl)$"#]
+        if FileManager.default.fileExists(atPath: directory),
+           let launch = invocation(query, in: directory, writableRoots: [], trusted: HostGit.TrustedConfiguration()),
+           let output = try? await execute(
+            URL(filePath: launch.executable), launch.arguments, environment: launch.environment, in: directory, input: nil,
+            timeout: .seconds(10), limit: 256 << 10, name: "config"), output.status == 0
+        {
+            for entry in output.stdout.split(separator: 0) {
+                let text = String(decoding: entry, as: UTF8.self)
+                guard let newline = text.firstIndex(of: "\n") else { continue }
+                let key = text[..<newline]
+                let url = String(text[text.index(after: newline)...])
+                guard broker.instance(forURL: url) != nil, key.hasPrefix("remote.") else { continue }
+                let name = key.dropFirst(7).split(separator: ".").dropLast().joined(separator: ".")
+                urls.append(url)
+                if !name.isEmpty { remotes.append(name) }
+            }
+        }
+        var seen: Set<String> = []
+        return (urls.filter { seen.insert($0).inserted }.prefix(16).map { $0 }, Array(Set(remotes)).sorted())
     }
 }
 

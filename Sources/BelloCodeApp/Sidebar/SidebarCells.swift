@@ -142,7 +142,8 @@ final class ThreadCell: NSTableCellView {
             session: session, status: row.status?.status,
             manuallyUnread: organisation?.markedUnread ?? false || workspace.manualUnread.contains(sessionID),
             childCount: childCount, projectName: projectName, snoozedUntil: organisation?.snoozedUntil?.date)
-        let mergeRequestText = Self.mergeRequestText(sessionID, workspace: workspace)
+        let gitText = Self.gitText(session.directory, workspace: workspace)
+        let mergeRequestText = [Self.mergeRequestText(sessionID, workspace: workspace), gitText].compactMap { $0 }.joined(separator: " ").nilIfEmpty
         guard presentation != self.presentation || mergeRequestText != self.mergeRequestText else { return }
         self.presentation = presentation
         self.mergeRequestText = mergeRequestText
@@ -168,7 +169,7 @@ final class ThreadCell: NSTableCellView {
             subtitle = nil
             detailText = [mergeRequestText, presentation.projectName, presentation.timeText].compactMap { $0 }.joined(separator: " · ")
         }
-        setAccessibilityLabel(presentation.accessibilityLabel + (mergeRequestText.map { ", merge request \($0)" } ?? ""))
+        setAccessibilityLabel(presentation.accessibilityLabel + (mergeRequestText.map { ", \($0.replacingOccurrences(of: "↑", with: "ahead ").replacingOccurrences(of: "↓", with: "behind "))" } ?? ""))
         needsLayout = true
         needsDisplay = true
     }
@@ -188,6 +189,17 @@ final class ThreadCell: NSTableCellView {
         let unread = presentation?.isUnread ?? false
         title.font = unread ? DS.TextRole.bodyEmph.font : DS.TextRole.body.font
         title.textColor = recedes && !unread ? DS.Color.text3 : DS.Color.sidebarText
+    }
+
+    /// Git parity: "⚠ Conflict", "↑2 ↓1" for a checkout whose status is already loaded (words in the tooltip and
+    /// accessibility label come from the header), nil when clean and in sync.
+    static func gitText(_ directory: String, workspace: WorkspaceController) -> String? {
+        guard let status = workspace.engine.git.cachedRepository(for: directory)?.status else { return nil }
+        if status.hasConflicts { return "⚠ Conflict" }
+        var parts: [String] = []
+        if status.ahead > 0 { parts.append("↑\(status.ahead)") }
+        if status.behind > 0 { parts.append("↓\(status.behind)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     /// "#42 ✓" for the first linked PR (+N more), nil without links.
@@ -553,4 +565,9 @@ final class DropGapCell: NSTableCellView {
         DSDraw.fill(rect, radius: 1, color: DS.Color.accent)
         DSDraw.fill(NSRect(x: rect.minX - 3, y: bounds.midY - 3, width: 6, height: 6), radius: 3, color: DS.Color.accent)
     }
+}
+
+extension String {
+    /// nil for an empty string.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

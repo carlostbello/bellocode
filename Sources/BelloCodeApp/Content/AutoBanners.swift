@@ -4,7 +4,7 @@ import DesignSystem
 import Engine
 
 /// A row of the attached tray (`AttachedTrayView`): another thread's agent stopped this one (docs/features/auto-mode.md).
-/// Names who and why, and offers Resume (⌃⌘P, Thread ▸ Resume Interrupted Thread); queued work waits until then.
+/// Names who and why, and offers Resume (⌃⌥⌘P, Thread ▸ Resume Interrupted Thread); queued work waits until then.
 @MainActor
 final class InterruptedBanner: NSView {
     private let thread: ThreadModel
@@ -31,7 +31,7 @@ final class InterruptedBanner: NSView {
         openButton.toolTip = "Open the thread that stopped this one"
         resumeButton.target = self
         resumeButton.action = #selector(resume)
-        resumeButton.toolTip = "Continue the interrupted work and deliver the held queue (⌃⌘P). Side effects already made stay."
+        resumeButton.toolTip = "Continue the interrupted work and deliver the held queue (⌃⌥⌘P). Side effects already made stay."
         let row = NSStackView(views: [glyph, message, openButton, resumeButton])
         row.alignment = .centerY
         row.spacing = DS.Space.s8

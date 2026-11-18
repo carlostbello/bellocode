@@ -1475,6 +1475,10 @@ actor EngineCore {
     /// (or a check finds it under its ID). On a definite failure the optimistic entry is removed and the error thrown
     /// (the caller restores the draft). If every answer was lost and the server cannot be asked, it throws
     /// `.deliveryUnknown` and keeps the entry plus an `UnconfirmedSend` for an explicit same-ID retry.
+    /// Runs before a new turn's prompt is delivered (not for queued follow-ups): the engine captures a checkpoint.
+    var turnWillStart: (@Sendable (SessionID, MessageID, String) async -> Void)?
+    func setTurnWillStart(_ hook: (@Sendable (SessionID, MessageID, String) async -> Void)?) { turnWillStart = hook }
+
     func sendPrompt(
         _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
     ) async throws -> MessageID {
@@ -1519,6 +1523,8 @@ actor EngineCore {
         do { try await store.saveOutbox(entry) } catch {
             EngineSignposts.log.error("outbox write failed: \(String(describing: type(of: error)), privacy: .public)")
         }
+        // Git parity: a checkpoint of the working tree before the turn starts (rewind "Revert Files Too").
+        if !busy, let turnWillStart { await turnWillStart(sessionID, id, session.directory) }
         switch await deliver(request, id: id, sessionID: sessionID) {
         case .admitted(let created):
             await settleOutbox(id)

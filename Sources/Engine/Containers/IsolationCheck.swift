@@ -199,15 +199,16 @@ public enum IsolationCheck {
                 ?? "no configuration sets the shell to bellocode-exec: commands could run on this Mac")))
         checks.append(.init("Formatters", formatterOn ? .host("formatters are on: they run project tooling on this Mac") : .off("off")))
         checks.append(.init("Language servers", lspOn ? .host("language servers are configured: they would run on this Mac") : .off("off")))
-        var routedMCP: [String] = [], refusedMCP: [String] = [], hostMCP: [String] = []
+        var routedMCP: [String] = [], refusedMCP: [String] = [], hostMCP: [String] = [], imageMCP: [String] = []
         for (name, route) in mcpRoutes {
             switch route {
             case .container: routedMCP.append(name)
+            case .image: imageMCP.append(name)
             case .refused: refusedMCP.append(name)
             case .host(let program): hostMCP.append("\(name) (\(program))")
             }
         }
-        checks.append(.init("Local MCP servers", localMCPOutcome(routed: routedMCP, refused: refusedMCP, host: hostMCP)))
+        checks.append(.init("Local MCP servers", localMCPOutcome(routed: routedMCP, refused: refusedMCP, host: hostMCP, image: imageMCP)))
         let starts = projects.filter { !($0.commands?.start ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
         checks.append(.init("Worktree start commands", starts.isEmpty ? .off("none set (setup scripts run in the container)")
             : .host("opencode would run a worktree start command on this Mac for \(starts.map(\.canonical).joined(separator: ", "))")))
@@ -219,10 +220,12 @@ public enum IsolationCheck {
         return checks
     }
 
-    static func localMCPOutcome(routed: [String], refused: [String], host: [String]) -> IsolationReport.Outcome {
+    static func localMCPOutcome(routed: [String], refused: [String], host: [String], image: [String] = []) -> IsolationReport.Outcome {
         if !host.isEmpty { return .host("local MCP servers would run on this Mac: \(Set(host).sorted().joined(separator: ", "))") }
         let refusedText = refused.isEmpty ? "" : "; refused (configured for all projects): \(Set(refused).sorted().joined(separator: ", "))"
-        if !routed.isEmpty { return .container("routed into the project's container (bellocode-exec --stdio): \(Set(routed).sorted().joined(separator: ", "))\(refusedText)") }
+        let imageText = image.isEmpty ? "" : "; in their own containers from an image (no project mount): \(Set(image).sorted().joined(separator: ", "))"
+        if !routed.isEmpty { return .container("routed into the project's container (bellocode-exec --stdio): \(Set(routed).sorted().joined(separator: ", "))\(imageText)\(refusedText)") }
+        if !image.isEmpty { return .container("in their own containers from an image (no project mount): \(Set(image).sorted().joined(separator: ", "))\(refusedText)") }
         if !refused.isEmpty { return .off("none run" + refusedText) }
         return .off("none configured")
     }
@@ -235,11 +238,60 @@ public enum IsolationCheck {
             let value = entry["info"] ?? entry
             if case .object(let servers)? = value["mcp"]?["servers"] { known.formUnion(servers.keys) }
         }
-        return listed.map(\.name).filter { !known.contains($0) && $0 != verifyMCPName }.sorted()
+        return listed.map(\.name).filter { !known.contains($0) && $0 != verifyMCPName && $0 != verifyImageMCPName }.sorted()
     }
 
     /// The scratch MCP server the self-check registers for a moment.
     static let verifyMCPName = "bellocode-verify-mcp"
+    static let verifyImageMCPName = "bellocode-verify-image"
+
+    /// A global image server, end to end: registered with opencode as global image servers are, its helper runs the
+    /// image (the project's, which has /bin/sh) in its own container like `docker run -i --rm`, and the program reports
+    /// on stderr (kept in the helper's log) whether it is in a container and whether the project folder exists there.
+    /// Passes only for "container", "Linux" and "project-absent".
+    @MainActor
+    static func imageServerCheck(client: OpenCodeClient, context: Context, service: EnvironmentService, directory: String,
+                                 image: String) async -> IsolationReport.Outcome {
+        guard let logDirectory = service.configuration?.mcpLogDirectory else { return .skipped("no log folder for image servers") }
+        let id = verifyImageMCPName
+        let log = BoundedLogFile(url: logDirectory.appending(path: "\(id).log"))
+        try? FileManager.default.removeItem(at: log.url)
+        let script = #"{ if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then printf 'container '; else printf 'host '; fi; uname -s | tr -d '\n'; if [ -e "$1" ]; then echo ' project-visible'; else echo ' project-absent'; fi; } | sed 's/^/bellocode-probe /' >&2"#
+        service.verifyImageSpec = ImageMCPSpec(id: id, name: id, image: image, entrypoint: ["/bin/sh", "-c", script, "probe", directory],
+                                               corporateNetwork: service.network.corporate.isEmpty ? nil : service.network.corporate)
+        await service.writeConfigNow()
+        defer {
+            service.verifyImageSpec = nil
+            service.scheduleConfigWrite()
+        }
+        do {
+            var config = MCPRouting.imageServerConfig(helper: context.helperPath, id: id, project: directory, secrets: [:])
+            if case .object(var fields) = config {
+                fields["timeout"] = .object(["startup": .number(15_000)])
+                config = .object(fields)
+            }
+            try await client.addMCPServer(id, config: config, directory: directory)
+        } catch {
+            try? await client.removeMCPServer(id, directory: directory)
+            return .failed("could not register a scratch image server: \(error)")
+        }
+        var line: String?
+        for _ in 0..<60 {
+            line = log.read().split(separator: "\n").first { $0.hasPrefix("bellocode-probe ") }.map(String.init)
+            if line != nil { break }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        try? await client.removeMCPServer(id, directory: directory)
+        guard let line else {
+            let text = log.read().trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failed("the image server left no answer\(text.isEmpty ? "" : ": " + String(text.suffix(200)))")
+        }
+        let answer = line.dropFirst("bellocode-probe ".count)
+        if answer.hasPrefix("host") { return .host("image server reported \(answer)") }
+        if answer.hasSuffix("project-visible") { return .failed("the project folder was visible inside the image server's container") }
+        guard answer.hasPrefix("container"), answer.contains("Linux") else { return .failed("unexpected answer: \(answer)") }
+        return .container("image server: own container, Linux, no project folder (\(image))")
+    }
 
     /// Runs the check against `directory` (a project whose container can run). `full` adds the session-based paths.
     @MainActor
@@ -355,6 +407,9 @@ public enum IsolationCheck {
             try? await client.removeMCPServer(verifyMCPName, directory: directory)
             checks.append(.init("MCP server (stdio)", .failed("could not register a scratch MCP server: \(error)")))
         }
+
+        checks.append(.init("Global MCP server (image)", await imageServerCheck(
+            client: client, context: context, service: service, directory: directory, image: spec.image)))
 
         if full { checks += await sessionChecks(client: client, context: context, directory: directory, runtime: runtime, container: container, user: spec.user) }
         return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)

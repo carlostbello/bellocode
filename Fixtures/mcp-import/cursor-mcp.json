@@ -1,0 +1,4 @@
+{ "mcpServers": {
+    "linear": { "url": "https://mcp.linear.example/sse" },
+    "browser": { "command": "docker", "args": ["run", "-i", "--rm", "-t", "--name", "pw", "--pull", "always", "mcr.example/playwright/mcp", "--headless"] }
+} }
