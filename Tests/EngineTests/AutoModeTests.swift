@@ -267,3 +267,31 @@ enum RowBuilderProbe {
         text.hasPrefix("[BelloCode interrupt] ") ? "Interrupted: " + text.dropFirst("[BelloCode interrupt] ".count) : nil
     }
 }
+
+@Suite("Auto audit store")
+struct AutoAuditStoreTests {
+    @Test func migratedBoundedPerThreadAndContentFree() async throws {
+        let store = try ProjectionStore(location: .inMemory, changes: ChangeBus(subscriberLimit: 16))
+        #expect(try await store.appliedMigrations().contains("v11-auto-audit"))
+        let session = SessionID("ses_audit")
+        let entries = (0..<(ProjectionStore.autoAuditPerThread + 20)).map { index in
+            AutoAuditEntry(
+                id: "req_\(index)|autoApproved", sessionID: session, projectDirectory: "/repo", kind: .autoApproved, source: .policy,
+                action: "read", toolCallID: "call_\(index)", findings: [], reasonCode: "in_project_read", explanation: "Reads inside the project",
+                policyVersion: RiskPolicy.version, latencyMilliseconds: 1, at: Timestamp(milliseconds: Double(Date().timeIntervalSince1970 * 1000) + Double(index)))
+        }
+        try await store.appendAutoAudit(entries)
+        let stored = try await store.autoAudit(sessionID: session)
+        #expect(stored.count == ProjectionStore.autoAuditPerThread)
+        #expect(stored.first?.id == "req_\(ProjectionStore.autoAuditPerThread + 19)|autoApproved", "newest first, oldest dropped")
+        // Older than the retention window: removed on the next write.
+        let old = AutoAuditEntry(
+            id: "old", sessionID: SessionID("ses_other"), projectDirectory: nil, kind: .notice, source: nil, action: "read", toolCallID: nil,
+            findings: [RiskFinding(.secretRead, ".env")], reasonCode: "secretRead", explanation: "Read a secret-looking file: .env",
+            policyVersion: RiskPolicy.version, at: Timestamp(milliseconds: 1_000))
+        try await store.appendAutoAudit([old])
+        #expect(try await store.autoAudit(sessionID: SessionID("ses_other")).isEmpty)
+        try await store.deleteAutoAudit(sessionID: session)
+        #expect(try await store.autoAudit(sessionID: session).isEmpty)
+    }
+}
