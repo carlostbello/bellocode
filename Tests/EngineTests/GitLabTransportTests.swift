@@ -46,6 +46,9 @@ final class RedirectFixtureServer: Sendable {
         while true {
             let client = accept(socket, nil, nil)
             if client < 0 { return }
+            // The client may hang up before the response is written: EPIPE, not SIGPIPE.
+            var on: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             var buffer = [UInt8](repeating: 0, count: 16 << 10)
             var head = Data()
             while !head.contains(Data("\r\n\r\n".utf8)) {

@@ -222,6 +222,8 @@ final class HTTPSGitServer: Sendable {
             process.environment = environment
             let stdin = Pipe()
             let stdout = Pipe()
+            // git http-backend may exit before reading the whole body: EPIPE, not SIGPIPE.
+            _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
             process.standardInput = stdin
             process.standardOutput = stdout
             process.standardError = FileHandle.nullDevice
