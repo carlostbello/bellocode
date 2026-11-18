@@ -1,0 +1,1089 @@
+{
+ "agents": [
+  {
+   "hidden": false,
+   "id": "build",
+   "mode": "primary",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "question",
+     "*",
+     "allow"
+    ]
+   ]
+  },
+  {
+   "hidden": true,
+   "id": "compaction",
+   "mode": "primary",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ]
+   ]
+  },
+  {
+   "hidden": false,
+   "id": "explore",
+   "mode": "subagent",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "*",
+     "*",
+     "deny"
+    ],
+    [
+     "shell",
+     "*",
+     "allow"
+    ],
+    [
+     "grep",
+     "*",
+     "allow"
+    ],
+    [
+     "glob",
+     "*",
+     "allow"
+    ],
+    [
+     "webfetch",
+     "*",
+     "allow"
+    ],
+    [
+     "websearch",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "subagent",
+     "*",
+     "deny"
+    ],
+    [
+     "external_directory",
+     "*",
+     "allow"
+    ]
+   ]
+  },
+  {
+   "hidden": false,
+   "id": "general",
+   "mode": "subagent",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "question",
+     "*",
+     "deny"
+    ],
+    [
+     "subagent",
+     "*",
+     "deny"
+    ]
+   ]
+  },
+  {
+   "hidden": false,
+   "id": "plan",
+   "mode": "primary",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "question",
+     "*",
+     "allow"
+    ],
+    [
+     "edit",
+     "*",
+     "deny"
+    ],
+    [
+     "edit",
+     "<sandbox>/home/.opencode/plan/*",
+     "allow"
+    ]
+   ]
+  },
+  {
+   "hidden": true,
+   "id": "summary",
+   "mode": "primary",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "*",
+     "*",
+     "deny"
+    ]
+   ]
+  },
+  {
+   "hidden": true,
+   "id": "title",
+   "mode": "primary",
+   "permissions": [
+    [
+     "*",
+     "*",
+     "allow"
+    ],
+    [
+     "read",
+     "*.env",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.*",
+     "ask"
+    ],
+    [
+     "read",
+     "*.env.example",
+     "allow"
+    ],
+    [
+     "*",
+     "*",
+     "deny"
+    ]
+   ]
+  }
+ ],
+ "browser": {
+  "accepted": [
+   4
+  ],
+  "closedWith": "closed",
+  "grantedRules": [
+   [
+    "browser",
+    "*",
+    "allow"
+   ],
+   [
+    "skill",
+    "browser",
+    "allow"
+   ]
+  ],
+  "rejected": [
+   3,
+   5
+  ]
+ },
+ "browserBridgeVersion": 4,
+ "capabilities": {
+  "persistentPty": true
+ },
+ "capturedAt": "2026-11-18",
+ "commands": [
+  "goal",
+  "init",
+  "review"
+ ],
+ "embeddedPromptFiles": [
+  "anthropic.txt",
+  "automation.txt",
+  "continuation.txt",
+  "gpt-astra.txt",
+  "gpt.txt",
+  "initialize.txt",
+  "judge.txt",
+  "kickoff.txt",
+  "kimi.txt",
+  "meta.txt",
+  "opencode.md",
+  "patch-grammar.txt",
+  "patch.txt",
+  "reminder.txt",
+  "report.md",
+  "review.txt",
+  "snapshot.txt",
+  "system.txt",
+  "todowrite.txt",
+  "trinity.txt"
+ ],
+ "eventTypes": [
+  "agent.updated",
+  "artifact.updated",
+  "command.updated",
+  "integration.updated",
+  "model.updated",
+  "permission.asked",
+  "permission.replied",
+  "plugin.updated",
+  "project.updated",
+  "provider.updated",
+  "reference.updated",
+  "server.connected",
+  "session.created",
+  "session.execution.started",
+  "session.execution.succeeded",
+  "session.inbox.delivered",
+  "session.inbox.enqueued",
+  "session.instructions.updated",
+  "session.reasoning.delta",
+  "session.reasoning.ended",
+  "session.reasoning.started",
+  "session.step.ended",
+  "session.step.first-token",
+  "session.step.started",
+  "session.step.streamed",
+  "session.text.delta",
+  "session.text.ended",
+  "session.text.started",
+  "session.tool.called",
+  "session.tool.input.ended",
+  "session.tool.input.started",
+  "session.tool.progress",
+  "session.tool.success",
+  "session.usage.updated",
+  "shell.created",
+  "shell.exited",
+  "skill.updated",
+  "websearch.updated"
+ ],
+ "permissions": [
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "none",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "none",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "none",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "ask",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "ask",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "autoEdit",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "build",
+   "effect": "deny",
+   "mode": "autoEdit",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "build",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "none",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "none",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "none",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "none",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "none",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "ask",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "ask",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "ask",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "ask",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "ask",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "autoEdit",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "ask",
+   "mode": "autoEdit",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "autoEdit",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "autoEdit",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "autoEdit",
+   "resource": "general"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "deny",
+   "mode": "fullAccess",
+   "resource": "src/main.swift"
+  },
+  {
+   "action": "edit",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "<sandbox>/home/.opencode/plan/plan.md"
+  },
+  {
+   "action": "shell",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "ls -la"
+  },
+  {
+   "action": "external_directory",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "/private/tmp/elsewhere/*"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "README.md"
+  },
+  {
+   "action": "read",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": ".env"
+  },
+  {
+   "action": "webfetch",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "https://example.com"
+  },
+  {
+   "action": "browser",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "*"
+  },
+  {
+   "action": "skill",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "browser"
+  },
+  {
+   "action": "subagent",
+   "agent": "plan",
+   "effect": "allow",
+   "mode": "fullAccess",
+   "resource": "general"
+  }
+ ],
+ "plugin": {
+  "contract": 1,
+  "listed": true,
+  "loaded": true,
+  "tools": [
+   "create_threads",
+   "delegate_task",
+   "orchestrator_capabilities",
+   "pending_requests",
+   "project_list",
+   "send_to_user",
+   "task_cancel",
+   "task_status",
+   "thread_interrupt",
+   "thread_list",
+   "thread_read",
+   "thread_search",
+   "thread_send",
+   "thread_wait"
+  ]
+ },
+ "plugins": [
+  "opencode.agent",
+  "opencode.browser",
+  "opencode.command",
+  "opencode.config.agent",
+  "opencode.config.command",
+  "opencode.config.compaction",
+  "opencode.config.compatibility",
+  "opencode.config.formatter",
+  "opencode.config.image",
+  "opencode.config.instruction",
+  "opencode.config.location-watcher",
+  "opencode.config.mcp",
+  "opencode.config.policy",
+  "opencode.config.provider",
+  "opencode.config.reference",
+  "opencode.config.shell",
+  "opencode.config.skill",
+  "opencode.config.snapshot",
+  "opencode.config.tool-output",
+  "opencode.config.websearch",
+  "opencode.config.worktree",
+  "opencode.fork-notice",
+  "opencode.goal",
+  "opencode.mcp.codemode.defaults",
+  "opencode.models.dev",
+  "opencode.plan",
+  "opencode.prompt.anthropic",
+  "opencode.prompt.arcee",
+  "opencode.prompt.identity",
+  "opencode.prompt.kimi",
+  "opencode.prompt.meta",
+  "opencode.prompt.openai",
+  "opencode.prompt.verbosity",
+  "opencode.provider.amazon.bedrock",
+  "opencode.provider.azure",
+  "opencode.provider.cerebras",
+  "opencode.provider.chatgpt",
+  "opencode.provider.claude-agent",
+  "opencode.provider.cloudflare.ai.gateway",
+  "opencode.provider.cloudflare.workers.ai",
+  "opencode.provider.databricks",
+  "opencode.provider.digitalocean",
+  "opencode.provider.dynamic",
+  "opencode.provider.github.copilot",
+  "opencode.provider.gitlab",
+  "opencode.provider.google.vertex",
+  "opencode.provider.kilo",
+  "opencode.provider.llmgateway",
+  "opencode.provider.lmstudio",
+  "opencode.provider.modal",
+  "opencode.provider.neon",
+  "opencode.provider.nvidia",
+  "opencode.provider.ollama",
+  "opencode.provider.openai",
+  "opencode.provider.openai-context-caps",
+  "opencode.provider.opencode",
+  "opencode.provider.openrouter",
+  "opencode.provider.poe",
+  "opencode.provider.prompt-cache-key",
+  "opencode.provider.sap.ai.core",
+  "opencode.provider.snowflake.cortex",
+  "opencode.provider.vllm",
+  "opencode.provider.xai",
+  "opencode.provider.zenmux",
+  "opencode.skill",
+  "opencode.tool.artifact",
+  "opencode.tool.automation",
+  "opencode.tool.edit",
+  "opencode.tool.glob",
+  "opencode.tool.grep",
+  "opencode.tool.image-generate",
+  "opencode.tool.input.repair",
+  "opencode.tool.patch",
+  "opencode.tool.question",
+  "opencode.tool.read",
+  "opencode.tool.shell",
+  "opencode.tool.skill",
+  "opencode.tool.subagent",
+  "opencode.tool.todo",
+  "opencode.tool.webfetch",
+  "opencode.tool.websearch",
+  "opencode.tool.write",
+  "opencode.tools",
+  "opencode.tools.mcp-events",
+  "opencode.tools.mcp-resources",
+  "opencode.vcs.git",
+  "opencode.vcs.hg",
+  "opencode.warming",
+  "opencode.websearch.exa",
+  "opencode.websearch.firecrawl",
+  "opencode.websearch.parallel",
+  "opencode.websearch.tavily",
+  "opencode.websearch.tinyfish",
+  "opencode.wellknown"
+ ],
+ "prompts": 1,
+ "skills": [
+  "browser",
+  "opencode",
+  "report"
+ ],
+ "toolRendererNames": [
+  "edit",
+  "execute",
+  "glob",
+  "grep",
+  "patch",
+  "question",
+  "read",
+  "shell",
+  "skill",
+  "subagent",
+  "todowrite",
+  "webfetch",
+  "websearch",
+  "write"
+ ],
+ "version": "2.3.2"
+}

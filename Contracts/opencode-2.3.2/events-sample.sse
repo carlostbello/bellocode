@@ -1,0 +1,90 @@
+data: {"id":"evt_1f01a4163001j7mM2IsEuDjw89","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_1f01a423e001dZI0pcZcwEsctR","created":1795029615166,"type":"project.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"id":"6f11e93d24898d2d91fdcbfa332558ee2776f2c7","canonical":"/private/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project","time":{"created":1795029615164,"updated":1795029615164,"active":1795029615165},"sandboxes":[]}}
+
+data: {"id":"evt_1f01a43ec0018eTAG8ggsASaeU","created":1795029615596,"type":"integration.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43ef001HfuDOg4LCr71Aw","created":1795029615599,"type":"provider.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43f2001LNti9rIrtMTARg","created":1795029615602,"type":"model.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43f3001M2nVN6wmYbix2W","created":1795029615603,"type":"agent.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43f3002tz7kRm2rCbG2Au","created":1795029615603,"type":"command.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43f30035eYbEUed0Kn8Mg","created":1795029615603,"type":"skill.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a43fe001UHbfm72Fsjp7nc","created":1795029615614,"type":"artifact.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a4403001WULftSiiGZE3NM","created":1795029615619,"type":"websearch.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a4403003gR2T1Uc2ylp6tp","created":1795029615619,"type":"reference.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a440300437VSoqoeIACs1f","created":1795029615619,"type":"plugin.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{}}
+
+data: {"id":"evt_1f01a44470016ZQGdFY2XXDTtu","created":1795029615687,"type":"session.created","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","slug":"misty-canyon","version":"2.3.2","projectID":"6f11e93d24898d2d91fdcbfa332558ee2776f2c7","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"subpath":"../../../../../../../../var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project","title":"contract capture","permissions":[{"action":"shell","resource":"*","effect":"ask"}],"model":{"id":"big-pickle","providerID":"opencode"}},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":0,"version":1}}
+
+data: {"id":"evt_1f01a444d001ElC0deaYL3B3II","created":1795029615693,"type":"session.inbox.enqueued","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"inboxID":"msg_1f01a444c0013YeuL4XbvF0Yb5","sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","item":{"type":"user","payload":{"text":"Use your shell tool to run exactly this command once: echo bellocode-contract. Then reply with the single word done."},"delivery":"steer"}},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":1,"version":1}}
+
+data: {"id":"evt_1f01a444e0015G65q6Wbg9u8Du","created":1795029615694,"type":"session.execution.started","data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":2,"version":1}}
+
+data: {"id":"evt_1f01a4452001bT1sYzITI4TfOk","created":1795029615698,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","delta":{"core/codemode":"6da984375e969a2e713ef39140c6cb17b5c01d43a175e4d6f28960bf2df6b77c","core/skill-guidance":"8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9","core/date":"c8d6c903be895246fe6d0bda574015bdc9cfe34aa8da37f5fa16218b4d8d5e88","core/environment":"4505fa98b7d3adc5dc7c32f394f8b2256088dbe95e72fa3cb514e188bd6d939c","api/bellocode.orchestration":"3c5466eefc73c5b2e5a7873cdd351b1bde641707a7b9f5d09fbfcc8ff037459e"}},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":3,"version":2}}
+
+data: {"id":"evt_1f01a4453001360MahcNLfPJvg","created":1795029615699,"type":"session.inbox.delivered","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","inboxID":"msg_1f01a444c0013YeuL4XbvF0Yb5"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":4,"version":1}}
+
+data: {"id":"evt_1f01a4ee8001HBBOVsLmjSabR8","created":1795029618408,"type":"session.step.started","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","agent":"build","model":{"id":"big-pickle","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","started":1795029615707},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":5,"version":1}}
+
+data: {"id":"evt_1f01a4eea001u4dl3uSKgEhdbw","created":1795029618410,"type":"session.step.first-token","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":6,"version":1}}
+
+data: {"id":"evt_1f01a4eeb001bey7ZZJaCi03D6","created":1795029618411,"type":"session.reasoning.started","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","ordinal":0,"native":{"reasoningField":"reasoning_content"}},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":7,"version":1}}
+
+data: {"id":"evt_1f01a4f51001OeLD1KuKgj5bg6","created":1795029618513,"type":"session.reasoning.delta","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","ordinal":0,"delta":"The user wants me to run exactly this command once:"}}
+
+data: {"id":"evt_1f01a4fa3001yGCD1aQPFT77ue","created":1795029618596,"type":"session.reasoning.delta","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","ordinal":0,"delta":" echo bellocode-contract. Then reply with single word done."}}
+
+data: {"id":"evt_1f01a4fa4001vQ8tEAacS5loPF","created":1795029618596,"type":"session.tool.input.started","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722","name":"shell"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":8,"version":1}}
+
+data: {"id":"evt_1f01a4fcf001iW26jSnNjizZHS","created":1795029618639,"type":"session.reasoning.ended","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","ordinal":0,"text":"The user wants me to run exactly this command once: echo bellocode-contract. Then reply with single word done.","native":{"reasoningField":"reasoning_content","reasoningDetails":[{"type":"reasoning.text","text":"The user wants me to run exactly this command once: echo bellocode-contract. Then reply with single word done.","format":"unknown","index":0}]}},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":9,"version":1}}
+
+data: {"id":"evt_1f01a4fd0001LbbuTfcTNoZ7Pb","created":1795029618640,"type":"session.tool.input.ended","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722","text":"{\"command\": \"echo bellocode-contract\"}"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":10,"version":1}}
+
+data: {"id":"evt_1f01a4fd1001jAfwgtYFhgTxJ1","created":1795029618641,"type":"session.tool.called","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722","input":{"command":"echo bellocode-contract"},"executed":false},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":11,"version":1}}
+
+data: {"id":"evt_1f01a4fd2001KfDXNoG8W1qt4N","created":1795029618642,"type":"session.step.streamed","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":12,"version":1}}
+
+data: {"id":"evt_1f01a4fd4002rDaQjapJZu7ReB","created":1795029618644,"type":"permission.asked","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"id":"per_1f01a4fd4001x4Njl6kn2niB5v","sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","action":"shell","resources":["echo bellocode-contract"],"save":["echo *"],"source":{"type":"tool","messageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722"}}}
+
+data: {"id":"evt_1f01a50770013bdsANHQIua7VP","created":1795029618807,"type":"permission.replied","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","requestID":"per_1f01a4fd4001x4Njl6kn2niB5v","reply":"once"}}
+
+data: {"id":"evt_1f01a511c001I0Hf9aM3E3xTWx","created":1795029618972,"type":"shell.created","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"info":{"id":"sh_1f01a5078001tFap976AtxDjEl","status":"running","command":"echo bellocode-contract","cwd":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project","shell":"/bin/zsh","file":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/data/opencode/shell/6f11e93d24898d2d91fdcbfa332558ee2776f2c7/sh_1f01a5078001tFap976AtxDjEl.out","metadata":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV"},"time":{"started":1795029618971},"pid":60878}}}
+
+data: {"id":"evt_1f01a511c00230JdN43hfvlKaM","created":1795029618972,"type":"session.tool.progress","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722","metadata":{"shellID":"sh_1f01a5078001tFap976AtxDjEl"}}}
+
+data: {"id":"evt_1f01a511f001Zne77yOyWd54jn","created":1795029618975,"type":"shell.exited","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"id":"sh_1f01a5078001tFap976AtxDjEl","exit":0,"status":"exited"}}
+
+data: {"id":"evt_1f01a511f002xalHXWf2Nfwy5p","created":1795029618975,"type":"session.tool.success","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","id":"chatcmpl-tool-9710a57d9d355722","content":[{"type":"text","text":"bellocode-contract\n"}],"metadata":{"status":"completed","truncated":false,"exit":0},"executed":false},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":13,"version":2}}
+
+data: {"id":"evt_1f01a5120001ez1yfa77JgVfez","created":1795029618976,"type":"session.step.ended","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a44580017zWxRLd2tVyn8r","finish":"tool-calls","rawFinish":"tool_calls","tokens":{"input":8136,"output":17,"reasoning":24,"cache":{"read":0,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":14,"version":1}}
+
+data: {"id":"evt_1f01a5121001TLthyeZp7CnffH","created":1795029618977,"type":"session.usage.updated","data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","cost":0,"tokens":{"input":8136,"output":17,"reasoning":24,"cache":{"read":0,"write":0}}}}
+
+data: {"id":"evt_1f01a5888001CnJdSBNFun3gE5","created":1795029620872,"type":"session.step.started","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","agent":"build","model":{"id":"big-pickle","providerID":"opencode","variant":"default"},"assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu","started":1795029618981},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":15,"version":1}}
+
+data: {"id":"evt_1f01a5889001rX1d7TkmWWgvnF","created":1795029620873,"type":"session.step.first-token","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":16,"version":1}}
+
+data: {"id":"evt_1f01a588a0015t11b6mQq6XEWT","created":1795029620874,"type":"session.text.started","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu","ordinal":0},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":17,"version":1}}
+
+data: {"id":"evt_1f01a58ef001BKIKpZDaMsY1BR","created":1795029620975,"type":"session.text.delta","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu","ordinal":0,"delta":"done"}}
+
+data: {"id":"evt_1f01a58f30018DKgPRBdiJDGHw","created":1795029620979,"type":"session.text.ended","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu","ordinal":0,"text":"done"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":18,"version":1}}
+
+data: {"id":"evt_1f01a58f4001KTKqZxzhLAhIo8","created":1795029620980,"type":"session.step.streamed","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":19,"version":1}}
+
+data: {"id":"evt_1f01a58f50011o7wGc6TL3YXy3","created":1795029620981,"type":"session.step.ended","location":{"directory":"/var/folders/wm/6pzgb_bn3rv3hb8jzgy3pp340000gn/T/bellocode-contract-liv3a5h7/project"},"data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","assistantMessageID":"msg_1f01a5124001A8VnG5ecxGh2Mu","finish":"stop","rawFinish":"stop","tokens":{"input":257,"output":3,"reasoning":0,"cache":{"read":7936,"write":0}},"cost":0},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":20,"version":1}}
+
+data: {"id":"evt_1f01a58f60016f51L09AVdpL1d","created":1795029620982,"type":"session.usage.updated","data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","cost":0,"tokens":{"input":8393,"output":20,"reasoning":24,"cache":{"read":7936,"write":0}}}}
+
+data: {"id":"evt_1f01a58f7001dhSWM2SF8e90m9","created":1795029620983,"type":"session.execution.succeeded","data":{"sessionID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV"},"durable":{"aggregateID":"ses_e0fe5bbbaffeAL5uMe1UX4x3gV","seq":21,"version":1}}
+

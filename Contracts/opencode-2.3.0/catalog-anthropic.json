@@ -1,0 +1,1746 @@
+[
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 1,
+     "write": 12.5
+    },
+    "input": 10,
+    "output": 50
+   }
+  ],
+  "enabled": true,
+  "family": "claude-fable",
+  "id": "claude-fable-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-fable-5",
+  "name": "Claude Fable 5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1780790400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.25,
+     "write": 12.5
+    },
+    "input": 10,
+    "output": 50
+   }
+  ],
+  "enabled": true,
+  "family": "claude-fable",
+  "id": "claude-fable-5-1",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-fable-5-1",
+  "name": "Claude Fable 5.1",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1788220800000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 10
+    },
+    "input": 8,
+    "output": 40
+   }
+  ],
+  "enabled": true,
+  "family": "claude-fable",
+  "id": "claude-fable-5-2",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-fable-5-2",
+  "name": "Claude Fable 5.2",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1794182400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 20
+    },
+    "input": 16,
+    "output": 80
+   }
+  ],
+  "enabled": true,
+  "family": "claude-fable",
+  "id": "claude-fable-5-2-fast",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-fable-5-2",
+  "name": "Claude Fable 5.2 Fast",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1794182400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 1.25
+    },
+    "input": 1,
+    "output": 5
+   }
+  ],
+  "enabled": true,
+  "family": "claude-haiku",
+  "id": "claude-haiku-4-5",
+  "limit": {
+   "context": 200000,
+   "output": 64000
+  },
+  "modelID": "claude-haiku-4-5",
+  "name": "Claude Haiku 4.5 (latest)",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1760486400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "high",
+    "settings": {
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "thinking": {
+      "budgetTokens": 31999,
+      "type": "enabled"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 1.25
+    },
+    "input": 1,
+    "output": 5
+   }
+  ],
+  "enabled": true,
+  "family": "claude-haiku",
+  "id": "claude-haiku-4-5-20251001",
+  "limit": {
+   "context": 200000,
+   "output": 64000
+  },
+  "modelID": "claude-haiku-4-5-20251001",
+  "name": "Claude Haiku 4.5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1760486400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "high",
+    "settings": {
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "thinking": {
+      "budgetTokens": 31999,
+      "type": "enabled"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.01,
+     "write": 0.125
+    },
+    "input": 0.1,
+    "output": 0.5
+   },
+   {
+    "cache": {
+     "read": 0.05,
+     "write": 0.625
+    },
+    "input": 0.5,
+    "output": 2.5,
+    "tier": {
+     "size": 100000,
+     "type": "context"
+    }
+   }
+  ],
+  "enabled": true,
+  "family": "claude-haiku",
+  "id": "claude-haiku-5-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-haiku-5-5",
+  "name": "Claude Haiku 5.5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1791331200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinking": {
+      "type": "disabled"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-5",
+  "limit": {
+   "context": 200000,
+   "output": 64000
+  },
+  "modelID": "claude-opus-4-5",
+  "name": "Claude Opus 4.5 (latest)",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1763942400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-5-20251101",
+  "limit": {
+   "context": 200000,
+   "output": 64000
+  },
+  "modelID": "claude-opus-4-5-20251101",
+  "name": "Claude Opus 4.5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1763942400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "budgetTokens": 16000,
+      "type": "enabled"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-6",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-4-6",
+  "name": "Claude Opus 4.6",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1770163200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-7",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-4-7",
+  "name": "Claude Opus 4.7",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1776124800000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-8",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-4-8",
+  "name": "Claude Opus 4.8",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1779926400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 1,
+     "write": 12.5
+    },
+    "input": 10,
+    "output": 50
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-4-8-fast",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-4-8",
+  "name": "Claude Opus 4.8 Fast",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1779926400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.5,
+     "write": 6.25
+    },
+    "input": 5,
+    "output": 25
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-5",
+  "name": "Claude Opus 5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1784851200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 5
+    },
+    "input": 4,
+    "output": 20
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-5-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-5-5",
+  "name": "Claude Opus 5.5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1790035200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.4,
+     "write": 10
+    },
+    "input": 8,
+    "output": 40
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-5-5-fast",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-5-5",
+  "name": "Claude Opus 5.5 Fast",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1790035200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 1,
+     "write": 12.5
+    },
+    "input": 10,
+    "output": 50
+   }
+  ],
+  "enabled": true,
+  "family": "claude-opus",
+  "id": "claude-opus-5-fast",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-opus-5",
+  "name": "Claude Opus 5 Fast",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1784851200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": true,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.3,
+     "write": 3.75
+    },
+    "input": 3,
+    "output": 15
+   }
+  ],
+  "enabled": true,
+  "family": "claude-sonnet",
+  "id": "claude-sonnet-4-6",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-sonnet-4-6",
+  "name": "Claude Sonnet 4.6",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1771286400000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.2,
+     "write": 2.5
+    },
+    "input": 2,
+    "output": 10
+   }
+  ],
+  "enabled": true,
+  "family": "claude-sonnet",
+  "id": "claude-sonnet-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-sonnet-5",
+  "name": "Claude Sonnet 5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1782691200000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "none",
+    "settings": {
+     "thinking": {
+      "type": "disabled"
+     }
+    }
+   },
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ },
+ {
+  "capabilities": {
+   "input": [
+    "text",
+    "image",
+    "pdf"
+   ],
+   "output": [
+    "text"
+   ],
+   "temperature": false,
+   "tools": true
+  },
+  "cost": [
+   {
+    "cache": {
+     "read": 0.1,
+     "write": 2.5
+    },
+    "input": 2,
+    "output": 10
+   }
+  ],
+  "enabled": true,
+  "family": "claude-sonnet",
+  "id": "claude-sonnet-5-5",
+  "limit": {
+   "context": 1000000,
+   "output": 128000
+  },
+  "modelID": "claude-sonnet-5-5",
+  "name": "Claude Sonnet 5.5",
+  "package": "@opencode/ai/providers/anthropic",
+  "providerID": "anthropic",
+  "status": "active",
+  "time": {
+   "released": 1790553600000
+  },
+  "type": "chat",
+  "variants": [
+   {
+    "id": "low",
+    "settings": {
+     "effort": "low",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "medium",
+    "settings": {
+     "effort": "medium",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "high",
+    "settings": {
+     "effort": "high",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "xhigh",
+    "settings": {
+     "effort": "xhigh",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   },
+   {
+    "id": "max",
+    "settings": {
+     "effort": "max",
+     "thinking": {
+      "display": "summarized",
+      "type": "adaptive"
+     }
+    }
+   }
+  ]
+ }
+]
