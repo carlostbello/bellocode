@@ -132,6 +132,31 @@ export default {
       return out
     }
 
+    /** Creates a worktree and returns its directory, or fails (nothing usable was returned). */
+    const createWorktree = async (projectID: string, already: { threads: string[]; worktrees: string[] }) => {
+      const value = await ctx.worktree.create({ projectID })
+      const directory = L.usableDirectory((value?.data ?? value)?.directory)
+      if (!directory)
+        fail(`opencode created no usable worktree directory, so nothing was started in it.${L.recoveryNote(already)}`)
+      return directory
+    }
+
+    /** Confirms where a new session runs (moving it there if needed) before anything is prompted. A move may land at a
+     *  delivery boundary, so the location is read back a few times. Fails with what was created, for recovery. */
+    const placeIn = async (session: Session, directory: string, created: { threads: string[]; worktrees: string[] }) => {
+      if (L.isLocatedIn(session, directory)) return
+      try {
+        await ctx.session.move({ sessionID: session.id, directory })
+      } catch (error) {
+        fail(`Could not move ${session.id} into worktree ${directory} (${L.oneLine(String((error as any)?.message ?? error), 160)}), so it was not started.${L.recoveryNote(created)}`)
+      }
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (L.isLocatedIn(await get(session.id), directory)) return
+        await sleep(100)
+      }
+      fail(`${session.id} is not running in worktree ${directory} after the move, so it was not started.${L.recoveryNote(created)}`)
+    }
+
     const messages = async (sessionID: string): Promise<L.MessageLike[]> =>
       list<L.MessageLike>(await ctx.session.context({ sessionID }))
 
@@ -274,10 +299,11 @@ export default {
           if (parsed && "error" in parsed) fail(parsed.error)
           const model = parsed ?? agent.model ?? caller.model ?? undefined
           let directory: string | undefined
+          const made = { threads: [] as string[], worktrees: [] as string[] }
           if (input.workspace === "worktree") {
             if (!caller.projectID) fail("This thread has no project, so it cannot get a worktree.")
-            const worktree = await ctx.worktree.create({ projectID: caller.projectID })
-            directory = (worktree?.data ?? worktree)?.directory
+            directory = await createWorktree(caller.projectID, made)
+            made.worktrees.push(directory)
           }
           const description = L.oneLine(String(input.description), 80)
           const created = await ctx.session.create({
@@ -295,8 +321,9 @@ export default {
             },
           })
           const child = (created?.data ?? created) as Session
-          if (directory && child.location?.directory !== directory)
-            await ctx.session.move({ sessionID: child.id, directory }).catch(() => undefined)
+          made.threads.push(child.id)
+          // The child is prompted only once it is confirmed in its worktree (never silently in this checkout).
+          if (directory) await placeIn(child, directory, made)
           await tool.progress({ sessionID: child.id, status: "running", agent: agentID })
           await putGuidance(child)
           await ctx.session.prompt({
@@ -390,13 +417,20 @@ export default {
           if (refusal) fail(refusal)
           const group = `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
           const created: Array<Record<string, unknown>> = []
+          const isolated = input.workspace === "worktree"
+          if (isolated && !caller.projectID) fail("This thread has no project, so it cannot create worktrees.")
           for (const spec of specs) {
             const parsed = L.parseModel(spec.model)
             if (parsed && "error" in parsed) fail(parsed.error)
+          }
+          // Earlier threads of this call are reported (with their worktrees) if a later one cannot be placed.
+          const made = { threads: [] as string[], worktrees: [] as string[] }
+          for (const spec of specs) {
+            const parsed = L.parseModel(spec.model)
             let directory = caller.location?.directory
-            if (input.workspace === "worktree" && caller.projectID) {
-              const worktree = await ctx.worktree.create({ projectID: caller.projectID })
-              directory = (worktree?.data ?? worktree)?.directory ?? directory
+            if (isolated) {
+              directory = await createWorktree(caller.projectID as string, made)
+              made.worktrees.push(directory)
             }
             const value = await ctx.session.create({
               title: L.oneLine(String(spec.title), 100),
@@ -414,6 +448,8 @@ export default {
               },
             })
             const session = (value?.data ?? value) as Session
+            made.threads.push(session.id)
+            if (isolated && directory) await placeIn(session, directory, made)
             await putGuidance(session)
             if (spec.prompt) await ctx.session.prompt({ sessionID: session.id, text: String(spec.prompt) })
             created.push({ threadID: session.id, title: session.title, started: Boolean(spec.prompt), directory })

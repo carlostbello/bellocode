@@ -266,3 +266,27 @@ export function guidance(input: { readonly depth: number; readonly limits: Limit
     lines.push("You are a delegated child task: finish with a concise final message, which is reported to your parent.")
   return lines.join("\n")
 }
+
+// MARK: - Worktree placement (deep review 1, C1)
+
+/** An absolute directory as opencode reports it, without a trailing slash; undefined when it is not usable. */
+export function usableDirectory(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("/")) return undefined
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed
+}
+
+/** The session runs in `directory` (compared as opencode reports both; no filesystem resolution). */
+export function isLocatedIn(session: SessionLike, directory: string): boolean {
+  const actual = usableDirectory(session.location?.directory)
+  return actual !== undefined && actual === usableDirectory(directory)
+}
+
+/** Names what a failed placement left behind, so the caller (or the user) can reuse or remove it. Nothing is deleted. */
+export function recoveryNote(created: { readonly threads?: readonly string[]; readonly worktrees?: readonly string[] }): string {
+  const parts: string[] = []
+  if (created.threads?.length) parts.push(`thread(s) ${created.threads.join(", ")}`)
+  if (created.worktrees?.length) parts.push(`worktree(s) ${created.worktrees.join(", ")}`)
+  return parts.length ? ` Created and left for recovery: ${parts.join("; ")}.` : ""
+}
