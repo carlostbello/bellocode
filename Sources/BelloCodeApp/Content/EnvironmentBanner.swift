@@ -156,7 +156,9 @@ final class TerminalEnvironmentStrip: NSView {
                 retry: { Task { await service.retry(directory) } }
             ).padding(.horizontal, DS.Space.s8).padding(.vertical, DS.Space.s4)))
         } else {
-            let text = "Container · \(environment.image ?? "no image") · \(environment.phase.label)"
+            let text = environment.mode == .hostDocker
+                ? "Host docker only · terminals are not available in this mode"
+                : "\(environment.mode == .sharedWorkspace ? "Shared workspace" : "Container") · \(environment.image ?? "no image") · \(environment.phase.label)"
             show(AnyView(
                 HStack(spacing: DS.Space.s4) {
                     Image(systemName: environment.phase.symbolName).foregroundStyle(DSColor.text3).accessibilityHidden(true)

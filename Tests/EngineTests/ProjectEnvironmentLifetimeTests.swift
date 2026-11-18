@@ -37,7 +37,7 @@ struct ProjectEnvironmentLifetimeTests {
             configuration.startsExtras = false
             configuration.containers = ContainerConfiguration(
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
-                execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault())
+                execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault()).projectContainerDefault()
             return configuration
         }
 

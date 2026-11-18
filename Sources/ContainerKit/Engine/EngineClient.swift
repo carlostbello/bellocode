@@ -512,6 +512,12 @@ public struct EngineClient: Sendable {
         return try decode(Body.self, try await call("GET", "/volumes", query: [("filters", Self.filters(["label": labels]))])).volumes ?? []
     }
 
+    /// Images carrying every one of `labels` (`key` or `key=value`).
+    public func listImages(labels: [String]) async throws -> [ImageListItem] {
+        let filters = (try? JSONSerialization.data(withJSONObject: ["label": labels])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+        return try decode([ImageListItem].self, try await call("GET", "/images/json", query: [("filters", filters)]))
+    }
+
     public func listImages() async throws -> [ImageListItem] {
         try decode([ImageListItem].self, try await call("GET", "/images/json"))
     }

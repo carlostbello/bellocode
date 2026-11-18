@@ -41,9 +41,9 @@ public struct PruneResult: Sendable, Equatable {
 
 extension WorkspaceManager {
     /// Label keys that mark a BelloCode container.
-    static let containerKinds = [WorkspaceSpec.labelWorkspace, ServiceLabels.service, WorkspaceSpec.labelSecretCommand]
+    static let containerKinds = [WorkspaceSpec.labelWorkspace, ServiceLabels.service, WorkspaceSpec.labelSecretCommand, DockerAgentLabels.agent]
     /// Label keys that mark a BelloCode volume.
-    static let volumeKinds = [WorkspaceSpec.labelWorkspace, ServiceLabels.volume, PackageCache.volumeLabel]
+    static let volumeKinds = [WorkspaceSpec.labelWorkspace, ServiceLabels.volume, PackageCache.volumeLabel, DockerAgentLabels.agent]
 
     /// Lists what a prune would remove. `keepProjectKeys`: projects BelloCode still has (their unused volumes, such as
     /// a persistent home or service data, are kept); `pulledImageIDs`: images BelloCode pulled itself.
@@ -56,7 +56,8 @@ extension WorkspaceManager {
                 guard ["exited", "created", "dead"].contains(container.state) else { continue }
                 let project = container.labels[WorkspaceSpec.labelProject].map { ($0 as NSString).lastPathComponent }
                 let role = container.labels[ServiceLabels.service].map { "service \($0)" }
-                    ?? (container.labels[WorkspaceSpec.labelSecretCommand] != nil ? "one-shot secret command" : "workspace")
+                    ?? (container.labels[WorkspaceSpec.labelSecretCommand] != nil ? "one-shot secret command"
+                        : container.labels[DockerAgentLabels.agent] != nil ? "created by the agent's docker" : "workspace")
                 plan.containers.append(.init(id: container.id, name: container.name,
                                              detail: [project, role, container.status ?? container.state].compactMap { $0 }.joined(separator: " · ")))
             }
@@ -67,21 +68,37 @@ extension WorkspaceManager {
                 volumeNames.insert(volume.name)
                 if volume.labels[PackageCache.sharedLabel] == "1" { continue }
                 if let key = volume.labels[WorkspaceSpec.labelProjectKey], keepProjectKeys.contains(key) { continue }
+                // Data volumes the agent's docker made for a workspace BelloCode still has are kept (a database).
+                if let scope = volume.labels[DockerAgentLabels.scope], keepProjectKeys.contains(scope) { continue }
                 guard try await client.listContainersUsing(volume: volume.name).isEmpty else { continue }
                 let project = volume.labels[WorkspaceSpec.labelProject].map { ($0 as NSString).lastPathComponent } ?? "no project"
                 plan.volumes.append(.init(id: volume.name, name: volume.name, detail: "\(project) (project no longer in BelloCode)"))
             }
         }
-        for id in try await client.listNetworks(labels: [ServiceLabels.network]) {
-            guard let network = try await client.inspectNetwork(id), network.containers.isEmpty,
-                  network.labels[ServiceLabels.network] != nil else { continue }
-            plan.networks.append(.init(id: network.id, name: network.name, detail: "no containers attached"))
+        var networkIDs = Set<String>()
+        for kind in [ServiceLabels.network, DockerAgentLabels.agent] {
+            for id in try await client.listNetworks(labels: [kind]) where networkIDs.insert(id).inserted {
+                guard let network = try await client.inspectNetwork(id), network.containers.isEmpty,
+                      network.labels[ServiceLabels.network] != nil || network.labels[DockerAgentLabels.agent] != nil else { continue }
+                let detail = network.labels[DockerAgentLabels.agent] != nil ? "created by the agent's docker, no containers attached" : "no containers attached"
+                plan.networks.append(.init(id: network.id, name: network.name, detail: detail))
+            }
         }
         if !pulledImageIDs.isEmpty {
             let inUse = Set(try await client.listContainers(labels: []).compactMap(\.imageID))
             for image in try await client.listImages() where pulledImageIDs.contains(image.id) && !inUse.contains(image.id) {
                 let size = image.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown"
                 plan.images.append(.init(id: image.id, name: image.repoTags.first ?? String(image.id.prefix(19)), detail: "pulled by BelloCode, unused · \(size)"))
+            }
+        }
+        // Images the agent built through the filtered endpoint, unused.
+        // The label is checked here too: only images that carry it, whatever the daemon's filter returned.
+        let agentImages = try await client.listImages(labels: [DockerAgentLabels.agent]).filter { $0.labels?[DockerAgentLabels.agent] != nil }
+        if !agentImages.isEmpty {
+            let inUse = Set(try await client.listContainers(labels: []).compactMap(\.imageID))
+            for image in agentImages where !inUse.contains(image.id) && !plan.images.contains(where: { $0.id == image.id }) {
+                let size = image.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown"
+                plan.images.append(.init(id: image.id, name: image.repoTags.first ?? String(image.id.prefix(19)), detail: "built by the agent's docker, unused · \(size)"))
             }
         }
         plan.containers.sort { $0.name < $1.name }

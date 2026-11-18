@@ -1,3 +1,4 @@
+import BelloCore
 import ContainerKit
 import Foundation
 
@@ -22,6 +23,12 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public var servicesYAML: String?
     /// Package-manager caches chosen for this project (an image's declared caches apply unless turned off here).
     public var caches: [CacheSelection]
+    /// Where this project's commands run; nil follows the app-wide default (Settings ▸ Containers).
+    public var executionMode: ExecutionMode?
+    /// Use the project's `.devcontainer/devcontainer.json` as the source of its project container (supported subset).
+    public var useDevContainer: Bool
+    /// The dev container's lifecycle commands the person approved (`DevContainerPlan.lifecycleDigest`).
+    public var approvedDevLifecycle: String?
     /// Register the global MCP servers (Settings ▸ MCP Servers) for this project.
     public var useGlobalMCP: Bool
     /// Global MCP servers (ids) this project turned off.
@@ -30,10 +37,12 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     public init(image: String? = nil, environment: [String: String] = [:], resources: ResourceLimits = .standard,
                 userMounts: [UserMount] = [], network: WorkspaceSpec.Network = .bridge, fileWatchBridge: Bool = true,
                 idleStopMinutes: Int = 30, mcpServers: [MCPServerSetting] = [], servicesYAML: String? = nil, caches: [CacheSelection] = [],
-                useGlobalMCP: Bool = true, globalMCPOptOut: [String] = []) {
+                executionMode: ExecutionMode? = nil, useDevContainer: Bool = false, useGlobalMCP: Bool = true, globalMCPOptOut: [String] = []) {
         self.useGlobalMCP = useGlobalMCP
         self.globalMCPOptOut = globalMCPOptOut
         self.caches = caches
+        self.executionMode = executionMode
+        self.useDevContainer = useDevContainer
         self.mcpServers = mcpServers
         self.servicesYAML = servicesYAML
         self.image = image
@@ -49,7 +58,7 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case image, environment, resources, userMounts, network, fileWatchBridge, idleStopMinutes, mcpServers, servicesYAML, caches, useGlobalMCP,
-             globalMCPOptOut
+             globalMCPOptOut, executionMode, useDevContainer, approvedDevLifecycle
     }
 
     public init(from decoder: any Decoder) throws {
@@ -64,6 +73,10 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
         mcpServers = try c.decodeIfPresent([MCPServerSetting].self, forKey: .mcpServers) ?? []
         servicesYAML = try c.decodeIfPresent(String.self, forKey: .servicesYAML)
         caches = try c.decodeIfPresent([CacheSelection].self, forKey: .caches) ?? []
+        // An unknown mode (a newer build's) falls back to the app default rather than failing the whole row.
+        executionMode = (try? c.decodeIfPresent(String.self, forKey: .executionMode)).flatMap { $0 }.flatMap(ExecutionMode.init(rawValue:))
+        useDevContainer = try c.decodeIfPresent(Bool.self, forKey: .useDevContainer) ?? false
+        approvedDevLifecycle = try c.decodeIfPresent(String.self, forKey: .approvedDevLifecycle)
         useGlobalMCP = try c.decodeIfPresent(Bool.self, forKey: .useGlobalMCP) ?? true
         globalMCPOptOut = try c.decodeIfPresent([String].self, forKey: .globalMCPOptOut) ?? []
     }
@@ -187,11 +200,21 @@ public struct EnvironmentDefaults: Codable, Sendable, Equatable {
     public var socketOverride: String?
     /// The image policy set in Settings (an administrator's managed policy wins over it).
     public var imagePolicy: ImagePolicy?
+    /// Code roots (Settings ▸ Containers ▸ Code roots); nil until chosen or suggested on first run.
+    public var codeRoots: [String]?
+    /// Whether `codeRoots` was suggested by BelloCode or edited by the person.
+    public var codeRootsSource: TrustedRoots.Source?
+    /// The execution mode for projects that have not chosen one (nil: `ExecutionMode.defaultMode`).
+    public var defaultMode: ExecutionMode?
 
-    public init(defaultImage: String? = nil, socketOverride: String? = nil, imagePolicy: ImagePolicy? = nil) {
+    public init(defaultImage: String? = nil, socketOverride: String? = nil, imagePolicy: ImagePolicy? = nil,
+                codeRoots: [String]? = nil, codeRootsSource: TrustedRoots.Source? = nil, defaultMode: ExecutionMode? = nil) {
         self.defaultImage = defaultImage
         self.socketOverride = socketOverride
         self.imagePolicy = imagePolicy
+        self.codeRoots = codeRoots
+        self.codeRootsSource = codeRootsSource
+        self.defaultMode = defaultMode
     }
 
     public static let preferenceKey = "containers.defaults"
@@ -265,6 +288,8 @@ public enum EnvironmentPhase: Sendable, Equatable {
     case policyUnavailable(String)
     /// The image is outside the image policy (allowlist, digest, signature, pull policy): nothing is pulled or run.
     case imageRefused(String)
+    /// The project uses the shared workspace but is not inside any code root (or none is configured).
+    case outsideCodeRoots(String)
 
     public var isBlocking: Bool { blocked != nil }
 
@@ -290,6 +315,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .failed(let message): .init(message: "The project's container failed: \(message)", fix: EnvironmentFix.retry.title)
         case .policyUnavailable(let message): .init(message: message, fix: EnvironmentFix.openSettings.title)
         case .imageRefused(let message): .init(message: message, fix: EnvironmentFix.chooseImage.title)
+        case .outsideCodeRoots(let message): .init(message: message, fix: EnvironmentFix.openSettings.title)
         }
     }
 
@@ -308,6 +334,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .failed: "Failed"
         case .policyUnavailable: "Settings unavailable"
         case .imageRefused: "Image not allowed"
+        case .outsideCodeRoots: "Outside code roots"
         }
     }
 
@@ -317,7 +344,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .unknown, .starting, .pulling: "arrow.triangle.2.circlepath"
         case .ready: "shippingbox.fill"
         case .idle: "shippingbox"
-        case .noImage, .unmountable: "exclamationmark.triangle"
+        case .noImage, .unmountable, .outsideCodeRoots: "exclamationmark.triangle"
         case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable: "xmark.octagon"
         case .imageRefused: "hand.raised"
         }
@@ -328,7 +355,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         case .ready: .success
         case .idle, .unknown: .neutral
         case .starting, .pulling: .info
-        case .noImage, .unmountable: .warning
+        case .noImage, .unmountable, .outsideCodeRoots: .warning
         case .runtimeUnavailable, .pullFailed, .failed, .policyUnavailable, .imageRefused: .danger
         }
     }
@@ -400,13 +427,14 @@ public struct EnvironmentNotice: Sendable, Equatable {
         case .unmountable: "Commands cannot run: a folder cannot be mounted"
         case .policyUnavailable: "Commands cannot run: the environment settings are unavailable"
         case .imageRefused: "Commands cannot run: the image is not allowed"
+        case .outsideCodeRoots: "Commands cannot run: the project is outside your code roots"
         default: "Commands cannot run"
         }
         let fix: EnvironmentFix? = switch phase {
         case .runtimeUnavailable(let state): EnvironmentFix(state.fix)
         case .noImage, .imageRefused: .chooseImage
         case .pullFailed(_, let signIn): signIn ? .signIn : .retry
-        case .unmountable, .policyUnavailable: .openSettings
+        case .unmountable, .policyUnavailable, .outsideCodeRoots: .openSettings
         case .failed: .retry
         default: nil
         }

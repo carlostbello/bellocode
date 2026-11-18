@@ -223,6 +223,12 @@ public final class Engine {
         orchestration = OrchestrationService(core: core, store: store, engine: self)
         auto = AutoModeService(core: core, store: store, engine: self, reviewerModel: configuration.autoReviewerModel)
         codeRoots = configuration.codeRoots
+        // Containerised execution owns the developer's code roots (Settings ▸ Containers ▸ Code roots): it provides them
+        // to Auto and Full-access notices and says when they change.
+        if configuration.containers != nil {
+            environments.onCodeRootsChanged = { [weak self] in self?.refreshCodeRoots() }
+            codeRootsProvider = environments
+        }
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests

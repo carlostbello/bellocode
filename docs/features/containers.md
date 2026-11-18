@@ -1,12 +1,13 @@
-# Containerised execution (M6-A, Containers 2, Containers 3)
+# Containerised execution (M6-A, Containers 2 and 3, execution modes)
 
-Everything the agent or the user **runs** executes in a Linux container on Rancher Desktop (dockerd); opencode stays a
-native host process; nothing falls back to the Mac. Spike: [G6-containers.md](../spikes/G6-containers.md).
+Everything the agent or the user **runs** executes in a Linux container on Rancher Desktop (dockerd), or, in host
+docker-only mode, as one filtered `docker` command; opencode stays a native host process; nothing else falls back to the Mac. Spike: [G6-containers.md](../spikes/G6-containers.md).
 
 > **Database: no migration (Containers 2 and 3).** No table is added: project fields (MCP servers, services, caches,
 > `useGlobalMCP`, `globalMCPOptOut`) live in the `app_environment` JSON (decoded with defaults); the image policy,
 > pulled images, global MCP list (`mcp.global`) and network settings (`network.settings`) in `app_preference`; the
-> restart grant in `app_grant`. Secrets are Keychain items only. The schema is unchanged (latest on develop: `v9-gitlab`).
+> restart grant in `app_grant`; execution modes add optional fields to both (`executionMode`, `useDevContainer`,
+> `approvedDevLifecycle`; `containers.defaults` code roots and default mode). Secrets are Keychain items only. The schema is unchanged (latest on develop: `v9-gitlab`).
 
 ## Architecture
 
@@ -25,6 +26,12 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
   `ProjectEnvironment` per project, helper configuration, idle stop, reaper, ports, file-watch bridge, secrets, setup
   scripts, MCP registration (project and global), stacks, services, caches, policy, network, prune, the self-check.
 
+## Execution modes ([execution-modes.md](execution-modes.md))
+
+Default **Shared workspace** (one container per developer, every code root at the same path: multi-repo without
+approvals); **Project container** (as above); **Host shell, docker only** (one parsed `docker` command on the Mac).
+`docker` in a workspace uses BelloCode's filtered endpoint; code roots are the policy layer's trusted roots.
+
 ## Coverage
 
 | Path | Where it runs | Proof |
@@ -42,6 +49,7 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
 | **Project services** | sibling containers, project network | live test (two services, health gate) |
 | Repository plugins/agents/commands, `"shell"` | ignored (`OPENCODE_DISABLE_PROJECT_CONFIG`) | spike e2e |
 | BelloCode's and opencode's host git | host, sandboxed (`HostGit`, shim) | hostile-repository matrix + "Host git" check |
+| Shared workspace (any folder in the code roots); `docker` inside; host docker-only | shared container; filtered endpoint; Mac, one `docker` argv | unit, live, `make e2e-exec`; hostile matrix; `HostDockerCommandTests` |
 | Commands receiving a secret (`secret_exec`) | one-shot sibling container, no network | fake-runtime e2e + live test |
 | File tools, ripgrep | host (no project code runs) | n/a |
 
@@ -247,4 +255,5 @@ read; a selection change reaches opencode at its next start. Narrow thread heade
 Measured (Rancher Desktop 1.25, arm64): container ready 115–196 ms; terminal round trip 133–144 ms; watch bridge 61 ms;
 two redis services healthy 2.3 s; project MCP server connected in the container 4.7 s; global image server through
 opencode 4.5 s; compose stack (built) connected 4.4 s; test CA trusted, diagnosed and built 9.9 s. Snapshots:
-`docs/snapshots/containers{,2,3}-*.png`. Commands: `make smoke`, `make e2e-containers`, `--snapshot containers3`, Live.
+`docs/snapshots/containers{,2,3}-*.png`, `exec-*.png`. Commands: `make smoke`, `make e2e-containers`, `make e2e-exec`,
+`--snapshot containers3`, Live.

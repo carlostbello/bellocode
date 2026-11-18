@@ -279,13 +279,15 @@ public struct ImageListItem: Decodable, Sendable, Equatable, Hashable {
     public var repoTags: [String]
     public var size: Int64?
     public var containers: Int?
-    enum CodingKeys: String, CodingKey { case id = "Id", repoTags = "RepoTags", size = "Size", containers = "Containers" }
+    public var labels: [String: String]?
+    enum CodingKeys: String, CodingKey { case id = "Id", repoTags = "RepoTags", size = "Size", containers = "Containers", labels = "Labels" }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         repoTags = (try? c.decodeIfPresent([String].self, forKey: .repoTags)) ?? []
         size = try? c.decodeIfPresent(Int64.self, forKey: .size)
         containers = try? c.decodeIfPresent(Int.self, forKey: .containers)
+        labels = (try? c.decodeIfPresent([String: String].self, forKey: .labels)) ?? nil
     }
 }
 

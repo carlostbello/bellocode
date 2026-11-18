@@ -156,6 +156,10 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
         let container = Self.containerText(context.engine.environments, directory: context.directory)
         containerCrumb.text = container
         containerCrumb.isHidden = container.isEmpty
+        if let environment = context.engine.environments.isEnabled && !context.directory.isEmpty
+            ? context.engine.environments.project(containing: context.directory) : nil {
+            containerCrumb.symbolName = environment.mode.symbolName
+        }
         summary = [
             titleField.stringValue, context.projectName, branchCrumb.isHidden ? nil : branchCrumb.text, placeCrumb.isHidden ? nil : placeCrumb.text,
             status.isEmpty ? nil : status, container.isEmpty ? nil : container, Self.gitText(repository).isEmpty ? nil : Self.gitText(repository),
@@ -233,7 +237,17 @@ final class ThreadHeaderView: NSView, NSTextFieldDelegate {
     /// "Container: node:22 (Running)" while commands run in the project's container (M6-A); empty when off.
     static func containerText(_ service: EnvironmentService, directory: String) -> String {
         guard service.isEnabled, !directory.isEmpty, let environment = service.project(containing: directory) else { return "" }
-        return "Container: \(environment.image ?? "no image") (\(environment.phase.label))"
+        return executionText(environment)
+    }
+
+    /// "Shared workspace: base:1 (Running)", "Project container: node:22 (Stopped)", "Host docker only (Ready)": the
+    /// execution mode, image and state in words.
+    static func executionText(_ environment: ProjectEnvironment) -> String {
+        switch environment.mode {
+        case .hostDocker: "Host docker only (\(environment.phase == .ready ? "Ready" : environment.phase.label))"
+        case .sharedWorkspace: "Shared workspace: \(environment.image ?? "no image") (\(environment.phase.label))"
+        case .projectContainer: "Project container: \(environment.image ?? "no image") (\(environment.phase.label))"
+        }
     }
 
     /// "⎇ main · Local checkout · 3 changed ↑2" (words, not colour; empty outside a repository).

@@ -28,7 +28,7 @@ struct LiveContainerServicesTests {
         let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-svc-\(UUID().uuidString.prefix(8))")
         var configuration = ContainerConfiguration(
             helperURL: URL(filePath: "/nonexistent/bellocode-exec"), execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil,
-            runtime: LiveWorkspaceRuntime(), registryVault: InMemorySecretVault())
+            runtime: LiveWorkspaceRuntime(), registryVault: InMemorySecretVault()).projectContainerDefault()
         configuration.managedPolicy = { policy.map { .init(policy: $0, defaultImage: nil, source: "test") } }
         let service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
         service.worktreeParent = { _ in root.appending(path: "worktrees").path }
