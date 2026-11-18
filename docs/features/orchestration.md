@@ -67,8 +67,9 @@ schedule's mode are part of the create request; agent and mode changes are seria
 first, agent switched back if the rules are refused, result read back), and a thread whose rules the server did not
 confirm refuses to send until the mode is chosen again.
 Attribution: plugin tools get `sessionID` from the tool context; client-MCP calls from `_meta["ai.opencode/sessionID"]`
-(unattributed calls are refused). Own descendants: free. Same project: free, except `thread_interrupt`, which asks
-(`bellocode_interrupt` approval card). Another project: every read/send/wait/interrupt asks (`bellocode_other_project`,
+(unattributed calls are refused). Own descendants: free. Same project: free, including `thread_interrupt` since
+Auto mode (docs/features/auto-mode.md): attributed, with a reason, rate-limited, shown in both threads, target held
+until Resume. Another project: every read/send/wait/interrupt asks (`bellocode_other_project`,
 "always" saves per project). `delegate_task` asserts the native `subagent` permission. App tools: same project only.
 
 ## Guidance

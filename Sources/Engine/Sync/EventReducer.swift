@@ -224,6 +224,7 @@ enum EventReducer {
                 call.ran = call.ran ?? at
                 call.executedByProvider = p.executed
             }
+            noticeRisk(p.sessionID, p.assistantMessageID, p.id, state: &state, into: &reduction)
         case .toolProgress(let p):
             tool(p.sessionID, p.assistantMessageID, p.id, name: nil, at: at, state: &state, into: &reduction) { call in
                 guard !call.status.isFinished else { return }
@@ -237,6 +238,7 @@ enum EventReducer {
                 call.metadata = Mapping.raw(p.metadata) ?? call.metadata
                 call.completed = call.completed ?? at
             }
+            noticeRisk(p.sessionID, p.assistantMessageID, p.id, state: &state, into: &reduction)
         case .toolFailed(let p):
             tool(p.sessionID, p.assistantMessageID, p.id, name: nil, at: at, state: &state, into: &reduction) { call in
                 guard call.status.canAdvance(to: .failed) else { return }
@@ -246,10 +248,11 @@ enum EventReducer {
                 call.metadata = Mapping.raw(p.metadata) ?? call.metadata
                 call.completed = call.completed ?? at
             }
+            noticeRisk(p.sessionID, p.assistantMessageID, p.id, state: &state, into: &reduction)
 
         // MARK: Blocking requests
         case .permissionAsked(let request):
-            state.putPending(.permission(Mapping.permission(request, received: at)), into: &reduction)
+            state.putPermission(Mapping.permission(request, received: at), into: &reduction)
             requireSession(SessionID(request.sessionID), state: state, into: &reduction)
         case .permissionReplied(let p):
             state.resolvePending(p.requestID, into: &reduction)
@@ -482,6 +485,43 @@ enum EventReducer {
         state.updateMessage(id, persist: true, into: &reduction, create: { assistantShell(id, sessionID, at) }) { message in
             mutateTool(&message, callID: callID, name: name, at: at, body)
         }
+    }
+
+    /// Full access (and opencode-default) risk notices (docs/features/auto-mode.md): the policy's detectors over the
+    /// call's input and the evaluations the plugin stamped on its result. Attempted (running) and finished calls are
+    /// both noted; the notice keeps the latest state. Best effort: static analysis cannot see everything.
+    private static func noticeRisk(
+        _ session: String, _ messageID: String, _ callID: String, state: inout ProjectionState, into reduction: inout Reduction
+    ) {
+        let sessionID = SessionID(session)
+        guard let owner = state.sessions[sessionID], owner.permissionMode == .fullAccess || owner.permissionMode == nil,
+            let message = state.messages[MessageID(messageID)],
+            let call = message.parts.lazy.compactMap(\.content.toolCall).first(where: { $0.callID == callID }),
+            let input = call.input.flatMap(RiskNoticeInput.object)
+        else { return }
+        let evaluated = call.metadata.flatMap(RiskNoticeInput.evaluations) ?? []
+        var roots = [owner.directory]
+        if let project = state.projects[owner.projectID]?.directory { roots.append(project) }
+        let context = RiskPolicy.Context(directory: owner.directory, roots: roots, trusted: state.codeRoots)
+        let notices = RiskPolicy.notices(tool: call.name, input: input, evaluated: evaluated, in: context)
+        let previous = call.risk?.notices ?? []
+        guard !notices.isEmpty || !previous.isEmpty else { return }
+        let merged = previous + notices.filter { !previous.contains($0) }
+        if merged != previous {
+            tool(session, messageID, callID, name: nil, at: .now, state: &state, into: &reduction) { call in
+                var risk = call.risk ?? ToolRisk()
+                risk.notices = merged
+                call.risk = risk
+            }
+        }
+        let stage: RiskNoticeEvent.Stage = call.status == .completed ? .completed : call.status == .failed ? .failed : .attempted
+        reduction.riskNotices.append(
+            RiskNoticeEvent(sessionID: sessionID, messageID: MessageID(messageID), callID: callID, tool: call.name, findings: merged,
+                            stage: stage, projectDirectory: state.projects[owner.projectID]?.directory))
+    }
+
+    static func noticeRiskForTesting(_ session: String, _ messageID: String, _ callID: String, state: inout ProjectionState, into reduction: inout Reduction) {
+        noticeRisk(session, messageID, callID, state: &state, into: &reduction)
     }
 
     /// Finds or creates the tool part and applies `body`, re-wrapping it as a sub-agent reference when it is one.

@@ -146,13 +146,13 @@ public final class ThreadModel: Identifiable {
     @ObservationIgnored private var draftEditedBeforeLoad = false
     @ObservationIgnored private var models: [MessageID: MessageModel] = [:]
     @ObservationIgnored private var keys: [MessageID: MessageSortKey] = [:]
-    @ObservationIgnored private let core: EngineCore
+    @ObservationIgnored let core: EngineCore
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var loadGeneration = 0
     /// Older pages were loaded; the server's newest-window flag no longer describes this window.
     @ObservationIgnored private var didPage = false
     @ObservationIgnored private var subscription: ChangeSubscription?
-    @ObservationIgnored private weak var engine: Engine?
+    @ObservationIgnored weak var engine: Engine?
     /// Outstanding `Engine.openThread` leases (one per holder, typically one per window).
     @ObservationIgnored private(set) var leaseCount = 0
     /// Torn down: the subscription is cancelled and the engine no longer returns this instance.

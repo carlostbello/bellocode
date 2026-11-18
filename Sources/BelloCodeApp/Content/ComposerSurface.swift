@@ -244,6 +244,13 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     func openModelPicker() { modelPicker?.requestOpen() }
     /// Opens the permission-mode popover (menu: Permission Mode…).
     func openPermissionMode() { modeTrigger.fire() }
+    /// Sets the permission mode of the thread or the draft (Thread ▸ Set Permission Mode, ⌃⌥⌘1–4).
+    func setPermissionMode(_ mode: PermissionMode) {
+        let source: (any AgentModeSource)? = context.thread ?? draftSource
+        guard let source else { return }
+        Task { await source.setPermissionMode(mode) }
+    }
+
     /// Switches between the plan and build agents (menu: Toggle Plan Mode).
     func togglePlan() {
         let source: (any AgentModeSource)? = context.thread ?? draftSource

@@ -154,6 +154,21 @@ public enum LayoutEngine {
                 labels: [Label(glyph: .warning, glyphColor: theme.failure, point: .zero, glyphRect: CGRect(x: 1, y: glyphTop, width: 14, height: 13))],
                 kindTag: .card)
 
+        case .lifecycle(let event) where event.kind == .risk || event.kind == .autoApproved || event.kind == .interruption:
+            // A compact left-aligned note under the call it is about: glyph + `meta` text (never colour alone).
+            let color = event.kind == .risk ? theme.warning : theme.tertiary
+            let glyph: Glyph = event.kind == .risk ? .warning : event.kind == .autoApproved ? .check : .cross
+            let attributed = fonts.plain(event.text, font: fonts.small, color: event.kind == .risk ? theme.secondary : theme.tertiary)
+            let lineHeight = DS.TextRole.meta.lineHeight(base: theme.baseSize)
+            let fragment = ProseTypesetter.layout(
+                attributed, origin: CGPoint(x: 20, y: 2), textStart: 0, width: width - 20, lineSpacing: 0, truncate: true,
+                lineHeight: lineHeight)
+            let top = floor(2 + (lineHeight - 12) / 2)
+            return BlockLayout(
+                size: CGSize(width: width, height: fragment.height + 4), plainLength: fragment.length, fragments: [fragment],
+                labels: [Label(glyph: glyph, glyphColor: color, point: .zero, glyphRect: CGRect(x: 2, y: top, width: 12, height: 12))],
+                kindTag: .other)
+
         case .lifecycle(let event):
             // One centred `meta text3` line; no rules.
             let attributed = fonts.plain(event.text, font: fonts.small, color: theme.tertiary)

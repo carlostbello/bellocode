@@ -14,6 +14,8 @@ public struct PermissionRequest: Hashable, Sendable, Codable, Identifiable {
     public var toolMessageID: MessageID?
     public var toolCallID: String?
     public var received: Timestamp
+    /// Set when BelloCode Auto escalated this request to the person: why (docs/features/auto-mode.md).
+    public var autoEscalation: AutoEscalation? = nil
 
     public init(
         id: PermissionRequestID, sessionID: SessionID, action: String, resources: [String], alwaysScopes: [String] = [],

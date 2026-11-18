@@ -151,7 +151,14 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.add(.chooseModel)
         menu.add(.permissionMode)
+        let modes = NSMenu(title: "Permissions")
+        for command in [ShellCommand.modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess] { modes.add(command) }
+        menu.addItem(submenu: modes, title: "Set Permission Mode")
         menu.add(.togglePlan)
+        menu.addItem(.separator())
+        menu.add(.showAutoAudit)
+        menu.add(.reviewRiskNotices)
+        menu.add(.resumeInterrupted)
         menu.addItem(.separator())
         let requests = NSMenu(title: "Requests")
         for command in [ShellCommand.allowOnce, .allowAlways, .denyRequest, .submitAnswer] { requests.add(command) }

@@ -155,8 +155,15 @@ final class ThreadCell: NSTableCellView {
         glyph.setAccessibilityElement(false)
         if isTwoLine {
             let status = presentation.status
-            let word = Self.needsYouWord(status)
-            subtitle = (word, StatusGlyph(status).tone, presentation.projectName ?? "")
+            let notices = workspace.engine.auto?.noticeCount(sessionID) ?? 0
+            let blocking = status == .awaitingApproval || status == .awaitingAnswer || status == .failed
+            if notices > 0, !blocking {
+                // Not a blocking approval: a risk notice to look at (the words say so; never colour alone).
+                subtitle = (notices == 1 ? "Review 1 risk notice" : "Review \(notices) risk notices", .warning, presentation.projectName ?? "")
+            } else {
+                let word = Self.needsYouWord(status)
+                subtitle = (word, StatusGlyph(status).tone, presentation.projectName ?? "")
+            }
             detailText = [mergeRequestText, presentation.timeText].compactMap { $0 }.joined(separator: " · ")
         } else {
             subtitle = nil

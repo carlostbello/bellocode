@@ -432,7 +432,8 @@ public struct ScheduledTasksView: View {
                         DSMenuSelect(
                             "Permissions",
                             options: [(PermissionMode?.none, "Project default"), (PermissionMode?.some(.ask), "Ask"),
-                                      (PermissionMode?.some(.autoEdit), "Auto-edit"), (PermissionMode?.some(.fullAccess), "Full access")],
+                                      (PermissionMode?.some(.autoEdit), "Auto-edit"), (PermissionMode?.some(.auto), "Auto"),
+                                      (PermissionMode?.some(.fullAccess), "Full access")],
                             selection: binding.permissionMode)
                     }
                     EditorRow("") {

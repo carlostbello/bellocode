@@ -263,6 +263,12 @@ final class AppRuntime {
         return await mockServer.issueBrowserCommand(sessionID: sessionID.rawValue, action: value)
     }
 
+    /// Mock mode: sets a session metadata key (the plugin's interrupt record in Auto snapshots).
+    func setMockSessionMetadata(_ sessionID: SessionID, key: String, json: String) async {
+        guard let mockServer, let value = try? MockOpenCode.JSONValue.parse(Data(json.utf8)) else { return }
+        await mockServer.setSessionMetadataKey(sessionID.rawValue, key, value)
+    }
+
     /// Mock mode: children report to their parent and wake it, as opencode does (orchestration snapshots).
     func setMockChildReports(_ enabled: Bool) async {
         await mockServer?.setChildReports(enabled)

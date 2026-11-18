@@ -111,6 +111,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showMCPServers
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
+    // Auto mode, risk notices and interrupts (docs/features/auto-mode.md, MainWindowController+Auto.swift).
+    case modeAsk, modeAutoEdit, modeAuto, modeFullAccess, showAutoAudit, reviewRiskNotices, resumeInterrupted
     // Git parity (MainWindowController+Git.swift, docs/features/git-parity.md).
     case gitQuickAction, showGitActions, commitAndPush, pullBranch, pullRebase, fetchRemote, syncBranch, publishToGitLab
     case switchRemoteToHTTPS, abortGitOperation, restoreStashedChanges, cloneFromGitLab, newGitProject, moveToNewWorktree, editFromHere
@@ -255,6 +257,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .toggleCleanupOnSettle: #selector(MainWindowController.toggleCleanupOnSettle(_:))
         case .toggleCleanupOnArchive: #selector(MainWindowController.toggleCleanupOnArchive(_:))
         case .pruneContainerResources: #selector(AppDelegate.pruneContainerResources(_:))
+        case .modeAsk: #selector(MainWindowController.setModeAsk(_:))
+        case .modeAutoEdit: #selector(MainWindowController.setModeAutoEdit(_:))
+        case .modeAuto: #selector(MainWindowController.setModeAuto(_:))
+        case .modeFullAccess: #selector(MainWindowController.setModeFullAccess(_:))
+        case .showAutoAudit: #selector(MainWindowController.showAutoAudit(_:))
+        case .reviewRiskNotices: #selector(MainWindowController.reviewRiskNotices(_:))
+        case .resumeInterrupted: #selector(MainWindowController.resumeInterruptedThread(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -370,6 +379,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showMCPServers: "MCP Servers…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
+        case .modeAsk: "Ask Every Time"
+        case .modeAutoEdit: "Auto-Accept Edits"
+        case .modeAuto: "Auto"
+        case .modeFullAccess: "Full Access"
+        case .showAutoAudit: "Show Auto Audit Log"
+        case .reviewRiskNotices: "Mark Risk Notices Reviewed"
+        case .resumeInterrupted: "Resume Interrupted Thread"
         case .gitQuickAction: "Run Suggested Git Action"
         case .showGitActions: "Git Actions…"
         case .commitAndPush: "Commit and Push…"
@@ -525,6 +541,13 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showScheduledTasks: ("e", [.command, .control])
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: ("", [])
         case .pruneContainerResources: ("", [])
+        case .modeAsk: ("1", [.command, .control, .option])
+        case .modeAutoEdit: ("2", [.command, .control, .option])
+        case .modeAuto: ("3", [.command, .control, .option])
+        case .modeFullAccess: ("4", [.command, .control, .option])
+        case .showAutoAudit: ("j", [.command, .control])
+        case .reviewRiskNotices: ("", [])
+        case .resumeInterrupted: ("p", [.command, .control, .option])
         // Git parity: ⌃⌘ letters free elsewhere (⌃⌘F full screen, ⌃⌘Q lock and ⌃⌘D look up are avoided).
         case .gitQuickAction: ("\r", [.command, .control])
         case .showGitActions: ("g", [.command, .control])
@@ -678,6 +701,8 @@ struct CommandContext: Equatable, Sendable {
     var agents = AgentsCommandState()
     /// The Merge Requests tab's state (GitLab 2).
     var gitLab = GitLabCommandState()
+    /// Auto mode, notices and interrupts for the shown thread.
+    var auto = AutoCommandState()
     /// Git parity: the displayed checkout's git actions.
     var git = GitCommandState()
 
@@ -734,6 +759,10 @@ struct CommandContext: Equatable, Sendable {
         case .showScheduledTasks: return true
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: return true
         case .pruneContainerResources: return true
+        case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess: return composerVisible
+        case .showAutoAudit: return target?.threadID != nil
+        case .reviewRiskNotices: return auto.noticesPending
+        case .resumeInterrupted: return auto.canResume
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible
@@ -795,6 +824,10 @@ struct CommandContext: Equatable, Sendable {
         case .moveProjectUp, .moveProjectDown: return "Select a project that can move"
         case .nextNeedsAttention: return "Nothing needs you"
         case .focusComposer, .chooseModel, .permissionMode, .togglePlan: return "Open a thread"
+        case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess: return "Open a thread"
+        case .showAutoAudit: return "Select a thread"
+        case .reviewRiskNotices: return "No risk notices to review in this thread"
+        case .resumeInterrupted: return "This thread was not stopped by another agent"
         case .sendMessage: return composerVisible ? "The composer is empty" : "Open a thread"
         case .queueFollowUp, .steerFollowUp: return composerRunning ? "The composer is empty" : "The agent is not running"
         case .stopRun: return "The agent is not running"
@@ -915,6 +948,14 @@ struct ChangesCommandState: Equatable, Sendable {
     var isSplit = false
     var ignoresWhitespace = false
     var wraps = false
+}
+
+/// What the Auto commands can act on in the shown thread (gathered by the window; pure, so validation is tested).
+struct AutoCommandState: Equatable, Sendable {
+    /// The thread has unreviewed Full-access risk notices.
+    var noticesPending = false
+    /// Another agent stopped the thread and its work is held.
+    var canResume = false
 }
 
 /// Git parity: what the Git commands can act on now (from `GitActionPlanner` on the displayed checkout).
