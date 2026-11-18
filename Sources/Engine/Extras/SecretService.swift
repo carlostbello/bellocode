@@ -247,13 +247,15 @@ public final class SecretService {
 ///   waiting on it (a non-blocking open for writing succeeds only then), which wakes it to an immediate end-of-file.
 ///
 /// Readers are watched by polling `FIONREAD` every `tickInterval` on a private serial queue (not the Swift cooperative
-/// pool, so a busy app cannot delay an end-of-file). A crash closes both ends (attached readers get end-of-file); the
+/// pool, so a busy app cannot delay an end-of-file), paced by a ticker thread of the pipe's own that sleeps between
+/// ticks: uptime-clock dispatch timers were seen never to fire on macOS 27 while the process was otherwise idle, which
+/// left a reader that had the value waiting for its end-of-file. The thread ends when the pipe is finished. A crash closes both ends (attached readers get end-of-file); the
 /// node itself is removed, and its waiters woken, by `removeStale` on the next launch.
 public final class SecretPipe: Sendable {
     /// The most a non-blocking write puts into a macOS FIFO.
     public static let capacity = 8_192
     public static let defaultSweepWindow: Duration = .milliseconds(250)
-    static let tickInterval: DispatchTimeInterval = .milliseconds(20)
+    static let tickInterval: TimeInterval = 0.02
 
     private enum Phase: Sendable {
         case filling
@@ -334,8 +336,10 @@ public final class SecretPipe: Sendable {
     }
 
     private func scheduleTick() {
-        queue.asyncAfter(deadline: .now() + Self.tickInterval) { [self] in
-            if tick() { scheduleTick() }
+        Thread.detachNewThread { [self] in
+            repeat {
+                Thread.sleep(forTimeInterval: Self.tickInterval)
+            } while queue.sync(execute: { tick() })
         }
     }
 

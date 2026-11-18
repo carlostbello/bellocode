@@ -31,7 +31,8 @@ enum PipeReader {
         await withCheckedContinuation { continuation in
             let once = OnceContinuation(continuation)
             let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
-            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { once.resume(.timedOut) }
+            // Wall-clock deadline: uptime-clock dispatch timers were seen never to fire on macOS 27 while idle.
+            DispatchQueue.global().asyncAfter(wallDeadline: .now() + seconds) { once.resume(.timedOut) }
             Thread.detachNewThread {
                 let fd = open(path, O_RDONLY)
                 guard fd >= 0 else {
