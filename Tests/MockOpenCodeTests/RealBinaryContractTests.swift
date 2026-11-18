@@ -194,6 +194,8 @@ struct RealBinaryContractTests {
         "worktree.resolved", "integration.updated", "provider.updated", "model.updated", "vcs.branch.updated",
         "agent.updated", "command.updated", "skill.updated", "websearch.updated", "reference.updated", "plugin.updated",
         "config.updated", "mcp.status.changed", "models-dev.refreshed", "project.updated",
+        // 2.3.2 also announces its artifact providers when a location activates.
+        "artifact.updated",
     ]
 
     static func eventShape(_ event: JSONValue) -> String {

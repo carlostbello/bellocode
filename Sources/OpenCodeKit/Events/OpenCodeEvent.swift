@@ -96,7 +96,7 @@ public enum OpenCodeEvent: Sendable {
         "integration.updated", "provider.updated", "model.updated", "agent.updated", "command.updated",
         "skill.updated", "websearch.updated", "reference.updated", "plugin.updated", "config.updated",
         "models-dev.refreshed", "credential.updated", "credential.switched", "mcp.status.changed",
-        "mcp.resources.changed",
+        "mcp.resources.changed", "artifact.updated",
     ]
 
     public var sessionID: String? {

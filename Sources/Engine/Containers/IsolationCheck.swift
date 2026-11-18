@@ -114,7 +114,7 @@ public struct IsolationReport: Sendable, Equatable {
 ///
 /// Quick (engine start, invisible): the configuration (shell, formatter, LSP, local MCP servers and how each is routed,
 /// worktree start commands, the plugin guard), a shell job (`/api/shell`, the agent shell tool's path), a PTY started
-/// with `$SHELL` (`/api/pty`) and a scratch local MCP server registered like a project's. Full (on demand, `make smoke`): also a command template (`!`…``), a schedule condition and
+/// with `$SHELL` (`/api/pty`) and a scratch local MCP server registered like a project's. Full (on demand, `make smoke`): also a command template (`!`…``), opencode automations (a schedule condition before 2.3.1) and
 /// BelloCode's own terminal (a persistent PTY), which need a scratch thread that is deleted afterwards.
 public enum IsolationCheck {
     public struct Context: Sendable {
@@ -390,25 +390,14 @@ public enum IsolationCheck {
         checks.append(.init("Command template (!`…`)", command))
         try? await client.interrupt(sessionID: session.id)
 
-        // 4. Schedule condition: due in a second, never wakes the thread.
-        do {
-            let schedule = try await client.createProbeSchedule(sessionID: session.id, directory: directory, run: probeCommand("schedule"), after: 1)
-            var result = IsolationReport.Outcome.failed("the condition did not run within 20 s")
-            for _ in 0..<80 {
-                try await Task.sleep(for: .milliseconds(250))
-                let answer = await outcome(of: "schedule", runtime: runtime, container: container, user: user, path: "schedule condition")
-                if case .failed = answer { continue }
-                result = answer
-                break
-            }
-            try? await client.deleteSchedule(schedule.id, directory: directory)
-            checks.append(.init("Schedule condition", result))
-        } catch where "\(error)".contains("Scheduled tasks are disabled") {
-            // opencode's own schedules are off in BelloCode's server configuration (BelloCode schedules its tasks
-            // itself), so no condition can run anywhere; when enabled they use the same configured shell.
-            checks.append(.init("Schedule condition", .off("opencode schedules are disabled in this configuration")))
-        } catch {
-            checks.append(.init("Schedule condition", .failed("could not create a schedule: \(error)")))
+        // 4. opencode's own timed work. 2.3.1 replaced schedules (whose shell conditions ran with the configured shell)
+        // by automations, which run a prompt or a Code Mode program and no shell of their own; their tool calls take
+        // the agent tools' paths checked above. BelloCode schedules its tasks itself and never enables either.
+        if let automation = await automationCheck(client: client, session: session.id, directory: directory) {
+            checks.append(automation)
+        } else {
+            checks.append(await scheduleCheck(client: client, session: session.id, directory: directory, runtime: runtime,
+                                              container: container, user: user))
         }
 
         // 5. BelloCode's terminal: a persistent PTY with the helper as its command (TerminalLaunch).
@@ -430,6 +419,47 @@ public enum IsolationCheck {
         }
         try? await client.deleteSession(session.id)
         return checks
+    }
+
+    /// opencode 2.3.1+: an automation that would be due in a second (Code Mode, no tool, no prompt). Nil when the
+    /// server has no automation API (2.3.0), so the schedule check runs instead.
+    static func automationCheck(client: OpenCodeClient, session: String, directory: String) async -> IsolationReport.Check? {
+        let name = "Automations"
+        do {
+            let automation = try await client.createProbeAutomation(sessionID: session, directory: directory, after: 60)
+            try? await client.deleteAutomation(automation.id, directory: directory)
+            return .init(name, .skipped("opencode automations are enabled; they run no shell of their own and their tool calls take the agent tool paths above"))
+        } catch let error as OpenCodeError where error.status == 404 {
+            return nil
+        } catch where "\(error)".contains("Automations are disabled") {
+            return .init(name, .off("opencode automations are disabled in this configuration"))
+        } catch {
+            return .init(name, .failed("could not probe automations: \(error)"))
+        }
+    }
+
+    /// opencode 2.3.0: a schedule condition due in a second that never wakes the thread.
+    static func scheduleCheck(client: OpenCodeClient, session: String, directory: String, runtime: any WorkspaceRuntime,
+                              container: String, user: String) async -> IsolationReport.Check {
+        do {
+            let schedule = try await client.createProbeSchedule(sessionID: session, directory: directory, run: probeCommand("schedule"), after: 1)
+            var result = IsolationReport.Outcome.failed("the condition did not run within 20 s")
+            for _ in 0..<80 {
+                try await Task.sleep(for: .milliseconds(250))
+                let answer = await outcome(of: "schedule", runtime: runtime, container: container, user: user, path: "schedule condition")
+                if case .failed = answer { continue }
+                result = answer
+                break
+            }
+            try? await client.deleteSchedule(schedule.id, directory: directory)
+            return .init("Schedule condition", result)
+        } catch where "\(error)".contains("Scheduled tasks are disabled") {
+            // opencode's own schedules are off in BelloCode's server configuration (BelloCode schedules its tasks
+            // itself), so no condition can run anywhere; when enabled they use the same configured shell.
+            return .init("Schedule condition", .off("opencode schedules are disabled in this configuration"))
+        } catch {
+            return .init("Schedule condition", .failed("could not create a schedule: \(error)"))
+        }
     }
 }
 

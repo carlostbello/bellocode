@@ -26,7 +26,11 @@ public struct ModelInfo: Codable, Sendable, Hashable, Identifiable {
         public var released: Double
     }
 
+    /// The catalog entry: what `Model.Ref.id` names (config `model: "<provider>/<id>"` resolves to it, checked on
+    /// 2.3.2). Several entries can share one `modelID`: tiers such as `gpt-6.2-astra`, `gpt-6.2-astra-fast` and
+    /// `gpt-6.2-astra-pro` are distinct entries with their own settings and prices.
     public var id: String
+    /// The provider's API model name (not unique within a provider).
     public var modelID: String
     public var providerID: String
     public var canonical: String?
@@ -43,8 +47,8 @@ public struct ModelInfo: Codable, Sendable, Hashable, Identifiable {
     public var enabled: Bool
     public var limit: Limit
 
-    /// The reference to send in session create or prompt requests.
-    public var ref: ModelRef { ModelRef(id: modelID, providerID: providerID) }
+    /// The reference to send in session create or prompt requests: the entry `id`, never the shared `modelID`.
+    public var ref: ModelRef { ModelRef(id: id, providerID: providerID) }
 }
 
 public struct ModelStatus: OpenEnum {

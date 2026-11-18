@@ -1,7 +1,8 @@
 import Foundation
 
-// The calls BelloCode's isolation self-check needs (docs/features/containers.md), checked against
-// Contracts/opencode-2.3.0/openapi.json: shell jobs (`/api/shell`), experimental schedules, configuration entries.
+// The calls BelloCode's isolation self-check needs (docs/features/containers.md), checked against the pinned contract
+// (Contracts/opencode-<pin>/openapi.json): shell jobs (`/api/shell`), experimental automations (2.3.1+; experimental
+// schedules before), configuration entries.
 
 /// `Shell.Info` (a shell job): only the fields the self-check reads.
 public struct ShellJob: Decodable, Sendable, Hashable {
@@ -26,6 +27,14 @@ public struct ScheduleInfo: Decodable, Sendable, Hashable {
     public var runCount: Int
     public var lastOutcome: String?
     public var lastOutput: String?
+}
+
+/// `Automation.Info` (opencode 2.3.1+, replacing `Schedule.Info`): only the fields the self-check reads.
+public struct AutomationInfo: Decodable, Sendable, Hashable {
+    public var id: String
+    public var status: String
+    public var runCount: Int
+    public var lastOutcome: String?
 }
 
 private struct Located<T: Decodable & Sendable>: Decodable, Sendable { var data: T }
@@ -75,6 +84,26 @@ extension OpenCodeClient {
         ])
         let request = try makeRequest(.post, ["api", "experimental", "schedule"], directory: directory, body: body)
         return try await send("experimental.schedule.create", request, as: Located<ScheduleInfo>.self).data
+    }
+
+    /// `POST /api/experimental/automation` (opencode 2.3.1+, which removed `/api/experimental/schedule` and shell
+    /// conditions): a Code Mode action that returns at once, calls no tool and sends no prompt, due after `seconds`.
+    /// Answers 403 "Automations are disabled" unless `experimental.automations` is set (BelloCode never sets it).
+    public func createProbeAutomation(sessionID: String, directory: String, after seconds: Int) async throws -> AutomationInfo {
+        let body: JSONValue = .object([
+            "sessionID": .string(sessionID),
+            "name": .string("BelloCode isolation check"),
+            "trigger": .object(["type": .string("at"), "at": .string("in \(seconds) seconds")]),
+            "action": .object(["type": .string("code"), "code": .string("return { done: true }")]),
+        ])
+        let request = try makeRequest(.post, ["api", "experimental", "automation"], directory: directory, body: body)
+        return try await send("experimental.automation.create", request, as: Located<AutomationInfo>.self).data
+    }
+
+    /// `DELETE /api/experimental/automation/{id}`.
+    public func deleteAutomation(_ id: String, directory: String) async throws {
+        let request = try makeRequest(.delete, ["api", "experimental", "automation", id], directory: directory)
+        try await sendIgnoringBody("experimental.automation.delete", request)
     }
 
     public func schedule(_ id: String, directory: String) async throws -> ScheduleInfo {
