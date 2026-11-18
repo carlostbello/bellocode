@@ -56,6 +56,11 @@ verify_pinned "$OPENCODE_BIN" "$OPENCODE_PIN" "opencode"
 verify_pinned "$RG_BIN" "$RG_PIN" "rg"
 
 cd "$ROOT"
+# SwiftTerm's build plugin can stall asking git for metadata (deep-review-1 D1): pass the pinned values.
+export SWIFTTERM_BUILD_TAG="${SWIFTTERM_BUILD_TAG:-v1.99.3}"
+export SWIFTTERM_BUILD_COMMIT="${SWIFTTERM_BUILD_COMMIT:-282c3c3a932b55c129628876b70f37d993af1615}"
+export SWIFTTERM_BUILD_BRANCH="${SWIFTTERM_BUILD_BRANCH:-HEAD}"
+export SWIFTTERM_BUILD_DIRTY="${SWIFTTERM_BUILD_DIRTY:-false}"
 say "swift build -c $CONFIG"
 swift build -c "$CONFIG" --product BelloCode
 swift build -c "$CONFIG" --product bellocode-exec
