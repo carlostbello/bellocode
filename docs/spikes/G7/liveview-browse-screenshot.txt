@@ -1,0 +1,4 @@
+browse screenshot CLI round trips (ms): 1648 63 640 64 635 631 47 634 633 65
+/tmp/browse/screenshot-75389828.png
+{"width":1279,"height":712,"format":"png"}
+

@@ -1,0 +1,30 @@
+# Same image, Chromium with --headless=new (no X needed), new volume (2026-11-18T20:51:04Z)
+connected after 38706 ms
+20:51:04.422 display ready +66ms
+20:51:04.432 relay ready +76ms
+Extension: in a browser, but not paired
+           browse is installed but not paired. Run `browse install` again: it pairs the browser when it can open it, or prints a code to enter in browse's Options (`browse pair` prints one too).
+parse error: Invalid numeric literal at line 1, column 7
+browse: --tab needs a value
+browse: --tab needs a value
+browse: --json must be a JSON object: expected value at line 1 column 8
+
+{"label": "headless=new, idle after one page", "container": "bellocode-g7-headless", "seconds": 15.0, "cpu_percent_of_one_core": 0.3, "memory_current_mib": 252, "anon_mib": 218, "per_process_cpu_percent": {}}
+## result 1: extension installed (policy) and its worker connects, but the setup link cannot be handed to a headless instance (second 'chromium <url>' does not reach it), so it stays 'in a browser, but not paired'
+## result 2: same, with the link opened through a loopback CDP port (PUT /json/new)
+chrome-extension://efaphbdblhlcbpdblflogpmbiamceggb/welcome.html#code=364GY5GK
+Extension: connected
+Browser:   Chromium on 48725a3af62d (chromium-48725a3af62d), default
+tab 65432798
+- heading "Create your account" [level=1]
+  - textbox "Full name" [ref=e1]
+  - textbox "Email" [ref=e2]
+  - combobox "Plan" [ref=e3 selected="Free" 3 options]
+/tmp/browse/screenshot-726e4e47.png
+{"width":1280,"height":713,"format":"png"}
+{
+  "clicked": "button \"Create account\" (button)",
+  "url": "http://fixture:8080/index.html"
+}
+
+{"label": "headless=new, paired, idle after one page", "container": "bellocode-g7-headless", "seconds": 10.0, "cpu_percent_of_one_core": 0.4, "memory_current_mib": 291, "anon_mib": 249, "per_process_cpu_percent": {}}

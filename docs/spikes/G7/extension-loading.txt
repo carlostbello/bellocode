@@ -1,0 +1,27 @@
+# G7 extension-loading matrix — Debian chromium 156.0.8078.79-1~deb12u1 arm64, Rancher Desktop 29.9.2 (2026-11-18)
+# Each row: fresh --user-data-dir, policy in /etc/chromium/policies/managed/bellocode.json, then CDP /json/list.
+
+--load-extension=/tmp/browse-ext (release zip 0.1.5 + manifest "key" from browse e1e3b75):
+  policy {}                                                     -> loaded  chrome-extension://afeafocngkodbmaipcngoamamfmekgfo/background.js
+  policy {"DeveloperToolsAvailability":1}                       -> loaded  (same ID)
+  policy {"ExtensionInstallBlocklist":["*"],"ExtensionInstallAllowlist":["afeafoc…"]}
+                                                                -> "Loading of unpacked extensions is disabled by the administrator."
+  policy {"ExtensionSettings":{"*":{"installation_mode":"blocked"},"afeafoc…":{"installation_mode":"allowed"}}}
+                                                                -> same refusal (also with ExtensionDeveloperModeSettings 1)
+  --disable-features=DisableLoadExtensionCommandLineSwitch      -> not needed: Chromium (unbranded) honours --load-extension
+
+Policy force-install (CRX3 packed with an image-local RSA key, `chromium --pack-extension`, key deleted afterwards):
+  {"ExtensionInstallBlocklist":["*"],"ExtensionInstallForcelist":["fpigklaadcfoleohkmopneilofkjbafc;file:///opt/crx/update.xml"]}
+                                                                -> installed into Default/Extensions/fpigk…, service worker running
+  relay without OPENCODE_BROWSER_EXTENSION_ORIGINS              -> extension log: "Error during WebSocket handshake: Unexpected response code: 403"
+  relay with OPENCODE_BROWSER_EXTENSION_ORIGINS=chrome-extension://<that id>  -> accepted (see run-*.txt)
+
+Sandbox (cap-drop ALL + no-new-privileges):
+  default seccomp        -> "Failed to move to new namespace … Operation not permitted"; zygote exits; Chromium never starts
+  default + clone/unshare/setns allowed -> "Check failed: sys_chroot("/proc/self/fdinfo/") == 0"
+  default + clone/unshare/setns/chroot (seccomp-chromium.json) -> starts with the full namespace sandbox, no --no-sandbox
+  `unshare -U -r true`: unconfined ok, default profile EPERM, derived profile ok (the VM kernel allows user namespaces)
+
+Other builds (availability.txt): Google Chrome stable 158.0.8127.36 and Chrome for Testing 158.0.8127.36 now publish
+linux arm64; not exercised here (Docker Hub pulls time out in this VM; Chrome's branded build ignores --load-extension
+since 137, so it would need the force-install route; CfT would be the pinned alternative to Debian's chromium).

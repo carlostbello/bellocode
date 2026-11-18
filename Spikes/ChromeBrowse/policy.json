@@ -1,0 +1,9 @@
+{
+  "DefaultBrowserSettingEnabled": false,
+  "MetricsReportingEnabled": false,
+  "PromptForDownloadLocation": false,
+  "DownloadDirectory": "/data/downloads",
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PasswordManagerEnabled": false
+}
