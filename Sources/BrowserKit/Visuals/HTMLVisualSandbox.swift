@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Engine
 import WebKit
 
@@ -139,7 +140,12 @@ public struct HTMLVisualTimeout: Error, Sendable, Hashable, CustomStringConverti
 
 /// Runs one completion-handler WebKit call with a hard time limit and cancellation. The continuation is resumed exactly
 /// once, by whichever comes first: the completion, the limit or cancellation. A completion that arrives later (when
-/// the web view is discarded) is ignored.
+/// the web view is discarded) is ignored. Nothing here waits on WebKit: a content process stuck in a script never calls
+/// back, and the limit alone resumes the caller.
+///
+/// The limit is a `Task.sleep` on `ContinuousClock`. Timers on the uptime clock (`DispatchTime` deadlines, strict
+/// dispatch sources, `SuspendingClock` sleeps, run-loop timers) were seen never to fire on macOS 27 (Darwin 27.0)
+/// unless something else woke the process, which left a looping visual waiting forever; continuous-clock timers fire.
 @MainActor
 func withWebKitDeadline<T: Sendable>(
     _ step: HTMLVisualTimeout.Step, limit: Duration, _ start: (@escaping @MainActor (Result<T, any Error>) -> Void) -> Void
@@ -149,25 +155,25 @@ func withWebKitDeadline<T: Sendable>(
     return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, any Error>) in
             once.continuation = continuation
-            let timer = DispatchWorkItem { MainActor.assumeIsolated { once.resume(.failure(HTMLVisualTimeout(step: step, limit: limit))) } }
-            once.timer = timer
-            let seconds = Double(limit.components.seconds) + Double(limit.components.attoseconds) / 1e18
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: timer)
+            once.deadline = Task { @MainActor in
+                do { try await Task.sleep(for: limit, clock: .continuous) } catch { return }
+                once.resume(.failure(HTMLVisualTimeout(step: step, limit: limit)))
+            }
             start { result in once.resume(result) }
         }
     } onCancel: {
-        DispatchQueue.main.async { MainActor.assumeIsolated { once.resume(.failure(CancellationError())) } }
+        Task { @MainActor in once.resume(.failure(CancellationError())) }
     }
 }
 
 @MainActor
 private final class WebKitOnce<T: Sendable> {
     var continuation: CheckedContinuation<T, any Error>?
-    var timer: DispatchWorkItem?
+    var deadline: Task<Void, Never>?
 
     func resume(_ result: Result<T, any Error>) {
-        timer?.cancel()
-        timer = nil
+        deadline?.cancel()
+        deadline = nil
         guard let continuation else { return }
         self.continuation = nil
         continuation.resume(with: result)
@@ -323,22 +329,58 @@ public final class HTMLVisualWebView: NSObject, WKNavigationDelegate, WKUIDelega
         }
     }
 
-    /// Gives up on this web view after a step ran past its limit: stops loading, detaches the delegates, removes it
-    /// from its window and ends its web content process. A process stuck in a script never answers again, so the
-    /// view cannot be reused; ending the process also frees the CPU it is spinning on.
+    /// The web content process serving this view (0 when it has none). WebKit has no public accessor; read through the
+    /// private `_webProcessIdentifier` key when the view answers to it.
+    public var contentProcessIdentifier: pid_t {
+        guard webView.responds(to: NSSelectorFromString("_webProcessIdentifier")),
+            let number = webView.value(forKey: "_webProcessIdentifier") as? NSNumber
+        else { return 0 }
+        return number.int32Value
+    }
+
+    /// The content process this view had when it was discarded (tests and diagnostics; 0 if none or not readable).
+    public private(set) var discardedProcessIdentifier: pid_t = 0
+
+    /// How the content process was ended by `discard` (tests and diagnostics).
+    public enum ProcessEnd: String, Sendable {
+        /// Nothing to end (no process, or its identifier could not be read).
+        case none
+        /// Gone after WebKit's own `_killWebContentProcess`.
+        case webKitKill
+        /// Still running after it (a script holding its main thread), so ended with SIGKILL.
+        case killed
+    }
+    public private(set) var processEnd: ProcessEnd = .none
+
+    /// Gives up on this web view (a step ran past its limit, or the view is no longer shown): stops loading, detaches
+    /// the delegates, removes it from its window and ends its web content process. A process stuck in a script never
+    /// answers again, so the view cannot be reused; ending the process frees the CPU it is spinning on. Synchronous: it
+    /// waits for nothing from the (possibly stuck) content process.
     public func discard() {
         guard !isDiscarded else { return }
         isDiscarded = true
+        let pid = contentProcessIdentifier
+        discardedProcessIdentifier = pid
         loadCompletion?(.failure(CancellationError()))
         loadCompletion = nil
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         webView.removeFromSuperview()
-        // No public API ends a web content process. `_killWebContentProcess` is what WebKit's own tests use; when it
-        // is missing, releasing the view closes the page and WebKit reclaims the process.
+        // No public API ends a web content process. WebKit's `_killWebContentProcess`, closing the page and releasing
+        // the view all ask the process over IPC, which a process spinning in a script never reads: measured on macOS 27,
+        // it kept running at full CPU after each of them, until our test process exited (and indefinitely when that
+        // was killed). So the view's own process is then ended with SIGKILL, after checking it is a WebKit content
+        // process of this user. Each visual has a data store, and so a process, of its own: nothing else is served by it.
         let kill = NSSelectorFromString("_killWebContentProcess")
         if webView.responds(to: kill) { webView.perform(kill) }
+        guard pid > 0 else { return }
+        if WebContentProcess.isRunningWebContent(pid) {
+            Darwin.kill(pid, SIGKILL)
+            processEnd = .killed
+        } else {
+            processEnd = .webKitKill
+        }
     }
 
     // MARK: WKNavigationDelegate
@@ -366,6 +408,21 @@ public final class HTMLVisualWebView: NSObject, WKNavigationDelegate, WKUIDelega
     ) -> WKWebView? {
         refusedWindows += 1
         return nil
+    }
+}
+
+/// The web content process of a discarded view.
+enum WebContentProcess {
+    /// Whether `pid` is running WebKit's web content service as this user (so a signal reaches the process WebKit
+    /// gave our view, never an unrelated one).
+    static func isRunningWebContent(_ pid: pid_t) -> Bool {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size, info.pbi_uid == getuid() else { return false }
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return false }
+        let name = String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return (name as NSString).lastPathComponent.hasPrefix("com.apple.WebKit.WebContent")
     }
 }
 
