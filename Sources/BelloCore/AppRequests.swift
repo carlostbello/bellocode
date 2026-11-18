@@ -70,6 +70,8 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case gitlabBabysit
         /// An agent asks to change something on GitLab (host, project, MR, SHA and the exact payload shown).
         case gitlabWrite
+        /// An agent restarts one of the project's service containers (the first time per project).
+        case serviceRestart
     }
 
     public var action: Action

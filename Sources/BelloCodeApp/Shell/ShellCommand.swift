@@ -106,6 +106,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case linkMergeRequest, refreshMergeRequests, toggleBabysit, showFailingJobLog, sendFailureToAgent, retryFailedJob, playManualJob
     case openMergeRequestInGitLab, unlinkMergeRequest, approveMergeRequest, mergeMergeRequest
     case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
+    // Containers 2: housekeeping (Settings ▸ Containers).
+    case pruneContainerResources
 
     @MainActor var selector: Selector {
         switch self {
@@ -226,6 +228,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
+        case .pruneContainerResources: #selector(AppDelegate.pruneContainerResources(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
         case .nextChangedFile: #selector(MainWindowController.nextDiffFile(_:))
@@ -339,6 +342,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: "Containers…"
         case .showEnvironment: "Project Environment…"
         case .verifyIsolation: "Verify Container Isolation"
+        case .pruneContainerResources: "Prune BelloCode Resources…"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -475,6 +479,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
         case .showContainers, .showEnvironment, .verifyIsolation: ("", [])
+        case .pruneContainerResources: ("", [])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -668,6 +673,7 @@ struct CommandContext: Equatable, Sendable {
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
         case .showContainers, .showEnvironment, .verifyIsolation: return true
+        case .pruneContainerResources: return true
         case .nextChange, .previousChange: return changes.hasHunks
         case .nextChangedFile, .previousChangedFile: return changes.fileCount > 1
         case .addReviewComment: return changes.hasSelection && composerVisible

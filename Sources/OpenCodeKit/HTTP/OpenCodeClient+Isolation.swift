@@ -111,3 +111,52 @@ extension OpenCodeClient {
         try await sendIgnoringBody("pty.remove", request)
     }
 }
+
+/// One MCP server of a location and its connection status (`GET /api/mcp`).
+public struct MCPServerStatus: Decodable, Sendable, Equatable, Identifiable {
+    public var name: String
+    /// `connected`, `pending`, `disabled`, `failed` or `needs_auth`.
+    public var status: String
+    public var error: String?
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey { case name, status }
+    struct Status: Decodable { var status: String; var error: String? }
+
+    public init(name: String, status: String, error: String? = nil) {
+        self.name = name
+        self.status = status
+        self.error = error
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        let status = try c.decode(Status.self, forKey: .status)
+        self.status = status.status
+        error = status.error
+    }
+}
+
+extension OpenCodeClient {
+    /// `GET /api/mcp` (mcp.list): the location's MCP servers and their status.
+    public func mcpServers(directory: String) async throws -> [MCPServerStatus] {
+        let request = try makeRequest(.get, ["api", "mcp"], directory: directory)
+        return try await send("mcp.list", request, as: LocatedList<MCPServerStatus>.self).data
+    }
+
+    /// `PUT /api/experimental/mcp/{server}` (experimental.mcp.add): adds or replaces a server for this location only and
+    /// connects it. Container execution passes only routed commands (`MCPRouting.projectServerConfig`).
+    public func addMCPServer(_ name: String, config: JSONValue, directory: String) async throws {
+        struct Body: Encodable, Sendable { var config: JSONValue }
+        let request = try makeRequest(.put, ["api", "experimental", "mcp", name], directory: directory, body: Body(config: config),
+                                      timeout: .seconds(60))
+        try await sendIgnoringBody("experimental.mcp.add", request)
+    }
+
+    /// `DELETE /api/experimental/mcp/{server}` (experimental.mcp.remove).
+    public func removeMCPServer(_ name: String, directory: String) async throws {
+        let request = try makeRequest(.delete, ["api", "experimental", "mcp", name], directory: directory)
+        try await sendIgnoringBody("experimental.mcp.remove", request)
+    }
+}

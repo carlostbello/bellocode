@@ -542,6 +542,15 @@ public final class ExtrasHub {
                 return
             case (.gitlabBabysit, _):
                 try await respondBabysit(approval, response)
+            case (.serviceRestart, let response):
+                // Project services (docs/features/containers.md): handled by the engine's container tools.
+                await core.resolveAppRequest(id)
+                if case .approve(let always) = response {
+                    await engine?.answerServiceRestart(approval, approved: true, always: always)
+                } else {
+                    await engine?.answerServiceRestart(approval, approved: false, always: false)
+                }
+                return
             case (.secretCommand, _):
                 await core.resolveAppRequest(id)
                 if let pending = pendingSecretCommands.removeValue(forKey: approval.subjectID) {

@@ -42,11 +42,50 @@ public protocol WorkspaceRuntime: Sendable {
     func logs(container: String, tail: Int) async throws -> Data
     func events() -> AsyncStream<EngineMonitorEvent>
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder
+
+    // MARK: Project services (ServiceManager)
+
+    /// Starts the project's services in dependency order with health gating (images must be present).
+    func ensureServices(_ specs: [ServiceSpec], projectKey: String, progress: @escaping @Sendable (String, ServiceOutcome?) -> Void) async throws
+        -> [String: ServiceOutcome]
+    func serviceStatus(projectKey: String, specs: [ServiceSpec]) async throws -> [String: ServiceStatus]
+    func stopServices(projectKey: String) async throws
+    /// The service's existing named volumes (listed before the explicit delete).
+    func serviceVolumes(projectKey: String, service: ServiceDefinition) async throws -> [String]
+    /// Removes the service's container and exactly the listed volumes (the explicit destructive action).
+    func deleteServiceData(projectKey: String, service: String, volumes: [String]) async throws
+    func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool)
+    /// Forwards a service's port to the Mac's loopback through a relay in the workspace container (services publish
+    /// nothing).
+    func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder
+
+    // MARK: Caches
+    func cacheVolumes() async throws -> [CacheVolume]
+    func cleanCache(_ name: String) async throws
+
+    // MARK: Housekeeping
+    func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan
+    func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult
 }
 
 extension WorkspaceRuntime {
     /// Removes one-shot secret-command containers left by a crash. Nothing to do in fakes.
     public func removeLeftoverSecretContainers() async {}
+
+    public func ensureServices(_ specs: [ServiceSpec], projectKey: String, progress: @escaping @Sendable (String, ServiceOutcome?) -> Void) async throws
+        -> [String: ServiceOutcome] { [:] }
+    public func serviceStatus(projectKey: String, specs: [ServiceSpec]) async throws -> [String: ServiceStatus] { [:] }
+    public func stopServices(projectKey: String) async throws {}
+    public func serviceVolumes(projectKey: String, service: ServiceDefinition) async throws -> [String] { [] }
+    public func deleteServiceData(projectKey: String, service: String, volumes: [String]) async throws {}
+    public func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool) { ("", false) }
+    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
+        throw ContainerError.notFound("service forwarding is not available here")
+    }
+    public func cacheVolumes() async throws -> [CacheVolume] { [] }
+    public func cleanCache(_ name: String) async throws {}
+    public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan { PrunePlan() }
+    public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult { PruneResult() }
 }
 
 /// Rancher Desktop through ContainerKit.
@@ -118,5 +157,37 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
         try PortForwarder(client: client, container: container, containerPort: port.port, containerHost: port.relayHost,
                           hostPort: hostPort, user: user)
+    }
+
+    var services: ServiceManager { ServiceManager(client: client) }
+    public func ensureServices(_ specs: [ServiceSpec], projectKey: String, progress: @escaping @Sendable (String, ServiceOutcome?) -> Void) async throws
+        -> [String: ServiceOutcome] {
+        try await services.ensure(specs, projectKey: projectKey, progress: progress)
+    }
+    public func serviceStatus(projectKey: String, specs: [ServiceSpec]) async throws -> [String: ServiceStatus] {
+        var imageIDs: [String: String] = [:]
+        for image in Set(specs.map(\.definition.image)) { imageIDs[image] = try? await client.inspectImage(image)?.id }
+        return try await services.status(projectKey: projectKey, specs: specs, imageIDs: imageIDs)
+    }
+    public func stopServices(projectKey: String) async throws { try await services.stopAll(projectKey: projectKey) }
+    public func serviceVolumes(projectKey: String, service: ServiceDefinition) async throws -> [String] {
+        try await services.volumes(projectKey: projectKey, service: service)
+    }
+    public func deleteServiceData(projectKey: String, service: String, volumes: [String]) async throws {
+        try await services.deleteData(projectKey: projectKey, service: service, volumes: volumes)
+    }
+    public func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool) {
+        try await services.logs(container: container, tail: tail, limit: limit)
+    }
+    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
+        try PortForwarder(client: client, container: workspace, containerPort: port, containerHost: service, hostPort: hostPort, user: user)
+    }
+    public func cacheVolumes() async throws -> [CacheVolume] { try await manager.cacheVolumes() }
+    public func cleanCache(_ name: String) async throws { try await manager.cleanCache(name) }
+    public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan {
+        try await manager.prunePlan(keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
+    }
+    public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult {
+        try await manager.prune(plan, keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
     }
 }

@@ -181,6 +181,7 @@ struct AppApprovalCard: View {
         case .network: "network"
         case .gitlabBabysit: "eye"
         case .gitlabWrite: "arrow.triangle.pull"
+        case .serviceRestart: "arrow.clockwise"
         }
     }
 
@@ -191,6 +192,7 @@ struct AppApprovalCard: View {
         case .secretCommand: "Always for This Command"
         case .gitlabBabysit: "Always in This Project"
         case .gitlabWrite: "Always"
+        case .serviceRestart: "Always in This Project"
         }
     }
 
@@ -201,6 +203,7 @@ struct AppApprovalCard: View {
         case .secretCommand: "The command does not run and the secret is not used."
         case .gitlabBabysit: "The merge request stays linked but does not wake the thread."
         case .gitlabWrite: "Nothing is sent to GitLab; the agent is told."
+        case .serviceRestart: "The service keeps running as it is."
         }
     }
 
@@ -216,6 +219,8 @@ struct AppApprovalCard: View {
             "Project: \(approval.scope). Babysitting reads the merge request with your GitLab token and wakes this thread on its events (within the wake budget). “Always” lets agents babysit merge requests in this project without asking again."
         case .gitlabWrite:
             "GitLab: \(approval.scope). Sent once, with your token, exactly as shown; GitLab's own permissions and branch rules still apply. Agents can never approve, merge or close."
+        case .serviceRestart:
+            "Project: \(approval.scope). Restarting stops the service briefly; its data volumes are kept. “Always” lets agents restart this project's services without asking again."
         }
     }
 }

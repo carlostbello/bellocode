@@ -33,6 +33,19 @@ Research this plan is built on (read these before implementing an area):
 - **Look and feel.** The first builds looked like a stock Swift app. A design pass now defines the target visual
   language from T3 Code's source and a mock ([design/](design/)); a restyle of every surface follows.
 
+### Owner answers (2026-11-18)
+
+- **GitLab:** Free tier; native API only (no `glab`). Instance `https://gitlab.novacoast.com`. Git uses HTTPS, not
+  SSH. Personal access tokens last one year.
+- **Git features:** parity with T3 Code's git integration, built natively into the app.
+- **MCP servers:** global MCP servers are wanted. The owner's existing ones are Docker images or separate compose
+  stacks that expose an MCP endpoint; a company-wide MCP gateway will be integrated later.
+- **Network:** an internal proxy transparently intercepts dependency traffic on the network; users do not configure it.
+- **Images (2026-11-18):** images are not signed, and there is no internal registry used for distribution. For most
+  projects the image is built from source locally (a Dockerfile in the repository); base images come from public
+  registries through the transparent proxy. So BelloCode must build images natively through the Docker Engine API,
+  signature verification stays off, and the registry allowlist applies to base images and pulled service images only.
+
 ## 1. Facts that shape the plan
 
 1. "opencode2" is opencode major version 2 (2.3.0 locally, MIT). One 224 MB arm64 binary, Bun compiled in.

@@ -29,16 +29,21 @@ public struct WorkspaceStatus: Sendable, Equatable {
 /// removes. Volumes hold the persistent $HOME and caches; deleting them cannot be undone.
 public struct WorkspaceStorage: Sendable, Equatable {
     public var projectKey: String
+    /// The workspace, service and leftover one-shot containers of the project.
     public var containers: [String]
+    /// Its home and cache volumes and its services' volumes (never a cache shared across projects).
     public var volumes: [String]
+    /// Its service network(s).
+    public var networks: [String]
 
-    public init(projectKey: String, containers: [String], volumes: [String]) {
+    public init(projectKey: String, containers: [String], volumes: [String], networks: [String] = []) {
         self.projectKey = projectKey
         self.containers = containers
         self.volumes = volumes
+        self.networks = networks
     }
 
-    public var isEmpty: Bool { containers.isEmpty && volumes.isEmpty }
+    public var isEmpty: Bool { containers.isEmpty && volumes.isEmpty && networks.isEmpty }
 }
 
 /// Why `ensureRunning` could not make the container run, phrased by what fixes it.
@@ -166,12 +171,20 @@ public struct WorkspaceManager: Sendable {
     private func create(_ spec: WorkspaceSpec, imageID: String?) async throws -> String {
         let unmountable = spec.unmountablePaths()
         guard unmountable.isEmpty else { throw WorkspaceError.unmountable(unmountable) }
+        if spec.serviceNetwork != nil {
+            try await ServiceManager(client: client).ensureNetwork(projectRoot: spec.projectRoot, offline: spec.network == .none, extraLabels: spec.extraLabels)
+        }
         for cache in Array(spec.caches.keys) + ["home"] {
             // Idempotent: creating an existing volume with the same name succeeds.
             try await client.createVolume(name: spec.volumeName(cache), labels: [
                 WorkspaceSpec.labelWorkspace: "1", WorkspaceSpec.labelProject: spec.projectRoot,
                 WorkspaceSpec.labelProjectKey: spec.projectKey,
             ].merging(spec.extraLabels) { a, _ in a })
+        }
+        for cache in spec.cacheMounts ?? [] {
+            try await client.createVolume(
+                name: cache.volumeName(projectKey: spec.projectKey),
+                labels: cache.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey).merging(spec.extraLabels) { a, _ in a })
         }
         var body = spec.createBody(imageID: imageID)
         body.labels?[WorkspaceSpec.labelConfig] = spec.configHash(imageID: imageID)
@@ -195,9 +208,13 @@ public struct WorkspaceManager: Sendable {
 
     /// Creates $HOME for the non-root user (a fresh volume belongs to root). Runs as root, issued by BelloCode only.
     func prepareHome(_ id: String, spec: WorkspaceSpec) async throws {
+        // Cache volumes nested in $HOME make the daemon create their parent folders (and a fresh volume) as root: give
+        // each folder from the cache up to $HOME to the user (not recursively: a shared cache keeps its contents).
+        let caches = (spec.cacheMounts ?? []).map(\.path).filter { $0.hasPrefix(WorkspaceSpec.home + "/") }
+        let script = "mkdir -p \"$HOME\" /tmp/.bellocode && chown \(spec.user) \"$HOME\" && chmod 1777 /tmp/.bellocode"
+            + #" && for p; do d=$p; while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do chown \#(spec.user) "$d"; d=$(dirname "$d"); done; done"#
         let result = try await ExecSession.run(
-            client: client, container: id,
-            argv: ["/bin/sh", "-c", "mkdir -p \"$HOME\" /tmp/.bellocode && chown \(spec.user) \"$HOME\" && chmod 1777 /tmp/.bellocode"],
+            client: client, container: id, argv: ["/bin/sh", "-c", script, "prepare-home"] + caches,
             user: "0:0", wrap: false, limit: 4096)
         if result.exitCode != 0 { throw ContainerError.http(status: 500, message: "preparing $HOME failed (exit \(result.exitCode))") }
     }
@@ -214,34 +231,53 @@ public struct WorkspaceManager: Sendable {
         }
     }
 
-    /// What `purge` would delete for a project: its labelled containers and volumes (names), found by label.
+    /// Everything of one project, by its project-key label (only BelloCode sets it).
+    static func projectOnly(_ projectKey: String) -> [String] { ["\(WorkspaceSpec.labelProjectKey)=\(projectKey)"] }
+
+    /// What `purge` would delete for a project: its labelled containers (workspace and services), volumes (home,
+    /// caches, service data; shared caches carry no project key) and service networks, found by label.
     public func storage(projectKey: String) async throws -> WorkspaceStorage {
-        let containers = try await client.listContainers(labels: Self.labelFilter(projectKey: projectKey))
-        let volumes = try await client.listVolumes(labels: Self.labelFilter(projectKey: projectKey))
+        let containers = try await client.listContainers(labels: Self.projectOnly(projectKey))
+        let volumes = try await client.listVolumes(labels: Self.projectOnly(projectKey))
+        var networks: [String] = []
+        for id in try await client.listNetworks(labels: Self.projectOnly(projectKey)) {
+            if let network = try await client.inspectNetwork(id) { networks.append(network.name) }
+        }
         return WorkspaceStorage(
-            projectKey: projectKey, containers: containers.map { $0.name }.sorted(), volumes: volumes.sorted())
+            projectKey: projectKey, containers: containers.map { $0.name }.sorted(), volumes: volumes.sorted(), networks: networks.sorted())
     }
 
-    /// Removes the project's containers and exactly the volumes named in `storage` that still carry this project's
-    /// labels (a volume created after the person confirmed is kept). Cannot be undone.
+    /// Removes the project's containers and exactly the volumes and networks named in `storage` that still carry this
+    /// project's label (a volume created after the person confirmed is kept). Cannot be undone.
     public func purge(_ storage: WorkspaceStorage) async throws {
-        try await remove(projectKey: storage.projectKey)
-        let current = Set(try await client.listVolumes(labels: Self.labelFilter(projectKey: storage.projectKey)))
+        for container in try await client.listContainers(labels: Self.projectOnly(storage.projectKey)) {
+            try await client.removeContainer(container.id, force: true)
+        }
+        let current = Set(try await client.listVolumes(labels: Self.projectOnly(storage.projectKey)))
         for name in storage.volumes where current.contains(name) {
             try await client.removeVolume(name, force: true)
         }
+        for id in try await client.listNetworks(labels: Self.projectOnly(storage.projectKey)) {
+            if let network = try await client.inspectNetwork(id), storage.networks.contains(network.name) {
+                try await client.removeNetwork(network.id)
+            }
+        }
     }
 
-    /// Every BelloCode-managed container, optionally for one project.
+    /// Every BelloCode-managed workspace and service container, optionally for one project.
     public func managedContainers(projectKey: String? = nil) async throws -> [ContainerSummary] {
-        try await client.listContainers(labels: projectKey.map(Self.labelFilter(projectKey:)) ?? ["\(WorkspaceSpec.labelWorkspace)=1"])
+        if let projectKey { return try await client.listContainers(labels: Self.projectOnly(projectKey)) }
+        let workspaces = try await client.listContainers(labels: ["\(WorkspaceSpec.labelWorkspace)=1"])
+        let services = try await client.listContainers(labels: [ServiceLabels.service])
+        return workspaces + services.filter { service in !workspaces.contains { $0.id == service.id } }
     }
 
-    /// Execs of the container that are still running.
+    /// Commands of the container that are still running (relayed programs such as local MCP servers are not counted:
+    /// they run as long as opencode keeps them connected and must not keep the container from idling).
     public func runningExecs(_ status: WorkspaceStatus) async -> Int {
         var running = 0
         for id in status.execIDs.prefix(256) {
-            if let inspect = try? await client.inspectExec(id), inspect.running { running += 1 }
+            if let inspect = try? await client.inspectExec(id), inspect.running, !inspect.isRelayedProgram { running += 1 }
         }
         return running
     }

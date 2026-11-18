@@ -36,10 +36,13 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         /// `spec.mountIdentity()` when the app last ensured the container; a different value now means a mounted folder
         /// was replaced, and the helper recreates the container before running the command.
         public var mountIdentity: String?
+        /// The project's services (names): `bellocode-exec --service NAME` opens a shell in one of them.
+        public var services: [String]?
 
         public init(roots: [String], container: String, user: String? = nil, shell: String = "/bin/sh", blocked: Blocked? = nil,
                     spec: WorkspaceSpec? = nil, mountIdentity: String? = nil, image: String? = nil,
-                    inventory: ContainerProbes.ToolInventory? = nil) {
+                    inventory: ContainerProbes.ToolInventory? = nil, services: [String]? = nil) {
+            self.services = services
             self.mountIdentity = mountIdentity
             self.image = image
             self.inventory = inventory
