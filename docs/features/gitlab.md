@@ -109,11 +109,11 @@ the first send creates gets the issue linked (metadata) and a header chip `#212 
 else the built-in browser), Done (switch; restorable on GitLab's Done list). Not in Needs You and never notified:
 Needs You and notifications are for blocked agents (navigation.md); to-dos are the person's own GitLab work. Cached 2
 min, read when shown. **Approvals** explain required vs optional rules, who can approve (users and groups), hidden
-groups, rule overrides, reset on push, author approval, "You can approve", and GitLab's merge status verbatim; Free
-says rules are not reported. **Code Owners**: `CODEOWNERS`, `docs/`, `.gitlab/` (first found) at `origin/<target>`, else
+groups, rule overrides, reset on push, author approval, "You can approve", and GitLab's merge status verbatim; on Free
+only the basic state (count, who approved, you) shows: absent Premium facts are hidden, not explained. **Code Owners**: `CODEOWNERS`, `docs/`, `.gitlab/` (first found) at `origin/<target>`, else
 HEAD, through confined git; sections, `^[optional]`, `[n]` counts, default owners, `!` exclusions, last match wins;
-"GitLab's rules decide what is required". **Dependencies**: GitLab's blockers/blockees, else "Related by branch (not
-enforced)"; navigation only.
+"GitLab's rules decide what is required"; hidden without a file. **Dependencies**: GitLab's blockers/blockees, else
+"Related by branch (not enforced)" only when such MRs exist; navigation only.
 
 ## Menus and keyboard
 GitLab menu (additive): Show Merge Requests ⌃⌘M, Link Merge Request…, Create Merge Request, Refresh, Open in GitLab,
@@ -201,7 +201,7 @@ for ranges and renamed files; `blocks`/`blockees` availability; `approval_state`
 ## Owner-decision defaults (where to change them)
 | Decision | Default | Where |
 |---|---|---|
-| Version/tier | unknown; capabilities detected and probed | automatic; shown in Settings ▸ GitLab |
+| Version/tier | **answered: Free** at `https://gitlab.novacoast.com`, native API, git over HTTPS (docs/PLAN.md §0); still detected and probed | Premium-only parts (rule detail, reset on push, dependencies) stay gated and are hidden on Free, not explained |
 | Instances, prefix, CA | any number of HTTPS instances with path prefix; system trust store | Settings ▸ GitLab (Add Instance) |
 | Token | per-user PAT; `read_api` suffices for reads; `api` only with writes on | Settings ▸ GitLab (Replace Token) |
 | Writes | off per instance | Settings ▸ GitLab "Allow write actions" (`gitlab.instanceSettings`) |

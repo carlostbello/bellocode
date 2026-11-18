@@ -341,7 +341,6 @@ struct ApprovalsSection: View {
     var body: some View {
         let service = model.service
         let rules = service.approvalRules[snapshot.ref.url]
-        let support = service.capabilities(snapshot.ref.instance).support(.approvalRules)
         let settings = service.settings(for: snapshot.ref.instance)
         VStack(alignment: .leading, spacing: DS.Space.s4) {
             SectionTitle(title: "Approvals", trailing: MergeRequestText.approvalCount(snapshot))
@@ -359,9 +358,6 @@ struct ApprovalsSection: View {
                     }
                     .accessibilityElement(children: .combine)
                 }
-            } else if case .unavailable = support {
-                Text("Approvals are optional on this instance; required rules and Code Owners are not reported.").foregroundStyle(SwiftUI.Color.ds.text3)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             if let work = model.work { CodeOwnersView(summary: work.codeOwners[snapshot.ref.url], note: work.codeOwnersNotes[snapshot.ref.url]) }
             if settings.approveAndMergeEnabled && snapshot.state == .opened {

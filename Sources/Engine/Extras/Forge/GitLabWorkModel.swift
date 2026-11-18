@@ -378,22 +378,21 @@ public struct ApprovalExplanation: Hashable, Sendable {
             }
             if rules.isEmpty { add("none", "Rules", "No approval rules apply to this merge request.", .info) }
         } else {
-            switch rulesSupport {
-            case .unavailable(let why):
-                add("free", overview.required > 0 ? "Required" : "Optional",
-                    overview.required > 0
-                        ? "\(overview.approvedBy.count) of \(overview.required) approvals (\(overview.left) left). Rules and who can approve are not reported by this instance."
-                        : "Approvals are optional here: \(why)", overview.required > 0 && overview.left > 0 ? .waiting : .info)
-            default:
-                add("unknown", "Rules", "Approval rules have not been read yet (or this instance does not report them).", .info)
+            // The basic state every tier reports; no rule detail (Premium) is mentioned when absent.
+            _ = rulesSupport
+            if overview.required > 0 {
+                add("free", "Required", "\(overview.approvedBy.count) of \(overview.required) approvals (\(overview.left) left).", overview.left > 0 ? .waiting : .done)
+            } else {
+                add("free", "Optional", "Approvals are optional on this merge request.", .info)
             }
             if !overview.suggestedApprovers.isEmpty { add("suggested", "Suggested", people(overview.suggestedApprovers), .info) }
         }
         if !overview.approvedBy.isEmpty { add("approved", "Approved by", people(overview.approvedBy), .done) }
+        // Premium-only facts are shown only where the instance reports them (Free: hidden, not explained away).
         switch settings?.resetOnPush {
         case true?: add("push", "On push", "New commits remove existing approvals.", .info)
         case false?: add("push", "On push", "Approvals are kept when commits are pushed.", .info)
-        case nil: add("push", "On push", "Whether a push resets approvals is not reported by this instance.", .info)
+        case nil: break
         }
         if settings?.authorCanApprove == false { add("author", "Author", "The author cannot approve their own merge request.", .info) }
         if let can = overview.userCanApprove {

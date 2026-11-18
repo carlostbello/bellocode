@@ -377,8 +377,9 @@ struct CodeOwnersView: View {
                 if summary.unowned > 0 { Text("\(summary.unowned) changed file\(summary.unowned == 1 ? " has" : "s have") no owner.").foregroundStyle(SwiftUI.Color.ds.text3) }
                 Text("From the repository's file; GitLab's approval rules above decide what is required.").foregroundStyle(SwiftUI.Color.ds.text4)
             }
-        } else if let note {
-            Text(note).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
+        } else {
+            // No CODEOWNERS file (or no checkout): nothing is shown. `note` stays available to tests and tooltips.
+            EmptyView().help(note ?? "")
         }
     }
 }
@@ -389,14 +390,12 @@ struct DependenciesSection: View {
     let snapshot: MergeRequestSnapshot
 
     var body: some View {
-        if let dependencies = model.work?.dependencies[snapshot.ref.url] {
+        // Free instances: only branch relationships, and only when there are some (nothing about the missing feature).
+        if let dependencies = model.work?.dependencies[snapshot.ref.url], isGitLab(dependencies) || !(dependencies.blockedBy.isEmpty && dependencies.blocks.isEmpty) {
             VStack(alignment: .leading, spacing: DS.Space.s4) {
                 switch dependencies.source {
                 case .gitLab: SectionTitle(title: "Dependencies", trailing: "GitLab")
                 case .branches: SectionTitle(title: "Related by branch", trailing: "not enforced")
-                }
-                if case .branches(let why) = dependencies.source {
-                    Text(why).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
                 }
                 if dependencies.blockedBy.isEmpty && dependencies.blocks.isEmpty {
                     Text("None.").foregroundStyle(SwiftUI.Color.ds.text3)
