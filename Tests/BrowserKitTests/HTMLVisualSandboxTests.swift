@@ -84,8 +84,6 @@ struct HTMLVisualSandboxTests {
             try { const ws = new WebSocket("ws://127.0.0.1:\(port)/ws"); ws.onerror = () => __r.ws = "blocked"; } catch (e) { __r.ws = "blocked"; }
             __r.webkit = typeof window.webkit;
             const w = window.open("\(base)/popup"); __r.open = w === null ? "null" : "window";
-            setTimeout(() => { try { location.href = "\(base)/nav"; } catch (e) {} }, 20);
-            setTimeout(() => { document.getElementById("link").click(); __r.clicked = "yes"; }, 40);
             </script></body></html>
             """
         let sandbox = HTMLVisualWebView()
@@ -97,9 +95,12 @@ struct HTMLVisualSandboxTests {
         window.orderFrontRegardless()
         defer { window.close() }
         await sandbox.load(page, theme: .light, allowedHosts: [])
-        // Wait until the page has made every attempt: the scripted navigation refused, the fetch settled and the
-        // scripted click done (conditions, not fixed delays: under a loaded machine the page's timers can fire well
-        // after a second).
+        // After load, a script navigates away and clicks the link. Driven from here, not by the page's `setTimeout`:
+        // on macOS 27 the content process's timers (uptime clock) were seen not to fire for 20 s and more.
+        _ = try? await sandbox.webView.evaluateJavaScript(#"try { location.href = "\#(base)/nav"; } catch (e) {} "nav""#)
+        _ = try? await sandbox.webView.evaluateJavaScript(#"document.getElementById("link").click(); __r.clicked = "yes"; "click""#)
+        // Wait until every attempt has played out: the navigation refused and the fetch settled (conditions, not
+        // fixed delays).
         var values: [String: String] = [:]
         let deadline = ContinuousClock.now + .seconds(20)
         while ContinuousClock.now < deadline {
