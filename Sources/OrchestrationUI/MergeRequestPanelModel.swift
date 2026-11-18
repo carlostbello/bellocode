@@ -29,6 +29,8 @@ public final class MergeRequestPanelModel {
     /// The expanded MR (its URL); nil shows the first.
     public var expanded: String?
     public var failuresOnly = false
+    /// A section to bring into view ("pipeline", "discussions", "babysit" of the expanded MR); cleared once shown.
+    public var scrollTarget: String?
     public private(set) var openLog: OpenLog?
     public private(set) var log: LogState = .idle
     /// Triage excerpts by job ID (sanitised, bounded).

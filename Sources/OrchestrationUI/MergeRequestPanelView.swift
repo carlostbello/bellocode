@@ -89,6 +89,7 @@ public struct MergeRequestPanelView: View {
             Text("Select a thread to see its merge requests.").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).padding(DS.Space.s12)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: DS.Space.s10) {
                     if let create = model.create { CreateMergeRequestView(model: create, cancel: { model.create = nil }) }
@@ -114,6 +115,12 @@ public struct MergeRequestPanelView: View {
                     }
                 }
                 .padding(DS.Space.s12)
+            }
+            .onChange(of: model.scrollTarget) { _, target in
+                guard let target else { return }
+                proxy.scrollTo(target, anchor: .top)
+                model.scrollTarget = nil
+            }
             }
         }
     }
@@ -182,12 +189,12 @@ struct MergeRequestCard: View {
                 if let snapshot {
                     OverviewSection(snapshot: snapshot, link: link)
                     ApprovalsSection(model: model, snapshot: snapshot)
-                    PipelineSection(model: model, snapshot: snapshot)
-                    DiscussionsSection(snapshot: snapshot)
+                    PipelineSection(model: model, snapshot: snapshot).id("pipeline")
+                    DiscussionsSection(snapshot: snapshot).id("discussions")
                 } else if model.service.problems[link.ref.url] == nil {
                     Text("Checking GitLab…").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
                 }
-                BabysitSection(model: model, link: link)
+                BabysitSection(model: model, link: link).id("babysit")
                 actions(snapshot)
             }
         }
@@ -280,7 +287,7 @@ struct OverviewSection: View {
             if let labels = snapshot.labels, !labels.isEmpty { row("Labels", labels.joined(separator: ", ")) }
             row("Assignees", (snapshot.assignees ?? []).isEmpty ? "None" : snapshot.assignees!.map { "@\($0)" }.joined(separator: ", "))
             row("Reviewers", snapshot.reviewers.map { $0.isEmpty ? "None" : $0.map { "@\($0)" }.joined(separator: ", ") } ?? "Not reported by this GitLab version")
-            if let updated = snapshot.updatedAt { row("Updated on GitLab", updated.formatted(date: .abbreviated, time: .shortened)) }
+            if let updated = snapshot.updatedAt { row("Updated", updated.formatted(date: .abbreviated, time: .shortened)) }
             if let note = snapshot.truncationNote {
                 Label(note, systemImage: "exclamationmark.triangle").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.warningText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -426,12 +433,15 @@ struct TriageBox: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s4) {
             if let excerpt = model.excerpts[job.id] {
-                ScrollView(.horizontal) {
+                ScrollView([.horizontal, .vertical]) {
                     Text(excerpt.text).font(.ds(.codeSmall)).foregroundStyle(SwiftUI.Color.ds.text2).textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: true).padding(DS.Space.s6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 180)
+                .frame(height: 170)
                 .background(RoundedRectangle(cornerRadius: DS.Radius.sm).fill(SwiftUI.Color.ds.codeFill))
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+                .accessibilityLabel("Log excerpt of \(job.name)")
                 Text("Excerpt of the log (secret-looking values redacted; \(excerpt.linesRead) lines read\(excerpt.headOmitted ? ", end of the log only" : "")).")
                     .foregroundStyle(SwiftUI.Color.ds.text3)
             } else if model.excerptLoading.contains(job.id) {
@@ -495,7 +505,7 @@ struct BabysitSection: View {
         let watch = model.threadID.flatMap { service.watch($0, link.ref.url) }
         let log = model.threadID.map { service.wakeLog($0, link.ref.url) } ?? []
         VStack(alignment: .leading, spacing: DS.Space.s4) {
-            SectionTitle(title: "Babysit", trailing: link.watching ? "\(watch?.wakes ?? 0) wakes" : nil)
+            SectionTitle(title: "Babysit", trailing: link.watching ? ((watch?.wakes ?? 0) == 1 ? "1 wake" : "\(watch?.wakes ?? 0) wakes") : nil)
             HStack(spacing: DS.Space.s6) {
                 Button(link.watching ? "Stop Babysitting" : "Babysit this MR") { Task { await model.setWatching(link, !link.watching) } }
                     .buttonStyle(DSButtonStyle(link.watching ? .outline : .primary, size: .small))
