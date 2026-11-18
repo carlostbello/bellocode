@@ -59,6 +59,13 @@ public struct IsolationReport: Sendable, Equatable {
     public var full: Bool
     public var checks: [Check]
 
+    public init(date: Date, directory: String?, full: Bool, checks: [Check]) {
+        self.date = date
+        self.directory = directory
+        self.full = full
+        self.checks = checks
+    }
+
     /// The overall result. Only a report where every applicable check ran and held is `isolated`; anything that could
     /// not be checked makes it `notVerified` (never shown as a pass); an escape or failure is a `problem`.
     public enum Verdict: String, Sendable, Equatable {

@@ -1,5 +1,6 @@
 import AppKit
 import BelloCore
+import ContainerKit
 import Engine
 import Foundation
 import MockOpenCode
@@ -191,6 +192,11 @@ final class AppRuntime {
                 helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
                 execConfigURL: directory.appending(path: "bellocode-exec.json"), opencodeDataDirectory: nil, runtime: fake,
                 registryVault: InMemorySecretVault())
+            // An administrator's policy (as a configuration profile would set it): the organisation's registry only.
+            configuration.containers?.managedPolicy = {
+                .init(policy: ImagePolicy(allowedPrefixes: ["registry.acme.internal"], pullPolicy: .missing), defaultImage: nil,
+                      source: "configuration profile")
+            }
         }
         let suite = "com.bellocode.app.mock"
         return AppRuntime(

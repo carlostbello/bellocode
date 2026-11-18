@@ -318,35 +318,7 @@ struct ContainersSettingsView: View {
                 }
             }
             SettingsGroup("Containers", footer: "Prune removes stopped BelloCode containers, unused BelloCode volumes of projects no longer in BelloCode, unattached BelloCode networks and unused images BelloCode pulled, after listing them. Nothing else is touched.") {
-                SettingsActionsRow(divided: false) {
-                    Text("\(model.containers.count) container\(model.containers.count == 1 ? "" : "s")").font(.ds(.label)).foregroundStyle(DSColor.text2)
-                    Spacer()
-                    Button("Prune BelloCode Resources…") { Task { await model.confirmPrune() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
-                        .disabled(service.runtime?.isReady != true)
-                }
-                if model.containers.isEmpty {
-                    SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs", divided: false) {
-                        EmptyView()
-                    }
-                }
-                ForEach(Array(model.containers.enumerated()), id: \.element.id) { index, container in
-                    SettingsRow((container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name)
-                                    + (container.service.map { " · service \($0)" } ?? " · workspace"),
-                                detail: "\(container.image) · \(container.status)", divided: index > 0) {
-                        HStack(spacing: DS.Space.s2) {
-                            ManagedContainerPill(container: container).padding(.trailing, DS.Space.s4)
-                            if container.isRunning {
-                                Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                                Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            } else {
-                                Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            }
-                            Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                            Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
-                                .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                        }
-                    }
-                }
+                ManagedContainersListView(model: model, service: service, confirmRemove: confirmRemove)
             }
             if let logs = model.logs { LogsView(title: logs.title, text: logs.text) { model.logs = nil } }
             if let message = model.message { SettingsNote(message) }
@@ -358,6 +330,85 @@ struct ContainersSettingsView: View {
         guard case .ready(let ready) = service.runtime else { return service.runtime.map { _ in "Socket \(service.isEnabled ? "~/.rd/docker.sock" : "")" } }
         let rancher = ready.rancherVersion.map { "Rancher Desktop \($0) · " } ?? ""
         return "\(rancher)Docker Engine \(ready.engineVersion), API \(ready.apiVersion), \(ready.arch)" + (ready.notes.isEmpty ? "" : " · " + ready.notes.joined(separator: "; "))
+    }
+}
+
+/// Settings ▸ Containers ▸ Containers: Prune, then every BelloCode workspace and service container with its state (glyph +
+/// word, health first), Stop/Start/Restart, Logs and Remove.
+struct ManagedContainersListView: View {
+    @ObservedObject var model: ContainersSettingsModel
+    let service: EnvironmentService
+    let confirmRemove: (ManagedContainer) -> Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DS.Space.s8) {
+                Text(String(model.containers.count) + (model.containers.count == 1 ? " container" : " containers")).font(.ds(.label)).foregroundStyle(DSColor.text2)
+                Spacer(minLength: DS.Space.s8)
+                Button("Prune BelloCode Resources…") { Task { await model.confirmPrune() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .disabled(service.runtime?.isReady != true)
+                    .help("Lists stopped BelloCode containers and unused BelloCode volumes, networks and pulled images, then asks")
+            }
+            .padding(.horizontal, DS.Space.s12)
+            .frame(minHeight: 40)
+            if model.containers.isEmpty {
+                SettingsRow(service.runtime?.isReady == true ? "No BelloCode containers" : "Containers are listed while Rancher Desktop runs") {
+                    EmptyView()
+                }
+            }
+            ForEach(Array(model.containers.enumerated()), id: \.element.id) { _, container in
+                TwoLineRow(
+                    title: (container.projectDirectory.map { ($0 as NSString).lastPathComponent } ?? container.name)
+                        + (container.service.map { " · service \($0)" } ?? " · workspace"),
+                    detail: "\(container.image) · \(container.status)", divided: true
+                ) {
+                    ManagedContainerPill(container: container)
+                } actions: {
+                    if container.isRunning {
+                        Button("Stop") { Task { await model.perform(.stop, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                        Button("Restart") { Task { await model.perform(.restart, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    } else {
+                        Button("Start") { Task { await model.perform(.start, container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
+                    Button("Logs") { Task { await model.showLogs(container) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    Spacer(minLength: DS.Space.s8)
+                    Button("Remove…") { if confirmRemove(container) { Task { await model.perform(.remove, container) } } }
+                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                }
+            }
+        }
+    }
+}
+
+/// A settings row on two lines: title and detail with a state on the right, then a line of actions, so a dense row
+/// never truncates in the 520 pt column.
+struct TwoLineRow<State: View, Actions: View>: View {
+    let title: String
+    let detail: String?
+    let divided: Bool
+    @ViewBuilder let state: () -> State
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                VStack(alignment: .leading, spacing: DS.Space.s2) {
+                    Text(title).font(.ds(.body)).foregroundStyle(DSColor.text)
+                    if let detail, !detail.isEmpty {
+                        Text(detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: DS.Space.s8)
+                state().fixedSize()
+            }
+            HStack(spacing: DS.Space.s2) { actions() }
+        }
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s8)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -972,36 +1023,55 @@ struct ServiceRowView: View {
     let service: ServiceState
     let divided: Bool
 
+    /// Two lines: name, image and ports with the state (glyph + word) on the right; then the actions, so nothing
+    /// truncates in the pane's column.
     var body: some View {
         let detail = ([service.image.isEmpty ? nil : service.image,
                        service.ports.isEmpty ? nil : service.ports.map { "\(service.name):\($0)" }.joined(separator: ", "),
                        service.outdated ? "definition changed: Restart applies it" : nil, service.message]
             .compactMap { $0 }).joined(separator: " · ")
-        SettingsRow(service.name, detail: detail, divided: divided) {
-            HStack(spacing: DS.Space.s2) {
-                DSPillView(service.label, tone: service.tone.ds, symbolName: service.symbolName).padding(.trailing, DS.Space.s4)
-                if service.phase == .running {
-                    ForEach(service.ports.prefix(2), id: \.self) { port in
-                        let forwarded = environment.serviceForwards.contains { $0.service == service.name && $0.port == port }
-                        Button(forwarded ? "Open :\(port) Again" : "Open :\(port)") { model.openServicePort(service.name, port: port) }
-                            .buttonStyle(DSButtonStyle(.outline, size: .small))
-                            .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            HStack(alignment: .firstTextBaseline, spacing: DS.Space.s8) {
+                VStack(alignment: .leading, spacing: DS.Space.s2) {
+                    Text(service.name).font(.ds(.body)).foregroundStyle(DSColor.text)
+                    if !detail.isEmpty {
+                        Text(detail).font(.ds(.meta)).foregroundStyle(DSColor.text3).fixedSize(horizontal: false, vertical: true)
                     }
-                    Button("Terminal") { model.openServiceTerminal(service.name, environment.directory) }
-                        .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true)).help("A shell inside the service's container")
                 }
-                if service.containerID != nil {
-                    Button("Logs") { Task { await model.showServiceLogs(service.name) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
-                }
-                if service.phase != .refused {
+                Spacer(minLength: DS.Space.s8)
+                DSPillView(service.label, tone: service.tone.ds, symbolName: service.symbolName).fixedSize()
+            }
+            if service.phase != .refused {
+                HStack(spacing: DS.Space.s2) {
+                    if service.phase == .running {
+                        ForEach(service.ports.prefix(2), id: \.self) { port in
+                            let forwarded = environment.serviceForwards.contains { $0.service == service.name && $0.port == port }
+                            Button(forwarded ? "Open :" + String(port) + " Again" : "Open :" + String(port)) { model.openServicePort(service.name, port: port) }
+                                .buttonStyle(DSButtonStyle(.outline, size: .small))
+                                .help("Forwards the port to this Mac's loopback only and opens it in the built-in browser")
+                        }
+                        Button("Terminal") { model.openServiceTerminal(service.name, environment.directory) }
+                            .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true)).help("A shell inside the service's container")
+                    }
+                    if service.containerID != nil {
+                        Button("Logs") { Task { await model.showServiceLogs(service.name) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    }
                     Button(service.phase == .running ? "Restart" : "Start") { Task { await model.restartService(service.name) } }
                         .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    Spacer(minLength: DS.Space.s8)
                     Button("Delete Data…") { Task { await model.confirmDeleteServiceData(service.name) } }
                         .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                         .help("Removes the service's container and its data volumes after listing them. Cannot be undone.")
                 }
             }
         }
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s8)
+        .overlay(alignment: .top) {
+            if divided { Rectangle().fill(DSColor.border).frame(height: 1).padding(.leading, DS.Space.s12) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(service.name), \(service.label)")
     }
 }
 
@@ -1118,7 +1188,7 @@ struct MCPStatusPill: View {
         case (true, "pending"): ("Starting", .info, "arrow.triangle.2.circlepath")
         case (true, "failed"): ("Failed", .danger, "xmark.octagon")
         case (true, "needs_auth"): ("Sign-in needed", .warning, "exclamationmark.triangle")
-        default: ("Starts with container", .neutral, "shippingbox")
+        default: ("Not started", .neutral, "shippingbox")
         }
         DSPillView(word, tone: tone, symbolName: symbol)
     }

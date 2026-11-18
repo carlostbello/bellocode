@@ -102,6 +102,9 @@ extension SnapshotRunner {
         _ = await waitUntil(timeout: .seconds(5)) { environment.phase == .ready }
         await environments.refreshPorts(project.directory)
 
+        // Containers 2: services, policy refusal, routed MCP server in the isolation report, caches.
+        written += await runContainers2(engine: engine, project: project.directory, driver: driver, workspace: workspace, fake: fake)
+
         // 3. Settings ▸ Environment (image, limits, variables, Ports) and Settings ▸ Containers.
         EnvironmentSettingsModel.preferredDirectory = project.directory
         let settingsWindow = SettingsWindowController(
@@ -140,7 +143,8 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
             : .notRunning(socketPath: socketPath)
     }
     func image(_ reference: String) async throws -> ImageSummary? {
-        try JSONDecoder().decode(ImageSummary.self, from: Data(#"{"Id":"sha256:5f2a","RepoDigests":["registry.acme.internal/dev/node@sha256:5f2a"]}"#.utf8))
+        try JSONDecoder().decode(ImageSummary.self, from: Data(
+            #"{"Id":"sha256:5f2a","RepoDigests":["registry.acme.internal/dev/node@sha256:5f2a"],"Config":{"Labels":{"app.bellocode.caches":"npm,pnpm"}}}"#.utf8))
     }
     func pull(_ reference: String, auth: RegistryAuth?, progress: @escaping @Sendable (ProgressMessage) -> Void) async throws {}
     func status(_ spec: WorkspaceSpec) async throws -> WorkspaceStatus {
@@ -159,10 +163,48 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
     func purge(_ storage: WorkspaceStorage) async throws {}
     func removeContainer(_ id: String) async throws {}
     func managedContainers() async throws -> [ContainerSummary] {
-        started.withLock { Array($0) }.sorted().map { name in
+        let workspaces = started.withLock { Array($0) }.sorted().map { name in
             ContainerSummary(id: name, names: ["/" + name], image: "registry.acme.internal/dev/node:22-2026.11", state: "running",
-                             status: "Up 12 minutes", labels: [WorkspaceSpec.labelWorkspace: "1"])
+                             status: "Up 12 minutes", labels: [WorkspaceSpec.labelWorkspace: "1", WorkspaceSpec.labelProject: projectDirectory.withLock { $0 } ?? ""])
         }
+        let project = projectDirectory.withLock { $0 } ?? ""
+        let key = WorkspaceSpec.projectKey(for: project)
+        let services: [(String, String, String, String)] = [
+            ("db", "registry.acme.internal/library/postgres:16", "running", "Up 12 minutes (healthy)"),
+            ("cache", "registry.acme.internal/library/redis:7", "running", "Up 12 minutes"),
+            ("worker", "registry.acme.internal/dev/worker:2026.11", "exited", "Exited (1) 3 minutes ago"),
+        ]
+        return workspaces + services.map { name, image, state, status in
+            ContainerSummary(id: "svc-\(name)", names: ["/" + ServiceLabels.containerName(projectKey: key, service: name)], image: image, state: state,
+                             status: status, labels: [ServiceLabels.service: name, WorkspaceSpec.labelProject: project, WorkspaceSpec.labelImage: image])
+        }
+    }
+
+    /// The project whose services the snapshot shows.
+    let projectDirectory = Mutex<String?>(nil)
+
+    func ensureServices(_ specs: [ServiceSpec], projectKey: String, progress: @escaping @Sendable (String, ServiceOutcome?) -> Void) async throws
+        -> [String: ServiceOutcome] {
+        Dictionary(uniqueKeysWithValues: specs.map { ($0.name, ServiceOutcome.running) })
+    }
+    func serviceStatus(projectKey: String, specs: [ServiceSpec]) async throws -> [String: ServiceStatus] {
+        [
+            "db": ServiceStatus(name: "db", containerID: "svc-db", state: "running", health: "healthy"),
+            "cache": ServiceStatus(name: "cache", containerID: "svc-cache", state: "running"),
+            "worker": ServiceStatus(name: "worker", containerID: "svc-worker", state: "exited", exitCode: 1),
+        ]
+    }
+    func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool) {
+        ("LOG:  database system is ready to accept connections\n", false)
+    }
+    func cacheVolumes() async throws -> [CacheVolume] {
+        let project = projectDirectory.withLock { $0 }
+        let key = WorkspaceSpec.projectKey(for: project ?? "")
+        return [
+            CacheVolume(name: "bellocode-shared-cache-pnpm", cache: .pnpm, shared: true, projectDirectory: nil, size: 1_284_000_000, users: 2),
+            CacheVolume(name: "bellocode-\(key)-cache-npm", cache: .npm, shared: false, projectDirectory: project, size: 412_000_000, users: 1),
+            CacheVolume(name: "bellocode-\(key)-cache-pip", cache: .pip, shared: false, projectDirectory: project, size: 88_400_000, users: 0),
+        ]
     }
     func runningExecs(container: String) async -> Int { 1 }
     func listeningPorts(container: String, user: String) async throws -> [ListeningPort] {
