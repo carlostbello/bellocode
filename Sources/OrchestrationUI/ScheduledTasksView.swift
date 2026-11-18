@@ -519,6 +519,11 @@ public struct SecretsSettingsView: View {
         self.confirmDelete = confirmDelete
     }
 
+    /// The failure, if any, is kept on the service (`revocationError`) and shown below the list (S7).
+    private func revoke(_ host: String) {
+        Task { try? await visuals.revokeNetwork(host) }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s8) {
             Text("Secrets agents asked for are kept in your Keychain. Agents only ever get one-use references or one-read files; values are never shown, logged or sent to a model.")
@@ -557,10 +562,19 @@ public struct SecretsSettingsView: View {
                     HStack {
                         Text(host).font(.body.monospaced())
                         Spacer()
-                        Button("Revoke") { Task { await visuals.revokeNetwork(host) } }
+                        Button("Revoke") { revoke(host) }
                     }
                 }
             }
+            ForEach(visuals.pendingNetworkRevocations, id: \.self) { host in
+                HStack {
+                    Text(host).font(.body.monospaced())
+                    Text("Removal pending").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.dangerText)
+                    Spacer()
+                    Button("Retry") { revoke(host) }
+                }
+            }
+            if let error = visuals.revocationError { Text(error).foregroundStyle(SwiftUI.Color.ds.dangerText) }
         }
         .buttonStyle(DSButtonStyle(.outline))
         .toggleStyle(DSToggleStyle(.checkbox))

@@ -64,6 +64,9 @@ settled threads keep chips current but absorb events without waking (no replay o
 ✕ Pipeline failed (1 job)`, sidebar `!42 ✕`, "Merge Requests" tab (Thread ▸ Show Merge Requests ⌃⌘M) with jobs + log links,
 approvals, unresolved discussions, watch state and last wake, Open / Open in BelloCode, Unlink with Undo; Settings ▸
 GitLab: add instance + token (secure field, Keychain, never shown again), Test, Replace Token, Remove (confirmed).
+**Removal is durable or not reported (S7):** Remove succeeds only once the Keychain token is deleted; otherwise the
+instance stays listed with the problem. A removed address is remembered (`gitlab.removedInstances`), and re-adding it
+without a new token deletes any token still found for it instead of reusing it.
 
 ## 3. Secrets
 `request_secret` (label, reason, https setup URL, delivery) raises a card and returns at once; the agent ends its turn.
@@ -128,7 +131,9 @@ Sandbox (`HTMLVisualSandbox`): non-persistent store; no message handlers (`windo
 rules block everything but about:/data:/blob: and approved hosts, plus a CSP meta (`default-src 'none'`, inline script
 only, `frame-src 'none'`); `window.open` refused; every navigation after load cancelled; links open externally only on a
 trusted click (scripted clicks dropped before WebKit pre-connects); theme CSS variables and system fonts injected.
-Hosts in `allowNetwork` need an approval card (once for the visual, or always per host; Settings ▸ Secrets revokes).
+Hosts in `allowNetwork` need an approval card (once for the visual, or always per host; Settings ▸ Secrets revokes; a revoke blocks the host at once and is reported done only when the grant row is
+deleted, otherwise it is listed as "Removal pending", kept in `pending-revocations.json` beside the visuals so a
+restart does not restore it, and retried, S7).
 Grant binding (checked in M6-B): "once" is bound to the visual's ID, which is a hash of its HTML, title and thread, so
 changed content is a new visual with no grant; "always" is a per-host decision by design and covers any visual's
 traffic to that host (a data-disclosure decision, see containers.md "For the security team"). Merge-request watches

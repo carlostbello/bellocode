@@ -74,6 +74,8 @@ public final class VisualService {
     @ObservationIgnored public let directory: URL
     @ObservationIgnored private let store: ProjectionStore
     @ObservationIgnored private var grantedHosts: Set<String> = []
+    /// Revoked hosts whose grant row is not deleted yet: never granted in memory, retried.
+    @ObservationIgnored private var pendingRevocations: Set<String> = []
     @ObservationIgnored private var records: [String: VisualRecord] = [:]
 
     public init(store: ProjectionStore, directory: URL? = nil) {
@@ -83,8 +85,25 @@ public final class VisualService {
     }
 
     public func load() async {
-        grantedHosts = (try? await store.grants(.network)) ?? []
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Revocations a previous run could not make durable stay revoked (kept in a file beside the visuals, apart
+        // from the database that refused) and are retried now.
+        if let data = try? Data(contentsOf: pendingRevocationsFile), let hosts = try? JSONDecoder().decode([String].self, from: data) {
+            pendingRevocations.formUnion(hosts)
+        }
+        grantedHosts = ((try? await store.grants(.network)) ?? []).subtracting(pendingRevocations)
+        try? await retryPendingRevocations()
+    }
+
+    private var pendingRevocationsFile: URL { directory.appending(path: "pending-revocations.json") }
+
+    private func savePendingRevocations() {
+        if pendingRevocations.isEmpty {
+            try? FileManager.default.removeItem(at: pendingRevocationsFile)
+        } else {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? JSONEncoder().encode(pendingRevocations.sorted()).write(to: pendingRevocationsFile, options: .atomic)
+        }
     }
 
     // MARK: Reads (the app's views and image loader)
@@ -184,6 +203,12 @@ public final class VisualService {
         return text
     }
 
+    nonisolated static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     /// `html_preview`: renders once (light), returns the facts the agent needs and a PNG path it may share.
     func preview(html: String, hosts: [String]) async throws -> String {
         guard let renderer else { throw ExtrasError("BelloCode cannot render visuals right now.") }
@@ -203,12 +228,6 @@ public final class VisualService {
         lines.append(output.console.isEmpty ? "console: (no errors or warnings)" : "console:\n" + output.console.prefix(20).map { "  " + $0 }.joined(separator: "\n"))
         if !output.blocked.isEmpty {
             lines.append("blocked (no network by default; ask for hosts with allowNetwork in html_render):\n" + output.blocked.prefix(20).map { "  " + $0 }.joined(separator: "\n"))
-    nonisolated static func realPath(_ path: String) -> String? {
-        guard let resolved = realpath(path, nil) else { return nil }
-        defer { free(resolved) }
-        return String(cString: resolved)
-    }
-
         }
         if !hosts.isEmpty, allowed.count < hosts.count {
             lines.append("network: previews load only hosts already approved; html_render asks the user for the others.")
@@ -250,8 +269,10 @@ public final class VisualService {
         if always {
             for host in hosts {
                 try? await store.setGrant(.network, scope: host, granted: true)
+                pendingRevocations.remove(host)
                 grantedHosts.insert(host)
             }
+            savePendingRevocations()
             revision += 1
         } else if var record = record(id) {
             record.approvedHosts = Array(Set(record.approvedHosts).union(hosts)).sorted()
@@ -267,10 +288,40 @@ public final class VisualService {
         return grantedHosts.sorted()
     }
 
-    public func revokeNetwork(_ host: String) async {
-        try? await store.setGrant(.network, scope: host, granted: false)
+    /// Revokes an "always" host grant. The host stops being allowed at once (fail closed in memory); the call succeeds
+    /// only when the grant is deleted from the store. Otherwise it throws, the host is listed in
+    /// `pendingRevocations` ("removal pending") and the deletion is retried on the next revoke or load, so a restart
+    /// cannot silently bring it back without the person having seen the failure (S7).
+    public func revokeNetwork(_ host: String) async throws {
         grantedHosts.remove(host)
+        pendingRevocations.insert(host)
         revision += 1
+        try await retryPendingRevocations()
+    }
+
+    /// Hosts whose revocation is not yet durable (shown as "removal pending").
+    public var pendingNetworkRevocations: [String] {
+        _ = revision
+        return pendingRevocations.sorted()
+    }
+
+    /// The last revocation that could not be made durable (shown in Settings until a retry succeeds).
+    public private(set) var revocationError: String?
+
+    /// Deletes every pending revocation from the store; throws the first failure (the rest stay pending).
+    public func retryPendingRevocations() async throws {
+        defer { savePendingRevocations() }
+        for host in pendingRevocations.sorted() {
+            do {
+                try await store.setGrant(.network, scope: host, granted: false)
+                pendingRevocations.remove(host)
+                revision += 1
+            } catch {
+                revocationError = "Access for \(host) is blocked now, but its saved approval could not be deleted (\(error.localizedDescription)). It is shown as pending; try again."
+                throw ExtrasError("Access for \(host) is blocked now, but its saved approval could not be deleted (\(error.localizedDescription)). It is shown as pending; try Revoke again.")
+            }
+        }
+        revocationError = nil
     }
 
     // MARK: Helpers
