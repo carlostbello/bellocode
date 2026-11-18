@@ -168,7 +168,10 @@ container reference (`bcsecretc_…`, one use, one thread, one hour, 64 outstand
 (M6-B) asks the person first: a card shows the secret's label, project and folder, the variable, **the command
 verbatim**, and its access. Only after Allow does the command run, in a **one-shot sibling container** (same image,
 user and limits, no capabilities, project and worktree folders read-only, no caches or persistent home, HOME=/tmp,
-network `none`) unless the agent asked for network or write access and the card said so. The value goes on the exec's
+network `none`) unless the agent asked for network or write access and the card said so. **Optional host mounts
+(S5):** none by default, whatever the project setting says; only when the agent asks (`includeMounts`) are the
+project's extra folders listed on the card, each with its access, bound into the approval's digest and passed with
+exactly that access (refused if the setting no longer allows it; checked on the create request in tests). The value goes on the exec's
 stdin into the variable (`NAME=$(cat)`), so it is in no container or exec configuration; the container is removed
 afterwards (also on error or timeout). The thread is woken with the bounded output; verbatim occurrences of the value
 are replaced by `<secret>` as a courtesy only. "Always for This Command" stores an approval bound to the secret,

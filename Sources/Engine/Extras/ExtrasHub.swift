@@ -564,7 +564,9 @@ struct PendingSecretCommand: Sendable {
 extension ExtrasHub {
     /// The approval binding: secret (Keychain account), project, variable, the exact command and its policy.
     static func secretCommandDigest(account: String, projectDirectory: String, name: String, command: String, policy: SecretCommandPolicy) -> String {
-        let parts = [account, projectDirectory, name, command, policy.network ? "network" : "offline", policy.writesProject ? "writes" : "read-only"]
+        var parts = [account, projectDirectory, name, command, policy.network ? "network" : "offline", policy.writesProject ? "writes" : "read-only"]
+        // Optional mounts are part of what is approved (S5); none keeps the earlier digest, so saved approvals still match.
+        if !policy.mounts.isEmpty { parts.append("mounts:" + policy.canonicalMounts.joined(separator: ",")) }
         return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
     }
 
@@ -583,7 +585,11 @@ extension ExtrasHub {
         else { throw ExtrasError("Give secretRef, name and command.") }
         guard command.utf8.count <= 4_000 else { throw ExtrasError("The command is too long to show for approval (4000 bytes at most).") }
         let name = try SecretVariableName.validate(rawName)
-        let policy = SecretCommandPolicy(network: arguments["network"]?.boolValue ?? false, writesProject: arguments["writesProject"]?.boolValue ?? false)
+        // Optional host mounts only when asked for, and then exactly as configured now, each listed on the card (S5).
+        let mounts = arguments["includeMounts"]?.boolValue == true
+            ? environments.environment(for: caller.projectDirectory).settings.userMounts : []
+        let policy = SecretCommandPolicy(
+            network: arguments["network"]?.boolValue ?? false, writesProject: arguments["writesProject"]?.boolValue ?? false, mounts: mounts)
         let entry = try containerSecrets.redeem(reference, by: caller.sessionID, now: wallClock.now())
         let digest = Self.secretCommandDigest(account: entry.account, projectDirectory: caller.projectDirectory, name: name, command: command, policy: policy)
         let pending = PendingSecretCommand(
@@ -596,7 +602,10 @@ extension ExtrasHub {
         if pendingSecretCommands.count >= 16, let oldest = pendingSecretCommands.keys.sorted().first { pendingSecretCommands[oldest] = nil }
         let id = AppRequest.makeID("scmd")
         pendingSecretCommands[id] = pending
-        let access = [policy.network ? "network ON" : "no network", policy.writesProject ? "can write the project" : "project read-only"]
+        var access = [policy.network ? "network ON" : "no network", policy.writesProject ? "can write the project" : "project read-only"]
+        access.append(policy.mounts.isEmpty
+            ? "no extra folders"
+            : "extra folders: " + policy.mounts.map { "\($0.path) (\($0.readOnly ? "read-only" : "read-write"))" }.joined(separator: ", "))
         let request = AppRequest(
             id: AppRequest.makeID("sec"), sessionID: caller.sessionID,
             kind: .approval(
@@ -646,6 +655,15 @@ extension ExtrasHub {
     }
 }
 
+        // The container gets exactly the approved mounts: refused if the project's setting no longer allows one as
+        // approved (removed, or made read-only since).
+        let configured = environments.environment(for: pending.projectDirectory).settings.userMounts
+        for mount in pending.policy.mounts {
+            let path = (mount.path as NSString).standardizingPath
+            guard let current = configured.first(where: { ($0.path as NSString).standardizingPath == path }), mount.readOnly || !current.readOnly else {
+                throw ExtrasError("The project's extra folders changed since this command was approved (\(mount.path)). Nothing ran; ask again.")
+            }
+        }
 /// Hex SHA-256 of a string.
 enum SHA256Hex {
     static func of(_ text: String) -> String {
