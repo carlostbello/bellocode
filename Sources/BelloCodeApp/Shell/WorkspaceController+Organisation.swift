@@ -61,6 +61,7 @@ extension WorkspaceController {
         organise(
             ids, settle ? .settle : .unsettle, name: settle ? "Settle" : "Un-settle",
             message: "\(settle ? "Settled" : "Un-settled") \(describe(ids))")
+        if settle { applyWorktreeCleanup(ids, trigger: .settled) }
     }
 
     func snooze(_ ids: [SessionID], until date: Date) {

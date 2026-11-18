@@ -1,6 +1,7 @@
 import AgentUI
 import AppKit
 import BelloCore
+import Engine
 
 /// Action methods the window answers. Menu items and toolbar items use a nil target, so these travel the responder
 /// chain (first responder → … → window → `MainWindowController`); text views see Edit commands first. The composer's
@@ -108,6 +109,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
+    // Git parity (MainWindowController+Git.swift, docs/features/git-parity.md).
+    case gitQuickAction, showGitActions, commitAndPush, pullBranch, pullRebase, fetchRemote, syncBranch, publishToGitLab
+    case switchRemoteToHTTPS, abortGitOperation, restoreStashedChanges, cloneFromGitLab, newGitProject, moveToNewWorktree, editFromHere
+    case toggleAutoPull, toggleCleanupOnSettle, toggleCleanupOnArchive
 
     @MainActor var selector: Selector {
         switch self {
@@ -228,6 +233,24 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
+        case .gitQuickAction: #selector(MainWindowController.gitQuickAction(_:))
+        case .showGitActions: #selector(MainWindowController.showGitActions(_:))
+        case .commitAndPush: #selector(MainWindowController.commitAndPush(_:))
+        case .pullBranch: #selector(MainWindowController.pullBranch(_:))
+        case .pullRebase: #selector(MainWindowController.pullRebase(_:))
+        case .fetchRemote: #selector(MainWindowController.fetchRemote(_:))
+        case .syncBranch: #selector(MainWindowController.syncBranch(_:))
+        case .publishToGitLab: #selector(MainWindowController.publishToGitLab(_:))
+        case .switchRemoteToHTTPS: #selector(MainWindowController.switchRemoteToHTTPS(_:))
+        case .abortGitOperation: #selector(MainWindowController.abortGitOperation(_:))
+        case .restoreStashedChanges: #selector(MainWindowController.restoreStashedChanges(_:))
+        case .cloneFromGitLab: #selector(MainWindowController.cloneFromGitLab(_:))
+        case .newGitProject: #selector(MainWindowController.newGitProject(_:))
+        case .moveToNewWorktree: #selector(MainWindowController.moveToNewWorktree(_:))
+        case .editFromHere: #selector(MainWindowController.editFromHere(_:))
+        case .toggleAutoPull: #selector(MainWindowController.toggleAutoPull(_:))
+        case .toggleCleanupOnSettle: #selector(MainWindowController.toggleCleanupOnSettle(_:))
+        case .toggleCleanupOnArchive: #selector(MainWindowController.toggleCleanupOnArchive(_:))
         case .pruneContainerResources: #selector(AppDelegate.pruneContainerResources(_:))
         case .nextChange: #selector(MainWindowController.nextDiffHunk(_:))
         case .previousChange: #selector(MainWindowController.previousDiffHunk(_:))
@@ -343,6 +366,24 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showEnvironment: "Project Environment…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
+        case .gitQuickAction: "Run Suggested Git Action"
+        case .showGitActions: "Git Actions…"
+        case .commitAndPush: "Commit and Push…"
+        case .pullBranch: "Pull"
+        case .pullRebase: "Pull with Rebase"
+        case .fetchRemote: "Fetch"
+        case .syncBranch: "Sync"
+        case .publishToGitLab: "Publish to GitLab…"
+        case .switchRemoteToHTTPS: "Switch Remote to HTTPS"
+        case .abortGitOperation: "Abort Merge or Rebase…"
+        case .restoreStashedChanges: "Restore Stashed Changes"
+        case .cloneFromGitLab: "Clone from GitLab…"
+        case .newGitProject: "New Project…"
+        case .moveToNewWorktree: "Move Changes to New Worktree…"
+        case .editFromHere: "Edit Last Prompt from Here…"
+        case .toggleAutoPull: "Automatically Pull Default Branch"
+        case .toggleCleanupOnSettle: "Remove Clean Worktrees When Settled"
+        case .toggleCleanupOnArchive: "Remove Clean Worktrees When Archived"
         case .nextChange: "Next Change"
         case .previousChange: "Previous Change"
         case .nextChangedFile: "Next Changed File"
@@ -480,6 +521,15 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showScheduledTasks: ("e", [.command, .control])
         case .showContainers, .showEnvironment, .verifyIsolation: ("", [])
         case .pruneContainerResources: ("", [])
+        // Git parity: ⌃⌘ letters free elsewhere (⌃⌘F full screen, ⌃⌘Q lock and ⌃⌘D look up are avoided).
+        case .gitQuickAction: ("\r", [.command, .control])
+        case .showGitActions: ("g", [.command, .control])
+        case .pullBranch: ("l", [.command, .control])
+        case .fetchRemote: ("r", [.command, .control])
+        case .pushBranch: ("p", [.command, .control])
+        case .commitAndPush, .pullRebase, .syncBranch, .publishToGitLab, .switchRemoteToHTTPS, .abortGitOperation, .restoreStashedChanges,
+            .cloneFromGitLab, .newGitProject, .moveToNewWorktree, .editFromHere, .toggleAutoPull, .toggleCleanupOnSettle, .toggleCleanupOnArchive:
+            ("", [])
         case .nextChange: (down, [.command, .control])
         case .previousChange: (up, [.command, .control])
         case .nextChangedFile: (String(UnicodeScalar(UInt16(NSRightArrowFunctionKey))!), [.command, .control])
@@ -489,8 +539,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .chooseWorkspace: ("e", [.command, .shift])
         case .chooseBranch: ("b", [.command, .shift])
         // GitLab 2: the review and the panel's sections; the rest are menu and palette actions.
-        case .reviewMergeRequest: ("r", [.command, .control])
-        case .submitReview: ("\r", [.command, .control])
+        // ⌃⌘R and ⌃⌘↩ belong to git (Fetch, Suggested Git Action); the review uses ⌃⌥⌘.
+        case .reviewMergeRequest: ("r", [.command, .control, .option])
+        case .submitReview: ("\r", [.command, .control, .option])
         case .nextReviewThread: ("]", [.command, .control, .option])
         case .previousReviewThread: ("[", [.command, .control, .option])
         case .showIssues: ("i", [.command, .control])
@@ -500,7 +551,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
             .approveMergeRequest, .mergeMergeRequest, .startThreadFromIssue, .linkIssueToThread, .openTodo, .markTodoDone:
             ("", [])
         // Reverting is never a single keystroke (research 03, section D); the rest are menu and panel actions.
-        case .revertHunk, .revertFile, .revertTurn, .commitChanges, .pushBranch, .createMergeRequest, .toggleDiffLayout,
+        case .revertHunk, .revertFile, .revertTurn, .commitChanges, .createMergeRequest, .toggleDiffLayout,
             .toggleDiffWhitespace, .toggleDiffWrap, .removeWorktree:
             ("", [])
         }
@@ -534,6 +585,9 @@ enum ShellCommand: String, CaseIterable, Sendable {
     func isChecked(in context: CommandContext) -> Bool? {
         switch self {
         case .toggleNeverAutoSettle: context.targetsNeverAutoSettle
+        case .toggleAutoPull: context.git.autoPull
+        case .toggleCleanupOnSettle: context.git.cleanupOnSettle
+        case .toggleCleanupOnArchive: context.git.cleanupOnArchive
         case .groupByProject: context.grouping == .byProject
         case .showThreadsByState: context.grouping == .byState
         default: nil
@@ -620,6 +674,8 @@ struct CommandContext: Equatable, Sendable {
     var agents = AgentsCommandState()
     /// The Merge Requests tab's state (GitLab 2).
     var gitLab = GitLabCommandState()
+    /// Git parity: the displayed checkout's git actions.
+    var git = GitCommandState()
 
     func isEnabled(_ command: ShellCommand) -> Bool {
         if command.conflictsWithTextEditing, textInputFocused { return false }
@@ -702,6 +758,22 @@ struct CommandContext: Equatable, Sendable {
         case .linkIssueToThread: return gitLab.issueSelected && gitLab.hasThread
         case .openTodo: return gitLab.todoSelected
         case .markTodoDone: return gitLab.todoSelected && gitLab.todoWrites
+        case .gitQuickAction: return git.quickAction != nil
+        case .showGitActions: return git.isRepository
+        case .commitAndPush: return git.enabled.contains(.commitAndPush)
+        case .pullBranch: return git.enabled.contains(.pull)
+        case .pullRebase: return git.enabled.contains(.pullRebase)
+        case .fetchRemote: return git.enabled.contains(.fetch)
+        case .syncBranch: return git.enabled.contains(.sync)
+        case .publishToGitLab: return git.enabled.contains(.publish)
+        case .switchRemoteToHTTPS: return git.enabled.contains(.switchRemoteToHTTPS)
+        case .abortGitOperation: return git.enabled.contains(.abortOperation)
+        case .restoreStashedChanges: return git.hasParkedStash
+        case .cloneFromGitLab, .newGitProject: return true
+        case .moveToNewWorktree: return git.canHandoff
+        case .editFromHere: return git.canRewind
+        case .toggleAutoPull: return true
+        case .toggleCleanupOnSettle, .toggleCleanupOnArchive: return git.isRepository
         }
     }
 
@@ -752,6 +824,11 @@ struct CommandContext: Equatable, Sendable {
         case .linkMergeRequest: return gitLab.configured ? "Open a thread" : "Connect GitLab in Settings ▸ GitLab"
         case .startThreadFromIssue, .linkIssueToThread: return "Select an issue in Issues"
         case .openTodo, .markTodoDone: return gitLab.todoSelected ? "GitLab write actions are off (Settings ▸ GitLab)" : "Select a to-do"
+        case .gitQuickAction: return git.quickHint ?? "Nothing to do"
+        case .commitAndPush, .pullBranch, .pullRebase, .fetchRemote, .syncBranch, .publishToGitLab, .switchRemoteToHTTPS, .abortGitOperation:
+            return git.reasons[command.rawValue] ?? (git.isRepository ? "Not available now" : "Open a thread in a git repository")
+        case .moveToNewWorktree: return "Open a thread in a local checkout with uncommitted changes"
+        case .editFromHere: return "Open a thread with a sent prompt that is not running"
         default: return "Not available now"
         }
     }
@@ -775,6 +852,7 @@ struct CommandContext: Equatable, Sendable {
         case .toggleDiffWrap: changes.wraps ? "Don’t Wrap Lines" : "Wrap Lines"
         case .toggleBabysit: gitLab.babysitting ? "Stop Babysitting" : command.title
         case .toggleReviewThreadResolved: gitLab.currentThreadResolved ? "Reopen Thread" : command.title
+        case .gitQuickAction: git.quickTitle.map { "Git: \($0)" } ?? command.title
         default: command.title
         }
     }
@@ -833,4 +911,21 @@ struct ChangesCommandState: Equatable, Sendable {
     var isSplit = false
     var ignoresWhitespace = false
     var wraps = false
+}
+
+/// Git parity: what the Git commands can act on now (from `GitActionPlanner` on the displayed checkout).
+struct GitCommandState: Equatable, Sendable {
+    var isRepository = false
+    var quickAction: GitAction?
+    var quickTitle: String?
+    var quickHint: String?
+    var enabled: Set<GitAction> = []
+    /// Disabled reasons by ShellCommand raw value.
+    var reasons: [String: String] = [:]
+    var hasParkedStash = false
+    var canHandoff = false
+    var canRewind = false
+    var autoPull = false
+    var cleanupOnSettle = false
+    var cleanupOnArchive = false
 }

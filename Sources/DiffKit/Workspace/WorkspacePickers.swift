@@ -216,20 +216,32 @@ public struct BranchPickerView: View {
     @StateObject private var query = PickerState("")
     @StateObject private var highlight = PickerState(0)
     @StateObject private var error = PickerState<String?>(nil)
+    /// Git parity: rows shown (paged by 100, "Show More" adds the next page).
+    @StateObject private var limit = PickerState(100)
+    /// A switch refused because of local changes: the branch and whether it was a create (offers Stash and Switch).
+    @StateObject private var blocked = PickerState<BlockedSwitch?>(nil)
     @FocusState private var focused: Bool
 
-    public init(draft: WorkspaceDraft, close: @escaping () -> Void) {
+    struct BlockedSwitch: Equatable {
+        var branch: String
+        var create: Bool
+    }
+
+    public init(draft: WorkspaceDraft, close: @escaping () -> Void, query initial: String = "") {
         self.draft = draft
         self.close = close
+        _query = StateObject(wrappedValue: PickerState(initial))
     }
 
     enum Row: Hashable, Identifiable {
         case branch(GitBranch)
         case create(String)
+        case more(Int)
         var id: String {
             switch self {
             case .branch(let branch): branch.id
             case .create(let name): "create:" + name
+            case .more: "more"
             }
         }
     }
@@ -238,7 +250,9 @@ public struct BranchPickerView: View {
         let branches = draft.repository.branches.filter { query.value.isEmpty || $0.name.localizedCaseInsensitiveContains(query.value) }
         let local = branches.filter { !$0.isRemote }
         let remote = branches.filter(\.isRemote).filter { remote in !local.contains { $0.name == remote.localName } || !query.value.isEmpty }
-        var rows = (local + remote).prefix(300).map(Row.branch)
+        let all = local + remote
+        var rows = all.prefix(limit.value).map(Row.branch)
+        if all.count > limit.value { rows.append(.more(all.count - limit.value)) }
         let trimmed = query.value.trimmingCharacters(in: .whitespaces)
         if draft.mode == .local, !trimmed.isEmpty, !local.contains(where: { $0.name == trimmed }) { rows.append(.create(trimmed)) }
         return rows
@@ -252,28 +266,32 @@ public struct BranchPickerView: View {
                 if branch.isRemote { draft.startFromOrigin = true }
                 close()
             } else {
-                Task {
-                    do {
-                        try await draft.switchLocalBranch(to: branch.isRemote ? branch.localName : branch.name, create: false)
-                        close()
-                    } catch {
-                        self.error.value = (error as? GitError)?.userMessage ?? "Could not switch branches."
-                    }
-                }
+                switchTo(branch.isRemote ? branch.localName : branch.name, create: false)
             }
         case .create(let name):
-            Task {
-                do {
-                    try await draft.switchLocalBranch(to: name, create: true)
-                    close()
-                } catch {
-                    self.error.value = (error as? GitError)?.userMessage ?? "Could not create the branch."
-                }
+            switchTo(name, create: true)
+        case .more:
+            limit.value += 100
+        }
+    }
+
+    func switchTo(_ name: String, create: Bool, stashing: Bool = false) {
+        Task {
+            do {
+                if stashing { try await draft.stashAndSwitch(to: name, create: create) } else { try await draft.switchLocalBranch(to: name, create: create) }
+                blocked.value = nil
+                close()
+            } catch GitSwitchError.localChanges(let files) {
+                blocked.value = BlockedSwitch(branch: name, create: create)
+                let list = files.prefix(3).joined(separator: ", ") + (files.count > 3 ? " and \(files.count - 3) more" : "")
+                self.error.value = "Local changes would be overwritten\(list.isEmpty ? "" : " (\(list))"). Stash them and switch, or commit first."
+            } catch {
+                blocked.value = nil
+                self.error.value = (error as? GitError)?.userMessage ?? (create ? "Could not create the branch." : "Could not switch branches.")
             }
         }
     }
 
-    /// "checked out" for the main checkout's branch, "in a worktree" for another worktree's.
     func worktreeNote(_ branch: GitBranch) -> String? {
         guard let path = branch.worktreePath else { return nil }
         func real(_ path: String) -> String { URL(filePath: path).resolvingSymlinksInPath().path }
@@ -323,7 +341,12 @@ public struct BranchPickerView: View {
                                 ) { choose(row) }
                                 .id(index)
                             case .create(let name):
-                                PickerRow(symbol: "plus", title: "Create branch “\(name)”", detail: "from the current commit", selected: false, highlighted: index == highlight.value) {
+                                PickerRow(symbol: "plus", title: "Create branch “\(name)”", detail: "and switch to it, from the current commit", selected: false, highlighted: index == highlight.value) {
+                                    choose(row)
+                                }
+                                .id(index)
+                            case .more(let count):
+                                PickerRow(symbol: "ellipsis", title: "Show More", detail: "\(count) more branch\(count == 1 ? "" : "es")", selected: false, highlighted: index == highlight.value) {
                                     choose(row)
                                 }
                                 .id(index)
@@ -343,10 +366,21 @@ public struct BranchPickerView: View {
                 SwiftUI.Color.ds.border.frame(height: 1)
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.dangerText)
-                    Text(error).foregroundStyle(SwiftUI.Color.ds.text)
+                    Text(error).foregroundStyle(SwiftUI.Color.ds.text).fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.ds(.label))
                 .padding(DS.Space.s12)
+                if let blocked = blocked.value {
+                    HStack(spacing: DS.Space.s8) {
+                        Spacer()
+                        Button("Cancel") { self.blocked.value = nil; self.error.value = nil }
+                            .buttonStyle(DSButtonStyle(.outline, size: .small))
+                        Button("Stash and Switch") { switchTo(blocked.branch, create: blocked.create, stashing: true) }
+                            .buttonStyle(DSButtonStyle(.primary, size: .small))
+                            .accessibilityHint("Stashes the local changes, including untracked files, then switches. Git ▸ Restore Stashed Changes brings them back.")
+                    }
+                    .padding([.horizontal, .bottom], DS.Space.s12)
+                }
             }
         }
         .font(.ds(.body))

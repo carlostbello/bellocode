@@ -82,7 +82,9 @@ final class ShellHeaderBar: NSView {
     let sidebarButton = DSButton(icon: "sidebar.left", accessibilityTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)))
     let newThreadButton = DSButton(icon: "square.and.pencil", accessibilityTitle: "New Thread", action: ShellCommand.newThread.selector)
     let openButton = DSSelectButton(title: "Open", symbolName: "arrow.up.forward.square", chevron: .down, size: .small)
-    let commitButton = DSButton(title: "Commit", variant: .outline, size: .small, symbolName: "arrow.triangle.branch", action: ShellCommand.commitChanges.selector)
+    let commitButton = DSButton(title: "Commit", variant: .outline, size: .small, symbolName: "arrow.triangle.branch", action: ShellCommand.gitQuickAction.selector)
+    /// Git parity: the git actions popover beside the quick action (T3 Code GitActionsControl's menu trigger).
+    let gitMenuButton = DSButton(icon: "chevron.down", accessibilityTitle: "Git Actions", action: ShellCommand.showGitActions.selector)
     let terminalToggle = DSButton(icon: "apple.terminal", accessibilityTitle: "Toggle Terminal", action: ShellCommand.toggleTerminal.selector)
     let panelToggle = DSButton(icon: "sidebar.right", accessibilityTitle: "Toggle Right Panel", action: #selector(NSSplitViewController.toggleInspector(_:)))
     /// The containers runtime state (M6-A), hidden while container execution is off.
@@ -113,12 +115,13 @@ final class ShellHeaderBar: NSView {
         openButton.isMuted = false
         openButton.toolTip = "Open the project in Finder or an editor"
         openButton.setAccessibilityLabel("Open")
-        commitButton.toolTip = "Commit… (⇧⌘C)"
+        commitButton.toolTip = "Run the suggested git action (⌃⌘↩)"
+        gitMenuButton.toolTip = "Git Actions (⌃⌘G)"
         terminalToggle.isToggle = true
         terminalToggle.toolTip = "Show or Hide Terminal (⌃`)"
         panelToggle.isToggle = true
         panelToggle.toolTip = "Show or Hide Right Panel (⌥⌘I)"
-        for view in [sidebarButton, newThreadButton, openButton, commitButton, divider, terminalToggle, panelToggle] as [NSView] {
+        for view in [sidebarButton, newThreadButton, openButton, commitButton, gitMenuButton, divider, terminalToggle, panelToggle] as [NSView] {
             addSubview(view)
         }
         setAccessibilityElement(true)
@@ -174,7 +177,7 @@ final class ShellHeaderBar: NSView {
         x -= DS.Space.s8 + DS.Border.hairline
         divider.frame = NSRect(x: x, y: (height - 16) / 2, width: DS.Border.hairline, height: 16)
         x -= DS.Space.s8
-        for view in [commitButton, openButton] as [NSView] where !view.isHidden {
+        for view in [gitMenuButton, commitButton, openButton] as [NSView] where !view.isHidden {
             let width = view.fittingSize.width
             x -= width
             place(view, x: x)

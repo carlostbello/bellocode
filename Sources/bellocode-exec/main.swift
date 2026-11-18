@@ -18,6 +18,11 @@ import Foundation
 
 let helperVersion = "bellocode-exec 1.0"
 
+// `--git-credential <operation>`: BelloCode's git credential helper for its own git processes (GitCredentialHelper).
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == GitCredentialHelper.modeArgument {
+    GitCredentialHelper.main(arguments: Array(CommandLine.arguments.dropFirst(2)), environment: ProcessInfo.processInfo.environment)
+}
+
 // Invoked as `git` (the shim first on the server's PATH): opencode's own host git runs confined (HostGit), never
 // unconfined and never in the container (its snapshots live outside the mounts).
 if (CommandLine.arguments.first.map { ($0 as NSString).lastPathComponent }) == "git" {
