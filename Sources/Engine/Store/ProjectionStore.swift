@@ -73,8 +73,9 @@ public struct StoreBatch: Sendable {
         messages = Self.upserting(messages, other.messages, by: \.id)
 
         if other.replaceAllPending {
-            pending = other.pending
-            resolvedRequests = other.resolvedRequests
+            // A complete server list replaces the server's requests only; BelloCode's own stay.
+            pending = Self.upserting(pending.filter(\.isAppOwned), other.pending, by: \.id)
+            resolvedRequests = Self.unique(resolvedRequests.filter(Self.isAppRequestID) + other.resolvedRequests)
             replaceAllPending = true
         } else {
             let resolved = Set(other.resolvedRequests)
@@ -99,12 +100,15 @@ public struct StoreBatch: Sendable {
         syncStates = Self.upserting(syncStates, other.syncStates, by: \.sessionID)
     }
 
-    /// The rows only BelloCode owns (projects added, drafts and per-thread state): never dropped on a write failure.
+    /// The rows only BelloCode owns (projects added, drafts, per-thread state and its own requests): never dropped on
+    /// a write failure.
     var appOwned: StoreBatch {
         var batch = StoreBatch()
         batch.registry = registry
         batch.removedRegistry = removedRegistry
         batch.threadUI = threadUI
+        batch.pending = pending.filter(\.isAppOwned)
+        batch.resolvedRequests = resolvedRequests.filter(Self.isAppRequestID)
         return batch
     }
 
@@ -114,8 +118,12 @@ public struct StoreBatch: Sendable {
         batch.registry = []
         batch.removedRegistry = []
         batch.threadUI = []
+        batch.pending = pending.filter { !$0.isAppOwned }
+        batch.resolvedRequests = resolvedRequests.filter { !Self.isAppRequestID($0) }
         return batch
     }
+
+    static func isAppRequestID(_ id: String) -> Bool { id.hasPrefix(AppRequest.idPrefix) }
 
     /// Rows written (for bounds and diagnostics).
     var rowCount: Int {
@@ -454,9 +462,16 @@ public actor ProjectionStore {
             }
         }
         for id in batch.resolvedRequests {
-            try db.execute(sql: "DELETE FROM pending_request WHERE id = ?", arguments: [id])
+            let table = StoreBatch.isAppRequestID(id) ? "app_request" : "pending_request"
+            try db.execute(sql: "DELETE FROM \(table) WHERE id = ?", arguments: [id])
         }
         for request in batch.pending {
+            if request.isAppOwned {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO app_request (id, session_id, received, json) VALUES (?, ?, ?, ?)",
+                    arguments: [request.id, request.sessionID.rawValue, request.received.milliseconds, try json(request, encoder)])
+                continue
+            }
             try db.execute(
                 sql: "INSERT OR REPLACE INTO pending_request (id, session_id, kind, received, json) VALUES (?, ?, ?, ?, ?)",
                 arguments: [
@@ -560,6 +575,8 @@ public actor ProjectionStore {
             sql: "DELETE FROM message_fts WHERE rowid IN (SELECT seq FROM message WHERE session_id = ?)", arguments: [raw])
         try db.execute(sql: "DELETE FROM message WHERE session_id = ?", arguments: [raw])
         try db.execute(sql: "DELETE FROM pending_request WHERE session_id = ?", arguments: [raw])
+        // The thread is gone on the server: its app requests can never be answered either.
+        try db.execute(sql: "DELETE FROM app_request WHERE session_id = ?", arguments: [raw])
         try db.execute(sql: "DELETE FROM queued_prompt WHERE session_id = ?", arguments: [raw])
         try db.execute(sql: "DELETE FROM session_sync WHERE session_id = ?", arguments: [raw])
         try db.execute(sql: "DELETE FROM session WHERE id = ?", arguments: [raw])
@@ -741,7 +758,9 @@ public actor ProjectionStore {
 
     public func pendingRequests() async throws -> [PendingRequest] {
         try await read("pending") { db in
-            try Data.fetchAll(db, sql: "SELECT json FROM pending_request ORDER BY received").map { try Self.decode(PendingRequest.self, $0) }
+            try Data.fetchAll(
+                db, sql: "SELECT json, received FROM pending_request UNION ALL SELECT json, received FROM app_request ORDER BY received"
+            ).map { try Self.decode(PendingRequest.self, $0) }
         }
     }
 
@@ -867,4 +886,9 @@ public actor ProjectionStore {
     public func appliedMigrations() async throws -> [String] {
         try await read("migrations") { db in try Array(ProjectionSchema.migrator.appliedIdentifiers(db)).sorted() }
     }
+}
+
+extension PendingRequest {
+    /// One of BelloCode's own requests (`app_request`): opencode cannot rebuild it, so no cache operation drops it.
+    var isAppOwned: Bool { if case .app = self { true } else { false } }
 }
