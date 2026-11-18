@@ -1687,10 +1687,12 @@ actor EngineCore {
         let sessionID = held.send.sessionID
         switch outcome {
         case .admitted(let created):
+            // Settled durably first: once the card goes, nothing stale remains to restore.
+            await settleOutbox(id)
+            guard unconfirmed[id] != nil else { return }
             unconfirmed[id] = nil
             bus.publish([.unconfirmedRemoved(id, sessionID: sessionID)])
             acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
-            await settleOutbox(id)
         case .rejected(let error):
             rollbackSend(id, sessionID: sessionID)
             let reason = EngineError.from(error).userMessage

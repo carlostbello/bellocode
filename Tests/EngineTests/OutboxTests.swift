@@ -93,7 +93,10 @@ struct OutboxTests {
         try await waitUntil("live") { engine.root.connection == .live }
         try await waitUntil("checked, still unknown") { thread.unconfirmedSends.first?.state == .unknown }
         #expect(await fixture.harness.server.promptBodies().isEmpty, "a restored send is never resent on its own")
-        await thread.retryUnconfirmed(id)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !thread.unconfirmedSends.isEmpty, ContinuousClock.now < deadline {
+            if thread.unconfirmedSends.first?.state == .unknown { await thread.retryUnconfirmed(id) } else { await Task.yield() }
+        }
         try await waitUntil("admitted") { thread.unconfirmedSends.isEmpty }
         #expect(try await engine.store.outbox().isEmpty)
         await fixture.harness.server.waitUntilIdle(fixture.sessionID.rawValue)
@@ -114,8 +117,13 @@ struct OutboxTests {
             try await waitUntil("live") { engine.root.connection == .live }
             await fixture.harness.server.injectHTTPFault(
                 .status(400, method: "POST", pathPrefix: "/api/session/\(fixture.sessionID.rawValue)/prompt", tag: "InvalidRequestError", count: nil))
-            await thread.retryUnconfirmed(id)
-            try await waitUntil("not sent") { if case .notSent = thread.unconfirmedSends.first?.state { true } else { false } }
+            // The launch check may be running (the card shows "Checking…" and Retry is disabled): retry once it ends.
+            func notSent() -> Bool { if case .notSent = thread.unconfirmedSends.first?.state { true } else { false } }
+            let deadline = ContinuousClock.now + .seconds(10)
+            while !notSent(), ContinuousClock.now < deadline {
+                if thread.unconfirmedSends.first?.state == .unknown { await thread.retryUnconfirmed(id) } else { await Task.yield() }
+            }
+            #expect(notSent(), "not sent")
             thread.close()
             await engine.stop()
         }

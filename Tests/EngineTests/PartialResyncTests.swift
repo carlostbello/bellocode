@@ -73,8 +73,8 @@ struct PartialResyncTests {
         let session = try await engine.createThread(in: "/tmp/mock-project")
         let thread = engine.openThread(session.id)
         try await waitUntil("ready") { thread.phase == .ready }
-        // A long turn, then a queued follow-up.
-        await harness.server.enqueueScript(TurnScript(name: "slow") { TurnStep.text(String(repeating: "word ", count: 400), chunkSize: 4, rate: 40) }, for: session.id.rawValue)
+        // A turn blocked on a question (it keeps running until answered), then a queued follow-up.
+        await harness.server.enqueueScript(TurnScript(name: "blocked") { TurnStep.question("Which runner?", options: ["a", "b"]) }, for: session.id.rawValue)
         await thread.send("start")
         try await waitUntil("running") { thread.isRunning }
         await thread.send("follow-up", delivery: .queue)
