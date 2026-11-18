@@ -8,8 +8,9 @@ import os
 
 /// Owns the engine and whatever server it talks to for one app run.
 ///
-/// Sources, in order of precedence: `--mock` (an in-process MockOpenCode with a temporary cache), then
-/// `BELLOCODE_SERVER_URL`/`BELLOCODE_SERVER_PASSWORD` (attach; never spawned or stopped by us), else the bundled
+/// Sources, in order of precedence: `--mock` (an in-process MockOpenCode with a temporary cache; development builds),
+/// then `BELLOCODE_SERVER_URL`/`BELLOCODE_SERVER_PASSWORD` (attach in a separate data namespace; never spawned or stopped
+/// by us; development builds only), else the bundled
 /// `Contents/Helpers/opencode` under a supervisor, with isolated data in
 /// `~/Library/Application Support/BelloCode/opencode` (the user's own opencode config and data are never touched).
 ///
@@ -49,24 +50,71 @@ final class AppRuntime {
         self.temporaryDirectory = temporaryDirectory
     }
 
-    static func make(options: LaunchOptions, bundle: Bundle = .main) async throws -> AppRuntime {
+    /// Why the app cannot start in this build or bundle.
+    enum LaunchError: Error, CustomStringConvertible, Equatable {
+        case developmentOnly(String)
+        case incompleteBundle([String])
+
+        var description: String {
+            switch self {
+            case .developmentOnly(let what): "\(what) is available only in development builds."
+            case .incompleteBundle(let missing):
+                "The app bundle is incomplete (missing \(missing.joined(separator: ", "))). BelloCode runs commands only through its bundled server and container helper, so it does not start without them. Reinstall BelloCode."
+            }
+        }
+    }
+
+    static func make(options: LaunchOptions, bundle: Bundle = .main,
+                     environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> AppRuntime {
         if let scenario = options.mock {
+            guard LaunchOptions.allowsDevelopmentModes else { throw LaunchError.developmentOnly("Mock mode") }
             if case .snapshot("containers") = options.mode { return try await makeMock(scenario, containers: true) }
             return try await makeMock(scenario)
         }
-        if let source = ServerSource.fromEnvironment(), case .fixed(let connection) = source {
-            let configuration = EngineConfiguration(server: source, store: .file(try storeURL()))
-            return AppRuntime(
-                engine: try await Engine.make(configuration: configuration), source: .attached(connection.baseURL), defaults: .standard,
-                autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
+        #if BELLOCODE_DEVELOPMENT
+        if let source = ServerSource.fromEnvironment(environment), case .fixed(let connection) = source {
+            return try await makeAttached(source, url: connection.baseURL)
         }
+        #endif
         let server = bundledServerConfiguration(bundle: bundle)
+        try requireBundledRuntime(server)
         var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         configuration.containers = containerConfiguration(for: server)
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
     }
+
+    /// The shipped app runs only the bundled, supervised server with its container helper: a bundle missing either
+    /// does not start (never a host fallback).
+    nonisolated static func requireBundledRuntime(_ server: ServerConfiguration) throws {
+        var missing: [String] = []
+        if !FileManager.default.isExecutableFile(atPath: server.executableURL.path) { missing.append("Contents/Helpers/opencode") }
+        if let helper = server.containerExecution?.helperURL {
+            if !FileManager.default.isExecutableFile(atPath: helper.path) { missing.append("Contents/Helpers/bellocode-exec") }
+        } else {
+            missing.append("container execution")
+        }
+        if !missing.isEmpty { throw LaunchError.incompleteBundle(missing) }
+    }
+
+    #if BELLOCODE_DEVELOPMENT
+    /// Development only: attach to a server named by `BELLOCODE_SERVER_URL`. Its own data namespace (cache, defaults,
+    /// secrets in memory), so it never reconciles the user's real cache with another server. No container execution:
+    /// setup scripts are refused rather than run on the host.
+    private static func makeAttached(_ source: ServerSource, url: URL) async throws -> AppRuntime {
+        let directory = applicationSupport().appending(path: "Development/attached", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var configuration = EngineConfiguration(server: source, store: .file(directory.appending(path: "projection.sqlite")))
+        configuration.secretVault = InMemorySecretVault()
+        configuration.forgeTokens = InMemorySecretVault()
+        configuration.visualsDirectory = directory.appending(path: "visuals", directoryHint: .isDirectory)
+        let suite = "com.bellocode.app.attached"
+        return AppRuntime(
+            engine: try await Engine.make(configuration: configuration), source: .attached(url),
+            defaults: UserDefaults(suiteName: suite) ?? .standard, autosaveSuffix: ".attached", mockServer: nil, temporaryDirectory: nil)
+    }
+    #endif
 
     /// The bundled server: `Contents/Helpers/opencode`, helpers first on PATH, isolated data under Application Support.
     nonisolated static func bundledServerConfiguration(bundle: Bundle = .main, dataRoot: URL? = nil) -> ServerConfiguration {

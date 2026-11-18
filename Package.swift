@@ -113,7 +113,10 @@ let targets: [Target] =
                 "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
                 "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI", "ContainerKit",
             ],
-            swiftSettings: swiftSettings
+            // S1 (docs/reviews/deep-review-1.md): attaching to another server (`BELLOCODE_SERVER_URL`) and the mock and
+            // snapshot modes exist only in development (debug) builds; a release build runs only the bundled,
+            // supervised server with container execution.
+            swiftSettings: swiftSettings + [.define("BELLOCODE_DEVELOPMENT", .when(configuration: .debug))]
         ),
         // Restyle step 0: every token and DesignSystem control in every state, light and dark, rendered to PNG
         // (`swift run DesignGallery`, docs/design/implementation-guide.md).

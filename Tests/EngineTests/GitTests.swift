@@ -208,8 +208,21 @@ struct GitRepositoryTests {
         let repo = try await TempRepo.make(files: files)
         defer { repo.remove() }
         try repo.write("src/dir0/file0.swift", "let value0 = -1 // local edit\n")
-        let service = WorktreeService.holding(in: repo)
+        var service = WorktreeService.holding(in: repo)
         let parent = repo.base.appending(path: "worktrees").path
+        // S1: without a container runner a setup script is refused before anything is created (never run on the host).
+        await #expect(throws: WorktreeError.setupNeedsContainer) {
+            try await service.create(
+                WorktreeCreation(projectDirectory: repo.path, branch: "bellocode/feature", base: "main", parentDirectory: parent, setupScript: "echo ready > setup.txt"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: WorktreeService.folder(for: "bellocode/feature", in: parent)))
+        await #expect(throws: WorktreeError.setupNeedsContainer) { try await service.runSetup("touch ran", in: repo.path, projectDirectory: repo.path) }
+        #expect(!FileManager.default.fileExists(atPath: repo.path + "/ran"))
+        // The container runner (here a stand-in that writes the file the script would) runs in the new worktree.
+        service.setupRunner = { script, worktree, _ in
+            try Data("ready\n".utf8).write(to: URL(filePath: worktree + "/setup.txt"))
+            return WorktreeSetupResult(exitCode: script.contains("ready") ? 0 : 1, output: "", duration: .zero)
+        }
         let created = try await service.create(
             WorktreeCreation(projectDirectory: repo.path, branch: "bellocode/feature", base: "main", parentDirectory: parent, setupScript: "echo ready > setup.txt"))
         #expect(created.clonedFiles == 300, "every clean file cloned (the dirty one checked out)")

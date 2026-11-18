@@ -6,7 +6,8 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
 
 - `Engine(configuration:)`, `@MainActor`. `start()` reads the cache into `root` first (no server needed), then connects;
   `stop()` before quitting. Source: `.supervised(ServerSupervisor)`, `.fixed(ServerConnection)` (mock, or
-  `ServerSource.fromEnvironment()` for `BELLOCODE_SERVER_URL`/`_PASSWORD`), `.dynamic { … }` (tests).
+  `ServerSource.fromEnvironment()` for `BELLOCODE_SERVER_URL`/`_PASSWORD`; the app honours it only in development
+  (debug) builds, in a separate data namespace, S1), `.dynamic { … }` (tests).
 - `engine.root: EngineRoot`: `connection` (cached/connecting/syncing/live/offline; content stays visible in all),
   `projects: [ProjectItem]` (pinned first), `attention: AttentionSummary` ("Needs you" items + `counts.dockBadge`),
   `catalog: CatalogModel`, `project(id) -> ProjectModel?`.

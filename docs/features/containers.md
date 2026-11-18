@@ -57,6 +57,13 @@ Desktop or the test image is missing.
 
 ## Failure behaviour
 
+**Shipped configuration (S1).** A release build runs only the bundled, supervised opencode with `bellocode-exec`; a
+bundle missing either does not start ("The app bundle is incomplete"). Attaching to another server
+(`BELLOCODE_SERVER_URL`) and the mock/snapshot modes are compiled only into debug builds (`BELLOCODE_DEVELOPMENT`,
+set for the debug configuration of the BelloCodeApp target); attach uses its own store, defaults suite and in-memory
+secrets under `Application Support/BelloCode/Development/attached`. Without a container runner a worktree setup script
+is refused before anything is created (`WorktreeError.setupNeedsContainer`); it never runs on the host.
+
 Runtime not installed / not running / containerd / too old, no image, pull failed (sign-in needed), folder not shared,
 container failed: each is a phase with a message and a fix ("Install/Start Rancher Desktop", "Switch the container
 engine to dockerd", "Choose an image", "Sign in to the registry", Retry). It is written into the helper configuration
