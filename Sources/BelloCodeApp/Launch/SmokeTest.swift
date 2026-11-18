@@ -49,7 +49,11 @@ enum SmokeTest {
         let engine: Engine
         do {
             var configuration = EngineConfiguration(server: .supervised(supervisor), store: .inMemory)
-            if container != nil { configuration.containers = AppRuntime.containerConfiguration(for: server) }
+            if container != nil {
+                configuration.containers = AppRuntime.containerConfiguration(for: server)
+                // Global MCP secrets of the run stay in memory (never the Keychain).
+                configuration.containers?.mcpVault = InMemorySecretVault()
+            }
             engine = try Engine(configuration: configuration)
         } catch {
             log("FAIL engine: \(error)")

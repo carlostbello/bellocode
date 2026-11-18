@@ -130,6 +130,10 @@ public final class EnvironmentService {
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
     @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
+    /// Every name BelloCode registered per location this launch (removal survives a superseded sync task).
+    @ObservationIgnored var mcpEverRegistered: [String: Set<String>] = [:]
+    @ObservationIgnored var mcpSyncRunning: Set<String> = []
+    @ObservationIgnored var mcpSyncPending: Set<String> = []
     @ObservationIgnored var serviceForwarders: [String: [String: PortForwarder]] = [:]
     /// The compose file last read per project (stat stamp and text) and the last parse per definition text.
     @ObservationIgnored var servicesDefinitionCache: [String: (stamp: String, text: String)] = [:]

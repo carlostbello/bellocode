@@ -37,7 +37,8 @@ public struct NetworkProbeResult: Sendable, Equatable, Hashable, Identifiable {
     }
 }
 
-/// The in-container probe: curl (`-v` shows the issuer and response headers), else python3, else wget (status only).
+/// The in-container probe: curl (`-v` shows the issuer and response headers), else node, else python3, else wget
+/// (status only).
 /// Output is delimited per URL so a failure of one never hides the others.
 public enum NetworkProbe {
     public static func script(urls: [String]) -> [String] {
@@ -49,6 +50,20 @@ public enum NetworkProbe {
             echo "@@tool curl"
             curl -sS -v -o /dev/null --max-time 10 "$u" >"$t" 2>&1; c=$?
             head -c 32768 "$t"; echo; echo "@@exit $c"
+          elif command -v node >/dev/null 2>&1; then
+            echo "@@tool node"
+            node -e '
+        const u = process.argv[1], m = u.startsWith("https:") ? require("https") : require("http");
+        const r = m.request(u, { method: "HEAD", timeout: 10000 }, (res) => {
+          const c = res.socket && res.socket.getPeerCertificate ? res.socket.getPeerCertificate() : null;
+          if (c && c.issuer) console.log("*  issuer: " + Object.entries(c.issuer).map(([k, v]) => k + "=" + v).join(", "));
+          console.log("< HTTP/1.1 " + res.statusCode);
+          for (const [k, v] of Object.entries(res.headers)) console.log("< " + k + ": " + v);
+          console.log("@@exit 0"); res.resume();
+        });
+        r.on("timeout", () => r.destroy(new Error("timed out")));
+        r.on("error", (e) => { console.log("curl: (1) " + e.message); console.log("@@exit 1"); });
+        r.end();' "$u" 2>&1 | head -c 32768
           elif command -v python3 >/dev/null 2>&1; then
             echo "@@tool python3"
             python3 - "$u" <<'PY' 2>&1 | head -c 32768
@@ -132,7 +147,7 @@ public enum NetworkProbe {
             if line.hasPrefix("curl: (") { result.error = String(line) }
             if result.tool == "wget", line.contains("certificate"), result.error == nil { result.error = String(line) }
         }
-        if result.tool == "none" { result.error = "the container image has no curl, python3 or wget to fetch with" }
+        if result.tool == "none" { result.error = "the container image has no curl, node, python3 or wget to fetch with" }
         result.ok = exit == 0 && result.status != nil
         if !result.ok, result.error == nil { result.error = exit.map { "failed (exit \($0))" } ?? "no answer" }
         return result

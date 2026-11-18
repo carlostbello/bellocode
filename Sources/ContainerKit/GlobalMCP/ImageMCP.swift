@@ -305,7 +305,8 @@ public struct ImageMCPRunner: Sendable {
         guard let all = try? await containers() else { return }
         for container in all {
             let id = container.labels[ImageMCPSpec.label] ?? ""
-            if !knownIDs.contains(id) || !container.isRunning {
+            // A container being created or started right now ("created") belongs to a connection that is starting.
+            if !knownIDs.contains(id) || container.state == "exited" || container.state == "dead" {
                 try? await client.removeContainer(container.id, force: true)
             }
         }

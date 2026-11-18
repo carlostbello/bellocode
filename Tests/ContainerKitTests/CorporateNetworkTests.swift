@@ -132,6 +132,6 @@ struct CorporateNetworkTests {
         #expect(results[1].error?.contains("unable to get local issuer certificate") == true)
         #expect(!results[2].ok, "a URL the probe never reached is a failure, not silence")
         let none = NetworkProbe.parse("@@url https://x\n@@tool none\n@@exit 127\n", urls: ["https://x"])
-        #expect(none[0].error == "the container image has no curl, python3 or wget to fetch with")
+        #expect(none[0].error == "the container image has no curl, node, python3 or wget to fetch with")
     }
 }
