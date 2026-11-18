@@ -116,6 +116,7 @@ public enum ExtrasTools {
                     "command": string("Shell command run in the project's folder, e.g. npm publish. Shown verbatim to the user."),
                     "network": boolean("The command needs outbound network (for example to publish). Default false."),
                     "writesProject": boolean("The command must write into the project folder. Default false (read-only)."),
+                    "includeMounts": boolean("The command needs the project's extra host folders (Project Settings ▸ Environment mounts). Default false: none are mounted. Each folder and its access is shown to the user."),
                 ], required: ["secretRef", "name", "command"])),
         ClientMCPTool(
             name: htmlPreview,

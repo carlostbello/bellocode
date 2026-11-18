@@ -58,6 +58,14 @@ Agents panel; the app mounts it as the "Agents" right-panel tab and adds the hea
   `rpc.unavailable` until it activates (client retries); `session.created` carries `metadata` (now mapped).
 
 ## Scoping and safety
+**Permission rules of created threads (S2).** Verified on 2.3.0 (`PolicyRealBinaryTests`, no prompts): a session
+created with `permissions` reports them at once; a child created with `parentID` inherits its parent's session rules;
+switching the agent alone leaves session rules untouched; an unknown agent is rejected with nothing changed.
+`delegate_task` checks that the child carries the caller's rules and `create_threads` passes the caller's rules to
+each new top-level thread and checks them; neither sends a first prompt otherwise. In the app, the draft's mode and a
+schedule's mode are part of the create request; agent and mode changes are serialised per thread (new rules computed
+first, agent switched back if the rules are refused, result read back), and a thread whose rules the server did not
+confirm refuses to send until the mode is chosen again.
 Attribution: plugin tools get `sessionID` from the tool context; client-MCP calls from `_meta["ai.opencode/sessionID"]`
 (unattributed calls are refused). Own descendants: free. Same project: free, except `thread_interrupt`, which asks
 (`bellocode_interrupt` approval card). Another project: every read/send/wait/interrupt asks (`bellocode_other_project`,

@@ -23,6 +23,22 @@ extension ProjectionStore {
         return result
     }
 
+    /// Every stored project environment and the directories whose row could not be decoded. An unreadable row is a
+    /// saved policy that cannot be honoured: the caller blocks that project instead of applying defaults (S3).
+    public func environmentsChecked() async throws -> (values: [String: StoredEnvironment], unreadable: Set<String>) {
+        let rows = try await writer.read { db in
+            try Row.fetchAll(db, sql: "SELECT directory, json FROM app_environment").map { ($0["directory"] as String, $0["json"] as Data) }
+        }
+        var result: [String: StoredEnvironment] = [:]
+        var unreadable = Set<String>()
+        for (directory, data) in rows {
+            if let value = try? JSONDecoder().decode(StoredEnvironment.self, from: data) { result[directory] = value } else {
+                unreadable.insert(directory)
+            }
+        }
+        return (result, unreadable)
+    }
+
     public func saveEnvironment(_ value: StoredEnvironment, directory: String) async throws {
         let data = try Self.environmentEncoder.encode(value)
         let now = Date().timeIntervalSince1970

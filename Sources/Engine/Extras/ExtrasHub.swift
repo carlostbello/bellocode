@@ -185,7 +185,8 @@ public final class ExtrasHub {
                     text: "Path for “\(label)”: \(path)\nIt yields the value once, to the first process that reads it, then disappears (10 minutes at most). Use it in one command (--token-file \(path) or \"$(cat \(path))\"). Never print, echo or log it.")
             case ExtrasTools.secretExec: return try await secretExec(arguments, caller)
             case ExtrasTools.htmlPreview:
-                let html = try visuals.document(html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory)
+                let html = try visuals.document(
+                    html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory, roots: visualRoots(caller))
                 let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
                 return ClientMCPResult(text: try await visuals.preview(html: html, hosts: hosts))
             case ExtrasTools.htmlRender: return try await htmlRender(arguments, caller)
@@ -439,8 +440,16 @@ public final class ExtrasHub {
 
     // MARK: Visuals
 
+    /// Where a visual may read a file: the calling thread's project and its worktree folders (S6).
+    func visualRoots(_ caller: ExtrasCaller) -> [String] {
+        var roots = [caller.projectDirectory, caller.directory]
+        if let environments { roots += environments.workspaceRoots(environments.environment(for: caller.projectDirectory), create: false) }
+        return roots
+    }
+
     private func htmlRender(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
-        let html = try visuals.document(html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory)
+        let html = try visuals.document(
+                    html: arguments["html"]?.stringValue, path: arguments["path"]?.stringValue, directory: caller.directory, roots: visualRoots(caller))
         let title = String((arguments["title"]?.stringValue ?? "Visual").prefix(80))
         let hosts = try VisualService.validHosts(Self.stringList(arguments["allowNetwork"]))
         let result = try await visuals.render(html: html, title: title, hosts: hosts, sessionID: caller.sessionID)
@@ -575,7 +584,9 @@ struct PendingSecretCommand: Sendable {
 extension ExtrasHub {
     /// The approval binding: secret (Keychain account), project, variable, the exact command and its policy.
     static func secretCommandDigest(account: String, projectDirectory: String, name: String, command: String, policy: SecretCommandPolicy) -> String {
-        let parts = [account, projectDirectory, name, command, policy.network ? "network" : "offline", policy.writesProject ? "writes" : "read-only"]
+        var parts = [account, projectDirectory, name, command, policy.network ? "network" : "offline", policy.writesProject ? "writes" : "read-only"]
+        // Optional mounts are part of what is approved (S5); none keeps the earlier digest, so saved approvals still match.
+        if !policy.mounts.isEmpty { parts.append("mounts:" + policy.canonicalMounts.joined(separator: ",")) }
         return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
     }
 
@@ -594,7 +605,11 @@ extension ExtrasHub {
         else { throw ExtrasError("Give secretRef, name and command.") }
         guard command.utf8.count <= 4_000 else { throw ExtrasError("The command is too long to show for approval (4000 bytes at most).") }
         let name = try SecretVariableName.validate(rawName)
-        let policy = SecretCommandPolicy(network: arguments["network"]?.boolValue ?? false, writesProject: arguments["writesProject"]?.boolValue ?? false)
+        // Optional host mounts only when asked for, and then exactly as configured now, each listed on the card (S5).
+        let mounts = arguments["includeMounts"]?.boolValue == true
+            ? environments.environment(for: caller.projectDirectory).settings.userMounts : []
+        let policy = SecretCommandPolicy(
+            network: arguments["network"]?.boolValue ?? false, writesProject: arguments["writesProject"]?.boolValue ?? false, mounts: mounts)
         let entry = try containerSecrets.redeem(reference, by: caller.sessionID, now: wallClock.now())
         let digest = Self.secretCommandDigest(account: entry.account, projectDirectory: caller.projectDirectory, name: name, command: command, policy: policy)
         let pending = PendingSecretCommand(
@@ -607,7 +622,10 @@ extension ExtrasHub {
         if pendingSecretCommands.count >= 16, let oldest = pendingSecretCommands.keys.sorted().first { pendingSecretCommands[oldest] = nil }
         let id = AppRequest.makeID("scmd")
         pendingSecretCommands[id] = pending
-        let access = [policy.network ? "network ON" : "no network", policy.writesProject ? "can write the project" : "project read-only"]
+        var access = [policy.network ? "network ON" : "no network", policy.writesProject ? "can write the project" : "project read-only"]
+        access.append(policy.mounts.isEmpty
+            ? "no extra folders"
+            : "extra folders: " + policy.mounts.map { "\($0.path) (\($0.readOnly ? "read-only" : "read-write"))" }.joined(separator: ", "))
         let request = AppRequest(
             id: AppRequest.makeID("sec"), sessionID: caller.sessionID,
             kind: .approval(
@@ -648,6 +666,15 @@ extension ExtrasHub {
         guard let value = try secretVault.read(account: pending.account), !value.isEmpty else {
             throw ExtrasError("“\(pending.label)” is no longer saved. Ask again with request_secret.")
         }
+        // The container gets exactly the approved mounts: refused if the project's setting no longer allows one as
+        // approved (removed, or made read-only since).
+        let configured = environments.environment(for: pending.projectDirectory).settings.userMounts
+        for mount in pending.policy.mounts {
+            let path = (mount.path as NSString).standardizingPath
+            guard let current = configured.first(where: { ($0.path as NSString).standardizingPath == path }), mount.readOnly || !current.readOnly else {
+                throw ExtrasError("The project's extra folders changed since this command was approved (\(mount.path)). Nothing ran; ask again.")
+            }
+        }
         await secrets.touch(account: pending.account)
         let result = try await environments.runWithSecret(
             directory: pending.directory, command: pending.command, name: pending.name, secret: value, policy: pending.policy)
@@ -671,8 +698,8 @@ extension ExtrasHub: ScheduleRunner {
         directory: String, title: String, prompt: String, agent: String?, model: ModelSelection?, permissionMode: PermissionMode?
     ) async throws -> SessionID {
         guard let engine else { throw ExtrasError("BelloCode is shutting down.") }
-        let session = try await engine.createThread(in: directory, title: title, agent: agent, model: model)
-        if let permissionMode { try? await engine.setPermissionMode(permissionMode, for: session.id) }
+        // The approved mode is part of the creation and confirmed by the server; on any failure nothing is sent (S2).
+        let session = try await engine.createThread(in: directory, title: title, agent: agent, model: model, permissionMode: permissionMode)
         _ = try await engine.send(prompt, to: session.id)
         return session.id
     }

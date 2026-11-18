@@ -19,6 +19,35 @@ import Testing
         #expect(try LaunchOptions.parse(["app", "-NSDocumentRevisionsDebugMode", "YES", "--mock"]).mock == .demo)
     }
 
+    /// S1: a release build has no mock, snapshot or attach mode, and the bundled runtime must be complete.
+    @Test func releaseBuildsRefuseDevelopmentModes() throws {
+        for flag in ["--mock", "--snapshot", "--snapshot-dir"] {
+            #expect(throws: LaunchOptions.ParseError.self) { try LaunchOptions.parse(["app", flag, "x"], development: false) }
+        }
+        #expect(try LaunchOptions.parse(["app", "--smoke-test"], development: false).mode == .smokeTest)
+    }
+
+    @Test func aBundleWithoutTheServerOrHelperDoesNotStart() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-s1-\(UUID().uuidString).app", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helpers = root.appending(path: "Contents/Helpers", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+        let bundle = try #require(Bundle(url: root))
+        let server = AppRuntime.bundledServerConfiguration(bundle: bundle, dataRoot: root.appending(path: "data"))
+        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/opencode", "Contents/Helpers/bellocode-exec"])) {
+            try AppRuntime.requireBundledRuntime(server)
+        }
+        let opencode = helpers.appending(path: "opencode")
+        FileManager.default.createFile(atPath: opencode.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/bellocode-exec"])) { try AppRuntime.requireBundledRuntime(server) }
+        FileManager.default.createFile(atPath: helpers.appending(path: "bellocode-exec").path, contents: Data("#!/bin/sh\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        try AppRuntime.requireBundledRuntime(server)
+        var noContainers = server
+        noContainers.containerExecution = nil
+        #expect(throws: AppRuntime.LaunchError.self) { try AppRuntime.requireBundledRuntime(noContainers) }
+    }
+
     @Test func rejectsBadArguments() {
         #expect(throws: LaunchOptions.ParseError.self) { try LaunchOptions.parse(["app", "--mock", "huge"]) }
         #expect(throws: LaunchOptions.ParseError.self) { try LaunchOptions.parse(["app", "--snapshot"]) }

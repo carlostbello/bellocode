@@ -423,7 +423,7 @@ struct MergeRequestServiceTests {
         #expect(saved == [GitLabFixtures.instance.baseURL])
         let dump = try await store.writer.read { db in try String.fetchAll(db, sql: "SELECT CAST(json AS TEXT) FROM app_preference").joined() }
         #expect(!dump.contains("SENTINEL"), "the token is never in the store")
-        await service.removeInstance(GitLabFixtures.instance)
+        try await service.removeInstance(GitLabFixtures.instance)
         #expect(tokens.count == 0)
         await #expect(throws: ExtrasError.self) { _ = try await service.saveInstance(baseURL: "not a url", token: nil) }
     }

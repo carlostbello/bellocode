@@ -34,7 +34,9 @@ live (launch before the server is ready, a reconnect). A run that cannot reach o
 refused, 503) keeps its due occurrence (no record, a one-off stays enabled; `SchedulerService.deferred`) and is retried
 30 s later or on the next arm; a rejection, timeout or unknown delivery is recorded as before. Destination: a new thread per run in
 the project, or a message into a thread (queued if running; a deleted thread disables the task). Prompts are prefixed
-`[Scheduled task “name”]`. An agent's first task in a project is paused behind an approval card (Allow Once / Always in
+`[Scheduled task “name”]`. **Permission mode first (S2):** a new-thread run creates the thread with the approved mode's
+rules in the create request, confirmed by the server; if creation or confirmation fails the run fails and nothing is
+sent (no fallback to default rules). An agent's first task in a project is paused behind an approval card (Allow Once / Always in
 This Project / Deny = delete); agents may only change agent-created tasks of their own project and never request a
 permission mode broader than their own. **Approval binding (M6-B, review C2):** a task stores the definition the user
 approved (name, prompt, rule, time zone, project, destination, agent, model, permission mode, catch-up) and runs (timer,
@@ -71,6 +73,9 @@ settled threads keep chips current but absorb events without waking (no replay o
 ✕ Pipeline failed (1 job)`, sidebar `!42 ✕`, "Merge Requests" tab (Thread ▸ Show Merge Requests ⌃⌘M) with jobs + log links,
 approvals, unresolved discussions, watch state and last wake, Open / Open in BelloCode, Unlink with Undo; Settings ▸
 GitLab: add instance + token (secure field, Keychain, never shown again), Test, Replace Token, Remove (confirmed).
+**Removal is durable or not reported (S7):** Remove succeeds only once the Keychain token is deleted; otherwise the
+instance stays listed with the problem. A removed address is remembered (`gitlab.removedInstances`), and re-adding it
+without a new token deletes any token still found for it instead of reusing it.
 
 ## 3. Secrets
 `request_secret` (label, reason, https setup URL, delivery) raises a card and returns at once; the agent ends its turn.
@@ -128,11 +133,16 @@ Settings ▸ Secrets lists labels and deletes (confirmed).
 
 ## 4. HTML visuals
 `html_preview` (height, console, CSP-blocked requests, PNG path for export) and `html_render` (stored, shown inline).
+**File inputs (S6):** `path` must resolve (symlinks and `..` resolved) to a regular file inside the calling thread's
+project or worktree folders; it is opened once (`O_NOFOLLOW`), its real location re-checked on the descriptor
+(`F_GETPATH`) and read with the 2 MB cap applied while reading. Anything else is a tool error; external files go inline.
 Sandbox (`HTMLVisualSandbox`): non-persistent store; no message handlers (`window.webkit` undefined); compiled content
 rules block everything but about:/data:/blob: and approved hosts, plus a CSP meta (`default-src 'none'`, inline script
 only, `frame-src 'none'`); `window.open` refused; every navigation after load cancelled; links open externally only on a
 trusted click (scripted clicks dropped before WebKit pre-connects); theme CSS variables and system fonts injected.
-Hosts in `allowNetwork` need an approval card (once for the visual, or always per host; Settings ▸ Secrets revokes).
+Hosts in `allowNetwork` need an approval card (once for the visual, or always per host; Settings ▸ Secrets revokes; a revoke blocks the host at once and is reported done only when the grant row is
+deleted, otherwise it is listed as "Removal pending", kept in `pending-revocations.json` beside the visuals so a
+restart does not restore it, and retried, S7).
 Grant binding (checked in M6-B): "once" is bound to the visual's ID, which is a hash of its HTML, title and thread, so
 changed content is a new visual with no grant; "always" is a per-host decision by design and covers any visual's
 traffic to that host (a data-disclosure decision, see containers.md "For the security team"). Merge-request watches

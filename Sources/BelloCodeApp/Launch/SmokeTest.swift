@@ -86,7 +86,7 @@ enum SmokeTest {
             let project = root.appending(path: "container-project", directoryHint: .isDirectory).path
             containerProject = project
             guard await containerCheck(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: project, image: image) else {
-                if keep { log("kept \(root.path)") } else { await engine.environments.removeContainerNow(project, volumes: true) }
+                if keep { log("kept \(root.path)") } else { await purgeScratch(engine, project) }
                 await engine.stop()
                 return false
             }
@@ -96,7 +96,7 @@ enum SmokeTest {
             let passed = await ContainerEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject, log: log)
             log(passed ? "container end-to-end passed" : "FAIL container end-to-end")
             guard passed else {
-                if !keep { await engine.environments.removeContainerNow(containerProject, volumes: true) }
+                if !keep { await purgeScratch(engine, containerProject) }
                 await engine.stop()
                 return false
             }
@@ -105,12 +105,12 @@ enum SmokeTest {
         guard let shellPID = await terminalRoundTrip(
             engine: engine, client: OpenCodeClient(endpoint: endpoint), root: root, containerProject: containerProject)
         else {
-            if let containerProject { await engine.environments.removeContainerNow(containerProject, volumes: true) }
+            if let containerProject { await purgeScratch(engine, containerProject) }
             await engine.stop()
             return false
         }
         if let containerProject {
-            await engine.environments.removeContainerNow(containerProject, volumes: true)
+            await purgeScratch(engine, containerProject)
             let left = (try? await LiveWorkspaceRuntime().managedContainers())?.filter { $0.labels.values.contains(containerProject) } ?? []
             log(left.isEmpty ? "container removed" : "FAIL container left behind")
             guard left.isEmpty else { await engine.stop(); return false }
@@ -262,6 +262,13 @@ enum SmokeTest {
             return false
         }
         return true
+    }
+
+    /// Deletes the smoke run's own scratch project container and volumes (the explicit purge: nothing else deletes a volume).
+    @MainActor
+    private static func purgeScratch(_ engine: Engine, _ project: String) async {
+        guard let storage = try? await engine.environments.storageToPurge(project) else { return }
+        do { try await engine.environments.purge(project, confirmed: storage) } catch { log("could not remove the scratch container: \(error)") }
     }
 
     private static func milliseconds(_ duration: Duration) -> Int {

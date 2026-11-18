@@ -1,6 +1,13 @@
 # Common development commands. See README.md, "Build and run".
 CONFIG ?= debug
 
+# SwiftTerm's build plugin asks git for build metadata when these are unset, and that child wait can stall
+# indefinitely under Command Line Tools (docs/reviews/deep-review-1.md, D1). Supply the pinned values.
+export SWIFTTERM_BUILD_TAG ?= v1.99.3
+export SWIFTTERM_BUILD_COMMIT ?= 282c3c3a932b55c129628876b70f37d993af1615
+export SWIFTTERM_BUILD_BRANCH ?= HEAD
+export SWIFTTERM_BUILD_DIRTY ?= false
+
 .PHONY: build test fetch app run smoke e2e-containers plugin-test clean
 
 build:

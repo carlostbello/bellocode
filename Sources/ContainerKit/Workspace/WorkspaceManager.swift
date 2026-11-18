@@ -25,6 +25,22 @@ public struct WorkspaceStatus: Sendable, Equatable {
     }
 }
 
+/// The labelled resources of one project's workspace: what the explicit "Delete Container and Data" action lists and
+/// removes. Volumes hold the persistent $HOME and caches; deleting them cannot be undone.
+public struct WorkspaceStorage: Sendable, Equatable {
+    public var projectKey: String
+    public var containers: [String]
+    public var volumes: [String]
+
+    public init(projectKey: String, containers: [String], volumes: [String]) {
+        self.projectKey = projectKey
+        self.containers = containers
+        self.volumes = volumes
+    }
+
+    public var isEmpty: Bool { containers.isEmpty && volumes.isEmpty }
+}
+
 /// Why `ensureRunning` could not make the container run, phrased by what fixes it.
 public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible {
     /// The image is not present and pulling was not allowed (the helper never pulls).
@@ -190,15 +206,29 @@ public struct WorkspaceManager: Sendable {
         if let id = try await status(spec).containerID { try await client.stopContainer(id, timeout: 3) }
     }
 
-    /// Removes the project's containers and, if asked, its volumes (caches and $HOME).
-    public func remove(projectKey: String, volumes: Bool) async throws {
+    /// Removes the project's containers. Never its volumes (caches and the persistent $HOME): those go only through
+    /// `purge`, the explicit destructive action that lists them first (docs/reviews/deep-review-1.md, U1).
+    public func remove(projectKey: String) async throws {
         for container in try await client.listContainers(labels: Self.labelFilter(projectKey: projectKey)) {
             try await client.removeContainer(container.id, force: true)
         }
-        if volumes {
-            for name in try await client.listVolumes(labels: Self.labelFilter(projectKey: projectKey)) {
-                try await client.removeVolume(name, force: true)
-            }
+    }
+
+    /// What `purge` would delete for a project: its labelled containers and volumes (names), found by label.
+    public func storage(projectKey: String) async throws -> WorkspaceStorage {
+        let containers = try await client.listContainers(labels: Self.labelFilter(projectKey: projectKey))
+        let volumes = try await client.listVolumes(labels: Self.labelFilter(projectKey: projectKey))
+        return WorkspaceStorage(
+            projectKey: projectKey, containers: containers.map { $0.name }.sorted(), volumes: volumes.sorted())
+    }
+
+    /// Removes the project's containers and exactly the volumes named in `storage` that still carry this project's
+    /// labels (a volume created after the person confirmed is kept). Cannot be undone.
+    public func purge(_ storage: WorkspaceStorage) async throws {
+        try await remove(projectKey: storage.projectKey)
+        let current = Set(try await client.listVolumes(labels: Self.labelFilter(projectKey: storage.projectKey)))
+        for name in storage.volumes where current.contains(name) {
+            try await client.removeVolume(name, force: true)
         }
     }
 

@@ -6,6 +6,8 @@ Read [docs/PLAN.md](docs/PLAN.md) first, then the research file for the area you
 ## Environment
 
 - Command Line Tools only: use `swift build` and `swift test`. There is no `xcodebuild`, no Xcode project.
+- Prefer `make build` / `make test`: they export the `SWIFTTERM_BUILD_*` values without which SwiftTerm's build plugin
+  can stall forever. When calling `swift` directly, export them as the Makefile does.
 - `Scripts/make-app.sh` assembles `build/BelloCode.app`. Do not hand-edit the bundle.
 - Tests use Swift Testing (`import Testing`). XCTest is not available with Command Line Tools.
 - A suite that touches sockets, pipes, processes or web views carries `.timeLimit(.minutes(3))` (10 for real-binary suites;

@@ -2,9 +2,12 @@ import Foundation
 
 /// The command-line modes the app understands. Parsed once at launch; pure, so it is tested directly.
 ///
-/// - (none): the normal app. Uses the bundled opencode, or `BELLOCODE_SERVER_URL` when set.
+/// - (none): the normal app. Uses the bundled, supervised opencode (development builds: `BELLOCODE_SERVER_URL` attaches
+///   to another server, in a separate data namespace).
 /// - `--mock [demo|large]`: an in-process MockOpenCode server with a temporary cache (UI work without a model).
+///   Development builds only.
 /// - `--snapshot <name>`: build the window against a mock scenario, render PNGs to `build/snapshots/`, exit.
+///   Development builds only.
 /// - `--smoke-test`: headless check of the bundled opencode through the supervisor and engine, then exit.
 struct LaunchOptions: Equatable, Sendable {
     enum MockScenario: String, Equatable, Sendable, CaseIterable {
@@ -29,7 +32,17 @@ struct LaunchOptions: Equatable, Sendable {
         var description: String
     }
 
-    static func parse(_ arguments: [String]) throws(ParseError) -> LaunchOptions {
+    /// True in development (debug) builds: mock, snapshot and attach modes exist only there (S1 in
+    /// docs/reviews/deep-review-1.md). A release build runs only the bundled, supervised server.
+    static var allowsDevelopmentModes: Bool {
+        #if BELLOCODE_DEVELOPMENT
+        true
+        #else
+        false
+        #endif
+    }
+
+    static func parse(_ arguments: [String], development: Bool = allowsDevelopmentModes) throws(ParseError) -> LaunchOptions {
         var options = LaunchOptions()
         var index = 1
         func value(after flag: String) -> String? {
@@ -40,6 +53,9 @@ struct LaunchOptions: Equatable, Sendable {
         }
         while index < arguments.count {
             let argument = arguments[index]
+            if !development, ["--mock", "--snapshot", "--snapshot-dir"].contains(argument) {
+                throw ParseError(description: "\(argument) is available only in development builds")
+            }
             switch argument {
             case "--smoke-test":
                 options.mode = .smokeTest

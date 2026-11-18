@@ -43,11 +43,12 @@ read -r ARCHIVE_SHA BINARY_SHA < <(
   awk -v v="$VERSION" -v p="$PLATFORM" '!/^#/ && $1 == v && $2 == p { print $3, $4 }' "$ROOT/Scripts/opencode-checksums"
 ) || true
 [[ -n "${ARCHIVE_SHA:-}" ]] || die "no checksum for opencode $VERSION $PLATFORM in Scripts/opencode-checksums"
-[[ "${BINARY_SHA:-}" == "-" ]] && BINARY_SHA=""
+# An executable digest is required: without one a cached or local binary cannot be verified (D2).
+[[ -n "${BINARY_SHA:-}" && "${BINARY_SHA:-}" != "-" ]] || die "no binary SHA-256 for opencode $VERSION $PLATFORM in Scripts/opencode-checksums"
 
 binary_ok() {
   [[ -x "$1" ]] || return 1
-  [[ -z "$BINARY_SHA" ]] || [[ "$(sha256 "$1")" == "$BINARY_SHA" ]]
+  [[ "$(sha256 "$1")" == "$BINARY_SHA" ]]
 }
 
 install_binary() { # source
@@ -121,8 +122,11 @@ case "$(uname -m)" in
   arm64) RG_TARGET="aarch64-apple-darwin" ;;
   *) RG_TARGET="x86_64-apple-darwin" ;;
 esac
-RG_SHA="$(awk -v v="$RG_VERSION" -v t="$RG_TARGET" '!/^#/ && $1 == v && $2 == t { print $3 }' "$ROOT/Scripts/ripgrep-checksums")"
-[[ -n "$RG_SHA" ]] || die "no checksum for ripgrep $RG_VERSION $RG_TARGET in Scripts/ripgrep-checksums"
+read -r RG_SHA RG_BINARY_SHA < <(
+  awk -v v="$RG_VERSION" -v t="$RG_TARGET" '!/^#/ && $1 == v && $2 == t { print $3, $4 }' "$ROOT/Scripts/ripgrep-checksums"
+) || true
+[[ -n "${RG_SHA:-}" && -n "${RG_BINARY_SHA:-}" ]] || die "no checksums for ripgrep $RG_VERSION $RG_TARGET in Scripts/ripgrep-checksums"
+RG_LICENCES="$(dirname "$RG_DEST")/licences"
 RG_STAMP="$(dirname "$RG_DEST")/.version"
 fetch_ripgrep() {
   local name="ripgrep-$RG_VERSION-$RG_TARGET"
@@ -141,15 +145,18 @@ fetch_ripgrep() {
   fi
   local work
   work="$(mktemp -d)"
-  tar -xzf "$archive" -C "$work" "$name/rg" || { rm -rf "$work"; return 1; }
-  mkdir -p "$(dirname "$RG_DEST")"
+  tar -xzf "$archive" -C "$work" "$name/rg" "$name/COPYING" "$name/LICENSE-MIT" "$name/UNLICENSE" || { rm -rf "$work"; return 1; }
+  [[ "$(sha256 "$work/$name/rg")" == "$RG_BINARY_SHA" ]] || { warn "rg in the archive does not match the pinned binary SHA-256"; rm -rf "$work"; return 1; }
+  mkdir -p "$(dirname "$RG_DEST")" "$RG_LICENCES"
   cp -f "$work/$name/rg" "$RG_DEST"
   chmod 755 "$RG_DEST"
+  cp -f "$work/$name/COPYING" "$work/$name/LICENSE-MIT" "$work/$name/UNLICENSE" "$RG_LICENCES/"
   rm -rf "$work"
-  echo "$RG_VERSION $RG_TARGET $RG_SHA" > "$RG_STAMP"
+  echo "$RG_VERSION $RG_TARGET $RG_SHA $RG_BINARY_SHA" > "$RG_STAMP"
   say "installed ripgrep $RG_VERSION ($RG_TARGET, archive SHA-256 verified)"
 }
-if [[ -x "$RG_DEST" && -f "$RG_STAMP" && "$(cat "$RG_STAMP")" == "$RG_VERSION $RG_TARGET $RG_SHA" ]]; then
+if [[ -x "$RG_DEST" && -f "$RG_STAMP" && "$(cat "$RG_STAMP")" == "$RG_VERSION $RG_TARGET $RG_SHA $RG_BINARY_SHA" \
+      && "$(sha256 "$RG_DEST")" == "$RG_BINARY_SHA" && -f "$RG_LICENCES/COPYING" ]]; then
   say "ripgrep $RG_VERSION already present at ${RG_DEST#"$ROOT"/}"
 elif ! fetch_ripgrep; then
   rg_source="$(command -v rg || true)"
@@ -160,7 +167,7 @@ elif ! fetch_ripgrep; then
     cp -f "$(realpath "$rg_source")" "$RG_DEST"
     chmod 755 "$RG_DEST"
     rm -f "$RG_STAMP"
-    warn "ripgrep download failed; copied the local rg from $rg_source"
+    warn "ripgrep download failed; copied the local rg from $rg_source (development only: Scripts/make-app.sh refuses to bundle an rg whose SHA-256 is not pinned)"
   fi
 fi
 if [[ -x "$RG_DEST" ]]; then

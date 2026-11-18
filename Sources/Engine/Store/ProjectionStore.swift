@@ -413,6 +413,8 @@ public actor ProjectionStore {
     /// Tests: runs before every write; throwing fails it, suspending holds it (a stalled disk).
     private var writeHook: (@Sendable (StoreBatch) async throws -> Void)?
     func setWriteHook(_ hook: (@Sendable (StoreBatch) async throws -> Void)?) { writeHook = hook }
+    /// Runs the test write hook for a write that is not a batch (grants), so failures can be injected there too.
+    func runWriteHook() async throws { if let writeHook { try await writeHook(StoreBatch()) } }
 
     /// Subscribes to changes for one topic.
     public nonisolated func observe(_ topic: ChangeTopic) -> ChangeSubscription { changes.subscribe(topic) }

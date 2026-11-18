@@ -410,7 +410,10 @@ export default {
           })
           const child = (created?.data ?? created) as Session
           made.threads.push(child.id)
-          // The child is prompted only once it is confirmed in its worktree (never silently in this checkout).
+          // S2: a child inherits the caller's session rules on the server; prompt only once that is confirmed.
+          if (!L.rulesConfirmed(caller.permissions, (await get(child.id)).permissions))
+            fail(`Created child ${child.id}, but the server did not confirm this thread's permission rules for it, so the task was not started.${L.recoveryNote(made)}`)
+          // C1: the child is prompted only once it is confirmed in its worktree (never silently in this checkout).
           if (directory) await placeIn(child, directory, made)
           await tool.progress({ sessionID: child.id, status: "running", agent: agentID })
           await putGuidance(child)
@@ -525,6 +528,8 @@ export default {
               ...(spec.agent ? { agent: spec.agent } : {}),
               ...(parsed ? { model: parsed } : {}),
               ...(directory ? { location: { directory } } : {}),
+              // S2: top-level threads do not inherit rules; they get the caller's, confirmed before any prompt.
+              ...(caller.permissions?.length ? { permissions: caller.permissions } : {}),
               metadata: {
                 bellocode: {
                   kind: "created",
@@ -538,6 +543,8 @@ export default {
             const session = (value?.data ?? value) as Session
             made.threads.push(session.id)
             if (isolated && directory) await placeIn(session, directory, made)
+            if (spec.prompt && !L.rulesConfirmed(caller.permissions, (await get(session.id)).permissions))
+              fail(`Created thread ${session.id}, but the server did not confirm this thread's permission rules for it, so its first prompt was not sent.${L.recoveryNote(made)}`)
             await putGuidance(session)
             if (spec.prompt) await ctx.session.prompt({ sessionID: session.id, text: String(spec.prompt) })
             created.push({ threadID: session.id, title: session.title, started: Boolean(spec.prompt), directory })

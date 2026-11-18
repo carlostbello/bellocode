@@ -154,7 +154,9 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
     func stop(container: String) async throws {}
     func start(container: String) async throws {}
     func restart(container: String) async throws {}
-    func remove(projectKey: String, volumes: Bool) async throws {}
+    func remove(projectKey: String) async throws {}
+    func storage(projectKey: String) async throws -> WorkspaceStorage { WorkspaceStorage(projectKey: projectKey, containers: [], volumes: []) }
+    func purge(_ storage: WorkspaceStorage) async throws {}
     func removeContainer(_ id: String) async throws {}
     func managedContainers() async throws -> [ContainerSummary] {
         started.withLock { Array($0) }.sorted().map { name in

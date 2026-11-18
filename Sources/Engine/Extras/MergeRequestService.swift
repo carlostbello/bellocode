@@ -53,6 +53,9 @@ public final class MergeRequestService {
     static let instancesKey = "gitlab.instances"
     /// Plain-HTTP instances the person explicitly allowed (M1): their token may cross the network unencrypted.
     static let plainHTTPKey = "gitlab.plainHTTPAllowed"
+    /// Addresses the person removed (S7): a token found for one of them is never reused; only a new token is.
+    static let removedKey = "gitlab.removedInstances"
+    @ObservationIgnored private var removedAccounts: Set<String> = []
     @ObservationIgnored public let plainHTTPAllowed = PlainHTTPAllowList()
 
     @ObservationIgnored public weak var host: (any MergeRequestHost)?
@@ -99,6 +102,7 @@ public final class MergeRequestService {
         instances = saved.compactMap(GitLabInstance.init(baseURL:))
         let allowed = (try? await store.preference(Self.plainHTTPKey, as: [String].self)) ?? []
         plainHTTPAllowed.set(Set(allowed).intersection(instances.map(\.baseURL)))
+        removedAccounts = Set((try? await store.preference(Self.removedKey, as: [String].self)) ?? [])
         refreshTokenPresence()
         for record in (try? await store.mergeRequestWatches()) ?? [] { watches[Self.key(record.sessionID, record.url)] = record }
         if let host { ingest(await host.allSessions()) }
@@ -160,8 +164,17 @@ public final class MergeRequestService {
                 try? await store.setPreference(Self.plainHTTPKey, plainHTTPAllowed.all.sorted())
             }
         }
+        if !instances.contains(instance), removedAccounts.contains(instance.baseURL), token?.isEmpty ?? true,
+           ((try? tokens.read(account: instance.baseURL)) ?? nil) != nil {
+            // Re-adding a removed address without a new token: a token still in the Keychain for it is never reused;
+            // it must be deleted first (S7).
+            do { try tokens.delete(account: instance.baseURL) } catch {
+                throw ExtrasError("An old token for \(instance.baseURL) is still in the Keychain and could not be deleted, so it was not reused. Enter a new token, or remove it in Keychain Access.")
+            }
+        }
         if let token, !token.isEmpty {
             try tokens.store(account: instance.baseURL, label: "GitLab token for \(instance.baseURL)", value: token)
+            if removedAccounts.remove(instance.baseURL) != nil { try? await store.setPreference(Self.removedKey, removedAccounts.sorted()) }
             instanceProblems[instance.baseURL] = nil
             for (key, record) in watches where MergeRequestRef.parse(record.url, instances: [instance]) != nil { nextPoll[key] = clock.now() }
         }
@@ -175,9 +188,20 @@ public final class MergeRequestService {
         return instance
     }
 
-    /// Removes an instance and deletes its token from the Keychain.
-    public func removeInstance(_ instance: GitLabInstance) async {
-        try? tokens.delete(account: instance.baseURL)
+    /// Removes an instance and deletes its token from the Keychain. Succeeds only when the token is deleted: if the
+    /// Keychain refuses, the instance stays listed with the problem and nothing is reported removed (S7).
+    public func removeInstance(_ instance: GitLabInstance) async throws {
+        // Remembered first: whatever happens to the deletion, this token is not reused when the address is added again.
+        removedAccounts.insert(instance.baseURL)
+        try? await store.setPreference(Self.removedKey, removedAccounts.sorted())
+        do {
+            try tokens.delete(account: instance.baseURL)
+        } catch {
+            let message = "The token for \(instance.baseURL) could not be deleted from the Keychain (\(error.localizedDescription)), so the instance was not removed. Try again."
+            instanceProblems[instance.baseURL] = message
+            refreshTokenPresence()
+            throw ExtrasError(message)
+        }
         instances.removeAll { $0 == instance }
         if plainHTTPAllowed.contains(instance.baseURL) {
             plainHTTPAllowed.set(plainHTTPAllowed.all.subtracting([instance.baseURL]))
