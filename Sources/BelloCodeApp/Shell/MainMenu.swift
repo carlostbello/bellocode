@@ -263,6 +263,8 @@ enum MainMenu {
     private static func gitLabMenu() -> NSMenu {
         let menu = NSMenu(title: "GitLab")
         menu.add(.showMergeRequests)
+        menu.add(.linkMergeRequest)
+        menu.add(.createMergeRequest)
         menu.add(.refreshMergeRequests)
         menu.add(.openMergeRequestInGitLab)
         menu.add(.toggleBabysit)

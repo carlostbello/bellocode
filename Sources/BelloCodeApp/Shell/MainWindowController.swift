@@ -545,7 +545,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             showMergeRequestsPanel()
         // GitLab 2: the tab's commands (MainWindowController+GitLab.swift).
         case .reviewMergeRequest, .submitReview, .discardReviewDrafts, .closeReview, .nextReviewThread, .previousReviewThread, .replyToReviewThread,
-            .toggleReviewThreadResolved, .addReviewThreadToAgent, .refreshMergeRequests, .toggleBabysit, .showFailingJobLog, .sendFailureToAgent,
+            .toggleReviewThreadResolved, .addReviewThreadToAgent, .linkMergeRequest, .refreshMergeRequests, .toggleBabysit, .showFailingJobLog, .sendFailureToAgent,
             .retryFailedJob, .playManualJob, .openMergeRequestInGitLab, .unlinkMergeRequest, .approveMergeRequest, .mergeMergeRequest, .showIssues,
             .startThreadFromIssue, .linkIssueToThread, .showTodos, .openTodo, .markTodoDone:
             mergeRequests?.perform(command)

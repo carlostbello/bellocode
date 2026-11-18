@@ -14,16 +14,16 @@ enum PaletteMode: String, Sendable, CaseIterable {
 
     var placeholder: String {
         switch self {
-        case .commands: "Type a command, or @ thread, # project, / file"
+        case .commands: "Type a command, or @ thread, # project, / file, + GitLab to-do"
         case .quickOpen: "Open a thread, project or file (> for commands)"
         case .messages: "Search messages in every thread"
         }
     }
 }
 
-/// Which kinds a query searches, from its prefix: `>` actions, `@` threads, `#` projects, `/` files.
+/// Which kinds a query searches, from its prefix: `>` actions, `@` threads, `#` projects, `/` files, `+` GitLab to-dos.
 enum PaletteScope: String, Sendable {
-    case all, actions, threads, projects, files
+    case all, actions, threads, projects, files, todos
 
     var title: String {
         switch self {
@@ -32,6 +32,7 @@ enum PaletteScope: String, Sendable {
         case .threads: "Threads"
         case .projects: "Projects"
         case .files: "Files"
+        case .todos: "GitLab To-dos"
         }
     }
 }
@@ -48,6 +49,7 @@ struct PaletteQuery: Equatable, Sendable {
         case "@": return PaletteQuery(scope: .threads, text: rest)
         case "#": return PaletteQuery(scope: .projects, text: rest)
         case "/": return PaletteQuery(scope: .files, text: rest)
+        case "+": return PaletteQuery(scope: .todos, text: rest)
         default: return PaletteQuery(scope: .all, text: raw.trimmingCharacters(in: .whitespaces))
         }
     }
@@ -62,10 +64,12 @@ enum PalettePayload: Hashable, Sendable {
     case file(directory: String, path: String)
     /// A search hit: the top-level thread, the thread the message is in, and the message.
     case message(thread: SessionID, session: SessionID, message: MessageID)
+    /// A GitLab to-do of the person (GitLab 2): its instance and ID.
+    case todo(instance: String, id: Int)
 }
 
 struct PaletteItem: Hashable, Sendable, Identifiable {
-    enum Kind: String, Sendable { case command, thread, project, file, message }
+    enum Kind: String, Sendable { case command, thread, project, file, message, todo }
 
     /// The frecency key (stable identity): "command:newThread", "thread:<id>", "project:<dir>", "file:<dir>/<path>".
     var id: String
@@ -116,12 +120,14 @@ struct PaletteSources: Sendable {
     var projects: [PaletteCandidate] = []
     /// Results of the last server file search (kept while a newer one runs, filtered locally: no flicker).
     var files: [PaletteCandidate] = []
+    /// The person's pending GitLab to-dos (cached; refreshed in the background when older than two minutes).
+    var todos: [PaletteCandidate] = []
 }
 
 /// Ranking: fuzzy score, plus frecency, plus the pick remembered for this query; fixed group order per mode, stable
 /// tie-breaks (title, then identity), so results never reshuffle between equal keystrokes. Pure; tested directly.
 enum PaletteSearch {
-    static let limits: [PaletteItem.Kind: Int] = [.command: 12, .thread: 20, .project: 8, .file: 30]
+    static let limits: [PaletteItem.Kind: Int] = [.command: 12, .thread: 20, .project: 8, .file: 30, .todo: 20]
     static let recentLimit = 8
 
     static func results(
@@ -167,6 +173,7 @@ enum PaletteSearch {
         if scope == .all || scope == .projects { add("Projects", rank(sources.projects, kind: .project)) }
         if mode == .quickOpen || scope == .files, scope == .all || scope == .files { add("Files", rank(sources.files, kind: .file)) }
         if !commandsFirst, scope == .all, mode == .commands { add("Actions", rank(sources.commands, kind: .command)) }
+        if scope == .todos || (scope == .all && mode == .commands) { add("GitLab To-dos", rank(sources.todos, kind: .todo)) }
         // The remembered pick for this query leads, wherever its group is.
         if let picked, let index = sections.firstIndex(where: { $0.items.first?.id == picked }), index > 0 {
             sections.insert(sections.remove(at: index), at: 0)
@@ -193,6 +200,7 @@ enum PaletteSearch {
         case .threads: sources.threads
         case .projects: sources.projects
         case .files: sources.files
+        case .todos: sources.todos
         }
         for candidate in pools { byID[candidate.item.id] = candidate.item }
         let prefix: String = switch scope {
@@ -201,6 +209,7 @@ enum PaletteSearch {
         case .threads: "thread:"
         case .projects: "project:"
         case .files: "file:"
+        case .todos: "todo:"
         }
         let recent = frecency.top(prefix: prefix, limit: recentLimit * 3, now: now).compactMap { byID[$0] }.prefix(recentLimit)
         let recentIDs = Set(recent.map(\.id))
@@ -229,6 +238,7 @@ enum PaletteSearch {
         case .threads: add("Threads", rest(sources.threads, limit: 50))
         case .projects: add("Projects", rest(sources.projects, limit: 50))
         case .files: add("Files", rest(sources.files, limit: 50))
+        case .todos: add("GitLab To-dos", rest(sources.todos, limit: 50))
         }
         return sections
     }

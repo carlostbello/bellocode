@@ -59,4 +59,20 @@ import Testing
         context.gitLab.currentThreadResolved = true
         #expect(context.title(for: .toggleReviewThreadResolved) == "Reopen Thread")
     }
+
+    @Test func paletteHasAToDoScope() {
+        #expect(PaletteQuery.parse("+review", mode: .commands) == PaletteQuery(scope: .todos, text: "review"))
+        let todos = [
+            ("https://gitlab.corp.test", GitLabTodo(id: 9, action: "review_requested", targetType: "MergeRequest", targetTitle: "Parser", targetURL: "u", targetIID: 5, projectPath: "team/app", author: "mara")),
+            ("https://gitlab.corp.test", GitLabTodo(id: 10, action: "assigned", targetType: "Issue", targetTitle: "Crash", targetURL: "v", targetIID: 3, projectPath: "team/app")),
+        ]
+        var sources = PaletteSources()
+        sources.todos = PaletteSourceBuilder.todoItems(todos.map { (instance: $0.0, todo: $0.1) }, now: Date())
+        let results = PaletteSearch.results(PaletteQuery(scope: .todos, text: "parser"), mode: .commands, sources: sources, frecency: FrecencyIndex(), now: Timestamp(Date()))
+        #expect(results.map(\.title) == ["GitLab To-dos"])
+        #expect(results.first?.items.map(\.title) == ["Review requested: !5 Parser"])
+        #expect(results.first?.items.first?.payload == .todo(instance: "https://gitlab.corp.test", id: 9))
+        let empty = PaletteSearch.results(PaletteQuery(scope: .todos, text: ""), mode: .commands, sources: sources, frecency: FrecencyIndex(), now: Timestamp(Date()))
+        #expect(empty.first?.items.count == 2)
+    }
 }

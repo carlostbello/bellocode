@@ -103,7 +103,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
     // panel-only actions (babysit, jobs, approve, merge, unlink).
     case reviewMergeRequest, submitReview, discardReviewDrafts, closeReview, nextReviewThread, previousReviewThread
     case replyToReviewThread, toggleReviewThreadResolved, addReviewThreadToAgent
-    case refreshMergeRequests, toggleBabysit, showFailingJobLog, sendFailureToAgent, retryFailedJob, playManualJob
+    case linkMergeRequest, refreshMergeRequests, toggleBabysit, showFailingJobLog, sendFailureToAgent, retryFailedJob, playManualJob
     case openMergeRequestInGitLab, unlinkMergeRequest, approveMergeRequest, mergeMergeRequest
     case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
 
@@ -204,6 +204,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .replyToReviewThread: #selector(MainWindowController.gitLabReplyToReviewThread(_:))
         case .toggleReviewThreadResolved: #selector(MainWindowController.gitLabToggleReviewThreadResolved(_:))
         case .addReviewThreadToAgent: #selector(MainWindowController.gitLabAddReviewThreadToAgent(_:))
+        case .linkMergeRequest: #selector(MainWindowController.gitLabLinkMergeRequest(_:))
         case .refreshMergeRequests: #selector(MainWindowController.gitLabRefreshMergeRequests(_:))
         case .toggleBabysit: #selector(MainWindowController.gitLabToggleBabysit(_:))
         case .showFailingJobLog: #selector(MainWindowController.gitLabShowFailingJobLog(_:))
@@ -365,6 +366,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .replyToReviewThread: "Reply to Thread…"
         case .toggleReviewThreadResolved: "Resolve Thread"
         case .addReviewThreadToAgent: "Add Thread to Agent Context"
+        case .linkMergeRequest: "Link Merge Request…"
         case .refreshMergeRequests: "Refresh Merge Requests"
         case .toggleBabysit: "Babysit Merge Request"
         case .showFailingJobLog: "Show Failing Job Log"
@@ -488,7 +490,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .previousReviewThread: ("[", [.command, .control, .option])
         case .showIssues: ("i", [.command, .control])
         case .showTodos: ("y", [.command, .control])
-        case .discardReviewDrafts, .closeReview, .replyToReviewThread, .toggleReviewThreadResolved, .addReviewThreadToAgent, .refreshMergeRequests,
+        case .linkMergeRequest, .discardReviewDrafts, .closeReview, .replyToReviewThread, .toggleReviewThreadResolved, .addReviewThreadToAgent, .refreshMergeRequests,
             .toggleBabysit, .showFailingJobLog, .sendFailureToAgent, .retryFailedJob, .playManualJob, .openMergeRequestInGitLab, .unlinkMergeRequest,
             .approveMergeRequest, .mergeMergeRequest, .startThreadFromIssue, .linkIssueToThread, .openTodo, .markTodoDone:
             ("", [])
@@ -684,6 +686,7 @@ struct CommandContext: Equatable, Sendable {
         case .nextReviewThread, .previousReviewThread, .replyToReviewThread, .addReviewThreadToAgent: return gitLab.reviewOpen && gitLab.reviewHasThreads
         case .toggleReviewThreadResolved: return gitLab.reviewOpen && gitLab.currentThreadResolvable && gitLab.writes
         case .toggleBabysit: return gitLab.hasMergeRequest && gitLab.hasThread
+        case .linkMergeRequest: return gitLab.configured && gitLab.hasThread
         case .showFailingJobLog, .sendFailureToAgent: return gitLab.hasFailedJob
         case .retryFailedJob: return gitLab.hasFailedJob && gitLab.writes
         case .playManualJob: return gitLab.hasManualJob && gitLab.writes
@@ -740,6 +743,7 @@ struct CommandContext: Equatable, Sendable {
         case .showFailingJobLog, .sendFailureToAgent, .retryFailedJob: return gitLab.hasFailedJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No failed job"
         case .playManualJob: return gitLab.hasManualJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No manual job"
         case .showIssues, .showTodos: return "Connect GitLab in Settings ▸ GitLab"
+        case .linkMergeRequest: return gitLab.configured ? "Open a thread" : "Connect GitLab in Settings ▸ GitLab"
         case .startThreadFromIssue, .linkIssueToThread: return "Select an issue in Issues"
         case .openTodo, .markTodoDone: return gitLab.todoSelected ? "GitLab write actions are off (Settings ▸ GitLab)" : "Select a to-do"
         default: return "Not available now"

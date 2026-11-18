@@ -24,6 +24,7 @@ extension MainWindowController {
     @objc func gitLabToggleReviewThreadResolved(_ sender: Any?) { gitLab(.toggleReviewThreadResolved) }
     @objc func gitLabAddReviewThreadToAgent(_ sender: Any?) { gitLab(.addReviewThreadToAgent) }
     @objc func gitLabRefreshMergeRequests(_ sender: Any?) { gitLab(.refreshMergeRequests) }
+    @objc func gitLabLinkMergeRequest(_ sender: Any?) { gitLab(.linkMergeRequest) }
     @objc func gitLabToggleBabysit(_ sender: Any?) { gitLab(.toggleBabysit) }
     @objc func gitLabShowFailingJobLog(_ sender: Any?) { gitLab(.showFailingJobLog) }
     @objc func gitLabSendFailureToAgent(_ sender: Any?) { gitLab(.sendFailureToAgent) }
@@ -39,6 +40,14 @@ extension MainWindowController {
     @objc func gitLabShowTodos(_ sender: Any?) { gitLab(.showTodos) }
     @objc func gitLabOpenTodo(_ sender: Any?) { gitLab(.openTodo) }
     @objc func gitLabMarkTodoDone(_ sender: Any?) { gitLab(.markTodoDone) }
+
+    /// Opens a to-do from the palette: the To-dos section shows it selected, and its target opens (a linked MR in place).
+    func openTodo(instance: String, id: Int) {
+        guard let surfaces = mergeRequests, let model = surfaces.model else { return }
+        surfaces.show(section: .todos)
+        guard let entry = model.todos.first(where: { $0.instance == instance && $0.todo.id == id }) else { return }
+        model.openTodo(entry.todo)
+    }
 
     /// Wires Start Thread: the issue (link and selected or whole text, quoted as untrusted) goes into the project's
     /// new-thread draft, whose workspace and branch pickers decide where it runs; the issue is linked to the thread the

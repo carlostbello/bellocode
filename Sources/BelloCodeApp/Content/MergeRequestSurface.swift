@@ -208,6 +208,21 @@ extension MergeRequestSurfaces {
         case .toggleReviewThreadResolved: review?.performOnCurrentThread("resolve")
         case .addReviewThreadToAgent: review?.performOnCurrentThread("agent")
         case .refreshMergeRequests: Task { await model.refresh() }
+        case .linkMergeRequest:
+            let alert = NSAlert()
+            alert.messageText = "Link a merge request to this thread"
+            alert.informativeText = "Its URL, or !number in this thread's GitLab project."
+            let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+            field.placeholderString = "https://gitlab.example.com/group/project/-/merge_requests/12 or !12"
+            alert.accessoryView = field
+            alert.window.initialFirstResponder = field
+            alert.addButton(withTitle: "Link")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            showPanel()
+            model.section = .mergeRequests
+            model.linkText = field.stringValue
+            Task { await model.link() }
         case .openMergeRequestInGitLab: if let url = URL(string: snapshot?.webURL ?? link?.ref.url ?? "") { model.openURL(url, false) }
         case .toggleBabysit: if let link { Task { await model.setWatching(link, !link.watching) } }
         case .unlinkMergeRequest: if let link { Task { await model.unlink(link) } }
