@@ -47,6 +47,9 @@ Research this plan is built on (read these before implementing an area):
   signature verification stays off, and the registry allowlist applies to base images and pulled service images only.
 
 ### Owner direction (2026-11-18, later)
+- **Docker CLI (2026-11-18):** the `docker` CLI is allowed on the host (it is Rancher Desktop's, in `~/.rd/bin`). This
+  replaces the earlier "no container CLI on the host" assumption. BelloCode may use `docker`, `docker compose` and
+  `docker buildx` where that is simpler or more complete than the Engine API; agent commands still run in the container.
 
 - **Dev containers:** move to dev-container infrastructure like VS Code's (`.devcontainer` where a project has one,
   a default otherwise), opencode still on the host writing files. Handle the dual-environment edge cases (git in/out,
