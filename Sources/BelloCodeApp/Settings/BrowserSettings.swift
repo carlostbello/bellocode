@@ -1,3 +1,4 @@
+import BelloCore
 import DesignSystem
 import Foundation
 import Observation
@@ -80,7 +81,10 @@ final class BrowseStatusModel {
                 let data = handle.availableData
                 if data.isEmpty { handle.readabilityHandler = nil } else { collected.append(data) }
             }
+            // The 15 s limit sleeps on ContinuousClock (an uptime-clock `asyncAfter` may not fire in an idle process).
+            let limit = ContinuousDeadline()
             process.terminationHandler = { _ in
+                limit.cancel()
                 output.fileHandleForReading.readabilityHandler = nil
                 collected.append(output.fileHandleForReading.readDataToEndOfFile())
                 continuation.resume(returning: collected.text)
@@ -91,7 +95,7 @@ final class BrowseStatusModel {
                 continuation.resume(returning: "Could not run \(path).")
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+            limit.schedule(after: .seconds(15)) {
                 if process.isRunning { process.terminate() }
             }
         }

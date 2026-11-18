@@ -174,7 +174,8 @@ for sig in [SIGTERM, SIGINT, SIGHUP, SIGWINCH] {
         } else {
             // End of stdin makes the in-container wrapper kill the command's process group (TERM, then KILL).
             session.closeStdin()
-            signalQueue.asyncAfter(deadline: .now() + 4) { exit(128 + sig) }
+            // Wall deadline: an uptime-clock `asyncAfter(deadline:)` may not fire while the process is idle (macOS 27).
+            signalQueue.asyncAfter(wallDeadline: .now() + 4) { exit(128 + sig) }
         }
     }
     source.resume()

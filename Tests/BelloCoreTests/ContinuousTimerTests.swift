@@ -4,23 +4,52 @@ import Testing
 
 @testable import BelloCore
 
-/// Counts events and lets a test wait for a count with a ceiling measured on `ContinuousClock`, so a timer that never
-/// fires fails the test instead of hanging it. With uptime-clock timers on an idle process (macOS 27) these waits time
-/// out; on `ContinuousClock` they finish in about the timer's interval.
+/// Counts events and lets a test wait for a count without waking in between: the waiter is a continuation resumed by
+/// the event itself or by a single ceiling deadline on `ContinuousClock`. The process is idle while it waits, which is
+/// the condition under which uptime-clock timers were seen not to fire (macOS 27); a polling wait would hide that.
 final class FireCounter: Sendable {
-    private let count = Mutex(0)
+    private struct State {
+        var count = 0
+        var target = Int.max
+        var waiter: CheckedContinuation<Bool, Never>?
+    }
 
-    func fire() { count.withLock { $0 += 1 } }
-    var value: Int { count.withLock { $0 } }
+    private let state = Mutex(State())
+    private let ceilingDeadline = ContinuousDeadline()
 
-    /// Polls on `ContinuousClock` until `value >= target` or `ceiling` passes. Returns whether the target was reached.
-    func wait(for target: Int = 1, ceiling: Duration = .seconds(10)) async -> Bool {
-        let deadline = ContinuousClock.now + ceiling
-        while value < target {
-            if ContinuousClock.now >= deadline { return false }
-            try? await Task.sleep(for: .milliseconds(5))
+    func fire() {
+        let waiter = state.withLock { state -> CheckedContinuation<Bool, Never>? in
+            state.count += 1
+            guard state.count >= state.target else { return nil }
+            defer { state.waiter = nil }
+            return state.waiter
         }
-        return true
+        waiter?.resume(returning: true)
+    }
+
+    var value: Int { state.withLock { $0.count } }
+
+    /// Waits until `value >= target` or `ceiling` passes. Returns whether the target was reached. One waiter at a time.
+    func wait(for target: Int = 1, ceiling: Duration = .seconds(10)) async -> Bool {
+        let reached = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let done = state.withLock { state -> Bool in
+                if state.count >= target { return true }
+                state.target = target
+                state.waiter = continuation
+                return false
+            }
+            if done { continuation.resume(returning: true); return }
+            ceilingDeadline.schedule(after: ceiling) { [weak self] in
+                let waiter = self?.state.withLock { state -> CheckedContinuation<Bool, Never>? in
+                    defer { state.waiter = nil }
+                    return state.waiter
+                }
+                waiter?.resume(returning: false)
+            }
+        }
+        ceilingDeadline.cancel()
+        state.withLock { $0.target = .max }
+        return reached
     }
 }
 
