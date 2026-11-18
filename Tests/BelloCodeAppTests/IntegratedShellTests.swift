@@ -218,6 +218,18 @@ import Testing
         composer.textView.string = ""
         driver.type("see @Pars")
         await composer.settle()
-        #expect(composer.completion.items.map(\.title).contains("Parser.swift"), "from the server's file search")
+        let titles = composer.completion.items.map(\.title)
+        if !titles.contains("Parser.swift") {
+            // Diagnostics: what the composer showed, and what the server's search and the disk say now.
+            let directory = shell.engine.root.projects.first?.directory ?? ""
+            let direct: String
+            do { direct = "\(try await shell.engine.findFiles(directory: directory, query: "Pars"))" } catch { direct = "error \(error)" }
+            Issue.record("""
+                completion for @Pars: state \(String(describing: composer.completion.state)), items \(titles); \
+                connection \(shell.engine.root.connection); search now \(direct); \
+                \(directory) exists on disk: \(FileManager.default.fileExists(atPath: directory))
+                """)
+        }
+        #expect(titles.contains("Parser.swift"), "from the server's file search")
     }
 }
