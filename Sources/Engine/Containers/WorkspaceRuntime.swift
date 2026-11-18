@@ -69,10 +69,11 @@ public protocol WorkspaceRuntime: Sendable {
 
     // MARK: Global MCP servers (docs/features/containers.md, "Global MCP servers")
 
-    /// Creates the stack's network and starts its services in dependency order (images must be present).
-    func ensureMCPStack(_ specs: [ServiceSpec], root: String) async throws -> [String: ServiceOutcome]
-    /// Forwards the stack's MCP endpoint (a port of one of its services) to the Mac's loopback through a relay in that
-    /// service's container; `prepare` runs before each connection (starts the stack on first use).
+    /// Runs Rancher Desktop's `docker compose` (at `executable`) against this runtime's socket.
+    func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                 timeout: Duration) async throws -> ComposeCLI.Result
+    /// Forwards the stack's MCP endpoint (a port of one of its services, by container name) to the Mac's loopback through
+    /// a relay in that service's container; `prepare` runs before each connection (starts the stack on first use).
     func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder
     /// Containers of global image servers.
     func mcpContainers() async throws -> [ContainerSummary]
@@ -100,7 +101,10 @@ extension WorkspaceRuntime {
     }
     public func cacheVolumes() async throws -> [CacheVolume] { [] }
     public func cleanCache(_ name: String) async throws {}
-    public func ensureMCPStack(_ specs: [ServiceSpec], root: String) async throws -> [String: ServiceOutcome] { [:] }
+    public func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                        timeout: Duration) async throws -> ComposeCLI.Result {
+        throw ContainerError.notFound("docker compose is not available here")
+    }
     public func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
         throw ContainerError.notFound("stack forwarding is not available here")
     }
@@ -214,9 +218,10 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult {
         try await manager.prune(plan, keepProjectKeys: keepProjectKeys, pulledImageIDs: pulledImageIDs)
     }
-    public func ensureMCPStack(_ specs: [ServiceSpec], root: String) async throws -> [String: ServiceOutcome] {
-        try await services.ensureNetwork(projectRoot: root, offline: false, extraLabels: specs.first?.extraLabels ?? [:])
-        return try await services.ensure(specs, projectKey: WorkspaceSpec.projectKey(for: root))
+    public func compose(executable: URL, configDirectory: URL, project: String, files: [URL], workingDirectory: URL?, command: [String],
+                        timeout: Duration) async throws -> ComposeCLI.Result {
+        try await ComposeCLI(executable: executable, socketPath: socketPath, configDirectory: configDirectory)
+            .run(project: project, files: files, workingDirectory: workingDirectory, command: command, timeout: timeout)
     }
     public func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
         try PortForwarder(client: client, container: container, containerPort: port, containerHost: "127.0.0.1", hostPort: hostPort, prepare: prepare)

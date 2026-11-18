@@ -75,8 +75,8 @@ extension EnvironmentService {
         try? await store.setPreference(GlobalMCPList.preferenceKey, globalMCP)
         for server in servers where globalMCPStates[server.id] == nil { globalMCPStates[server.id] = GlobalMCPState() }
         for id in Set(globalMCPStates.keys).subtracting(servers.map(\.id)) { globalMCPStates[id] = nil }
-        let changed = Set(previous.filter { old in servers.first { $0.id == old.id } != old }.map(\.name))
-        globalMCPChanged(restarting: changed)
+        let changedServers = previous.filter { old in servers.first { $0.id == old.id }.map { $0 != old && $0.enabled == old.enabled } ?? false }
+        globalMCPChanged(restarting: Set(changedServers.map(\.name)), changedIDs: Set(changedServers.map(\.id)))
     }
 
     /// Turns one server on or off.
@@ -143,10 +143,10 @@ extension EnvironmentService {
 
     /// The list changed: write the helper configuration, re-register everywhere, start or stop stack forwarders, pull
     /// missing images. `restarting` names servers whose definition changed (their connections are replaced).
-    func globalMCPChanged(restarting: Set<String> = []) {
+    func globalMCPChanged(restarting: Set<String> = [], changedIDs: Set<String> = []) {
         reloadConfigImageServers()
         scheduleConfigWrite()
-        reconcileStacks()
+        reconcileStacks(changed: changedIDs)
         checkGlobalImages()
         for name in restarting {
             for directory in registeredMCP.keys { registeredMCP[directory]?[name] = nil }

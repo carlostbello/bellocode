@@ -37,7 +37,7 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
 | **Local MCP servers, per project** | **container** (`bellocode-exec --stdio`) | scan + scratch-server probe (smoke); live test; e2e tool call |
 | **Global image MCP servers** (Settings, or `docker run` in the isolated config) | **own container**, no project mount | self-check "Global MCP server (image)" (smoke); live test; e2e tool call |
 | Other local commands configured for all projects | **refused** (helper prints why) | unit test; scan reports "refused" |
-| Remote MCP servers, compose-stack endpoints | nothing on the Mac (HTTPS; stack in containers, loopback forward) | unit + live test |
+| Remote MCP servers; compose stacks (Rancher's `docker compose`) | nothing on the Mac but the loopback forward | unit + live test |
 | MCP servers added at runtime by another client | flagged (command unknown) | self-check "MCP servers added at runtime" |
 | **Project services** | sibling containers, project network | live test (two services, health gate) |
 | Repository plugins/agents/commands, `"shell"` | ignored (`OPENCODE_DISABLE_PROJECT_CONFIG`) | spike e2e |
@@ -78,15 +78,16 @@ a file, the store, the helper configuration or a log; the editor shows "Saved in
   the helper's environment. **Shared** (opt-in): one `bellocode-mcp-<id>` keep-alive (needs `/bin/sh`), secrets per
   exec only, stopped when idle. Connections end when the project's container idles out. Pull, Restart, Logs (stderr,
   256 KiB); leftovers of killed helpers are removed after a removal and at runtime start.
-- **Compose stack**: the project-services subset and refusals; `bellocode-svc-<key>-<svc>` on `bellocode-net-<key>`
-  (key of `bellocode-mcp-stack:<id>`, label `app.bellocode.mcp-stack`). The endpoint (service, port, path) is forwarded
-  to a stable `127.0.0.1` port through a relay in that service's container (socat, bash, python3, nc or perl; nothing
-  published) and registered as remote; the stack starts on the first connection, stops when idle; state, health, logs,
-  restart; Prune keeps its volumes.
+- **Compose stack** (full compose spec): Rancher's `~/.rd/bin/docker-compose` by explicit path (never `PATH` or Docker
+  Desktop's plugin), Rancher's socket, BelloCode's own `DOCKER_CONFIG` (Rancher's buildx linked in), project
+  `bellocode-mcp-<key>`; an existing file (its folder is the project: `build`, `env_file` work) or one written here.
+  `config --format json` first: privileged, caps, devices, host namespaces, bind mounts need **Run as written**; the
+  engine socket is always refused; image-only services follow the policy. The override labels containers, adds
+  certificates and proxies (builds: proxy args, `bellocode-ca` context) and `!reset`s published ports; the endpoint is
+  forwarded to a stable loopback port, registered as remote. `up --wait` on first use, `stop` idle, `down` on removal.
 
-Local servers in **BelloCode's isolated opencode files**: a `docker run` without mounts or refused options runs its image
-the same way (`--mcp cfg-<name>`); any other command stays refused (`--refuse <name>`). Runtime adds by other clients are
-flagged by the self-check.
+Local servers in BelloCode's isolated opencode files: a mount-free `docker run` runs its image the same way (`--mcp
+cfg-<name>`); any other command stays refused. Runtime adds by other clients are flagged by the self-check.
 
 **Import…** reads only when asked, read-only: opencode (`~/.config/opencode/opencode.json(c)`, `config.json`; 2.x
 `mcp.servers`, 1.x `mcp`), Claude Desktop (`claude_desktop_config.json`), Claude Code (`~/.claude.json`), Cursor
@@ -227,13 +228,12 @@ Undo. Not exercised: VoiceOver walk-through, two windows, Reduce Motion (nothing
 
 ## Known gaps
 
-Signature verification (seam). MCP servers (project and global) are registered for project roots, not worktree
-locations. Edits to the isolated global configuration apply at the next launch (the scan flags them). Service images
-run as their own user with default capabilities. Shared image containers need `/bin/sh`; stack relays need a relay
-tool in the endpoint image; PAC proxies are not read; a selection change reaches opencode at its next start. The
-thread header lets a long container crumb overlap the Agents chip at narrow widths (pre-existing). Remote runtimes.
+MCP servers register for project roots, not worktrees. Isolated-config edits apply at the next launch. Service images
+keep their user and default capabilities. Shared image containers need `/bin/sh`; stack relays need a relay tool in the
+endpoint image; stack builds get certificates only where the Dockerfile copies `bellocode-ca`; PAC proxies are not
+read; a selection change reaches opencode at its next start. Narrow thread headers can overlap (pre-existing).
 
 Measured (Rancher Desktop 1.25, arm64): container ready 115–196 ms; terminal round trip 133–144 ms; watch bridge 61 ms;
 two redis services healthy 2.3 s; project MCP server connected in the container 4.7 s; global image server through
-opencode 4.5 s; stack endpoint started on first use 4.3 s; test CA trusted and diagnosed 6.9 s. Snapshots:
+opencode 4.5 s; compose stack (built) connected 4.4 s; test CA trusted, diagnosed and built 9.9 s. Snapshots:
 `docs/snapshots/containers{,2,3}-*.png`. Commands: `make smoke`, `make e2e-containers`, `--snapshot containers3`, Live.

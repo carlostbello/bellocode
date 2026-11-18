@@ -161,6 +161,7 @@ final class AppRuntime {
         configuration.mcpLogDirectory = server.dataRoot.appending(path: "mcp-logs", directoryHint: .isDirectory)
         configuration.opencodeConfigDirectory = server.configDirectory
         configuration.certificateDirectory = certificateDirectory(dataRoot: server.dataRoot)
+        configuration.stackDirectory = server.dataRoot.appending(path: "mcp-stacks", directoryHint: .isDirectory)
         return configuration
     }
 

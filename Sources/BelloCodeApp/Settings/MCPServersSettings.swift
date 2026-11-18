@@ -44,6 +44,9 @@ struct MCPServerDraft: Equatable {
     var shared = false
     var idleMinutes = 15
     // Stack
+    var useFile = true
+    var composeFile = ""
+    var allowElevated = false
     var compose = ""
     var service = ""
     var port = ""
@@ -80,6 +83,9 @@ struct MCPServerDraft: Equatable {
             idleMinutes = image.idleStopMinutes
         }
         if let stack = server.stack {
+            useFile = stack.composeFile != nil
+            composeFile = stack.composeFile ?? ""
+            allowElevated = stack.allowElevated
             compose = stack.composeYAML
             service = stack.service
             port = String(stack.port)
@@ -112,8 +118,11 @@ struct MCPServerDraft: Equatable {
                 environment: fields(variables) { GlobalMCPSecrets.account(server: id, variable: $0) }, mounts: mounts,
                 network: network, shared: shared, idleStopMinutes: idleMinutes)
         case .stack:
-            server.stack = StackMCPSetting(composeYAML: compose, service: service.trimmingCharacters(in: .whitespaces), port: Int(port) ?? 0,
-                                           path: path.isEmpty ? "/" : path, hostPort: hostPort, idleStopMinutes: idleMinutes)
+            let file = (composeFile.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+            server.stack = StackMCPSetting(composeYAML: useFile ? "" : compose, composeFile: useFile ? file : nil,
+                                           service: service.trimmingCharacters(in: .whitespaces), port: Int(port) ?? 0,
+                                           path: path.isEmpty ? "/" : path, hostPort: hostPort, idleStopMinutes: idleMinutes,
+                                           allowElevated: allowElevated)
         }
         return (server, secrets)
     }
@@ -259,7 +268,7 @@ struct MCPServersSettingsView: View {
         switch kind {
         case .remote: "Streamable HTTP (opencode falls back to SSE). Certificates are checked against the Mac's roots and the enterprise roots in Settings ▸ Containers. Secret header values are kept in your Keychain and given only to opencode."
         case .image: "Like docker run -i --rm IMAGE ARGS, in a container BelloCode manages: no project folder is mounted, no extra privileges. Secret variables are kept in your Keychain and passed when the server starts."
-        case .stack: "The compose subset of project services (build, bind mounts and privileges are refused). The stack starts on the first connection, on its own network; only the endpoint is forwarded to this Mac's loopback."
+        case .stack: "Run by Rancher Desktop's docker compose (the full compose spec: build, env_file, networks). It starts on the first connection; published ports are replaced by a forward of the endpoint to this Mac's loopback, and the enterprise certificates and proxy are added."
         }
     }
 }
@@ -464,15 +473,32 @@ struct MCPServerEditorView: View {
     }
 
     @ViewBuilder private var stackFields: some View {
-        VStack(alignment: .leading, spacing: DS.Space.s4) {
-            Text("compose.yaml").font(.ds(.meta)).foregroundStyle(DSColor.text3)
-            TextEditor(text: draft.compose).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
-                .frame(height: 120).padding(DS.Space.s4)
-                .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
-                .accessibilityLabel("Compose file")
+        SettingsRow("Compose file") {
+            DSSegmentedPicker(options: [(id: true, title: "On this Mac"), (id: false, title: "Write here")], selection: draft.useFile).fixedSize()
         }
-        .padding(DS.Space.s12)
+        if draft.wrappedValue.useFile {
+            SettingsFieldRow {
+                TextField("", text: draft.composeFile, prompt: Text("~/src/mcp-notes/compose.yaml")).textFieldStyle(DSTextFieldStyle())
+                    .font(.ds(.codeSmall)).accessibilityLabel("Compose file path")
+                Button("Choose…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = false
+                    panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let url = panel.url { model.draft?.composeFile = url.path }
+                }.buttonStyle(DSButtonStyle(.outline, size: .small))
+            }
+        } else {
+            VStack(alignment: .leading, spacing: DS.Space.s4) {
+                Text("compose.yaml").font(.ds(.meta)).foregroundStyle(DSColor.text3)
+                TextEditor(text: draft.compose).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                    .frame(height: 120).padding(DS.Space.s4)
+                    .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                    .accessibilityLabel("Compose file")
+            }
+            .padding(DS.Space.s12)
+        }
         SettingsFieldRow {
             label("Endpoint")
             TextField("", text: draft.service, prompt: Text("service")).textFieldStyle(DSTextFieldStyle()).frame(width: 110)
@@ -480,6 +506,9 @@ struct MCPServerEditorView: View {
             TextField("", text: draft.port, prompt: Text("port")).textFieldStyle(DSTextFieldStyle()).frame(width: 64).accessibilityLabel("Endpoint port")
             TextField("", text: draft.path, prompt: Text("/mcp")).textFieldStyle(DSTextFieldStyle()).font(.ds(.codeSmall)).accessibilityLabel("Endpoint path")
         }
+        SettingsToggleRow("Run as written",
+                          detail: "Allow what the file asks for beyond its containers: bind mounts, privileges, capabilities, devices, host networking. Off: such a stack is not started and the row lists what it asks for. The container engine's socket is never allowed.",
+                          isOn: draft.allowElevated)
     }
 }
 

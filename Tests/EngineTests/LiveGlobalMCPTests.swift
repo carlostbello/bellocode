@@ -53,6 +53,7 @@ struct LiveGlobalMCPTests {
         containers.certificateDirectory = URL(filePath: project.path + "-certs", directoryHint: .isDirectory)
         containers.managedNetwork = { nil }
         containers.systemProxy = { SystemProxySettings() }
+        containers.stackDirectory = root.appending(path: "stacks", directoryHint: .isDirectory)
         configuration.containers = containers
         let engine = try Engine(configuration: configuration)
         await engine.start()
@@ -75,13 +76,10 @@ struct LiveGlobalMCPTests {
             for container in (try? await client.listContainers(labels: ["\(EnvironmentService.stackLabel)=\(id)"])) ?? [] {
                 try? await client.removeContainer(container.id, force: true)
             }
-            let key = EnvironmentService.stackKey(id)
-            for network in (try? await client.listNetworks(labels: ["\(WorkspaceSpec.labelProjectKey)=\(key)"])) ?? [] {
-                try? await client.removeNetwork(network)
-            }
-            for volume in (try? await client.listVolumes(labels: ["\(WorkspaceSpec.labelProjectKey)=\(key)"])) ?? [] {
-                try? await client.removeVolume(volume, force: true)
-            }
+            let compose = "com.docker.compose.project=\(EnvironmentService.stackProject(id))"
+            for container in (try? await client.listContainers(labels: [compose])) ?? [] { try? await client.removeContainer(container.id, force: true) }
+            for network in (try? await client.listNetworks(labels: [compose])) ?? [] { try? await client.removeNetwork(network) }
+            for volume in (try? await client.listVolumes(labels: [compose])) ?? [] { try? await client.removeVolume(volume, force: true) }
         }
         if let storage = try? await environments.storageToPurge(harness.project.path) { try? await environments.purge(harness.project.path, confirmed: storage) }
         await harness.engine.stop()
@@ -157,63 +155,83 @@ struct LiveGlobalMCPTests {
 
     // MARK: Compose stack
 
-    static let stackCompose = """
-        services:
-          mcp:
-            image: node:22-bookworm-slim
-            command: ["node", "-e", "eval(process.env.MCP_JS)"]
-            ports: ["8080"]
-            environment:
-              MCP_JS: |
-                const http = require('http'), os = require('os');
-                http.createServer((req, res) => {
-                  if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
-                  let body = ''; req.on('data', (d) => body += d);
-                  req.on('end', () => {
-                    const m = JSON.parse(body || '{}');
-                    if (m.id === undefined) { res.writeHead(202); return res.end(); }
-                    let result;
-                    if (m.method === 'initialize') result = { protocolVersion: (m.params && m.params.protocolVersion) || '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'stack', version: '1' } };
-                    else if (m.method === 'tools/list') result = { tools: [{ name: 'where', description: 'Says where it runs.', inputSchema: { type: 'object', properties: {} } }] };
-                    else if (m.method === 'tools/call') result = { content: [{ type: 'text', text: os.type() }] };
-                    else if (m.method === 'ping') result = {};
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify(result ? { jsonrpc: '2.0', id: m.id, result } : { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no' } }));
-                  });
-                }).listen(8080);
-        """
+    /// A streamable-HTTP MCP server for the stack (Node, no dependencies): its tool reports a value from the stack's
+    /// `env_file`.
+    static let stackServer = #"""
+    const http = require('http'), os = require('os');
+    http.createServer((req, res) => {
+      if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+      let body = ''; req.on('data', (d) => body += d);
+      req.on('end', () => {
+        const m = JSON.parse(body || '{}');
+        if (m.id === undefined) { res.writeHead(202); return res.end(); }
+        let result;
+        if (m.method === 'initialize') result = { protocolVersion: (m.params && m.params.protocolVersion) || '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'stack', version: '1' } };
+        else if (m.method === 'tools/list') result = { tools: [{ name: 'where', description: 'Says where it runs.', inputSchema: { type: 'object', properties: {} } }] };
+        else if (m.method === 'tools/call') result = { content: [{ type: 'text', text: os.type() + ' ' + process.env.GREETING }] };
+        else if (m.method === 'ping') result = {};
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result ? { jsonrpc: '2.0', id: m.id, result } : { jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no' } }));
+      });
+    }).listen(8080, () => console.log('stack mcp listening'));
+    """#
 
-    @Test func aComposeStackEndpointIsForwardedToLoopbackAndRegisteredAsRemote() async throws {
-        guard try await client.inspectImage(Self.image) != nil else {
-            Issue.record("needs \(Self.image) present")
+    @Test func aComposeStackFromAFileWithABuildIsForwardedToLoopbackAndRegisteredAsRemote() async throws {
+        guard try await client.inspectImage(Self.image) != nil, ComposeCLI.rancherExecutable() != nil else {
+            Issue.record("needs \(Self.image) present and Rancher Desktop's docker-compose")
             return
         }
         let harness = try await makeHarness()
-        let id = "livegstk01"
+        let id = "livegstk02"
+        let folder = URL(filePath: harness.project.path + "-stack", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
         do {
+            // Features the old subset refused: build from a Dockerfile, env_file, a published port, depends_on.
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(Self.stackServer.utf8).write(to: folder.appending(path: "server.js"))
+            try Data("FROM \(Self.image)\nCOPY server.js /server.js\nCMD [\"node\", \"/server.js\"]\n".utf8).write(to: folder.appending(path: "Dockerfile"))
+            try Data("GREETING=from-env-file\n".utf8).write(to: folder.appending(path: "mcp.env"))
+            try Data("""
+                services:
+                  mcp:
+                    build: .
+                    ports: ["8080:8080"]
+                    env_file: [mcp.env]
+                    depends_on: [helper]
+                  helper:
+                    image: \(Self.image)
+                    command: ["node", "-e", "setInterval(() => {}, 1000)"]
+                """.utf8).write(to: folder.appending(path: "compose.yaml"))
             let environments = harness.environments
             let server = GlobalMCPServer(id: id, name: "stacktools", kind: .stack,
-                                         stack: StackMCPSetting(composeYAML: Self.stackCompose, service: "mcp", port: 8080, path: "/mcp"))
+                                         stack: StackMCPSetting(composeFile: folder.appending(path: "compose.yaml").path, service: "mcp", port: 8080))
             #expect(server.validationErrors().isEmpty, "\(server.validationErrors())")
             try await environments.saveGlobalMCP([server])
-            try await waitUntil("forwarded", timeout: .seconds(10)) { environments.globalMCPStates[id]?.hostPort != nil }
+            try await waitUntil("forwarded", timeout: .seconds(60)) { environments.globalMCPStates[id]?.hostPort != nil || environments.globalMCPStates[id]?.problem != nil }
+            #expect(environments.globalMCPStates[id]?.problem == nil, "\(environments.globalMCPStates[id]?.problem ?? "")")
             let port = try #require(environments.globalMCPStates[id]?.hostPort)
             #expect(try await client.listContainers(labels: ["\(EnvironmentService.stackLabel)=\(id)"]).isEmpty, "nothing runs before first use")
             environments.projectInUse(harness.project.path)
-            let connected = await waitUntilAsync(timeout: .seconds(120)) { await status(harness, "stacktools") == "connected" }
-            #expect(connected, "stacktools: \(environments.environment(for: harness.project.path).mcpStatus)")
+            let connected = await waitUntilAsync(timeout: .seconds(300)) { await status(harness, "stacktools") == "connected" }
+            let stackLog = await environments.globalMCPLogs(id)
+            #expect(connected, "stacktools: \(environments.environment(for: harness.project.path).mcpStatus) \(stackLog.suffix(400))")
             #expect(environments.registeredMCP[harness.project.path]?["stacktools"]?["url"]?.stringValue == "http://127.0.0.1:\(port)/mcp")
             let containers = try await client.listContainers(labels: ["\(EnvironmentService.stackLabel)=\(id)"])
-            #expect(containers.map(\.name) == ["bellocode-svc-\(EnvironmentService.stackKey(id))-mcp"])
-            let inspect = try #require(try await client.inspectContainer(containers[0].id))
-            #expect((inspect.ports ?? [:]).values.allSatisfy { ($0 ?? []).isEmpty }, "nothing published on the Mac")
+            #expect(Set(containers.map(\.name)) == ["\(EnvironmentService.stackProject(id))-mcp-1", "\(EnvironmentService.stackProject(id))-helper-1"])
+            let endpoint = try #require(try await client.inspectContainer("\(EnvironmentService.stackProject(id))-mcp-1"))
+            #expect((endpoint.ports ?? [:]).values.allSatisfy { ($0 ?? []).isEmpty }, "the file's published port was reset: nothing on the Mac's interfaces")
+            #expect(endpoint.config.env?.contains("GREETING=from-env-file") == true, "env_file honoured")
             environments.refreshStack(id)
-            try await waitUntil("stack status", timeout: .seconds(10)) { environments.globalMCPStates[id]?.services.first?.phase == .running }
-            #expect(await environments.globalMCPLogs(id).contains("── mcp"))
+            try await waitUntil("stack status", timeout: .seconds(20)) { environments.globalMCPStates[id]?.services.contains { $0.name == "mcp" && $0.phase == .running } == true }
+            let logs = await environments.globalMCPLogs(id)
+            #expect(logs.contains("stack mcp listening"), "\(logs.suffix(300))")
         } catch {
             Issue.record(error)
         }
         await tearDown(harness, serverIDs: [id])
+        for image in (try? await client.listImages()) ?? [] where image.repoTags.contains(where: { $0.hasPrefix(EnvironmentService.stackProject(id)) }) {
+            try? await client.removeImage(image.id, force: true)
+        }
     }
 
     // MARK: Corporate network

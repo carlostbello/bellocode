@@ -40,6 +40,10 @@ public struct ContainerConfiguration: Sendable {
     public var certificateSource: any TrustedCertificateSource = KeychainCertificateSource()
     /// Where the exported bundles are written (`ca-bundle.pem`, `enterprise-roots.pem`).
     public var certificateDirectory: URL?
+    /// Rancher Desktop's `docker-compose` (explicit path, never `PATH`), for compose-stack MCP servers.
+    public var composeExecutable: @Sendable () -> URL? = { ComposeCLI.rancherExecutable() }
+    /// Where compose-stack files (written ones, BelloCode's overrides) and compose's own `DOCKER_CONFIG` live.
+    public var stackDirectory: URL?
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -184,6 +188,8 @@ public final class EnvironmentService {
     @ObservationIgnored var stackForwarders: [String: PortForwarder] = [:]
     @ObservationIgnored var stackLastUse: [String: ContinuousClock.Instant] = [:]
     @ObservationIgnored var stackSeenConnections: [String: Int] = [:]
+    @ObservationIgnored var stackPlans: [String: StackPlan] = [:]
+    @ObservationIgnored var stackGates: [String: StackGate] = [:]
     /// The isolation self-check's scratch image server (present only while it runs).
     @ObservationIgnored var verifyImageSpec: ImageMCPSpec?
     /// Corporate network (certificates and proxies) as applied to containers and the server.

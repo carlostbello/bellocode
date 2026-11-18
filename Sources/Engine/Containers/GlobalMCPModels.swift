@@ -99,7 +99,7 @@ public struct GlobalMCPServer: Codable, Sendable, Equatable, Hashable, Identifia
         switch kind {
         case .remote: remote?.url ?? ""
         case .image: ([image?.image ?? ""] + (image?.args ?? [])).joined(separator: " ")
-        case .stack: stack.map { "\($0.service):\($0.port)\($0.path)" } ?? ""
+        case .stack: stack.map { ($0.composeFile.map { ($0 as NSString).abbreviatingWithTildeInPath + " · " } ?? "") + "\($0.service):\($0.port)\($0.path)" } ?? ""
         }
     }
 }
@@ -200,9 +200,14 @@ public struct ImageMCPSetting: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// A compose stack exposing an MCP endpoint (supported compose subset; refused keys stop it, as for project services).
+/// A compose stack exposing an MCP endpoint, run by Rancher Desktop's `docker compose` (full compose spec): an existing
+/// compose file on this Mac (`composeFile`, its folder is the project directory, so builds and `env_file` work) or one
+/// written here (`composeYAML`). Features that reach past the containers (privileged, capabilities, devices, host
+/// namespaces, bind mounts) run only with `allowElevated`; the container engine's socket never does.
 public struct StackMCPSetting: Codable, Sendable, Equatable, Hashable {
     public var composeYAML: String
+    /// An existing compose file (absolute path); when set, `composeYAML` is not used.
+    public var composeFile: String?
     /// The service, container port and path of the MCP endpoint (`mcp`, 8080, `/mcp`).
     public var service: String
     public var port: Int
@@ -211,25 +216,47 @@ public struct StackMCPSetting: Codable, Sendable, Equatable, Hashable {
     public var hostPort: Int?
     /// Stop the stack after this many minutes without a connection (0 = never).
     public var idleStopMinutes: Int
+    /// Run as written: allow the elevated features the file asks for (listed in the pane).
+    public var allowElevated: Bool
 
-    public init(composeYAML: String, service: String, port: Int, path: String = "/mcp", hostPort: Int? = nil, idleStopMinutes: Int = 30) {
+    public init(composeYAML: String = "", composeFile: String? = nil, service: String, port: Int, path: String = "/mcp", hostPort: Int? = nil,
+                idleStopMinutes: Int = 30, allowElevated: Bool = false) {
         self.composeYAML = composeYAML
+        self.composeFile = composeFile
         self.service = service
         self.port = port
         self.path = path
         self.hostPort = hostPort
         self.idleStopMinutes = idleStopMinutes
+        self.allowElevated = allowElevated
     }
 
+    enum CodingKeys: String, CodingKey { case composeYAML, composeFile, service, port, path, hostPort, idleStopMinutes, allowElevated }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        composeYAML = try c.decodeIfPresent(String.self, forKey: .composeYAML) ?? ""
+        composeFile = try c.decodeIfPresent(String.self, forKey: .composeFile)
+        service = try c.decode(String.self, forKey: .service)
+        port = try c.decode(Int.self, forKey: .port)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? "/mcp"
+        hostPort = try c.decodeIfPresent(Int.self, forKey: .hostPort)
+        idleStopMinutes = try c.decodeIfPresent(Int.self, forKey: .idleStopMinutes) ?? 30
+        allowElevated = try c.decodeIfPresent(Bool.self, forKey: .allowElevated) ?? false
+    }
+
+    /// Checks that need no runtime; the file itself is checked by `docker compose config` when the stack is prepared.
     public func validationErrors(server: String) -> [String] {
         var errors: [String] = []
         if !(1...65535).contains(port) { errors.append("“\(server)”: the endpoint port must be 1–65535.") }
         if !path.hasPrefix("/") { errors.append("“\(server)”: the endpoint path must start with /.") }
-        let parse = ComposeParser.parse(composeYAML)
-        if let error = parse.errors.first {
-            errors.append("“\(server)”: \(error)")
-        } else if !parse.services.contains(where: { $0.name == service }) {
-            errors.append("“\(server)”: the compose file has no usable service “\(service)”.")
+        if service.trimmingCharacters(in: .whitespaces).isEmpty { errors.append("“\(server)”: name the endpoint's service.") }
+        if let composeFile {
+            if !composeFile.hasPrefix("/") || !FileManager.default.fileExists(atPath: composeFile) {
+                errors.append("“\(server)”: the compose file \(composeFile) does not exist.")
+            }
+        } else if composeYAML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errors.append("“\(server)”: choose a compose file or write one.")
         }
         return errors
     }

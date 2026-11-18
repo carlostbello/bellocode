@@ -36,6 +36,8 @@ struct GlobalMCPTests {
         configuration.certificateDirectory = root.appending(path: "certs")
         configuration.managedNetwork = { nil }
         configuration.systemProxy = { SystemProxySettings() }
+        configuration.composeExecutable = { URL(filePath: "/Users/someone/.rd/bin/docker-compose") }
+        configuration.stackDirectory = root.appending(path: "stacks")
         let store = try ProjectionStore(location: .inMemory)
         let service = EnvironmentService(configuration: configuration, store: store)
         service.worktreeParent = { [root] directory in root.appending(path: "worktrees/\((directory as NSString).lastPathComponent)").path }
@@ -177,40 +179,47 @@ struct GlobalMCPTests {
 
     // MARK: Compose stacks
 
+    static func composeJSON(_ services: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["name": EnvironmentService.stackProject("st00000001"), "services": services])
+    }
+
+    static let stack = GlobalMCPServer(id: "st00000001", name: "notes", kind: .stack,
+                                       stack: StackMCPSetting(composeYAML: "services: {}\n", service: "mcp", port: 8080, path: "/mcp"))
+
     @Test func aStackEndpointIsForwardedRegisteredAsRemoteAndStartsTheStackOnFirstUse() async throws {
-        let (service, _) = try await makeService()
+        runtime.composeConfig.withLock {
+            $0 = Self.composeJSON([
+                "mcp": ["build": ["context": "."], "ports": [["target": 8080, "published": "8080"]], "environment": ["SSL_CERT_FILE": "/own.pem"]],
+                "db": ["image": "redis:7"],
+            ])
+        }
+        let corporate = Self.certificate("Acme Root CA", domain: .admin)
+        let (service, _) = try await makeService(certificates: [corporate])
         defer { service.stop() }
-        let compose = """
-            services:
-              mcp:
-                image: registry.acme.internal/mcp/notes:1
-                ports: ["8080"]
-                depends_on: [db]
-              db:
-                image: registry.acme.internal/library/redis:7
-              builder:
-                build: ./x
-            """
-        let stack = GlobalMCPServer(id: "st00000001", name: "notes", kind: .stack,
-                                    stack: StackMCPSetting(composeYAML: compose, service: "mcp", port: 8080, path: "/mcp"))
-        #expect(stack.validationErrors().isEmpty)
-        try await service.saveGlobalMCP([stack])
-        #expect(await waitFor { service.globalMCPStates[stack.id]?.hostPort != nil })
-        let port = try #require(service.globalMCPStates[stack.id]?.hostPort)
+        try await service.saveGlobalMCP([Self.stack])
+        #expect(await waitFor { service.globalMCPStates[Self.stack.id]?.hostPort != nil })
+        let port = try #require(service.globalMCPStates[Self.stack.id]?.hostPort)
         #expect(await waitFor { service.globalMCP.servers.first?.stack?.hostPort == port }, "the port is kept for the next launch")
+        #expect(runtime.composeCommands.first == "config", "normalised first")
+        #expect(!runtime.composeCommands.contains("up"), "nothing starts before a connection")
+        let plan = try #require(service.stackPlans[Self.stack.id])
+        #expect(plan.endpointContainer == "\(EnvironmentService.stackProject(Self.stack.id))-mcp-1")
+        #expect(plan.files.map(\.lastPathComponent) == ["compose.yaml", "bellocode.override.yaml"])
+        let override = try String(contentsOf: plan.files[1], encoding: .utf8)
+        #expect(override.contains("\"app.bellocode.mcp-stack\": \"st00000001\""))
+        #expect(override.contains("ports: !reset []"), "published ports are replaced by the loopback forward")
+        #expect(override.contains("\"NODE_EXTRA_CA_CERTS\""), "certificates reach the stack")
+        // Services are written in name order: "db", then "mcp" (the last section).
+        let mcpSection = override.components(separatedBy: "  \"mcp\":").last ?? ""
+        #expect(!mcpSection.contains("\"SSL_CERT_FILE\""), "a value the file sets wins")
+        #expect(override.contains("\"SSL_CERT_FILE\": \"/etc/bellocode/certs/ca-bundle.pem\""), "others get it")
+        #expect(override.contains("additional_contexts:"), "and its builds")
 
         service.projectInUse(project)
         let (configs, _) = EnvironmentService.resolve(service.globalRegistrations(service.environment(for: project)), vault: vault)
         #expect(configs["notes"]?["type"]?.stringValue == "remote")
-        #expect(configs["notes"]?["url"]?.stringValue == "http://127.0.0.1:\(port)/mcp", "loopback only, nothing published")
+        #expect(configs["notes"]?["url"]?.stringValue == "http://127.0.0.1:\(port)/mcp", "loopback only")
 
-        // The refused service is listed and never started; the first connection starts the rest.
-        let (specs, refused, _) = service.stackSpecs(stack)
-        #expect(Set(specs.map(\.name)) == ["mcp", "db"])
-        #expect(refused.contains { $0.contains("builder") })
-        #expect(specs.allSatisfy { $0.extraLabels[EnvironmentService.stackLabel] == stack.id })
-        #expect(specs.allSatisfy { $0.network == ServiceLabels.networkName(projectKey: EnvironmentService.stackKey(stack.id), offline: false) })
-        #expect(runtime.stackEnsures.withLock { $0 }.isEmpty, "nothing runs before a connection")
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         defer { close(fd) }
         var address = sockaddr_in()
@@ -221,14 +230,40 @@ struct GlobalMCPTests {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         #expect(connected == 0)
-        #expect(await waitFor { !runtime.stackEnsures.withLock { $0 }.isEmpty })
-        #expect(Set(runtime.stackEnsures.withLock { $0 }.first ?? []) == ["mcp", "db"])
-        #expect(service.stackProjectKeys.contains(EnvironmentService.stackKey(stack.id)), "Prune keeps the stack's volumes")
+        #expect(await waitFor { runtime.composeCommands.contains("up") }, "the first connection starts the stack")
+        let up = try #require(runtime.composeCalls.withLock { $0.first { $0.command.first == "up" } })
+        #expect(up.command.contains("--wait") && up.files == plan.files)
 
-        // Turned off: no forwarder, no registration.
-        await service.setGlobalMCP(stack.id, enabled: false)
-        #expect(service.stackForwarders[stack.id] == nil)
+        // Turned off: no forwarder, no registration, the stack is stopped (not removed).
+        await service.setGlobalMCP(Self.stack.id, enabled: false)
+        #expect(service.stackForwarders[Self.stack.id] == nil)
         #expect(service.globalRegistrations(service.environment(for: project)).isEmpty)
+        #expect(await waitFor { runtime.composeCommands.contains("stop") })
+    }
+
+    @Test func elevatedStacksNeedRunAsWrittenAndTheEngineSocketIsNeverAllowed() async throws {
+        runtime.composeConfig.withLock {
+            $0 = Self.composeJSON(["mcp": ["image": "acme/mcp:1", "privileged": true,
+                                           "volumes": [["type": "bind", "source": "/Users/someone/data", "target": "/data"]]]])
+        }
+        let (service, _) = try await makeService()
+        defer { service.stop() }
+        try await service.saveGlobalMCP([Self.stack])
+        #expect(await waitFor { service.globalMCPStates[Self.stack.id]?.problem != nil })
+        let problem = try #require(service.globalMCPStates[Self.stack.id]?.problem)
+        #expect(problem.contains("privileged") && problem.contains("bind mount /Users/someone/data") && problem.contains("Run as written"))
+        #expect(service.stackForwarders[Self.stack.id] == nil, "not started")
+        var allowed = Self.stack
+        allowed.stack?.allowElevated = true
+        try await service.saveGlobalMCP([allowed])
+        #expect(await waitFor { service.stackForwarders[Self.stack.id] != nil }, "runs as written once allowed")
+
+        runtime.composeConfig.withLock {
+            $0 = Self.composeJSON(["mcp": ["image": "acme/mcp:1", "volumes": [["type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"]]]])
+        }
+        allowed.stack?.port = 8081
+        try await service.saveGlobalMCP([allowed])
+        #expect(await waitFor { service.globalMCPStates[Self.stack.id]?.problem?.contains("engine's socket") == true }, "never, even as written")
     }
 
     // MARK: Import
