@@ -77,8 +77,9 @@ public struct CodeRootIssue: Sendable, Equatable, Hashable {
     public var message: String
     /// The fix BelloCode can apply itself (the canonical spelling), when there is one.
     public var suggestion: String?
-    /// False for issues that do not stop the root from being used (`overlaps` is dropped, not an error).
-    public var isBlocking: Bool { kind != .overlaps }
+    /// False for issues that do not stop the root from being used: an overlap is dropped, and a link is replaced by
+    /// the real folder it leads to (which is then validated itself).
+    public var isBlocking: Bool { kind != .overlaps && kind != .notCanonical }
 
     public init(path: String, kind: Kind, message: String, suggestion: String? = nil) {
         self.path = path
@@ -162,7 +163,7 @@ public enum CodeRoots {
         if canonicalPath != standardized {
             found.append(CodeRootIssue(
                 path: standardized, kind: .notCanonical,
-                message: "\(display(standardized, home: home)) is a link to \(display(canonicalPath, home: home)). Use the real folder, so paths in the container and on the Mac agree.",
+                message: "\(display(standardized, home: home)) is a link to \(display(canonicalPath, home: home)); the real folder is used, so paths in the container and on the Mac agree.",
                 suggestion: canonicalPath))
         }
         // Checked on both spellings: a link may not lead into a system location.

@@ -49,11 +49,7 @@ extension EnvironmentService {
                     Task { @MainActor in self?.recordPulled(reference) }
                 },
                 onRefusal: { [weak self] refusal in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.dockerRefusals.append(refusal)
-                        if self.dockerRefusals.count > 20 { self.dockerRefusals.removeFirst(self.dockerRefusals.count - 20) }
-                    }
+                    Task { @MainActor in self?.recordDockerRefusal(refusal) }
                 })
             dockerProxy = proxy
             dockerEndpoint = DockerEndpoint(
@@ -63,6 +59,12 @@ extension EnvironmentService {
         } catch {
             Self.log.error("could not start the filtered Docker endpoint")
         }
+    }
+
+    /// Keeps a refused request for the Environment pane (bounded: the newest 20).
+    public func recordDockerRefusal(_ refusal: DockerFilterProxy.Refusal) {
+        dockerRefusals.append(refusal)
+        if dockerRefusals.count > 20 { dockerRefusals.removeFirst(dockerRefusals.count - 20) }
     }
 
     /// Rancher Desktop's docker CLI, by absolute path (never PATH).

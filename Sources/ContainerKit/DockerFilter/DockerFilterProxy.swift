@@ -41,6 +41,14 @@ public final class DockerFilterProxy: Sendable {
         public var path: String
         public var message: String
         public var date: Date
+
+        public init(scope: String, method: String, path: String, message: String, date: Date) {
+            self.scope = scope
+            self.method = method
+            self.path = path
+            self.message = message
+            self.date = date
+        }
     }
 
     /// - Parameters:

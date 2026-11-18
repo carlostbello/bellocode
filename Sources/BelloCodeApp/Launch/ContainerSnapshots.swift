@@ -72,6 +72,7 @@ extension SnapshotRunner {
         var environmentSettings = ProjectEnvironmentSettings()
         environmentSettings.image = "registry.acme.internal/dev/node:22-2026.11"
         environmentSettings.environment = ["NODE_ENV": "development", "PNPM_HOME": "/home/dev/.pnpm"]
+        environmentSettings.executionMode = .projectContainer
         await environments.update(project.directory, settings: environmentSettings)
         _ = await waitUntil(timeout: .seconds(5)) { environments.runtime?.isReady == true }
         environments.activate(project.directory)
@@ -104,6 +105,9 @@ extension SnapshotRunner {
 
         // Containers 2: services, policy refusal, routed MCP server in the isolation report, caches.
         written += await runContainers2(engine: engine, project: project.directory, driver: driver, workspace: workspace, fake: fake)
+
+        // Execution modes: the shared workspace, code roots, the mode picker, a refused Docker request.
+        written += await runExecutionModes(engine: engine, driver: driver, workspace: workspace)
 
         // 3. Settings ▸ Environment (image, limits, variables, Ports) and Settings ▸ Containers.
         EnvironmentSettingsModel.preferredDirectory = project.directory

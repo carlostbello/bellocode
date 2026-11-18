@@ -55,6 +55,8 @@ struct CodeRootsTests {
         let link = CodeRoots.issues(for: home + "/repos-link", home: home, sharedPrefixes: shared)
         #expect(link.first?.kind == .notCanonical)
         #expect(link.first?.suggestion == home + "/Documents/Repos", "the fix is the real folder")
+        #expect(link.first?.isBlocking == false)
+        #expect(CodeRoots.validate([home + "/repos-link"], home: home, sharedPrefixes: shared).roots == [home + "/Documents/Repos"], "a link is replaced by its target")
         // A link that leads to a system location is refused for where it leads.
         #expect(kinds(home + "/Documents/Repos/evil").contains(.systemLocation))
     }

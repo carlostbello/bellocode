@@ -33,6 +33,8 @@ struct CodeRootsSettingsView: View {
                         if let suggestion = blocking.suggestion, !service.codeRootsLocked {
                             Button("Use Real Path") { replace(path, with: suggestion) }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         }
+                    } else if let link = issues.first(where: { $0.kind == .notCanonical }), let real = link.suggestion {
+                        DSPillView("Uses \(CodeRoots.display(real))", tone: .info, symbolName: "arrow.turn.down.right")
                     } else if issues.contains(where: { $0.kind == .overlaps }) {
                         DSPillView("Inside another root", tone: .neutral, symbolName: "arrow.turn.down.right")
                     } else {
@@ -138,6 +140,8 @@ struct ExecutionModeRow: View {
     var enabled = true
     var divided = true
     var detail: String?
+    /// Replaces the mode's title (the "follow the default" row).
+    var title: String?
     let choose: () -> Void
 
     var body: some View {
@@ -147,7 +151,7 @@ struct ExecutionModeRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: DS.Space.s6) {
                         Image(systemName: mode.symbolName).font(.system(size: 11)).foregroundStyle(Color.ds.text2)
-                        Text(mode.title).font(.ds(.bodyEmph)).foregroundStyle(Color.ds.text)
+                        Text(title ?? mode.title).font(.ds(.bodyEmph)).foregroundStyle(Color.ds.text)
                         if recommended { DSPillView("Default", tone: .info) }
                         if mode == .hostDocker { DSPillView("Weaker", tone: .warning, symbolName: "exclamationmark.triangle") }
                     }
@@ -166,7 +170,7 @@ struct ExecutionModeRow: View {
             if divided { Rectangle().fill(Color.ds.border).frame(height: 1).padding(.leading, DS.Space.s12) }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(mode.title). \(mode.explanation)")
+        .accessibilityLabel("\(title ?? mode.title). \(detail ?? mode.explanation)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -187,10 +191,10 @@ struct ExecutionModePickerView: View {
     var body: some View {
         let chosen = environment.settings.executionMode
         ExecutionModeRow(mode: service.defaultMode, selected: chosen == nil, divided: false,
-                         detail: "Use the default (\(service.defaultMode.title)). \(service.defaultMode.explanation)") {
+                         detail: "Follows Settings ▸ Containers ▸ Execution, which is \(service.defaultMode.title) now.",
+                         title: "App default: \(service.defaultMode.title)") {
             choose(nil)
         }
-        .accessibilityLabel("Use the default, \(service.defaultMode.title)")
         ForEach(ExecutionMode.allCases.filter(service.isAllowed), id: \.self) { mode in
             ExecutionModeRow(mode: mode, selected: chosen == mode, recommended: false) { choose(mode) }
         }
