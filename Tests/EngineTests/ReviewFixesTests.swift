@@ -154,7 +154,11 @@ struct AmbiguousSendTests {
         #expect(held.state == .unknown)
         #expect(held.text == "deploy to staging")
         // The optimistic message stays (not delivered, not removed).
-        #expect(userMessages(setup.thread).contains { $0.id == held.id })
+        #expect(userMessages(setup.thread).contains { $0.id == held.id }, """
+            held \(held.id) not among the thread's messages: \(setup.thread.messageIDs.map { id in
+                "\(id) \(setup.thread.message(id).map { "\($0.message.kind.typeName) \(String(describing: $0.message.delivery))" } ?? "nil")"
+            }); phase \(setup.thread.phase)
+            """)
 
         await server.clearHTTPFaults()
         await setup.thread.retryUnconfirmed(held.id)

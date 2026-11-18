@@ -781,6 +781,8 @@ actor EngineCore {
         var windows: [SessionID: Page<SessionMessage>] = [:]
         /// Server time just before the windows were read (newer local admissions are kept by a whole-history reconcile).
         var windowsReadAt = Timestamp(milliseconds: 0)
+        /// The message cache's clock just before the windows were read (messages changed after it are newer than them).
+        var windowsReadMark: UInt64 = 0
         var serverPID: Int?
     }
 
@@ -870,6 +872,7 @@ actor EngineCore {
         let open = openThreads.keys.filter { known.contains($0) }.sorted()
         let windowSize = configuration.windowSize
         snapshot.windowsReadAt = serverNow()
+        snapshot.windowsReadMark = pipeline.state.messages.now
         let windows = try await boundedMap(open) { id in
             (id, try await client.messages(sessionID: id.rawValue, MessageListQuery(limit: windowSize, order: .descending)))
         }
@@ -908,7 +911,7 @@ actor EngineCore {
         // Disk reads first (they await); then one synchronous section that changes state.
         var windowInputs: [SessionID: WindowInput] = [:]
         for (id, page) in snapshot.windows {
-            windowInputs[id] = try await windowInput(id, page: page, readAt: snapshot.windowsReadAt)
+            windowInputs[id] = try await windowInput(id, page: page, readAt: snapshot.windowsReadAt, readMark: snapshot.windowsReadMark)
         }
         guard generation == syncGeneration, !Task.isCancelled else { return }
         let now = Timestamp.now
@@ -1080,11 +1083,16 @@ actor EngineCore {
         var syncState: SessionSyncState?
         /// Server time just before the page was requested.
         var readAt: Timestamp
+        /// The message cache's clock just before the page was requested: a message put after it (an event, a send or a
+        /// fetch that arrived while the page was in flight) is newer than the page, so its absence there proves nothing.
+        var readMark: UInt64
         /// A short page (the whole history): every cached ID of the session up to `readAt`, in or out of the range.
         var cachedWhole: [MessageID] = []
     }
 
-    private func windowInput(_ sessionID: SessionID, page: Page<SessionMessage>, readAt: Timestamp) async throws -> WindowInput {
+    private func windowInput(
+        _ sessionID: SessionID, page: Page<SessionMessage>, readAt: Timestamp, readMark: UInt64
+    ) async throws -> WindowInput {
         let server = page.data.map { Mapping.message($0, sessionID: sessionID) }.sorted { $0.sortKey < $1.sortKey }
         var local: [MessageID: Message] = [:]
         for message in try await store.messages(ids: server.map(\.id)) { local[message.id] = message }
@@ -1098,7 +1106,7 @@ actor EngineCore {
             server: server, local: local, cachedInRange: cachedInRange,
             oldestCached: server.first.map { local[$0.id] != nil } ?? false, hasOlderCached: hasOlderCached,
             full: page.data.count >= configuration.windowSize, cursor: page.cursor.next,
-            syncState: try await store.syncState(sessionID), readAt: readAt,
+            syncState: try await store.syncState(sessionID), readAt: readAt, readMark: readMark,
             cachedWhole: page.data.count < configuration.windowSize
                 ? try await store.messageIDs(sessionID: sessionID, createdThrough: readAt) : [])
     }
@@ -1109,6 +1117,10 @@ actor EngineCore {
         _ sessionID: SessionID, input: WindowInput, state: inout ProjectionState, into reduction: inout Reduction, now: Timestamp
     ) {
         let serverIDs = Set(input.server.map(\.id))
+        // Changed after the page was requested: the page is older than these, so they are neither removed nor deleted
+        // from the cache for being absent from it (the next read, or their own events, decide).
+        let newerThanPage = Set(
+            state.messages.messages(in: sessionID).map(\.id).filter { state.messages.putSince(input.readMark, $0) })
         for message in input.server {
             let local = state.messages[message.id] ?? input.local[message.id]
             let merged = SnapshotMerge.message(local: local, server: message, keepLocalProgress: !serverRestarted)
@@ -1129,7 +1141,7 @@ actor EngineCore {
             }
             candidates.formUnion(input.cachedWhole)
         }
-        for id in candidates where !serverIDs.contains(id) {
+        for id in candidates where !serverIDs.contains(id) && !newerThanPage.contains(id) {
             if let delivery = state.messages[id]?.delivery, delivery != .delivered { continue }
             state.removeMessage(id, sessionID: sessionID, into: &reduction)
         }
@@ -1137,7 +1149,7 @@ actor EngineCore {
             // The whole history, proven: reconcile the cache by session (not just the returned range), in one
             // transaction with parts and search entries. Local sends not yet listed (still sending, or admitted after
             // the read) are kept.
-            var keep = serverIDs.union(admittedDuringSync)
+            var keep = serverIDs.union(admittedDuringSync).union(newerThanPage)
             for message in state.messages.messages(in: sessionID) {
                 if let delivery = message.delivery, delivery != .delivered { keep.insert(message.id) }
             }
@@ -1152,7 +1164,8 @@ actor EngineCore {
                 reduction.writes.truncatedHistory[sessionID] = oldest
                 reduction.changes.append(.threadReset(sessionID))
             } else if input.server.isEmpty {
-                for message in state.messages.messages(in: sessionID) where message.delivery == nil || message.delivery == .delivered {
+                for message in state.messages.messages(in: sessionID)
+                where (message.delivery == nil || message.delivery == .delivered) && !newerThanPage.contains(message.id) {
                     state.removeMessage(message.id, sessionID: sessionID, into: &reduction)
                 }
             }
@@ -1236,9 +1249,10 @@ actor EngineCore {
         let generation = syncGeneration
         do {
             let readAt = serverNow()
+            let readMark = pipeline.state.messages.now
             let page = try await client.messages(
                 sessionID: sessionID.rawValue, MessageListQuery(limit: configuration.windowSize, order: .descending))
-            let input = try await windowInput(sessionID, page: page, readAt: readAt)
+            let input = try await windowInput(sessionID, page: page, readAt: readAt, readMark: readMark)
             guard generation == syncGeneration, !Task.isCancelled, pipeline.state.sessions[sessionID] != nil else { return }
             var reduction = Reduction()
             var state = pipeline.state

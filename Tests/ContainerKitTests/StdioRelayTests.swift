@@ -139,12 +139,14 @@ struct StdioRelayTests {
         let argv = StdioRelay.wrapper(token: token, program)
         process.arguments = Array(argv.dropFirst())
         let stdin = Pipe(), stdout = Pipe()
+        // The program may exit before reading its input: the write then fails with EPIPE instead of raising SIGPIPE.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
         try process.run()
         defer { try? FileManager.default.removeItem(atPath: "/tmp/.bellocode/\(token).pid") }
-        stdin.fileHandleForWriting.write(input)
+        try? stdin.fileHandleForWriting.write(contentsOf: input)
         if let signal {
             // Wait until the program runs (it echoes the input), then signal the wrapper as the host's kill does.
             let first = stdout.fileHandleForReading.availableData

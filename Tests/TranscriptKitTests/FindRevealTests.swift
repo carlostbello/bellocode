@@ -28,8 +28,10 @@ import Testing
         return builder.messages
     }
 
-    static func waitForMatches(_ controller: TranscriptController) async {
-        for _ in 0..<200 where controller.findMatches.isEmpty { try? await Task.sleep(for: .milliseconds(20)) }
+    /// Waits (real time, bounded) for the find's matches: a fixed number of short sleeps runs out under load.
+    static func waitForMatches(_ controller: TranscriptController, timeout: Duration = .seconds(30)) async {
+        let deadline = ContinuousClock.now + timeout
+        while controller.findMatches.isEmpty, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }
     }
 
     @Test func revealingAnUncachedLargeRowParsesAndLaysOutOffMain() async {

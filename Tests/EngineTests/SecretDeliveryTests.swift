@@ -57,6 +57,7 @@ enum PipeReader {
 /// Runs `/bin/sh -c script sh arg` with a bounded wait; nil on timeout or failure to start.
 func runShell(_ script: String, _ argument: String, timeout: Duration = .seconds(5)) async -> String? {
     let process = Process()
+    process.standardInput = FileHandle.nullDevice
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = ["-c", script, "sh", argument]
     let output = Pipe()
@@ -318,6 +319,7 @@ struct SecretDeliveryTests {
             try? FileManager.default.removeItem(at: legacyParent)
         }
         let dead = Process()
+        dead.standardInput = FileHandle.nullDevice
         dead.executableURL = URL(fileURLWithPath: "/usr/bin/true")
         try dead.run()
         dead.waitUntilExit()

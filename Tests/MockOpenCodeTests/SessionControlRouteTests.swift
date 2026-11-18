@@ -33,7 +33,8 @@ struct SessionControlRouteTests {
         // The first turn blocks on a question, so later prompts stay in the inbox.
         await server.enqueueScript(TurnScript { TurnStep.question("Pick", options: ["a", "b"]) }, for: id)
         _ = try await client.prompt(id, "first")
-        for _ in 0..<200 where await server.pendingForms().isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while await server.pendingForms().isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         _ = try await client.post("/api/session/\(id)/prompt", ["id": "msg_q1", "text": "later", "delivery": "queue"])
         _ = try await client.post("/api/session/\(id)/prompt", ["id": "msg_q2", "text": "drop", "delivery": "queue"])
 

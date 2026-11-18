@@ -370,7 +370,7 @@ struct GitLabPollingTests {
         #expect(service.failureKinds[GitLabWorld.ref.url] == .offline)
         service.shutdown()
         // The snapshot write is ordered but not awaited by the read: wait for the row itself.
-        for _ in 0..<200 where (try await store.mergeRequestSnapshots()).isEmpty { await Task.yield() }
+        try await waitFor("the snapshot row", timeout: .seconds(30)) { !(try await store.mergeRequestSnapshots()).isEmpty }
         let (again, _, _) = try await make(GitLabWorld.server(), store: store, host: host)
         #expect(again.snapshots[GitLabWorld.ref.url]?.title == "Add launch checklist", "shown before any fetch")
         again.shutdown()

@@ -213,6 +213,7 @@ struct HelperAuthorisationTests {
         try ExecHelperConfig.writeAtomically(try ExecHelperConfig.Requirement(epoch: "e", generation: 2).encoded(),
                                              to: ExecHelperConfig.Requirement.url(forConfig: url))
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: helper)
         process.arguments = ["-c", "touch \(root.path)/ran"]
         process.currentDirectoryURL = URL(filePath: project)

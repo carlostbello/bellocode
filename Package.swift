@@ -51,11 +51,15 @@ func library(_ name: String, dependencies: [Target.Dependency] = [], testDepende
         .target(name: name, dependencies: dependencies, swiftSettings: swiftSettings),
         .testTarget(
             name: "\(name)Tests",
-            dependencies: [.target(name: name)] + testDependencies,
+            dependencies: [.target(name: name), "TestProcessSetup"] + testDependencies,
             swiftSettings: testSwiftSettings
         ),
     ]
 }
+
+/// Linked into every test bundle: process-wide setup that runs when the bundle loads (SIGPIPE ignored, so a write to a
+/// closed pipe or socket fails with EPIPE instead of killing the test process). `Tests/Support/TestProcessSetup`.
+let testProcessSetup: Target = .target(name: "TestProcessSetup", path: "Tests/Support/TestProcessSetup")
 
 let uiKitDependencies: [Target.Dependency] = ["BelloCore", "DesignSystem"]
 
@@ -147,6 +151,7 @@ let targets: [Target] =
             name: "BelloCodeAppTests",
             dependencies: [
                 "BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore", "OrchestrationUI",
+                "TestProcessSetup",
             ],
             swiftSettings: testSwiftSettings
         ),
@@ -166,6 +171,6 @@ let package = Package(
         .executable(name: "BelloCode", targets: ["BelloCodeApp"]),
     ],
     dependencies: packageDependencies,
-    targets: targets + [transcriptDemo],
+    targets: targets + [transcriptDemo, testProcessSetup],
     swiftLanguageModes: [.v6]
 )

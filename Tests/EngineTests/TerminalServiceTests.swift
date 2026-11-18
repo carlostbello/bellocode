@@ -144,6 +144,35 @@ struct TerminalServiceTests {
         await fixture.stop()
     }
 
+    /// A reconcile whose server list was requested before a terminal exited, and answered after, must not show it running
+    /// again (or save it so). It did when the list was slow (seen as `saveWaitsForAWriteAlreadyInFlight` failing under
+    /// load: the load-time refresh landed between an exit and its save).
+    @Test func aListRequestedBeforeAnExitDoesNotReviveTheTerminal() async throws {
+        let fixture = try await Fixture.start()
+        let server = fixture.harness.server
+        let terminals = fixture.service.terminals(for: fixture.sessionID)
+        await terminals.waitUntilLoaded()
+        await terminals.refresh()
+        let record = try #require(await terminals.create(directory: "/tmp/mock-project"))
+        let list = "/api/experimental/session/\(fixture.sessionID.rawValue)/terminal"
+        await server.injectHTTPFault(HTTPFault(method: "GET", pathPrefix: list, action: .holdResponse(gate: "list"), count: 1))
+        let refreshing = Task { await terminals.refresh() }
+        let held = await waitUntilAsync(timeout: .seconds(20)) { await server.heldResponseCount(gate: "list") == 1 }
+        try #require(held, "the list is read (it still has the terminal) and its answer held")
+
+        terminals.streamExited(record.id, code: 7)
+        await server.releaseResponses(gate: "list")
+        await refreshing.value
+        #expect(terminals.record(record.id)?.state == .exited(code: 7), "the older list does not revive it")
+        await terminals.save()
+        #expect(try await fixture.store.terminalSet(fixture.sessionID)?.record(record.id)?.state == .exited(code: 7))
+
+        // A list requested after the exit still reconciles the record as before.
+        await terminals.refresh()
+        #expect(terminals.record(record.id)?.state == .running, "the server lists it again: running")
+        await fixture.stop()
+    }
+
     @Test func streamTypesResizesDetachesAndReplaysOnlyTheGap() async throws {
         let fixture = try await Fixture.start()
         let server = fixture.harness.server

@@ -34,7 +34,7 @@ struct GitProjectTests {
         #expect(job.state == .cloning)
         #expect(service.job(for: destination) === job)
         // The project is listed at once (the person can start typing).
-        for _ in 0..<100 where added.paths.withLock(\.isEmpty) { await Task.yield() }
+        try await waitFor("the project is listed", timeout: .seconds(30)) { !added.paths.withLock(\.isEmpty) }
         #expect(added.paths.withLock { $0 } == [destination])
         // The person types and presses Send: the send waits here.
         let typed = "Explain the README"
