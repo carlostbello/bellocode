@@ -51,7 +51,7 @@ extension EnvironmentService {
     /// (marked as suggested; Settings shows them for review).
     func suggestCodeRootsIfNeeded() {
         guard defaults.codeRoots == nil, managedExecution?.codeRoots == nil else { return }
-        let projects = models.values.filter { $0.projectID != nil }.map(\.directory)
+        let projects = projectDirectories.sorted()
         let suggestion = CodeRoots.suggestion(projectDirectories: projects)
         guard !suggestion.isEmpty else { return }
         var value = defaults
@@ -140,7 +140,8 @@ extension EnvironmentService {
     /// outside them. Missing folders are created (they must exist to be mounted).
     func sharedExtraMounts() -> [String] {
         let roots = codeRootsValidation.roots
-        var mounts = [(NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees")]
+        // The folder BelloCode's worktrees live in (~/.bellocode/worktrees), whole.
+        var mounts = [(worktreeParent("/shared") as NSString).deletingLastPathComponent]
         if let data = configuration?.opencodeDataDirectory { mounts.append(data.appending(path: "opencode/worktree").path) }
         for model in models.values.sorted(by: { $0.directory < $1.directory })
         where mode(for: model) == .sharedWorkspace && CodeRoots.root(containing: model.directory, in: roots) != nil {
@@ -148,7 +149,7 @@ extension EnvironmentService {
             mounts += model.extraWorktrees
         }
         var seen = Set<String>()
-        let standardized = mounts.map { ($0 as NSString).standardizingPath }.filter { seen.insert($0).inserted }
+        let standardized = mounts.map { CodeRoots.lexicallyNormalized($0) }.filter { seen.insert($0).inserted }
         let outer = standardized.filter { path in
             !(roots + standardized).contains { $0 != path && CodeRoots.inside(path, $0) }
         }

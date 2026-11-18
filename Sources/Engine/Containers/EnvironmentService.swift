@@ -167,6 +167,8 @@ public final class EnvironmentService {
     @ObservationIgnored var worktreeParent: @MainActor (String) -> String = { directory in
         (NSHomeDirectory() as NSString).appendingPathComponent(".bellocode/worktrees/\((directory as NSString).lastPathComponent)")
     }
+    /// The folders the person added as projects (the first-run code-roots suggestion is derived from them).
+    @ObservationIgnored var projectDirectories: Set<String> = []
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
     /// BelloCode's filtered Docker endpoint (nil until started, and in tests that do not use it).
     @ObservationIgnored public internal(set) var dockerEndpoint: DockerEndpoint?
@@ -278,6 +280,7 @@ public final class EnvironmentService {
     /// only changes what the sidebar shows: its container, volumes, forwards and settings are untouched (U1 in
     /// docs/reviews/deep-review-1.md). Deleting them is the separate, confirmed `purge`.
     func projectsChanged(_ projects: [ProjectItem]) {
+        projectDirectories = Set(projects.map(\.directory))
         for item in projects {
             var created = false
             let model = models[item.directory] ?? {
