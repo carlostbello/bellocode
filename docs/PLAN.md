@@ -33,6 +33,16 @@ Research this plan is built on (read these before implementing an area):
 - **Look and feel.** The first builds looked like a stock Swift app. A design pass now defines the target visual
   language from T3 Code's source and a mock ([design/](design/)); a restyle of every surface follows.
 
+### Owner answers (2026-11-18)
+
+- **GitLab:** Free tier; native API only (no `glab`). Instance `https://gitlab.novacoast.com`. Git uses HTTPS, not
+  SSH. Personal access tokens last one year.
+- **Git features:** parity with T3 Code's git integration, built natively into the app.
+- **MCP servers:** global MCP servers are wanted. The owner's existing ones are Docker images or separate compose
+  stacks that expose an MCP endpoint; a company-wide MCP gateway will be integrated later.
+- **Network:** an internal proxy transparently intercepts dependency traffic on the network; users do not configure it.
+- **Still open:** whether container images are signed today and with what; which registry hosts the approved images.
+
 ## 1. Facts that shape the plan
 
 1. "opencode2" is opencode major version 2 (2.3.0 locally, MIT). One 224 MB arm64 binary, Bun compiled in.
