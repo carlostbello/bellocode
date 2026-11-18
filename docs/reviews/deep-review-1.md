@@ -5,7 +5,7 @@ Scope includes the shipping Swift targets, their test seams, the bundled TypeScr
 
 ## Executive summary
 
-**Hold enterprise rollout.** The app can archive a project by deleting its persistent container home, and a warm launch can replace saved execution restrictions with defaults. Both behaviors were observed at the service boundary using in-memory fixtures. These are release blockers even for a single internal user.
+**Hold enterprise rollout.** The app can archive a project by deleting its persistent container home, and a warm launch can replace saved execution restrictions with defaults. Both behaviors were observed at the service boundary using in-memory fixtures. These are release blockers even for a single internal user. The 41 findings comprise **2 critical, 18 major, 16 minor and 5 suggestions**.
 Keep the single backend, stable server IDs, native editors, virtualized renderers and one ordered projection. The most valuable changes are small corrections to lifetime, ownership and acknowledgement at the places those components meet.
 
 ### Recommendations ranked by value for effort
@@ -63,8 +63,9 @@ The SwiftPM app and helper dependency closure contains **370 Swift files and 93,
 | Engine/Store/ProjectionStore.swift | 870 | MainWindowController (17) | 729 |
 | TranscriptKit/Transcript/Controller/TranscriptController.swift | 857 | DefaultCatalogJSON (MockOpenCode, line 5) | 722 |
 
+Including same-module extensions gives a different ranking: MockOpenCodeServer 3,548 lines, TranscriptController 3,381, EngineCore 1,919, SidebarViewController 1,211, SnapshotRunner 1,182, ComposerViewController 1,049 and DiffContentView 1,043. SnapshotRunner alone is larger than most production view controllers.
 File and type columns are independent rankings. Primary declaration spans include comments/nested members through the closing top-level brace, exclude extensions and are a lower bound on total responsibility. The long mock catalog is fixture data. The same line count in EngineCore has very different maintenance costs.
-Swift normally imports modules. Counting import statements gives BelloCore 133, Engine 83, DesignSystem 78 and OpenCodeKit 37. For type fan-in, counting distinct *other* files mentioning a uniquely named top-level type/alias outside imports and line comments gives DS 86, SessionID 76, Engine 33, MessageID 32, Timestamp 28, DSButton/DSDraw 24 each, Message/Session 23 each, ProjectionStore 22, OpenCodeClient/MainWindowController 20 each. This is a lexical proxy, not compiler symbol resolution.
+Swift normally imports modules. Counting import statements gives BelloCore 133, Engine 83, DesignSystem 78 and OpenCodeKit 37. For type fan-in, counting distinct *other* files mentioning a uniquely named top-level type/alias outside imports and line comments gives DS 86, SessionID 76, Engine 33, MessageID 32, Timestamp 28, DSButton/DSDraw 24 each, Message/Session 23 each, ProjectionStore 22, OpenCodeClient/MainWindowController 20 each. These counts approximate fan-in because equally spelled references can resolve differently.
 
 **A1 · suggestion · Divide EngineCore by invariant (L).**
 `Sources/Engine/EngineCore.swift:69` owns the server epoch, event exclusion, command admission, persistence retry, attention, organisation and presentation reads.
@@ -98,7 +99,7 @@ Track completeness per list and directory, retain last-known rows, publish parti
 **C3 · major · App requests cross the cache deletion boundary (M).**
 `Sources/Engine/EngineCore.swift:1946` stores secret and app approvals through the ordinary pending projection. `Sources/Engine/Store/ProjectionStore.swift:103` preserves only registry and thread UI rows on repeated write failure.
 `Sources/Engine/Store/Schema.swift:191` includes the entire pending table in a cache rebuild. opencode cannot reconstruct a request created solely in the app.
-Give app requests their own durable table or an ownership discriminator honored by rebuild, write retry and deletion. Test write failure, relaunch and rebuild with a pending app card.
+A startup repair reconstructs pending schedule cards (Extras/ExtrasHub.swift:115). It cannot reconstruct an arbitrary app-only request. Give app requests their own durable table or an ownership discriminator honored by rebuild, write retry and deletion. Test write failure, relaunch and rebuild with a pending app card.
 
 **C4 · major · Closing one window can freeze another window's thread (S).**
 `Sources/Engine/Presentation/Engine.swift:291` returns the same model without acquiring another reference. Each workspace owns a separate eight-entry LRU and calls close on eviction or teardown at `Sources/BelloCodeApp/Shell/WorkspaceController.swift:115,416`.
@@ -107,7 +108,7 @@ Give each window a lease and tear down on last release. Keep view-local scroll/f
 
 **C5 · major · An authoritative short history can leave deleted messages searchable (M).**
 `Sources/Engine/EngineCore.swift:913,941,961` reads disk IDs only between the first and last returned messages. For a short or empty page it also scans the bounded in-memory message cache.
-If a server-side rewind removes the tail while disconnected, newer on-disk rows outside that interval can outlive reconcile. With an empty page and a cold message cache there are no candidates at all. The session is nevertheless marked historyComplete.
+If a server-side change removes the tail while disconnected, newer on-disk rows outside that interval can outlive reconcile. With an empty page and a cold message cache there are no candidates at all. The session is nevertheless marked historyComplete.
 Reconcile a proven whole history by session and retained IDs in one SQLite transaction, including parts and FTS. Protect optimistic admissions newer than the read. Test an empty list and a shortened tail after process relaunch.
 
 **C6 · major · Delivery-unknown recovery ends at process exit (M).**
@@ -157,13 +158,23 @@ Bound bytes while streaming and before base64 decoding, cap concurrent loads and
 MR polling already backs off, schedule timing uses the earliest due task, and `Sources/Engine/Extras/WallClock.swift:21` wakes at most a minute apart to follow clock changes. Plugin waits check every 750 ms and may walk a task tree (`Plugin/server.ts:193`).
 Back off an unavailable runtime when no project needs it, pause invisible row clocks, and use event-driven waits plus deadlines where possible. Count wakeups and requests over ten idle minutes with zero, one and ten watches before tuning.
 
+**P5 · minor · File-watch overflow loses coverage of the changed tree (M).**
+`Sources/Engine/Containers/FileEventBridge.swift:157,180` caps pending paths while continuing to insert parent folders. Flush clears both sets and sends only the first maxBatch entries. More distinct changed folders than the limit can leave the container watcher unaware of part of a change.
+A large checkout or generated tree is a realistic trigger. Counters record overflow, but the truncated names have no retry path. The backing folder set can grow until flush.
+Represent overflow as one dirty workspace with a bounded rescan/refresh obligation. Expose the degraded state and avoid repeated debounce wakeups while a prior sink call is outstanding. Test more changed directories than fit in a batch.
+
+**P6 · minor · Virtual rows do not bound paged message bodies (M).**
+`Sources/Engine/Presentation/ThreadModel.swift:350` keeps a full MessageModel and sort key for every older message loaded. The core's 2,048-message cache (`EngineConfiguration.swift:40`) and the window's eight-thread LRU bound different objects.
+Paging through long tool-heavy histories in several recently visited threads can therefore retain their bodies even after cells and layouts are recycled. This is a source-derived memory slope. Earlier transcript layout/cache repairs addressed different storage.
+Measure resident bytes after paging 1k/10k messages in eight threads and after closing one window. Keep lightweight IDs/sort keys, evict bodies outside a costed window and rehydrate from SQLite while preserving selection ranges and the visible anchor.
+
 ## 4. Security and execution isolation
 
 **S1 · major · Production can select an unconfined backend (S).**
 `Sources/BelloCodeApp/Launch/AppRuntime.swift:57` accepts an environment-selected endpoint before building the supervised configuration.
 `Sources/Engine/EngineConfiguration.swift:15` accepts any URL with a scheme. The attached branch uses the ordinary projection database, default vaults and no container configuration.
 A developer's inherited override therefore changes where normal app work executes and which server reconciles the user's existing cache.
-In that branch, the missing setup runner falls through to host zsh (Sources/Engine/Presentation/Engine.swift:172 and Sources/Engine/Git/WorktreeService.swift:299). Compile attachment into a development harness with a separate data namespace. Require the bundled supervisor and helper in the distributed executable.
+In that branch, the missing setup runner falls through to host zsh (`Sources/Engine/Presentation/Engine.swift:172` and `Sources/Engine/Git/WorktreeService.swift:299`). Compile attachment into a development harness with a separate data namespace. Require the bundled supervisor and helper in the distributed executable.
 
 **S2 · major · A selected permission mode can fail while the first turn proceeds (M).**
 `Sources/BelloCodeApp/Shell/Seams.swift:215` creates a thread and calls the nonthrowing setter in `Sources/Engine/Presentation/ThreadModel.swift:322`.
@@ -254,6 +265,10 @@ Return a queued/refused result to the pane. Show a persistent overflow notice, r
 This produces multiple refresh paths for the same appearance/text-size change, even where the restyle uses the same DS colors. Native field, terminal and diff metrics genuinely differ.
 Keep the renderer types and feed them one versioned appearance/text-scale input. Check live changes in an already-open picker, composer, diff, terminal and transcript with the same contrast/font-size matrix.
 
+**U5 · minor · An unavailable search index is presented as a successful empty search (S).**
+`Sources/BelloCodeApp/Palette/PaletteController.swift:346` turns a thrown message search into an empty array, marks the query complete and displays “No messages match”. The file-search path at line 331 already distinguishes failure.
+A store read failure with cached sessions visible is indistinguishable from an absent message. Preserve prior results, show the index error with Retry, and commit messageQuery only after a successful result.
+
 The section E checklist was applied as a code and test audit. Cached snapshots, native split autosave, per-window selection/drafts and stable IDs give warm navigation a sound base. `AppDelegate.swift:53` shows the window before cache hydration. Slow store open still precedes the first window, and `Presentation/Engine.swift:232` suppresses cache-load errors. Measure time to usable cached rows on a populated store, separately from server-ready time.
 Purpose/context, states and artifacts have specific exceptions in C1, C2, U1 and U2. Parallelism and restoration need C4 and S3. Ask for the effective branch/worktree at action time and preserve focus on a failed confirmation.
 Keyboard evidence includes marked-text checks in `Sources/ComposerKit/View/ComposerTextView.swift:50,64` and terminal key routing in `Sources/TerminalKit/Terminal/TerminalPaneView.swift:22,137`. AgentUI has pinned requests and menu responders. Status glyphs and labels, per-row text accessibility and on-demand accessibility elements for large diff row lists are substantial work.
@@ -267,8 +282,8 @@ The first build was still waiting after 32 minutes. A process sample located the
 Pass verified dependency revision/tag/dirty metadata in the reproducible release build, add a build timeout with diagnostics, and raise the observed hang upstream. Keep the CLT macro-path workaround test-scoped and verify it on each toolchain, including the minimum supported OS.
 
 **D2 · major · The release script can sign a helper whose provenance it cannot establish (S).**
-`Scripts/opencode-checksums:7` records an Intel archive hash but no Intel executable hash. The binary_ok test in `Scripts/fetch-opencode.sh:52` accepts executability alone when that second hash is absent. This also affects an already-populated Vendor directory.
-The verified archive route is stronger. The ripgrep fallback at `Scripts/fetch-opencode.sh:168` permits a local executable or missing helper, and `Scripts/make-app.sh:58` will still package/sign. A signature authenticates what this build packaged.
+`Scripts/opencode-checksums:7` records an Intel archive hash but no Intel executable hash. The binary_ok test in `Scripts/fetch-opencode.sh:48` accepts executability alone when that second hash is absent. This also affects an already-populated Vendor directory.
+The verified archive route is stronger. The ripgrep fallback at `Scripts/fetch-opencode.sh:155` permits a local executable or missing helper, and `Scripts/make-app.sh:58` will still package/sign. A signature authenticates what this build packaged.
 Require verified executable digests and portable dependencies for every shipping architecture, verify any cached helper just before signing, and keep the permissive fallback solely in a clearly marked developer build. Test an unrecognized cached helper without executing it.
 
 **D3 · minor · Acknowledgements omit bundled notices (S).**
@@ -278,3 +293,109 @@ T3 Code's embedded MIT notice is present. Include required notices and binary re
 **D4 · suggestion · Isolate Rancher discovery from the Docker capability decision (S).**
 `Sources/ContainerKit/Runtime/RuntimeDiscovery.swift:117,135,158` relies on the 1.25 product layout, a home-relative socket, app plist and containerEngine.name. A config value can reject access before the supported Linux Engine API is probed.
 A settings rename or stale value can misclassify an otherwise supported engine. Prefer version/ping/API compatibility on the selected socket as authority and use product configuration for remediation hints. Retain API 1.44 floor and fail closed on unsupported capabilities.
+
+**D5 · minor · Unknown new events and broken known events look identical (M).**
+`Sources/OpenCodeKit/Events/OpenCodeEvent.swift:160` catches a decoding failure and emits the same unknown envelope used for genuinely new event types. `Sources/Engine/Sync/EventReducer.swift:552` then decodes seven additional known event types manually out of raw frames.
+A changed field on a known semantic event can therefore increment an unknown counter while the connection stays healthy and the relevant state goes stale. Conversely, an intentionally supported extra event can count as unknown.
+Move the seven typed payloads into OpenCodeKit. Distinguish unsupported event, malformed known event and irrelevant event. Trigger a bounded targeted refresh for malformed semantic events. Log only type/category and count.
+
+### External contracts to carry through upgrades
+
+| Dependency or boundary | Pinned assumption and how drift appears |
+| --- | --- |
+| GRDB.swift 7.12.0 (MIT) | DatabasePool with WAL on disk, DatabaseQueue in memory, FTS5, foreign keys, transactional named migrations. Test a populated old file on the oldest supported macOS SQLite as well as this SDK. |
+| swift-markdown/swift-cmark 0.9.0 (Apache-2.0 / bundled cmark notices) | Parsing and source spans feed layout and selection caches. Replay the Markdown corpus, including partial fences, tables, UTF-16 selection and finished revisions. |
+| SwiftTerm 1.99.3 (MIT) | Rendering, input routing and terminal replay depend on the pre-2.0 surface and its build plugin. Retest resize/input ordering, alternate screen, clipboard controls and reconnect. |
+| swift-argument-parser 1.8.2, swift-png 4.5.2, h 1.0.1 | Transitive pins in Package.resolved, Apache-2.0. Build the complete app/helper closure under Swift 6.4. Check license notices with the shipped inventory. |
+| opencode 2.3.0 | Bundled host binary, MIT. Supervisor checks version and PID. HTTP 404/decoding failure, missing events and changed tool behavior are three different failure modes. Keep the source archive checksum and contract fixtures as an upgrade unit. |
+| GitLab REST v4 | Same-origin redirect guard, Keychain token, conditional pagination, rate-limit handling. Revalidate against the supported self-managed versions and editions, including a path prefix and missing approval capability. |
+| Rancher Desktop / Docker Engine | Product layout and file-sharing assumptions, labeled mounts/volumes, Linux Engine v1.44, exec hijack and port forwarding. The fake daemon protects protocol shape. VM behavior, file events and network policy need a controlled live matrix. |
+
+The checked-in OpenAPI includes many operations the app never invokes. The following are the experimental routes used by the first-party clients, plus the plugin contracts they require.
+
+| Route or protocol | Consumer, failure signal and upgrade check |
+| --- | --- |
+| GET /api/experimental/client-mcp (WebSocket) | ClientMCPHost.swift:167 builds Basic-auth upgrade plus location/name. Check MCP initialize, tools/list, attributed calls, cancellation and disconnect removing tools. |
+| GET /api/experimental/session/{id}/instructions/entries, PUT/DELETE …/entries/{key} | OpenCodeClient+Browser.swift:118 supplies browser and plugin guidance. Check stored entry text/identity after attach and removal. Missing guidance can otherwise look like a functioning bridge. |
+| GET/POST /api/experimental/session/{id}/terminal and GET …/terminal/read | OpenCodeClient+PTY.swift:9,15,49. Check persistent list/create shape and readable terminal output per session. |
+| GET/PUT/DELETE /api/experimental/persistent-pty/{id}, GET …/snapshot, GET …/connect (WebSocket) | OpenCodeClient+PTY.swift:22,29,36,41,60. Verify cursor/role/takeover/input_protocol=1, replay/reset boundaries and exit. A successful upgrade alone does not verify byte offsets. |
+| POST /api/experimental/schedule, GET/DELETE …/schedule/{id} | OpenCodeClient+Isolation.swift:65. Exercised by isolation diagnostics. BelloCode's recurring scheduler executes its stored definitions locally. A broken probe must remain “Not verified”/“Problem”. |
+| POST /api/rpc/{rpcID}/{method} carrying experimental.browser v4 | BrowserContract.swift:8, BrowserAttachment.swift:113,246,325,380 implement attach, command, result, state and SSE rpc.experimental.browser.control. Explicit version mismatch, long-lived attach and request deadline. Replay navigation, cancellation, ownership transfer and stale generations. |
+| Same RPC with bellocode/info, plugin contract v1 | OrchestrationContract.swift:14,114 and Plugin/server.ts:629. Compare tool set and version after location activation. Verify SDK ctx.session, worktree, permission, instructions, event subscription, tool transformation and shell hook behavior in addition to the names. |
+
+Session list/message/inbox, interrupt, pending permission/form, synthetic wakes, VCS and worktree calls also need semantic upgrade coverage even though their URLs lack the experimental prefix. A wire-compatible change to prompt-ID admission or worktree move ordering can invalidate UI guarantees.
+
+## Refactoring roadmap
+
+| Order | Change and size | Primary risk | Protection and exit criterion |
+| --- | --- | --- | --- |
+| Quick 1 | Remove purge from archive, restore saved policy before helper publication (S each). | Existing cleanup and cold-start ordering. | Fake-runtime archive/undo/quit and populated-cache relaunch. Observe zero volume deletes and the exact saved policy. |
+| Quick 2 | Gate first send on permission confirmation and child location (S–M). | Orphaned empty sessions/worktrees. | Reject the second step after successful creation. Keep the ID for retry, report cleanup, observe zero dispatched prompts. |
+| Quick 3 | Lease shared thread models, fence MR completions, defer schedule catch-up (S each). | Leaks, duplicate reminders, delayed sidebar state. | Two windows plus eviction, unwatch while fetching, one overdue occurrence with a gated-ready supervisor. |
+| Quick 4 | Remove optional secret mounts, fix visual file authorization and revocation errors (S–M). | Existing projects expecting optional assets. | Inspect effective mounts and card scopes, exercise failed deletion/relaunch, verify authorized visual attachments still render. |
+| Quick 5 | Enforce verified release inputs and notices, stabilize SwiftTerm build metadata (S). | Developer bootstrap friction. | Fresh arm64/Intel inputs, stale cached input refusal, strict codesign verification and notice inventory. |
+| Structural 1 | Extract a production composition root and fixture executable. Require a container runner in the shipped Git/PTY setup (M). | Broken shell snapshots or missing test hooks. | Build both graphs. The release dependency graph excludes MockOpenCode, fixture graph still drives all panes. |
+| Structural 2 | Split durable app state from rebuildable projection, moving requests/outbox via an additive migration (M–L). | Losing pending cards, attachments or drafts during upgrade. | Seed historical DB/WAL, interrupt migration, restart, rebuild and recover. Preserve explicit unknown delivery and deduplicate by ID. |
+| Structural 3 | Extract the per-project execution-policy writer and per-session command/resync state machines (L). | Reordering events or admitting stale work across awaits. | Deterministic barriers around install/configure/fetch/commit, snapshot completeness tests, full reducer fixtures, real supervisor disconnect lane. |
+| Structural 4 | Optimize measured sidebar, FTS and resource work and isolate shared highlighting (M). | Search freshness, anchor drift, lost live context. | Compare row work, WAL bytes, resident memory and p95 under a fixed multi-window fixture. Preserve replay, selection and find behavior. |
+| Release gate | Run hardware UX and enterprise integration acceptance on a signed build (M). | Debug/mock behavior differs on the managed image. | Unlocked 60/120 Hz, VoiceOver/IME, real approved image, self-managed GitLab and production Keychain signing identity. |
+
+The target graph keeps BelloCore and rendering tokens at the bottom, external protocol adapters independent, a single projection writer above them, and a main-actor window layer consuming scoped models. Split files along these ownership boundaries after the regression tests exist. A separate process or a generic provider abstraction adds no value to this single-backend deployment.
+
+## Verification and limits
+
+**Environment.** Apple M5 Max, arm64, macOS 27.0.1 (26A434), Apple Swift 6.4, CLT 6.4 driver 1.168.6. Source revision `6db276a`. Counts use physical lines and file-level identifiers in the checked-in tree. No on-screen frame measurements were available.
+
+### Commands and observed results
+
+| Check | Result in this worktree |
+| --- | --- |
+| `Scripts/fetch-opencode.sh` | Used the cached, SHA-256-verified arm64 opencode 2.3.0 archive and the verified ripgrep 15.1.0 archive. |
+| `swift build` | First invocation stalled in SwiftTermBuildInfoGenerator. After sampling and ending that generator, the debug build with the dependency's supported metadata overrides completed in 31.94 s. CLT linker search-path and the Q3 warning remain. |
+| `make app` with the same build metadata | Assembled a 292 MiB debug bundle with opencode, rg, bellocode-exec and plugin. Inside-out ad-hoc signing and `codesign --verify --deep --strict` passed. Inspected the packaged acknowledgements. |
+| Focused `swift test --filter` run, six test targets | 148 tests, 147 passed. The terminal drawer assertion failed at TerminalShellTests.swift:73. The 2,000-thread navigation test passed in this run. |
+| `swift test --skip-build --filter TerminalShellTests` | All 3 passed in isolation (32.630 s). Attribution to load or a product race remains open. |
+| `swift test --skip-build --filter NavigationPerformanceTests` | Isolated repeat failed. Exceeded its 300 s limit, finished after 442.351 s and reported 3,504 row edits in each of ten samples against a bound of four. |
+| Real pinned server, `swift test --skip-build --filter 'lifecycleSessionsEventsCrashRestartAndStop\|stopDuringStartupLeavesNoChild'` | 2 passed in 2.070 s. First readiness 1,381 ms, restart after owned child kill 342 ms, new SSE resync 344 ms after kill, stop 6 ms. CRUD, auth rejection and restart ran without a model turn. |
+| Additional `swift test --skip-build --filter` sweep | 49 passed across orchestration text, fake environment/interception, secret approvals, worktree folders, cold-start faults, diff/AX and design controls. |
+| Read-only source/contract census | Counted declarations/imports under Sources, inspected all six SQL migrations and compared the used experimental operations with Contracts/opencode-2.3.0/openapi.json and the recorded SSE stream. |
+
+The build override values were `SWIFTTERM_BUILD_BRANCH=detached`, `SWIFTTERM_BUILD_TAG=v1.99.3`, `SWIFTTERM_BUILD_COMMIT=282c3c3a932b55c129628876b70f37d993af1615` and `SWIFTTERM_BUILD_DIRTY=false`. Revision, tag and clean detached state were checked in the resolved SwiftTerm checkout.
+The first test invocation used this filter, before fetching the binary. The separate real-server command selected only the two named prompt-free tests.
+
+```sh
+swift test --filter 'SSEParserTests|EventHubTests|ServerSupervisorTests|NavigationPerformanceTests|SwitchTimeTests|StreamingCostTests|ProjectionStoreTests|QueueOrderingTests|AttentionTests|GitLabTransportTests|ScheduleApprovalBindingTests|PortForwarderTests|AccessibilityTextTests|DraftHydrationTests|StoreOpenSafetyTests|ResyncRetryTests|WriteBehindSafetyTests|EngineClientTests|ScheduleTests|ChangesShellTests|TerminalShellTests|BrowserShellTests|ClientMCPEngineTests'
+swift test --skip-build --filter 'DiffAccessibilityTests|DiffEngineTests|ControlTests|AgentsPanelModelTests|ContainerEnvironmentTests|SecretCommandApprovalTests|FaultAndColdStartTests'
+```
+
+**Direct service probes.** Two disposable Swift programs were compiled from stdin against the debug object files. They used in-memory GRDB, synthetic identifiers and a fake runtime. No repository test source or product code was edited.
+
+| Finding | Probe and observation |
+| --- | --- |
+| S3 | Saved image `approved:1` and network `none`. Replayed the launch order `projectsChanged → EnvironmentService.start → environment(for:)`. Observed image nil and network bridge. Runtime discovery was disabled for this probe. |
+| C4 | Acquired the same thread twice through Engine.openThread. Object identity matched. Closing the first handle left the second alive but unregistered (`loadedThread(id) === second` was false). Removal of its subscription is in ThreadModel.close. |
+| C3 | Inserted one synthetic app-owned pending request via StoreBatch, then called ProjectionStore.rebuild. Pending count went from 1 to 0. |
+| U1 | Sent a visible project followed by the hidden-project list into EnvironmentService with a recording FakeWorkspaceRuntime. Its remove call received `volumes=true`. Actual Docker removal was not exercised. |
+| S5 | Inspected secretCommandBody for an offline/read-only approval and a configured writable optional mount. The effective bind mounts had readOnly flags `[true, false]`. No secret value or Docker connection was involved. |
+
+**Performance interpretation.** The combined debug run measured 4,018 sidebar rows, a 2.89 ms median / 5.70 ms p95 palette keystroke and 24.3 ms median palette open. It rebuilt candidate sources ten times for ten opens and zero times during typing. Warm 500-thread switches measured 9.5 ms median / 10.5 ms p95. Cold p95 was 11.3 ms with a **46.4 s maximum**. Record both the tail and the median.
+The isolated navigation run produced a contradictory edit count after timeout. A process sample was in NavigationWindowTests.swift:465 → ShellDriver.idle → nested RunLoop.main.run. The test samples lastStructureMilliseconds/lastRowEdits after an idle interval, without awaiting a unique applied revision. Instrument that receipt before treating either run as a production latency guarantee.
+Earlier release measurements in `docs/features/transcript.md:120`, `docs/features/diff-git.md:51` and `docs/features/terminal.md:43` belong to their original scenarios. Transcript tail regressions passed here. DiffContentView.swift:265 draws dirty visible rows and DiffViewController.swift:622 performs cancellable find. Earlier 100k-row diff build times of 43–51 ms do not measure today's whole window or interval to first usable content.
+Measure three launch milestones in a signed release build with a large, cold and warm store: visible window, first interactive cached thread, first live reconciliation. Correlate SQLite read duration, main-actor projection apply, time until first blocker is visible, idle file watchers and memory per open window. For transcript and diff, sample p95/p99 layout and presentation separately while resizing and streaming.
+
+### Earlier dispositions checked
+
+- **M1.** Store-open quarantine distinguishes corruption from ordinary open failures. Forced write/retry, same-ID command flow and resync tests are meaningful. The new issues concern app-only requests joining an older cache lane, durability after restart and incomplete *successful* resyncs.
+- **M2–M4.** Tail-only updates, transcript AX text, virtual diff rows and actual download admission/identity handling remain present. The multi-window model-lifetime issue is independent of the app-wide pending deletion fix. The archive issue affects labeled Docker volumes, distinct from the repaired Git worktree Trash path.
+- **M3–M6.** Verified regressions for same-origin GitLab redirects/304 pagination, schedule-definition binding, one-shot command approval, per-project worktree folders and forwarder admission through selected tests or source inspection. Host Git's sandbox and shim remain connected in the bundled launch path. S4/S5 concern configuration delivery and effective mounts around those fixes.
+
+**Reading only and unverified.** Other findings are reasoned control-flow or data-ownership traces unless a probe or measurement is named. No full-suite pass is claimed. No live Rancher API, container lifecycle, provider/model prompt, enterprise GitLab account, user opencode database, real Keychain credential, Finder walkthrough or human accessibility session was used. `make smoke` includes live execution/isolation probes and was outside this review's constraints. Developer ID, notarization, signed Keychain access, Intel behavior and macOS 15 compatibility remain unverified.
+
+## Open questions for the owner
+
+1. Should archived project environments stay running, stop while retaining volumes, or expire under a separate retention rule? Which volume contents need backup?
+2. Can the enterprise build remove external-server attachment, host setup scripts and host-secret delivery entirely? Which release architectures and minimum CLT/macOS combinations must CI support?
+3. Is optional mount access ever required by commands receiving secrets? Should approval also bind an image digest and an exact worktree rather than a project-wide command grant?
+4. Which app-owned records must survive a downgrade, cache reset and server replacement? What retention/encryption policy applies to undelivered prompts, attachments and recoverable old databases?
+5. Should grants for visual network hosts and cross-thread read/send span every project? Should remote transcript images load automatically from host networking in an otherwise offline workspace?
+6. What delivery semantics should schedules and MR wakes promise when a crash occurs between server admission and local bookkeeping? Which synthetic operations support a stable client-supplied ID on the pinned backend?
