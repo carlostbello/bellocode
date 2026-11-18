@@ -388,10 +388,12 @@ public final class ThreadModel: Identifiable {
     /// and tells the engine the thread is no longer shown. Extra releases are ignored.
     public func close() {
         guard !isClosed else { return }
-        saveDraftNow()
         leaseCount = max(0, leaseCount - 1)
-        guard leaseCount == 0 else { return }
-        tearDown()
+        guard leaseCount == 0 else {
+            saveDraftNow()
+            return
+        }
+        tearDown()  // saves the draft once
     }
 
     /// Ends the model regardless of outstanding leases (engine stop).
