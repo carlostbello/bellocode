@@ -80,6 +80,7 @@ struct LiveEgressPerfTests {
     /// `docker run --rm` on the default bridge (direct egress), labelled.
     func dockerRun(_ image: String, _ script: String) async throws -> String {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["docker", "run", "--rm", "--label", "app.bellocode.test=secrets", image, "/bin/bash", "-c", script]
         let pipe = Pipe()

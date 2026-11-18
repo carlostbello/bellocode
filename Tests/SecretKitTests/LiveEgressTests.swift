@@ -246,6 +246,7 @@ struct LiveEgressTests {
     /// `docker export` of the container, scanned in overlapping chunks for any form of the canary.
     func dockerExportScan(_ container: String) async throws -> (found: Bool, bytes: Int) {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["docker", "export", container]
         let pipe = Pipe()
@@ -271,6 +272,7 @@ struct LiveEgressTests {
 
     func dockerOutput(_ arguments: [String]) async throws -> String {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["docker"] + arguments
         let pipe = Pipe()

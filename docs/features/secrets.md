@@ -174,6 +174,5 @@ Window ▸ Secrets…, ⌘N. Delete confirmed; Revoke reversible. Not run: Voice
 
 **Known gaps.** Project services see
 the internal network but keep their own egress (they could relay unsubstituted traffic). Clients that only speak
-HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The shared workspace is recreated once in its
-first second in the execution-modes end to end (a command then sees `EOF`); to investigate. The CA is per Mac. Bodies
+HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The CA is per Mac. Bodies
 over 16 MB from secret-bound destinations are refused.

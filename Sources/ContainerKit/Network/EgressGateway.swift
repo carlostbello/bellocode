@@ -100,7 +100,7 @@ public struct EgressGateway: Sendable {
     public static let labelEgress = "app.bellocode.egress"
     public static let labelScope = "app.bellocode.egress-scope"
     public static let labelConfig = "app.bellocode.egress-config"
-    static let relayScriptVersion = "4"
+    static let relayScriptVersion = "5"
 
     public let client: EngineClient
     public init(client: EngineClient) { self.client = client }
@@ -161,7 +161,8 @@ public struct EgressGateway: Sendable {
         body.networkingConfig = NetworkingConfig(endpointsConfig: [spec.networkName: .init(aliases: [EgressAttachment.proxyAlias])])
         let id = try await client.createContainer(name: spec.containerName, body)
         try await client.startContainer(id)
-        // The relay binds only the internal network's address, chosen at start while that is its only interface.
+        // The relay binds only the internal network's address, chosen at start while that is its only interface; it
+        // retries its upstream dial for a few seconds, so a connection that arrives before the bridge joins still works.
         try await waitForRelay(id)
         try await client.connectNetwork("bridge", container: id)
     }
@@ -228,14 +229,17 @@ public struct EgressGateway: Sendable {
         const ip=Object.values(os.networkInterfaces()).flat().find(i=>i&&i.family==='IPv4'&&!i.internal);
         if(!ip){console.log('bellocode-relay no-address');process.exit(4)}
         const T=process.env.BC_TOKEN,H=process.env.BC_HOST,P=+process.env.BC_PORT;
-        const relay=(line)=>net.createServer({allowHalfOpen:true},c=>{c.pause();const u=net.connect({port:P,host:H,allowHalfOpen:true},()=>{u.write(line);c.pipe(u);u.pipe(c);c.resume()});
-        const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)});
+        const relay=(line)=>net.createServer({allowHalfOpen:true},c=>{c.pause();let u=null;
+        c.on('error',()=>{if(u)u.destroy();c.destroy()});c.on('close',()=>{if(u)u.destroy()});
+        const dial=n=>{const s=net.connect({port:P,host:H,allowHalfOpen:true});
+        s.on('connect',()=>{u=s;s.write(line);c.pipe(s);s.pipe(c);c.resume();s.on('close',()=>c.destroy())});
+        s.on('error',()=>{if(!u&&n<50&&!c.destroyed)setTimeout(()=>dial(n+1),100);else c.destroy()})};dial(0)});
         relay('BCEGRESS '+T+'\\n').listen(+process.env.BC_LISTEN_PORT,ip.address,()=>console.log('bellocode-relay ready '+ip.address));
         relay('BCEGRESS '+T+' docker\\n').listen(+process.env.BC_DOCKER_LISTEN,ip.address);
         """
 
     static let pythonRelay = """
-        import os,socket,threading
+        import os,socket,threading,time
         def addr():
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
             try:
@@ -255,11 +259,17 @@ public struct EgressGateway: Sendable {
             try:b.shutdown(socket.SHUT_WR)
             except Exception:pass
         def serve(c,preamble):
-            try:
-                u=socket.create_connection((H,P))
-                u.sendall(('BCEGRESS '+T+preamble+'\\n').encode())
-            except Exception:
+            u=None
+            for _ in range(50):
+                try:
+                    u=socket.create_connection((H,P));break
+                except Exception:
+                    time.sleep(0.1)
+            if u is None:
                 c.close();return
+            try:u.sendall(('BCEGRESS '+T+preamble+'\\n').encode())
+            except Exception:
+                c.close();u.close();return
             t=threading.Thread(target=pump,args=(c,u),daemon=True);t.start();pump(u,c);t.join()
             for s in (c,u):
                 try:s.close()
