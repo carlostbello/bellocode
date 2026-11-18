@@ -50,6 +50,9 @@ extension MockOpenCodeServer {
     /// Synthetic texts admitted so far (tests: what woke a thread, and that no secret value was ever posted).
     public var syntheticTexts: [String] { state.syntheticLog }
 
+    /// Every session environment set through `PUT /api/session/{id}/environment` (tests: what agent shells receive).
+    public var environmentText: String { String(describing: state.environments) }
+
     /// Every message text the mock holds, joined (tests scan it for secret values).
     public func allMessageText() -> String {
         var out: [String] = []

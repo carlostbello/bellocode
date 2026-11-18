@@ -30,6 +30,8 @@ public enum AppGrantKind: String, Sendable {
     case network
     /// A saved secret may go to this exact command without asking (scope: `<account>\n<binding digest>`).
     case secretCommand
+    /// Agents may babysit merge requests in this project directory without asking.
+    case gitlabBabysit
 }
 
 extension ProjectionStore {

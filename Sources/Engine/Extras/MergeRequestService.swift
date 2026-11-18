@@ -655,6 +655,11 @@ public final class MergeRequestService {
             return
         }
         let policy = babysitPolicy
+        if policy.ignoreOwnNotes, instanceStatus[ref.instance]?.user == nil, let instance = instances.first(where: { $0.baseURL == ref.instance }) {
+            // Own notes are recognised by the token's user: learn it once.
+            _ = await refreshInstanceStatus(instance)
+            guard isCurrent(key, generation) else { return }
+        }
         let own = policy.ignoreOwnNotes ? Set([instanceStatus[ref.instance]?.user].compactMap { $0 }) : []
         var (events, next) = baseline.diff(snapshot, ignoreAuthors: own)
         if !policy.wakeOnPipelineSuccess { events.removeAll { $0.isPipelineSuccess } }

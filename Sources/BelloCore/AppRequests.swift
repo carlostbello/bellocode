@@ -66,6 +66,10 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case network
         /// A saved secret goes to one exact command (label, project, variable, command, network and write access shown).
         case secretCommand
+        /// An agent asks to babysit a merge request (first time per project; wakes the thread on GitLab events).
+        case gitlabBabysit
+        /// An agent asks to change something on GitLab (host, project, MR, SHA and the exact payload shown).
+        case gitlabWrite
     }
 
     public var action: Action
