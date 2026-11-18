@@ -159,7 +159,9 @@ public enum GitActionPlanner {
         GitAction.allCases.compactMap { action in
             let reason = disabledReason(action, input)
             if reason == hidden { return nil }
-            return GitActionItem(action: action, title: action.title, isEnabled: reason == nil, disabledReason: reason)
+            var title = action.title
+            if action == .abortOperation, let operation = input.status?.operation { title = "Abort \(operation.label)…" }
+            return GitActionItem(action: action, title: title, isEnabled: reason == nil, disabledReason: reason)
         }
     }
 

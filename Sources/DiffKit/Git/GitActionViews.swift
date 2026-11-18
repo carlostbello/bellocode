@@ -118,8 +118,16 @@ public struct GitCommitView: View {
             }
             TextField("", text: $form.message, prompt: Text("Commit message"), axis: .vertical)
                 .lineLimit(3...8)
-                .textFieldStyle(DSTextFieldStyle())
+                .textFieldStyle(.plain)
+                .font(.ds(.body))
+                .foregroundStyle(SwiftUI.Color.ds.text)
                 .focused($focused)
+                .padding(.horizontal, DS.Space.s8)
+                .padding(.vertical, DS.Space.s6)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).fill(SwiftUI.Color.ds.canvas))
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                        .stroke(focused ? SwiftUI.Color.ds.accent : SwiftUI.Color.ds.borderStrong, lineWidth: 1))
                 .accessibilityLabel("Commit message")
             HStack(spacing: DS.Space.s8) {
                 Button {

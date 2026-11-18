@@ -227,9 +227,10 @@ public struct BranchPickerView: View {
         var create: Bool
     }
 
-    public init(draft: WorkspaceDraft, close: @escaping () -> Void) {
+    public init(draft: WorkspaceDraft, close: @escaping () -> Void, query initial: String = "") {
         self.draft = draft
         self.close = close
+        _query = StateObject(wrappedValue: PickerState(initial))
     }
 
     enum Row: Hashable, Identifiable {

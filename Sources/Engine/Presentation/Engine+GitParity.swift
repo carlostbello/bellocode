@@ -12,6 +12,14 @@ public struct RewindPlan: Sendable {
     public var files: GitCheckpoints.RestorePlan?
     /// Why files cannot be restored (shown; the conversation can still be rewound).
     public var filesUnavailable: String?
+
+    public init(sessionID: SessionID, messageID: MessageID, directory: String, files: GitCheckpoints.RestorePlan? = nil, filesUnavailable: String? = nil) {
+        self.sessionID = sessionID
+        self.messageID = messageID
+        self.directory = directory
+        self.files = files
+        self.filesUnavailable = filesUnavailable
+    }
 }
 
 public struct AppliedRewind: Sendable {

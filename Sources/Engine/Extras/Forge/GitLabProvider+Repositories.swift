@@ -11,6 +11,19 @@ public struct GitLabProjectSummary: Sendable, Hashable, Identifiable {
     public var webURL: String
     public var defaultBranch: String?
     public var lastActivity: Date?
+
+    public init(
+        id: Int, path: String, name: String, description: String?, httpURL: String, webURL: String, defaultBranch: String?, lastActivity: Date?
+    ) {
+        self.id = id
+        self.path = path
+        self.name = name
+        self.description = description
+        self.httpURL = httpURL
+        self.webURL = webURL
+        self.defaultBranch = defaultBranch
+        self.lastActivity = lastActivity
+    }
 }
 
 /// A namespace a project can be created in (the person's own, or a group they can create projects in).
