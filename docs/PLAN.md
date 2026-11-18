@@ -46,6 +46,19 @@ Research this plan is built on (read these before implementing an area):
   registries through the transparent proxy. So BelloCode must build images natively through the Docker Engine API,
   signature verification stays off, and the registry allowlist applies to base images and pulled service images only.
 
+### Owner direction (2026-11-18, later)
+
+- **Dev containers:** move to dev-container infrastructure like VS Code's (`.devcontainer` where a project has one,
+  a default otherwise), opencode still on the host writing files. Handle the dual-environment edge cases (git in/out,
+  company certificates, secrets, ports, file ownership) and give the agent an environment contract so it navigates
+  them without trial and error. Git stays on the host. Research: research/09.
+- **Permissions:** the owner will run with full access but wants risky things surfaced (secrets entering the context,
+  anything outside the project). Implement T3 Code's **Auto** mode. Agents may interrupt other threads without
+  approval. MCP servers always need human approval. Research: research/08.
+- **Secrets:** a value the agent can never see is a key feature (stronger than today's "approve the exact command").
+- **opencode upgrades:** a repeatable upgrade and regression gate; move to 2.3.2 (needed for a new GPT model).
+- **Browser:** find a way to use real Chrome and the actual `browse` functionality (research/09).
+
 ## 1. Facts that shape the plan
 
 1. "opencode2" is opencode major version 2 (2.3.0 locally, MIT). One 224 MB arm64 binary, Bun compiled in.
