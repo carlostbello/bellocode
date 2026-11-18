@@ -589,6 +589,7 @@ public final class EnvironmentService {
 
     /// Retries whatever is blocking (the banner's Retry): re-checks the runtime, retries a failed pull, re-activates.
     public func retry(_ directory: String) async {
+        reloadManagedPolicy()
         await recheckRuntime()
         let model = environment(for: directory)
         if case .pullFailed = model.phase { pull(model); return }

@@ -116,10 +116,31 @@ final class ContainersSettingsModel: ObservableObject {
     @Published var containers: [ManagedContainer] = []
     @Published var logs: (title: String, text: String)?
     @Published var requirements: [HostRequirement] = HostRequirement.check()
+    @Published var allowlist: String
+    @Published var requireDigest: Bool
+    @Published var pullPolicy: ImagePolicy.PullPolicy
+    @Published var requireSignature: Bool
 
     init(engine: Engine) {
         self.engine = engine
-        defaultImage = engine.environments.defaults.defaultImage ?? ""
+        engine.environments.reloadManagedPolicy()
+        defaultImage = engine.environments.defaultImage ?? ""
+        let policy = engine.environments.imagePolicy
+        allowlist = policy.allowedPrefixes.joined(separator: "\n")
+        requireDigest = policy.requireDigest
+        pullPolicy = policy.pullPolicy
+        requireSignature = policy.requireSignature
+    }
+
+    /// Saves the image policy set here (ignored while an administrator manages it).
+    func savePolicy() async {
+        guard service.managedPolicy == nil else { return }
+        var defaults = service.defaults
+        let prefixes = allowlist.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: requireSignature)
+        await service.setDefaults(defaults)
+        message = prefixes.isEmpty && !requireDigest && !requireSignature
+            ? "Image policy saved: any image may run." : "Image policy saved. Projects outside it are refused until their image is changed."
     }
 
     func saveDefaultImage() async {
@@ -184,11 +205,22 @@ struct ContainersSettingsView: View {
                 "Default image",
                 footer: "Used by projects without their own image. There is no built-in public default: point this at your organisation's registry."
             ) {
-                SettingsFieldRow(divided: false) {
-                    TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
-                        .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
-                    Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                if let managed = service.managedPolicy?.defaultImage {
+                    SettingsRow(managed, detail: "Set by your organisation", divided: false) {
+                        DSPillView("Managed", tone: .info, symbolName: "building.2")
+                    }
+                } else {
+                    SettingsFieldRow(divided: false) {
+                        TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
+                            .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
+                        Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    }
                 }
+            }
+            SettingsGroup("Image policy", footer: model.service.managedPolicy == nil
+                ? "Applies to every project's image and its services. One registry (registry.acme.internal) or repository prefix (registry.acme.internal/dev/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
+                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Images outside it are refused for the workspace and every service.") {
+                ImagePolicySettingsView(model: model)
             }
             SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
                 SettingsFieldRow(divided: false) {
@@ -262,6 +294,55 @@ struct ManagedContainerPill: View {
         default: (container.state.capitalized, .neutral, container.service == nil ? "shippingbox" : "cylinder.split.1x2")
         }
         DSPillView(word, tone: tone, symbolName: symbol)
+    }
+}
+
+/// The image policy: editable rows, or the administrator's values read-only with a "Managed" pill.
+struct ImagePolicySettingsView: View {
+    @ObservedObject var model: ContainersSettingsModel
+
+    var body: some View {
+        let service = model.service
+        if let managed = service.managedPolicy {
+            let policy = managed.policy
+            SettingsRow("Allowed images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
+                DSPillView("Managed", tone: .info, symbolName: "building.2")
+            }
+            SettingsRow("Pinned by digest", detail: policy.requireDigest ? "Required" : "Not required") { EmptyView() }
+            SettingsRow("Pulling", detail: Self.pullText(policy.pullPolicy)) { EmptyView() }
+            SettingsRow("Verified signatures", detail: policy.requireSignature
+                ? "Required: BelloCode cannot verify signatures yet, so every image is refused" : "Not required") {
+                if policy.requireSignature { DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised") } else { EmptyView() }
+            }
+        } else {
+            VStack(alignment: .trailing, spacing: DS.Space.s8) {
+                TextEditor(text: $model.allowlist).font(.ds(.codeSmall)).scrollContentBackground(.hidden)
+                    .frame(height: 48).padding(DS.Space.s4)
+                    .background(DSColor.canvas, in: RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous).strokeBorder(DSColor.borderStrong, lineWidth: 1))
+                    .accessibilityLabel("Allowed registries or repository prefixes, one per line")
+            }
+            .padding(DS.Space.s12)
+            SettingsToggleRow("Require images pinned by digest", detail: "name@sha256:…, so a tag cannot change under a project.", isOn: $model.requireDigest)
+            SettingsRow("Pulling") {
+                DSSegmentedPicker(options: [(id: ImagePolicy.PullPolicy.missing, title: "When missing"), (id: .always, title: "Always"), (id: .never, title: "Never")],
+                                  selection: $model.pullPolicy).fixedSize()
+            }
+            SettingsToggleRow("Require verified signatures", detail: "BelloCode cannot verify signatures yet: turning this on refuses every image.",
+                              isOn: $model.requireSignature)
+            SettingsActionsRow {
+                Spacer()
+                Button("Save Policy") { Task { await model.savePolicy() } }.buttonStyle(DSButtonStyle(.primary, size: .small))
+            }
+        }
+    }
+
+    static func pullText(_ policy: ImagePolicy.PullPolicy) -> String {
+        switch policy {
+        case .missing: "When an image is not on this Mac"
+        case .always: "Before every container is created (follows moved tags)"
+        case .never: "Never: images must be loaded on this Mac by other means"
+        }
     }
 }
 
