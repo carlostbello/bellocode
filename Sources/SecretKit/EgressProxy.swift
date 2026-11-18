@@ -103,10 +103,13 @@ public struct EgressProxyConfiguration: Sendable {
     /// is refused, because it cannot be inspected).
     public var inspectedResponseTime: Duration
     public var idleTimeout: Duration
+    /// The routing step (internet, a container through a gateway's dial endpoint, or refuse). Default: internet.
+    public var router: any EgressRouter
 
     public init(upstreamProxy: HostPort? = nil, extraAnchors: [Data] = [], resolverOverrides: [String: HostPort] = [:],
                 requestBodyLimit: Int = 32 << 20, responseBodyLimit: Int = ResponseFilter.defaultBodyLimit,
-                inspectedResponseTime: Duration = .seconds(60), idleTimeout: Duration = .seconds(120)) {
+                inspectedResponseTime: Duration = .seconds(60), idleTimeout: Duration = .seconds(120),
+                router: any EgressRouter = InternetRouter()) {
         self.upstreamProxy = upstreamProxy
         self.extraAnchors = extraAnchors
         self.resolverOverrides = resolverOverrides
@@ -114,6 +117,7 @@ public struct EgressProxyConfiguration: Sendable {
         self.responseBodyLimit = responseBodyLimit
         self.inspectedResponseTime = inspectedResponseTime
         self.idleTimeout = idleTimeout
+        self.router = router
     }
 }
 
@@ -616,7 +620,7 @@ public final class EgressProxy: Sendable {
         for attempt in 0..<2 {
             if upstream == nil {
                 do {
-                    upstream = Upstream(key: key, wire: try await connectUpstream(scheme: scheme, destination: destination))
+                    upstream = Upstream(key: key, wire: try await connectUpstream(scheme: scheme, destination: destination, scope: scope.id))
                 } catch let error as DestinationRefused {
                     try await client.send(Self.plainResponse(403, "Forbidden", error.message))
                     return false
@@ -760,7 +764,23 @@ public final class EgressProxy: Sendable {
         return .hostPort(host: NWEndpoint.Host(destination.host), port: NWEndpoint.Port(rawValue: UInt16(destination.port))!)
     }
 
-    private func connectUpstream(scheme: String, destination: HostPort) async throws -> WireConnection {
+    private func connectUpstream(scheme: String, destination: HostPort, scope: String) async throws -> WireConnection {
+        switch await configuration.router.route(scheme: scheme, destination: destination, scope: scope) {
+        case .internet:
+            return try await connectInternet(scheme: scheme, destination: destination)
+        case .refuse(let reason):
+            throw DestinationRefused(message: "BelloCode: " + reason)
+        case .dial(let dial):
+            // Plain HTTP to the container (dev servers, services); TLS to a routed container is not offered.
+            guard scheme == "http" else { throw DestinationRefused(message: "BelloCode: \(destination) is reached over http only.") }
+            let wire = WireConnection(NWConnection(to: endpoint(dial.endpoint), using: .tcp), queue: queue)
+            try await wire.start()
+            if let preamble = dial.preamble { try await wire.send(preamble) }
+            return wire
+        }
+    }
+
+    private func connectInternet(scheme: String, destination: HostPort) async throws -> WireConnection {
         let parameters: NWParameters
         if scheme == "https" {
             let tls = NWProtocolTLS.Options()

@@ -65,6 +65,21 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
   (Settings ▸ Secrets ▸ Container network, labelled **no secret protection**: never inspected, never substituted).
 - Switch: Settings ▸ Secrets ▸ Container network (next launch); administrators force it with `EgressEnforced`.
 
+## Routing (for the shared browser package)
+
+Routing is a step of its own, after the request checks and any substitution: `EgressProxyConfiguration.router`
+(`EgressRouter`: `.internet`, `.dial(EgressDial)` to a Mac-loopback endpoint, `.refuse`). `SuffixRouter` sends `*.bc`
+names through a table and refuses unknown ones; everything else goes to the internet path (company CA, proxy).
+Substitution never looks at the route or the client: a scope (`EgressScope`: token, which projects it serves) is all
+the proxy knows of a client, so a browser container is one more scope (`admitsProject` = every project it serves) with
+the same snapshot. **The browser package plugs in by:** (1) making its gateway with `EgressGateway.ensure` (scope
+key e.g. `browser`) and registering the scope; (2) `EgressGateway.attach(scopeKey:network:)` to each project's service
+or workspace network when it is in use (`detach` after); (3) per route, a ContainerKit `PortForwarder` on
+`EgressGateway.containerName(scope)` with `containerHost` = the service alias or workspace container name, and a
+`SuffixRouter` table mapping `web.<project>.bc` / `<project>.bc:5173` to `.dial(EgressDial(endpoint: 127.0.0.1:<forwarder>))`;
+(4) Chromium's proxy = `bellocode-proxy:3128` and its trust = the egress CA bundle. Routed names are plain http
+(`.dial` refuses https). Tested: `RoutingTests` (in-process, two client scopes) and `LiveEgressRoutingTests`.
+
 ## Binding rules
 
 A placeholder is replaced only when **all** hold: the request's scheme, host and port (from the CONNECT target; the
@@ -139,38 +154,25 @@ With a model (`opencode/glm-5.3-flash-free`, 2 prompts): asked to script the cal
 the agent never showed it; the transcript (9 KB, tool inputs and outputs), opencode's data, the project, the
 workspace's environments and the audit held no form of it: **pass**. That run shared its thread with the shell leg, so
 it did not prove the agent's *own* call was substituted; the harness now uses separate threads and checks the audit's
-thread, but the rerun was refused by the free tier (as were 5 earlier requests, before any generation). Rerun:
-`BELLOCODE_SMOKE_MODEL=… BELLOCODE_SMOKE_SECRETS=1 …`.
-Installs, fresh caches, `LiveEgressPerf`: npm (4 packages)
-3.7 s direct, 3.6 s through the proxy; pip (3 packages) 4.5 s direct, 3.3 s through the proxy.
+thread, but the rerun was refused by the free tier (5 earlier requests too, before any generation). Installs
+(`LiveEgressPerf`, fresh caches): npm 3.7 s direct, 3.6 s proxied; pip 4.5 s direct, 3.3 s proxied.
 
-## Administrators
+**Administrators:** `EgressEnforced` (bool, forced in `com.bellocode.app`) fixes the switch; `NetworkHTTP(S)Proxy`
+(the proxy chains through it) and `NetworkTrust…` (roots beside BelloCode's CA) apply as in Containers 3.
 
-`EgressEnforced` (bool, forced in `com.bellocode.app`) fixes the switch. Existing keys apply upstream:
-`NetworkHTTPSProxy`/`NetworkHTTPProxy` (BelloCode's proxy chains through it), `NetworkTrustEnterpriseCertificates`,
-`NetworkTrustedCertificates` (roots containers trust beside BelloCode's CA).
-
-## Needs verification on the company network
-
-Chaining to the transparent proxy (BelloCode's upstream TLS sees the company's interception certificate: trusted only if
+**Needs the company network:** chaining to the transparent proxy (BelloCode's upstream TLS sees the company's interception certificate: trusted only if
 its root is in the Mac's admin trust settings); an explicit proxy requiring authentication (not supported); PAC-only
 proxies (not read); whether the company proxy blocks or rewrites CONNECT to internal hosts; images without node or
 python3 for the gateway; tools that pin certificates or ignore `HTTPS_PROXY` (they fail closed).
 
-## UX checklist (§E)
+**UX checklist (§E).** Purpose: cards and rows name label, handle, mode, destination, project; claims are glyph + words with a popover. States:
+none, proxy starting/running/failed/off, placeholder unavailable, revoked, commands only, refusals and blocked responses
+naming the rule, audit gap. Keyboard: Window ▸ Secrets…, ⌘N. Delete confirmed; Revoke reversible. Not run: VoiceOver,
+two windows, 30 sessions.
 
-Purpose: cards and rows name label, handle, mode, destination, project; the claim is glyph + words with a popover.
-States: no secrets, proxy starting/running/failed/off, placeholder unavailable, revoked, commands-only, refusal and
-blocked responses with the rule, audit gap. Keyboard: Window ▸ Secrets…, ⌘N Add Secret, card shortcuts as approvals.
-Destructive: Delete confirmed; Revoke reversible (Restore). Not run: VoiceOver, two windows, 30-session parallelism.
-
-## Known gaps
-
-The shared workspace (execution modes) carries the attachment too (its own gateway, scoped to the code roots).
-Containers the agent starts through the filtered Docker endpoint get ordinary networking: they can reach the network
+**Known gaps.** The shared workspace carries the attachment (own gateway, code-root scope). Containers the agent starts through the filtered Docker endpoint get ordinary networking: they can reach the network
 directly, but never get a substituted value (the endpoint also refuses the gateway and egress network). Services see
 the internal network but keep their own egress (they could relay unsubstituted traffic). Clients that only speak
-HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. In the execution-modes end to end the shared workspace is recreated once within its first second (its configuration
-changes as the certificate bundle settles), so a command started in that second sees a reset (`EOF`); to investigate.
-The CA is per Mac; rotating it recreates
-containers. Response bodies above 16 MB from secret-bound destinations are refused.
+HTTP/2 or QUIC fail. The gateway token is visible to Docker API clients. The shared workspace is recreated once in its
+first second in the execution-modes end to end (a command then sees `EOF`); to investigate. The CA is per Mac. Bodies
+over 16 MB from secret-bound destinations are refused.

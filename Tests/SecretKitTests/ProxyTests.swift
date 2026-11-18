@@ -153,3 +153,50 @@ struct ProxyTests {
         guard case .refused(.useLimit, _, _, _, _)? = await events.next() else { Issue.record("no refusal event"); return }
     }
 }
+
+/// The routing step (docs/features/secrets.md "Routing"): private `.bc` names go where the router says, unknown ones are
+/// refused, and secret substitution is the same whatever the route or the client scope.
+@Suite("Egress routing (in-process)", .serialized, .timeLimit(.minutes(2)))
+struct RoutingTests {
+    @Test func routedNamesSubstitutionAndClientIndependence() async throws {
+        let serverCA = try CertificateAuthority(commonName: "Routing servers CA")
+        let bound = try await EchoServer(name: "bound.test", authority: serverCA)
+        let devServer = try await EchoServer(name: "dev", authority: nil)
+        defer { bound.stop(); devServer.stop() }
+        let devPort = Int(devServer.port)
+        let router = SuffixRouter { destination, _ in
+            destination == HostPort(host: "web.proj.bc", port: 5173) ? .dial(EgressDial(endpoint: HostPort(host: "127.0.0.1", port: devPort))) : nil
+        }
+        let proxyCA = try CertificateAuthority(commonName: "Routing egress CA")
+        let proxy = EgressProxy(authority: proxyCA, configuration: EgressProxyConfiguration(
+            extraAnchors: [serverCA.certificateDER],
+            resolverOverrides: ["bound.test": HostPort(host: "127.0.0.1", port: Int(bound.port))], router: router))
+        let port = try await proxy.start()
+        defer { proxy.stop() }
+        // Two clients: a workspace scope (one project) and a browser scope (any project), same snapshot.
+        proxy.setScopes([EgressScope(id: "workspace", token: "ws-token") { $0 == "/project" },
+                         EgressScope(id: "browser", token: "browser-token") { _ in true }])
+        let secret = ManagedSecret(account: "bcs_r", name: "K", label: "Key", mode: .placeholder,
+                                   bindings: [SecretBinding(host: "bound.test", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")])])
+        let placeholder = Placeholder.make()
+        proxy.update(EgressSnapshot(
+            grants: [placeholder: PlaceholderGrant(placeholder: placeholder, account: secret.account, sessionID: "s", projectDirectory: "/project")],
+            secrets: [secret.account: secret], values: [secret.account: SecretValue(ProxyTests.canary)]))
+        for token in ["ws-token", "browser-token"] {
+            let gateway = try await TestGateway(proxyPort: port, token: token)
+            let client = ProxyClient(gatewayPort: gateway.port, anchor: proxyCA.certificateDER)
+            defer { gateway.stop(); client.session.invalidateAndCancel() }
+            let (routed, _, body) = try await client.get("http://web.proj.bc:5173/hello")
+            #expect(routed == 200 && String(decoding: body, as: UTF8.self) == "ok\n", "\(token): routed dev server")
+            let (unknown, _, _) = try await client.get("http://other.proj.bc:5173/")
+            #expect(unknown == 403, "\(token): unknown private name refused")
+            let (unbound, _, _) = try await client.get("http://web.proj.bc:5173/x", headers: ["Authorization": "Bearer \(placeholder)"])
+            #expect(unbound == 403, "\(token): a placeholder to a routed name is refused like any unbound destination")
+            let (substituted, headers, echoed) = try await client.get("https://bound.test/v1/echo", headers: ["Authorization": "Bearer \(placeholder)"])
+            #expect(substituted == 200, "\(token): bound destination")
+            #expect(!ProxyTests.leaked(Data((headers.description).utf8) + echoed))
+        }
+        #expect(!ProxyTests.leaked(devServer.receivedBytes), "the routed server never received the value")
+        #expect(ByteSearch.count(bound.receivedBytes, Data(ProxyTests.canary.utf8)) == 2, "both clients' requests were substituted")
+    }
+}

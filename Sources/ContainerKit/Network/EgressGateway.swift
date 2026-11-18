@@ -188,6 +188,21 @@ public struct EgressGateway: Sendable {
         return text
     }
 
+    /// Joins the gateway to another Docker network at runtime (a project's services or workspace network, for routes
+    /// from a shared browser): a `PortForwarder` on the gateway with `containerHost` set to a name on that network then
+    /// reaches it. Idempotent.
+    public func attach(scopeKey: String, network: String, aliases: [String]? = nil) async throws {
+        try await client.connectNetwork(network, container: "bellocode-egress-gw-\(scopeKey)", aliases: aliases)
+    }
+
+    /// Leaves a network joined with `attach` (absent: nothing to do).
+    public func detach(scopeKey: String, network: String) async {
+        try? await client.disconnectNetwork(network, container: "bellocode-egress-gw-\(scopeKey)")
+    }
+
+    /// The gateway's container name for a scope (the container a `PortForwarder` relays through).
+    public static func containerName(_ scopeKey: String) -> String { "bellocode-egress-gw-\(scopeKey)" }
+
     /// Removes the gateway (and the network when `network` is true and nothing else uses it).
     public func remove(scopeKey: String, network: Bool) async {
         if let existing = try? await client.inspectContainer("bellocode-egress-gw-\(scopeKey)") {
@@ -279,6 +294,16 @@ extension EngineClient {
         let data = try await call("POST", "/networks/create", json: Body(
             name: name, labels: labels, options: ["com.docker.network.bridge.enable_ip_masquerade": "false"]))
         return try JSONDecoder().decode(Created.self, from: data).Id
+    }
+
+    /// `POST /networks/{id}/disconnect`.
+    public func disconnectNetwork(_ network: String, container: String) async throws {
+        struct Body: Encodable {
+            var container: String
+            var force = true
+            enum CodingKeys: String, CodingKey { case container = "Container", force = "Force" }
+        }
+        try await call("POST", "/networks/\(Self.escape(network))/disconnect", json: Body(container: container))
     }
 
     /// `POST /networks/{id}/connect`.

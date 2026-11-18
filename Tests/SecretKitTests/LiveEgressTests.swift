@@ -284,3 +284,75 @@ struct LiveEgressTests {
         try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appending(path: "secrets-adversarial.md"))
     }
 }
+
+/// Routing to a container on another Docker network (the shared-browser case): the gateway is attached to that network
+/// at runtime and a `PortForwarder` on the gateway (`containerHost` = the service's alias) is the route's endpoint. An
+/// egress-enforced workspace reaches `web.proj.bc:8080` through the proxy; nothing else on that network is reachable.
+@Suite("Live egress routing", .serialized, .timeLimit(.minutes(5)),
+       .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_SECRET_LIVE"] == "1", "set BELLOCODE_SECRET_LIVE=1"))
+struct LiveEgressRoutingTests {
+    let client = EngineClient(socketPath: NSHomeDirectory() + "/.rd/docker.sock")
+    static let image = "node:22-bookworm-slim"
+
+    @Test func gatewayAttachedAtRuntimeReachesAContainer() async throws {
+        let key = "r" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10).lowercased()
+        let network = "bellocode-test-route-\(key)"
+        let root = NSHomeDirectory() + "/Library/Caches/BelloCode/tests/route-\(key)"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let gateway = EgressGateway(client: client)
+        var spec = WorkspaceSpec(projectRoot: root, image: Self.image, extraLabels: LiveEgressTests.labels)
+        let manager = WorkspaceManager(client: client)
+        let proxyCA = try CertificateAuthority(commonName: "Routing live CA")
+        let forwarder = Mutex<PortForwarder?>(nil)
+        let router = SuffixRouter { destination, _ in
+            guard destination == HostPort(host: "web.proj.bc", port: 8080), let port = forwarder.withLock({ $0?.hostPort }) else { return nil }
+            return .dial(EgressDial(endpoint: HostPort(host: "127.0.0.1", port: port)))
+        }
+        let proxy = EgressProxy(authority: proxyCA, configuration: EgressProxyConfiguration(router: router))
+        let port = try await proxy.start()
+        let token = UUID().uuidString
+        proxy.setScopes([EgressScope(id: key, token: token) { _ in true }])
+        var outcome = ""
+        var other = ""
+        do {
+            _ = try await client.createNetwork(name: network, labels: LiveEgressTests.labels, isInternal: false)
+            var web = ContainerCreate(image: Self.image)
+            web.cmd = ["node", "-e", "require('http').createServer((q,r)=>r.end('hello from web')).listen(8080)"]
+            web.labels = LiveEgressTests.labels
+            var host = HostConfig()
+            host.networkMode = network
+            web.hostConfig = host
+            web.networkingConfig = NetworkingConfig(endpointsConfig: [network: .init(aliases: ["web"])])
+            let webID = try await client.createContainer(name: "bellocode-test-web-\(key)", web)
+            try await client.startContainer(webID)
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, image: Self.image, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
+            try await gateway.attach(scopeKey: key, network: network)
+            let relay = try PortForwarder(client: client, container: EgressGateway.containerName(key), containerPort: 8080, containerHost: "web")
+            forwarder.withLock { $0 = relay }
+            Task { await relay.run() }
+            spec.egress = EgressAttachment(network: EgressGateway.networkName(key), caFingerprint: proxyCA.fingerprint)
+            let container = try await manager.ensureRunning(spec, pull: false)
+            let fetch = { (url: String) in
+                "node -e \"require('http').get({host:'bellocode-proxy',port:3128,path:'\(url)'},r=>{r.setEncoding('utf8');let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(r.statusCode,b))}).on('error',e=>console.log('error',e.message))\""
+            }
+            outcome = String(decoding: try await ExecSession.run(client: client, container: container, argv: ["/bin/sh", "-c", fetch("http://web.proj.bc:8080/")],
+                                                                 user: spec.user, timeout: .seconds(30)).stdout, as: UTF8.self)
+            other = String(decoding: try await ExecSession.run(client: client, container: container, argv: ["/bin/sh", "-c", fetch("http://web:8080/") + "; " + fetch("http://db.proj.bc:5432/")],
+                                                               user: spec.user, timeout: .seconds(30)).stdout, as: UTF8.self)
+        } catch {
+            Issue.record("\(error)")
+        }
+        forwarder.withLock { $0?.stop() }
+        if let storage = try? await manager.storage(projectKey: spec.projectKey) { try? await manager.purge(storage) }
+        try? await client.removeContainer("bellocode-test-web-\(key)", force: true)
+        await gateway.detach(scopeKey: key, network: network)
+        await gateway.remove(scopeKey: key, network: true)
+        try? await client.removeNetwork(network)
+        proxy.stop()
+        try? FileManager.default.removeItem(atPath: root)
+        #expect(outcome.contains("200 hello from web"), "routed: \(outcome)")
+        #expect(!other.contains("hello from web") && other.contains("403"), "unrouted names: \(other)")
+        let leftovers = try await client.listContainers(labels: ["app.bellocode.test=secrets"])
+        #expect(leftovers.isEmpty)
+    }
+}
