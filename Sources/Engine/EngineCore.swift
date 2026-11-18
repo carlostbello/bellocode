@@ -100,6 +100,11 @@ actor EngineCore {
     private var openThreads: [SessionID: Int] = [:]
     /// Optimistic sessions not yet acknowledged; a resync must not delete them.
     private var creatingSessions: Set<SessionID> = []
+    /// Per-session chain of permission-policy transitions (agent, mode): one at a time, and sends wait for it (S2/Q1
+    /// in docs/reviews/deep-review-1.md).
+    private var policyChains: [SessionID: Task<Void, Never>] = [:]
+    /// Sessions whose effective rules the server did not confirm: nothing is sent until a mode change succeeds.
+    private var policyUncertain: Set<SessionID> = []
     /// Prompts the server admitted (HTTP answer) while a resync was reading the inbox: its snapshot may predate them,
     /// so its reconcile must not remove them. Cleared when a snapshot fetch starts; bounded by the sends made during one.
     private var admittedDuringSync: Set<MessageID> = []
@@ -1162,7 +1167,13 @@ actor EngineCore {
         Timestamp(milliseconds: (Timestamp.now.milliseconds + serverClockOffset).rounded())
     }
 
-    func createSession(directory: String, title: String?, agent: String?, model: ModelSelection?, parentID: SessionID?) async throws -> Session {
+    func createSession(
+        directory: String, title: String?, agent: String?, model: ModelSelection?, parentID: SessionID?, permissionMode: PermissionMode? = nil
+    ) async throws -> Session {
+        // The mode's rules go into the create request itself, so the session never exists without them (S2). The agent's
+        // restrictions are read first: nothing is created if they cannot be.
+        var rules: [PermissionRule]?
+        if let permissionMode { rules = try await modeRules(permissionMode, agent: agent ?? "build", directory: directory) }
         let now = serverNow()
         let id = ids.sessionID(now: now)
         let projectID = pipeline.state.registry[directory]?.projectID
@@ -1183,15 +1194,26 @@ actor EngineCore {
         do {
             let request = SessionCreateRequest(
                 directory: directory, id: id.rawValue, parentID: parentID?.rawValue, title: title, agent: agent,
-                model: model.map(Mapping.modelRef))
-            let dto = try await call { try await $0.createSession(request) }
+                model: model.map(Mapping.modelRef), permissions: rules)
+            var dto = try await call { try await $0.createSession(request) }
             observeServerTime(dto.time.created)
+            if let rules, dto.permissions != rules {
+                // Not echoed as sent: read it back once before deciding.
+                dto = try await call { try await $0.session(id.rawValue) }
+                if dto.permissions != rules { policyUncertain.insert(id) }
+            }
             var reduction = Reduction()
             let session = mergeSession(local: pipeline.state.sessions[id], server: Mapping.session(dto))
             pipeline.state.sessions[id] = nil
             pipeline.state.putSession(session, into: &reduction)
             commit(reduction)
+            if policyUncertain.contains(id) {
+                throw EngineError.failed(
+                    "The thread was created, but the server did not confirm its permission mode, so nothing was sent. Choose the mode again in the thread, then send.")
+            }
             return session
+        } catch let error as EngineError where policyUncertain.contains(id) {
+            throw error
         } catch {
             if let session = pipeline.state.sessions.removeValue(forKey: id) {
                 var reduction = Reduction()
@@ -1271,6 +1293,7 @@ actor EngineCore {
     func sendPrompt(
         _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
     ) async throws -> MessageID {
+        try await awaitConfirmedPolicy(sessionID)
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
         guard unconfirmed.count < unconfirmedLimit else {
             throw EngineError.failed("Too many messages have unknown delivery. Retry them before sending more.")
@@ -1664,28 +1687,114 @@ actor EngineCore {
     }
 
     func setModel(_ sessionID: SessionID, model: ModelSelection) async throws {
-        try await optimisticSession(sessionID, { $0.model = model }) { client in
+        try await optimisticSession(sessionID, \.model, model) { client in
             try await client.switchModel(sessionID: sessionID.rawValue, model: Mapping.modelRef(model))
         }
     }
 
     /// Switches the agent. When the thread has a permission mode, its rules are rewritten for the new agent's
-    /// restrictions (plan's `edit: deny` must follow the mode's rules; see `PermissionModeRules`).
+    /// restrictions (plan's `edit: deny` must follow the mode's rules; see `PermissionModeRules`). One transition at a
+    /// time per thread (Q1): the new rules are computed before anything changes; if they cannot be applied the agent
+    /// is switched back; the result is read back from the server, and a state it does not confirm blocks sending.
     func setAgent(_ sessionID: SessionID, agent: String) async throws {
-        try await optimisticSession(sessionID, { $0.agent = agent }) { client in
-            try await client.switchAgent(sessionID: sessionID.rawValue, agent: agent)
+        try await withPolicyTransition(sessionID) {
+            guard let session = self.pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+            let previousAgent = session.agent
+            let mode = session.permissionMode
+            var rules: [PermissionRule]?
+            if let mode { rules = try await self.modeRules(mode, agent: agent, directory: session.directory) }
+            try await self.optimisticSession(sessionID, \.agent, agent) { client in
+                try await client.switchAgent(sessionID: sessionID.rawValue, agent: agent)
+            }
+            if let rules {
+                do {
+                    try await self.call { try await $0.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules)) }
+                } catch {
+                    // Roll the agent back so the old agent keeps the rules computed for it.
+                    if let previousAgent {
+                        do {
+                            try await self.call { try await $0.switchAgent(sessionID: sessionID.rawValue, agent: previousAgent) }
+                            self.setSessionField(sessionID, \.agent, previousAgent)
+                        } catch {
+                            self.policyUncertain.insert(sessionID)
+                        }
+                    } else {
+                        self.policyUncertain.insert(sessionID)
+                    }
+                    await self.reconcilePolicy(sessionID, expectedAgent: nil, expectedRules: nil)
+                    throw EngineError.failed(
+                        "The agent was not changed: the server did not accept the permission rules for \(agent). \(EngineError.from(error).userMessage)")
+                }
+            }
+            try await self.confirmPolicy(sessionID, expectedAgent: agent, expectedRules: rules)
         }
-        guard let session = pipeline.state.sessions[sessionID], let mode = session.permissionMode else { return }
-        let rules = try await modeRules(mode, agent: agent, directory: session.directory)
-        try await call { try await $0.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules)) }
     }
 
     func setPermissionMode(_ sessionID: SessionID, mode: PermissionMode) async throws {
-        guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
-        let rules = try await modeRules(mode, agent: session.agent ?? "build", directory: session.directory)
-        try await optimisticSession(sessionID, { $0.permissionMode = mode }) { client in
-            try await client.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules))
+        try await withPolicyTransition(sessionID) {
+            guard let session = self.pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
+            let rules = try await self.modeRules(mode, agent: session.agent ?? "build", directory: session.directory)
+            try await self.optimisticSession(sessionID, \.permissionMode, mode) { client in
+                try await client.updateSession(sessionID.rawValue, SessionUpdateRequest(permissions: rules))
+            }
+            try await self.confirmPolicy(sessionID, expectedAgent: nil, expectedRules: rules)
         }
+    }
+
+    /// Runs one policy transition for the session after any earlier one has finished. Sends wait for it too.
+    private func withPolicyTransition<T: Sendable>(_ sessionID: SessionID, _ body: () async throws -> T) async throws -> T {
+        let previous = policyChains[sessionID]
+        let (gate, open) = AsyncStream<Void>.makeStream()
+        let marker = Task { for await _ in gate {} }
+        policyChains[sessionID] = marker
+        defer {
+            open.finish()
+            if policyChains[sessionID] == marker { policyChains[sessionID] = nil }
+        }
+        await previous?.value
+        return try await body()
+    }
+
+    /// Waits for a running policy transition, then refuses if the thread's rules are not confirmed (S2): no prompt is
+    /// sent under rules the person did not choose.
+    private func awaitConfirmedPolicy(_ sessionID: SessionID) async throws {
+        while let chain = policyChains[sessionID] { await chain.value; if policyChains[sessionID] == chain { break } }
+        if policyUncertain.contains(sessionID) {
+            throw EngineError.failed(
+                "The server did not confirm this thread's permission rules, so the message was not sent. Choose the permission mode again, then send.")
+        }
+    }
+
+    /// Reads the session back and checks the agent and rules the server reports. A mismatch marks the policy
+    /// uncertain (sending blocked), shows the server's actual values and throws.
+    private func confirmPolicy(_ sessionID: SessionID, expectedAgent: String?, expectedRules: [PermissionRule]?) async throws {
+        let confirmed = await reconcilePolicy(sessionID, expectedAgent: expectedAgent, expectedRules: expectedRules)
+        guard confirmed else {
+            policyUncertain.insert(sessionID)
+            throw EngineError.failed(
+                "The server reports different permission rules than were chosen for this thread, so nothing will be sent until the mode is chosen again.")
+        }
+        policyUncertain.remove(sessionID)
+    }
+
+    /// Applies the server's agent and rules to the local session. Returns whether they match what is expected (nil
+    /// expectations always match); false also when the session could not be read.
+    @discardableResult
+    private func reconcilePolicy(_ sessionID: SessionID, expectedAgent: String?, expectedRules: [PermissionRule]?) async -> Bool {
+        guard let dto = try? await call({ try await $0.session(sessionID.rawValue) }) else { return false }
+        let server = Mapping.session(dto)
+        setSessionField(sessionID, \.agent, server.agent ?? pipeline.state.sessions[sessionID]?.agent)
+        if let rules = dto.permissions { setSessionField(sessionID, \.permissionMode, PermissionModeRules.mode(from: rules)) }
+        if let expectedAgent, dto.agent != expectedAgent { return false }
+        if let expectedRules, dto.permissions != expectedRules { return false }
+        return true
+    }
+
+    private func setSessionField<V: Equatable>(_ id: SessionID, _ field: WritableKeyPath<Session, V>, _ value: V) {
+        guard let session = pipeline.state.sessions[id], session[keyPath: field] != value else { return }
+        var reduction = Reduction()
+        pipeline.state.updateSession(id, into: &reduction) { $0[keyPath: field] = value }
+        commit(reduction)
     }
 
     /// The session rules for `mode` under `agent`, with the agent's restrictions read from the server.
@@ -1706,22 +1815,18 @@ actor EngineCore {
         }
     }
 
-    private func optimisticSession(
-        _ id: SessionID, _ change: (inout Session) -> Void, request: @Sendable (OpenCodeClient) async throws -> Void
+    /// Shows `value` in `field` at once and sends `request`. On failure only that field is rolled back, and only if it
+    /// still shows the optimistic value (an unrelated change, such as a rename from the event stream, is kept; Q1).
+    private func optimisticSession<V: Equatable>(
+        _ id: SessionID, _ field: WritableKeyPath<Session, V>, _ value: V, request: @Sendable (OpenCodeClient) async throws -> Void
     ) async throws {
         guard let previous = pipeline.state.sessions[id] else { throw EngineError.notFound("The thread was not found.") }
-        var reduction = Reduction()
-        pipeline.state.updateSession(id, into: &reduction, change)
-        let expected = pipeline.state.sessions[id]
-        commit(reduction)
+        let old = previous[keyPath: field]
+        setSessionField(id, field, value)
         do {
             try await call(request)
         } catch {
-            if pipeline.state.sessions[id] == expected {
-                var rollback = Reduction()
-                pipeline.state.putSession(previous, into: &rollback)
-                commit(rollback)
-            }
+            if pipeline.state.sessions[id]?[keyPath: field] == value { setSessionField(id, field, old) }
             throw error
         }
     }
@@ -1988,3 +2093,4 @@ extension EngineCore {
 
     private func commitAppRequestChange(_ reduction: Reduction) { commitExternal(reduction) }
 }
+

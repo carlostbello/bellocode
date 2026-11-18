@@ -32,6 +32,29 @@ CONTENTS="$APP/Contents"
 
 [[ -x "$OPENCODE_BIN" ]] || die "missing $OPENCODE_BIN; run Scripts/fetch-opencode.sh first"
 
+# Provenance (D2 in docs/reviews/deep-review-1.md): every helper binary in the bundle is either pinned by SHA-256 in
+# this repository (opencode, rg) or built from source by this run (bellocode-exec). Anything else is refused, and the
+# copies in the bundle are checked again just before signing.
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+case "$(uname -m)" in
+  arm64) OC_PLATFORM="darwin-arm64"; RG_TARGET="aarch64-apple-darwin" ;;
+  x86_64) OC_PLATFORM="darwin-x64-baseline"; RG_TARGET="x86_64-apple-darwin" ;;
+  *) die "unsupported architecture $(uname -m)" ;;
+esac
+OPENCODE_PIN="$(awk -v v="$OPENCODE_VERSION" -v p="$OC_PLATFORM" '!/^#/ && $1 == v && $2 == p { print $4 }' "$ROOT/Scripts/opencode-checksums")"
+RG_PIN="$(awk -v t="$RG_TARGET" '!/^#/ && $2 == t { print $4 }' "$ROOT/Scripts/ripgrep-checksums")"
+[[ -n "$OPENCODE_PIN" && "$OPENCODE_PIN" != "-" ]] || die "no pinned binary SHA-256 for opencode $OPENCODE_VERSION $OC_PLATFORM"
+[[ -n "$RG_PIN" && "$RG_PIN" != "-" ]] || die "no pinned binary SHA-256 for rg $RG_TARGET"
+verify_pinned() { # file pin name
+  [[ -f "$1" ]] || die "missing $3 ($1)"
+  local got
+  got="$(sha256 "$1")"
+  [[ "$got" == "$2" ]] || die "$3 SHA-256 $got is not the pinned $2; refusing to bundle it (run Scripts/fetch-opencode.sh)"
+}
+verify_pinned "$OPENCODE_BIN" "$OPENCODE_PIN" "opencode"
+[[ -x "$RG_BIN" ]] || die "missing $RG_BIN; run Scripts/fetch-opencode.sh (ripgrep is required: opencode would download one at runtime)"
+verify_pinned "$RG_BIN" "$RG_PIN" "rg"
+
 cd "$ROOT"
 say "swift build -c $CONFIG"
 swift build -c "$CONFIG" --product BelloCode
@@ -39,6 +62,8 @@ swift build -c "$CONFIG" --product bellocode-exec
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 [[ -x "$BIN_DIR/BelloCode" ]] || die "swift build produced no executable at $BIN_DIR/BelloCode"
 [[ -x "$BIN_DIR/bellocode-exec" ]] || die "swift build produced no executable at $BIN_DIR/bellocode-exec"
+# Built from this checkout by the swift build above: record what is bundled and check the copy before signing.
+EXEC_SHA="$(sha256 "$BIN_DIR/bellocode-exec")"
 
 say "assembling ${APP#"$ROOT"/}"
 rm -rf "$APP"
@@ -54,19 +79,37 @@ cp "$BIN_DIR/bellocode-exec" "$CONTENTS/Helpers/bellocode-exec"
 cp "$ROOT/Plugin/server.ts" "$CONTENTS/Resources/opencode-plugin/server.ts"
 mkdir -p "$CONTENTS/Resources/opencode-plugin/src"
 cp "$ROOT/Plugin/src/"*.ts "$CONTENTS/Resources/opencode-plugin/src/"
-if [[ -x "$RG_BIN" ]]; then
-  cp "$RG_BIN" "$CONTENTS/Helpers/rg"
-else
-  warn "no Vendor/ripgrep/rg; bundling without ripgrep"
-fi
+cp "$RG_BIN" "$CONTENTS/Helpers/rg"
 
-# Licence texts of the Swift packages linked into the app (Settings ▸ Acknowledgements shows them).
-mkdir -p "$CONTENTS/Resources/Acknowledgements"
-for pair in "GRDB.swift:GRDB.swift/LICENSE" "SwiftTerm:SwiftTerm/LICENSE" "swift-markdown:swift-markdown/LICENSE.txt" \
-            "swift-cmark:swift-cmark/COPYING" "swift-argument-parser:swift-argument-parser/LICENSE.txt" \
-            "swift-png:swift-png/LICENSE" "h:h/LICENSE"; do
-  name="${pair%%:*}"; file="$ROOT/.build/checkouts/${pair#*:}"
-  if [[ -f "$file" ]]; then cp "$file" "$CONTENTS/Resources/Acknowledgements/$name.txt"; else warn "no licence file for $name"; fi
+# Licence texts and NOTICE files of everything shipped (Settings ▸ Acknowledgements shows them; D3): the Swift packages
+# linked into the app (licence, then NOTICE where the package has one, as Apache-2.0 requires), opencode (its LICENSE at
+# the pinned tag, Scripts/notices) and ripgrep (the texts from its verified release archive). A missing text fails.
+ACK="$CONTENTS/Resources/Acknowledgements"
+mkdir -p "$ACK"
+notice() { # name licence-file [notice-file...]
+  local name="$1"; shift
+  [[ -f "$1" ]] || die "no licence text for $name ($1)"
+  cat "$1" > "$ACK/$name.txt"; shift
+  for extra in "$@"; do
+    [[ -f "$extra" ]] || die "missing notice for $name ($extra)"
+    printf '\n\n---- %s ----\n\n' "$(basename "$extra")" >> "$ACK/$name.txt"
+    cat "$extra" >> "$ACK/$name.txt"
+  done
+}
+CHECKOUTS="$ROOT/.build/checkouts"
+notice "GRDB.swift" "$CHECKOUTS/GRDB.swift/LICENSE"
+notice "SwiftTerm" "$CHECKOUTS/SwiftTerm/LICENSE"
+notice "swift-markdown" "$CHECKOUTS/swift-markdown/LICENSE.txt" "$CHECKOUTS/swift-markdown/NOTICE.txt"
+notice "swift-cmark" "$CHECKOUTS/swift-cmark/COPYING"
+notice "swift-argument-parser" "$CHECKOUTS/swift-argument-parser/LICENSE.txt"
+notice "swift-png" "$CHECKOUTS/swift-png/LICENSE" "$CHECKOUTS/swift-png/NOTICE"
+notice "h" "$CHECKOUTS/h/LICENSE" "$CHECKOUTS/h/NOTICE"
+notice "opencode" "$ROOT/Scripts/notices/opencode.txt"
+RG_LICENCES="$ROOT/Vendor/ripgrep/licences"
+notice "ripgrep" "$RG_LICENCES/COPYING" "$RG_LICENCES/LICENSE-MIT" "$RG_LICENCES/UNLICENSE"
+# Every entry Settings ▸ Acknowledgements lists (except T3 Code, whose notice is embedded) has its text in the bundle.
+for name in $(sed -n 's/.*Acknowledgement(name: "\([^"]*\)".*/\1/p' "$ROOT/Sources/BelloCodeApp/Settings/Acknowledgements.swift"); do
+  [[ "$name" == "T3 Code" ]] || [[ -s "$ACK/$name.txt" ]] || die "no bundled licence text for acknowledgement '$name'"
 done
 
 # SwiftPM resource bundles (none yet). Copied for when modules gain resources; check Bundle.module lookup then.
@@ -145,13 +188,21 @@ EOF
 plutil -lint -s "$CONTENTS/Info.plist" || die "invalid Info.plist"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
+# The bundled helpers are still exactly the verified ones (nothing replaced them between copy and signing).
+verify_pinned "$CONTENTS/Helpers/opencode" "$OPENCODE_PIN" "bundled opencode"
+verify_pinned "$CONTENTS/Helpers/rg" "$RG_PIN" "bundled rg"
+[[ "$(sha256 "$CONTENTS/Helpers/bellocode-exec")" == "$EXEC_SHA" ]] || die "bundled bellocode-exec is not the one built by this run"
+for helper in "$CONTENTS/Helpers/"*; do
+  case "$(basename "$helper")" in opencode | rg | bellocode-exec) ;; *) die "unexpected helper $(basename "$helper") in the bundle" ;; esac
+done
+
 say "signing (identity: $IDENTITY)"
 TIMESTAMP="--timestamp"
 [[ "$IDENTITY" == "-" ]] && TIMESTAMP="--timestamp=none"
 sign() { codesign --force "$TIMESTAMP" --options runtime --sign "$IDENTITY" "$@"; }
 sign --identifier "$BUNDLE_ID.opencode" --entitlements "$ENTITLEMENTS/opencode.entitlements" "$CONTENTS/Helpers/opencode"
 sign --identifier "$BUNDLE_ID.exec" "$CONTENTS/Helpers/bellocode-exec"
-if [[ -f "$CONTENTS/Helpers/rg" ]]; then sign --identifier "$BUNDLE_ID.rg" "$CONTENTS/Helpers/rg"; fi
+sign --identifier "$BUNDLE_ID.rg" "$CONTENTS/Helpers/rg"
 sign --entitlements "$ENTITLEMENTS/BelloCode.entitlements" "$APP"
 
 codesign --verify --deep --strict --verbose=1 "$APP"

@@ -300,9 +300,13 @@ public enum HostGit {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        // Not `waitUntilExit`: in the helper's async top level it spins the main run loop and was seen never to return
+        // (the shim hung on every network subcommand on macOS 27). The handler runs on a Foundation queue.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         guard (try? process.run()) != nil else { return TrustedConfiguration() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        exited.wait()
         return parseTrusted(data.prefix(64 << 10))
     }
 

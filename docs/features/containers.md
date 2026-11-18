@@ -11,7 +11,13 @@ native host process; nothing falls back to the Mac. Spike and raw measurements: 
   `<data>/opencode/bellocode-exec.json` (written atomically by the app, mode 0600), finds the project for the working
   directory (mapping `/private/var/…` back to the mounted spelling), starts the container if needed (never pulls) and
   relays the command, stdin, window size and signals. Blocked: exit 125 and one `BelloCode: … The command was not run.`
-  line the agent sees as a tool failure.
+  line the agent sees as a tool failure. **Policy currency (S4):** the app writes the configuration through one
+  serialised writer; each write first puts `bellocode-exec.required` (this launch's epoch and the new generation), then
+  the configuration with that epoch and generation. The helper runs a command only if the configuration's epoch equals
+  the requirement's and its generation is at least the required one (it re-reads for up to ~2 s to ride over the gap
+  between the two writes), so a failed, overtaken or earlier-launch file refuses with exit 125. A failed write is shown
+  in Settings ▸ Containers and Environment ("Commands refused") and retried; if the requirement itself cannot be written
+  the configuration is removed.
 - **Server launch** (`ContainerExecution`, always on for the bundled server): `SHELL`/`config.shell` = helper,
   `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `formatter: false`, `lsp: false`, opencode's own git through the `git` shim
   (`<data>/git-shim/git` → `bellocode-exec`, first on PATH; see "Host git"), no `BUN_*` variable ever passed, the bundled plugin's
@@ -51,6 +57,13 @@ Desktop or the test image is missing.
 
 ## Failure behaviour
 
+**Shipped configuration (S1).** A release build runs only the bundled, supervised opencode with `bellocode-exec`; a
+bundle missing either does not start ("The app bundle is incomplete"). Attaching to another server
+(`BELLOCODE_SERVER_URL`) and the mock/snapshot modes are compiled only into debug builds (`BELLOCODE_DEVELOPMENT`,
+set for the debug configuration of the BelloCodeApp target); attach uses its own store, defaults suite and in-memory
+secrets under `Application Support/BelloCode/Development/attached`. Without a container runner a worktree setup script
+is refused before anything is created (`WorktreeError.setupNeedsContainer`); it never runs on the host.
+
 Runtime not installed / not running / containerd / too old, no image, pull failed (sign-in needed), folder not shared,
 container failed: each is a phase with a message and a fix ("Install/Start Rancher Desktop", "Switch the container
 engine to dockerd", "Choose an image", "Sign in to the registry", Retry). It is written into the helper configuration
@@ -60,14 +73,20 @@ configuration on every command. Setup scripts and secret commands throw the same
 
 ## Workspace model
 
-Per project setting (`app_environment`, migration `v6-container-environments`, kept by `rebuild()`): image (else the
+Per project setting (`app_environment`, migration `v6-container-environments`, kept by `rebuild()`). **Saved policy
+first (S3):** at launch every project's saved setting is loaded and in force before the cached project list is applied
+or any container is created, the helper configuration is written or a command runs; until then, and for a row that
+cannot be read (or a table read failure), the project is "Settings unavailable" and blocked (never run under
+defaults; saving the setting again replaces an unreadable row). Fields: image (else the
 app default; **no public default**), variables (reserved names refused), limits (CPU, memory, pids), user mounts (off;
 read-only by default), network (bridge / none), file-watch bridge, idle minutes. Registry passwords: Keychain
 (`app.bellocode.registry`), sent only in the pull's `X-Registry-Auth` header. One container per project
 (`bellocode-ws-<key>`), project folder, BelloCode's and opencode's worktree folders mounted at the same absolute paths,
 host uid:gid, no capabilities, `no-new-privileges`, `init`. Recreated when the image, the setting or the folder identity
-(device:inode) changes; an outdated container keeps running until the next activation. Stopped when idle; removed with
-the project; stray processes (`setsid` leftovers) reaped after cancelled commands and on demand.
+(device:inode) changes; an outdated container keeps running until the next activation. Stopped when idle. **Archiving a
+project only hides it** (container, volumes and settings untouched; Undo and relaunch are safe). The persistent home and
+cache volumes are deleted only by Settings ▸ Environment ▸ **Delete Container and Data…**, which lists the containers
+and volumes it will delete and asks once (it cannot be undone); no other path deletes a volume. Stray processes (`setsid` leftovers) reaped after cancelled commands and on demand.
 
 ## Dev servers
 
@@ -149,7 +168,10 @@ container reference (`bcsecretc_…`, one use, one thread, one hour, 64 outstand
 (M6-B) asks the person first: a card shows the secret's label, project and folder, the variable, **the command
 verbatim**, and its access. Only after Allow does the command run, in a **one-shot sibling container** (same image,
 user and limits, no capabilities, project and worktree folders read-only, no caches or persistent home, HOME=/tmp,
-network `none`) unless the agent asked for network or write access and the card said so. The value goes on the exec's
+network `none`) unless the agent asked for network or write access and the card said so. **Optional host mounts
+(S5):** none by default, whatever the project setting says; only when the agent asks (`includeMounts`) are the
+project's extra folders listed on the card, each with its access, bound into the approval's digest and passed with
+exactly that access (refused if the setting no longer allows it; checked on the create request in tests). The value goes on the exec's
 stdin into the variable (`NAME=$(cat)`), so it is in no container or exec configuration; the container is removed
 afterwards (also on error or timeout). The thread is woken with the bounded output; verbatim occurrences of the value
 are replaced by `<secret>` as a courtesy only. "Always for This Command" stores an approval bound to the secret,
@@ -159,7 +181,11 @@ revokes it. Guarantee and limits: [orchestration-extras.md](orchestration-extras
 ## Host requirements
 
 Only `git`, `/bin/sh` and the bundled `opencode`, `bellocode-exec` and `rg` (ripgrep 15.1.0, pinned SHA-256 in
-`Scripts/ripgrep-checksums`, system libraries only). Settings ▸ Containers lists them. `make plugin-test` runs the
+`Scripts/ripgrep-checksums`, system libraries only). **Provenance (D2):** `Scripts/make-app.sh` bundles opencode and rg
+only when their executable SHA-256 equals the pin for the build architecture (both architectures are pinned; rg is
+required), bellocode-exec only as built by that run, re-checks the bundled copies just before signing and refuses any
+other helper. Licence texts and NOTICE files of every shipped component (Swift packages, opencode at the pinned tag in
+`Scripts/notices/`, ripgrep from its verified archive) go to `Resources/Acknowledgements/`; a missing one fails the build. Settings ▸ Containers lists them. `make plugin-test` runs the
 plugin's `bun test` in a throwaway container. **Policy point:** the opencode binary embeds Bun; `BUN_BE_BUN` would make
 it a JavaScript runtime on the host. The server's environment drops every `BUN_*` variable and the helper never sets one.
 

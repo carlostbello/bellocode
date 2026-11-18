@@ -22,7 +22,7 @@ struct LiveWorkspaceTests {
     }
 
     func cleanup(_ spec: WorkspaceSpec) async {
-        try? await manager.remove(projectKey: spec.projectKey, volumes: true)
+        if let storage = try? await manager.storage(projectKey: spec.projectKey) { try? await manager.purge(storage) }
         try? FileManager.default.removeItem(atPath: spec.projectRoot)
     }
 

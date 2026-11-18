@@ -228,10 +228,12 @@ public final class Engine {
     public func start() async {
         guard !started else { return }
         started = true
+        // Every project's saved execution policy is in force before any project model can create, publish or use an
+        // environment (S3 in docs/reviews/deep-review-1.md); the service also refuses until then.
+        await environments.start()
         subscribeRoot()
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.
-        await environments.start()
         await environments.writeConfigNow()
         orchestration.start()
         await extras.start(store: store)
@@ -322,11 +324,14 @@ public final class Engine {
     // MARK: - Commands: threads
 
     /// Creates a thread in `directory`. It appears in the sidebar at once when the project is known.
+    /// Creates a thread. With `permissionMode` the mode's rules are part of the create request and confirmed by the
+    /// server before this returns (S2): a thread is never left running its first prompt under default rules.
     public func createThread(
         in directory: String, title: String? = nil, agent: String? = nil, model: ModelSelection? = nil,
-        parent: SessionID? = nil
+        parent: SessionID? = nil, permissionMode: PermissionMode? = nil
     ) async throws -> Session {
-        try await core.createSession(directory: directory, title: title, agent: agent, model: model, parentID: parent)
+        try await core.createSession(
+            directory: directory, title: title, agent: agent, model: model, parentID: parent, permissionMode: permissionMode)
     }
 
     public func renameThread(_ id: SessionID, to title: String) async throws { try await core.renameSession(id, title: title) }
@@ -389,7 +394,7 @@ public final class Engine {
         let signpost = EngineSignposts.publish.beginInterval("launchSnapshot")
         defer { EngineSignposts.publish.endInterval("launchSnapshot", signpost) }
         root.setProjects(snapshot.projects, registry: snapshot.registry)
-        environments.projectsChanged(root.projects, removed: root.hiddenProjects)
+        environments.projectsChanged(root.projects)
         root.setAttention(snapshot.attention)
         root.organisation = snapshot.organisation
         root.organisationRules = snapshot.organisationRules
@@ -457,7 +462,7 @@ public final class Engine {
             || !change.removedRegistry.isEmpty
         {
             root.apply(projectsChange: change)
-            environments.projectsChanged(root.projects, removed: root.hiddenProjects)
+            environments.projectsChanged(root.projects)
             for item in root.projects {
                 if let id = item.projectID, root.projectModels[id] == nil {
                     root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
@@ -478,7 +483,7 @@ public final class Engine {
                     let snapshot = await core.snapshot()
                     guard let self else { return }
                     self.root.setProjects(snapshot.projects, registry: snapshot.registry)
-                    self.environments.projectsChanged(self.root.projects, removed: self.root.hiddenProjects)
+                    self.environments.projectsChanged(self.root.projects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }

@@ -117,6 +117,8 @@ public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
     case baseNotFound(String)
     case fetchFailed(String)
     case notAWorktree(String)
+    /// No container runner: setup scripts never run on the host (S1). The script was not run.
+    case setupNeedsContainer
 
     public var description: String { userMessage }
 
@@ -130,6 +132,8 @@ public enum WorktreeError: Error, Sendable, Equatable, CustomStringConvertible {
         case .baseNotFound(let ref): "The base “\(ref)” was not found."
         case .fetchFailed(let message): "Could not fetch from origin: \(message)"
         case .notAWorktree: "This folder is not a worktree of the project."
+        case .setupNeedsContainer:
+            "Setup scripts run only in the project's container, and container execution is not available in this build. The script was not run."
         }
     }
 }
@@ -143,7 +147,8 @@ public struct WorktreeService: Sendable {
     /// folder of their own.
     let recycle: @Sendable (URL) throws -> URL
     /// Runs setup scripts somewhere other than the host: the engine routes them into the project's container
-    /// (docs/features/containers.md). Nil only without container execution (mock mode, tests).
+    /// (docs/features/containers.md). Nil without container execution (mock mode, development attach, tests): setup
+    /// scripts are then refused, never run on the host.
     public var setupRunner: (@Sendable (_ script: String, _ worktree: String, _ project: String) async throws -> WorktreeSetupResult)?
 
     public init(runner: GitRunner = GitRunner()) {
@@ -204,6 +209,10 @@ public struct WorktreeService: Sendable {
 
     public func create(_ request: WorktreeCreation) async throws -> CreatedWorktree {
         let start = ContinuousClock.now
+        // A setup script needs the container runner: refuse before creating anything rather than half-create.
+        if request.setupScript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false, setupRunner == nil {
+            throw WorktreeError.setupNeedsContainer
+        }
         let project = GitRepository(directory: request.projectDirectory, runner: runner, writableRoots: [request.parentDirectory])
         let directory = Self.folder(for: request.branch, in: request.parentDirectory)
         if FileManager.default.fileExists(atPath: directory) { throw WorktreeError.directoryExists(directory) }
@@ -294,16 +303,11 @@ public struct WorktreeService: Sendable {
         return count
     }
 
-    /// Runs a setup script in the project's container (`setupRunner`), or, without container execution, with `zsh -lc`
-    /// in the worktree (10 minutes at most).
+    /// Runs a setup script in the project's container (`setupRunner`). Without a container runner it fails closed
+    /// (`WorktreeError.setupNeedsContainer`): a setup script never runs on the host.
     public func runSetup(_ script: String, in directory: String, projectDirectory: String) async throws -> WorktreeSetupResult {
-        if let setupRunner { return try await setupRunner(script, directory, projectDirectory) }
-        let start = ContinuousClock.now
-        let output = try await runner.runProgram(
-            URL(filePath: "/bin/zsh"), ["-lc", script], in: directory,
-            environment: ["BELLOCODE_WORKTREE_PATH": directory, "BELLOCODE_PROJECT_ROOT": projectDirectory], timeout: .seconds(600))
-        let combined = WorktreeSetupResult.headAndTail(String(decoding: output.stdout + output.stderr, as: UTF8.self))
-        return WorktreeSetupResult(exitCode: output.status, output: combined.text, duration: ContinuousClock.now - start, omittedBytes: combined.omitted)
+        guard let setupRunner else { throw WorktreeError.setupNeedsContainer }
+        return try await setupRunner(script, directory, projectDirectory)
     }
 
     // MARK: Remove and restore

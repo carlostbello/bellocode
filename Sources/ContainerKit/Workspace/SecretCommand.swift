@@ -10,10 +10,29 @@ public struct SecretCommandPolicy: Sendable, Hashable, Codable {
     /// The project (and its worktree folders) mounted read-write. Off by default: read-only, so the value cannot be
     /// written into the bind-mounted project where the agent could read it later.
     public var writesProject: Bool
+    /// The project's optional host mounts this command receives, each with the access it was approved with. Empty by
+    /// default: a secret command never gets an optional mount the approval did not list (S5 in
+    /// docs/reviews/deep-review-1.md).
+    public var mounts: [UserMount]
 
-    public init(network: Bool = false, writesProject: Bool = false) {
+    public init(network: Bool = false, writesProject: Bool = false, mounts: [UserMount] = []) {
         self.network = network
         self.writesProject = writesProject
+        self.mounts = mounts
+    }
+
+    enum CodingKeys: String, CodingKey { case network, writesProject, mounts }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        network = try c.decode(Bool.self, forKey: .network)
+        writesProject = try c.decode(Bool.self, forKey: .writesProject)
+        mounts = try c.decodeIfPresent([UserMount].self, forKey: .mounts) ?? []
+    }
+
+    /// The mounts in a canonical order and spelling (what an approval binds).
+    public var canonicalMounts: [String] {
+        mounts.map { "\(($0.path as NSString).standardizingPath):\($0.readOnly ? "ro" : "rw")" }.sorted()
     }
 }
 
@@ -22,8 +41,9 @@ extension WorkspaceSpec {
     public static let labelSecretCommand = "app.bellocode.secret-command"
 
     /// The create body of a one-shot container for a secret command: the workspace's image, user, limits and hardening;
-    /// the workspace folders read-only unless `policy.writesProject`; user mounts as configured; no caches and no
-    /// persistent home (HOME is a fresh /tmp); network `none` unless `policy.network`.
+    /// the workspace folders read-only unless `policy.writesProject`; only the optional mounts `policy.mounts` lists,
+    /// with the access listed there (never the project's other user mounts); no caches and no persistent home (HOME is
+    /// a fresh /tmp); network `none` unless `policy.network`.
     public func secretCommandBody(imageID: String?, policy: SecretCommandPolicy) -> ContainerCreate {
         var body = createBody(imageID: imageID)
         body.env = ["HOME=/tmp", "BELLOCODE_WORKSPACE=1"] + environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
@@ -33,7 +53,7 @@ extension WorkspaceSpec {
         // Nothing BelloCode runs as root here: no capabilities at all.
         host.capAdd = nil
         var mounts = workspaceRoots.map { Mount(type: .bind, source: $0, target: $0, readOnly: !policy.writesProject, createMountpoint: false) }
-        mounts += userMounts.map { Mount(type: .bind, source: $0.path, target: $0.path, readOnly: $0.readOnly, createMountpoint: false) }
+        mounts += policy.mounts.map { Mount(type: .bind, source: $0.path, target: $0.path, readOnly: $0.readOnly, createMountpoint: false) }
         host.mounts = mounts
         host.portBindings = nil
         body.exposedPorts = nil

@@ -132,7 +132,7 @@ struct GitLabTransportTests {
             tokens: InMemorySecretVault(), autoPoll: false)
         await again.start()
         #expect(again.plainHTTPAllowed.all == [instance.baseURL])
-        await again.removeInstance(instance)
+        try await again.removeInstance(instance)
         #expect(again.plainHTTPAllowed.all.isEmpty)
         service.shutdown()
         again.shutdown()

@@ -162,7 +162,7 @@ public struct GitRunner: Sendable {
         return output
     }
 
-    /// Runs another program (a setup script's shell) with the same draining, limits, timeout and cancellation. A
+    /// Runs another program (isolation probes, tests) with the same draining, limits, timeout and cancellation. A
     /// non-zero exit is returned, not thrown.
     @concurrent
     public func runProgram(

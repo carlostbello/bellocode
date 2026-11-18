@@ -49,10 +49,34 @@ func parseCommand(_ all: [String]) -> String? {
 let command = parseCommand(CommandLine.arguments)
 
 let environment = ProcessInfo.processInfo.environment
-guard let configPath = environment["BELLOCODE_EXEC_CONFIG"], let configData = FileManager.default.contents(atPath: configPath),
-      let config = try? JSONDecoder().decode(ExecHelperConfig.self, from: configData) else {
+guard let configPath = environment["BELLOCODE_EXEC_CONFIG"] else {
     fail(126, "commands run only in a project's container, and this one is not configured (BELLOCODE_EXEC_CONFIG). Nothing runs on this Mac instead.")
 }
+
+/// Reads the configuration and the app's requirement. The app writes the requirement first, then the configuration:
+/// a reader between the two sees a newer requirement and waits briefly (at most ~2 s) for the configuration; a failed
+/// or missing write means refusal (fail closed), never a command run under an older policy (S4).
+func loadAuthorisedConfig() -> ExecHelperConfig {
+    let requirementURL = ExecHelperConfig.Requirement.url(forConfig: URL(filePath: configPath))
+    var refusal = "commands run only in a project's container, and this one is not configured (BELLOCODE_EXEC_CONFIG). Nothing runs on this Mac instead."
+    var code: Int32 = 126
+    for attempt in 0..<20 {
+        if attempt > 0 { usleep(100_000) }
+        let requirement = FileManager.default.contents(atPath: requirementURL.path)
+            .flatMap { try? JSONDecoder().decode(ExecHelperConfig.Requirement.self, from: $0) }
+        let config = FileManager.default.contents(atPath: configPath).flatMap { try? JSONDecoder().decode(ExecHelperConfig.self, from: $0) }
+        if let config {
+            guard let message = config.refusal(requirement: requirement) else { return config }
+            refusal = message
+            code = 125
+        }
+        // Waiting helps only while the app is between writing a requirement and its configuration; without a
+        // requirement nothing is on its way: refuse at once.
+        if requirement == nil { break }
+    }
+    fail(code, refusal)
+}
+let config = loadAuthorisedConfig()
 let hostDirectory = FileManager.default.currentDirectoryPath
 if let blocked = config.runtimeBlocked { fail(125, blocked.message) }
 guard let (workspace, cwd) = config.resolve(directory: hostDirectory) else {

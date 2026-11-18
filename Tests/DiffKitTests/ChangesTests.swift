@@ -1,5 +1,5 @@
 import BelloCore
-import Engine
+@testable import Engine
 import Foundation
 import MockOpenCode
 import OpenCodeKit
@@ -143,6 +143,11 @@ struct ChangesModelTests {
         preferences.worktreeParent = fixture.root.appending(path: "worktrees").path
         preferences.setupScript = "touch .setup-ran"
         await fixture.git.setPreferences(preferences, projectDirectory: fixture.repo.path)
+        // Setup scripts run only through a container runner (S1); this stand-in does what the script would.
+        fixture.git.worktrees.setupRunner = { _, worktree, _ in
+            FileManager.default.createFile(atPath: worktree + "/.setup-ran", contents: Data())
+            return WorktreeSetupResult(exitCode: 0, output: "", duration: .zero)
+        }
         let draft = WorkspaceDraft(git: fixture.git, projectDirectory: fixture.repo.path, projectID: nil)
         draft.load()
         let deadline = ContinuousClock.now + .seconds(5)

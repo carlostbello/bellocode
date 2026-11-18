@@ -95,6 +95,7 @@ extension ProjectionStore {
     }
 
     public func setGrant(_ kind: AppGrantKind, scope: String, granted: Bool) async throws {
+        try await runWriteHook()
         try await writer.write { db in
             if granted {
                 try db.execute(

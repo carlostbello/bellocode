@@ -74,6 +74,8 @@ public final class VisualService {
     @ObservationIgnored public let directory: URL
     @ObservationIgnored private let store: ProjectionStore
     @ObservationIgnored private var grantedHosts: Set<String> = []
+    /// Revoked hosts whose grant row is not deleted yet: never granted in memory, retried.
+    @ObservationIgnored private var pendingRevocations: Set<String> = []
     @ObservationIgnored private var records: [String: VisualRecord] = [:]
 
     public init(store: ProjectionStore, directory: URL? = nil) {
@@ -83,8 +85,25 @@ public final class VisualService {
     }
 
     public func load() async {
-        grantedHosts = (try? await store.grants(.network)) ?? []
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Revocations a previous run could not make durable stay revoked (kept in a file beside the visuals, apart
+        // from the database that refused) and are retried now.
+        if let data = try? Data(contentsOf: pendingRevocationsFile), let hosts = try? JSONDecoder().decode([String].self, from: data) {
+            pendingRevocations.formUnion(hosts)
+        }
+        grantedHosts = ((try? await store.grants(.network)) ?? []).subtracting(pendingRevocations)
+        try? await retryPendingRevocations()
+    }
+
+    private var pendingRevocationsFile: URL { directory.appending(path: "pending-revocations.json") }
+
+    private func savePendingRevocations() {
+        if pendingRevocations.isEmpty {
+            try? FileManager.default.removeItem(at: pendingRevocationsFile)
+        } else {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? JSONEncoder().encode(pendingRevocations.sorted()).write(to: pendingRevocationsFile, options: .atomic)
+        }
     }
 
     // MARK: Reads (the app's views and image loader)
@@ -135,18 +154,59 @@ public final class VisualService {
 
     // MARK: Tools
 
-    /// Resolves `html` or `path` (absolute, or relative to the thread's directory) into a document.
-    func document(html: String?, path: String?, directory base: String) throws -> String {
+    /// Resolves `html` or `path` into a document. A path (absolute, or relative to the thread's directory) must name
+    /// a regular file inside one of `roots` (the calling thread's project and worktree folders) after resolving
+    /// symlinks and `..`; it is opened once and read with a size cap from that descriptor (S6 in
+    /// docs/reviews/deep-review-1.md). Anything else is refused with a tool error.
+    func document(html: String?, path: String?, directory base: String, roots: [String]) throws -> String {
         if let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard html.utf8.count <= Self.maxHTMLBytes else { throw ExtrasError("The HTML is larger than 2 MB.") }
             return html
         }
         guard let path, !path.isEmpty else { throw ExtrasError("Give html (the document) or path (an .html file).") }
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : URL(fileURLWithPath: base).appending(path: path)
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { throw ExtrasError("No file at \(url.path).") }
-        guard size <= Self.maxHTMLBytes else { throw ExtrasError("The file is larger than 2 MB.") }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { throw ExtrasError("The file is not UTF-8 text.") }
+        return try Self.readAuthorisedFile(path, base: base, roots: roots, limit: Self.maxHTMLBytes)
+    }
+
+    /// Reads a UTF-8 file that resolves inside `roots`, at most `limit` bytes, from a single descriptor.
+    nonisolated static func readAuthorisedFile(_ path: String, base: String, roots: [String], limit: Int) throws -> String {
+        let candidate = path.hasPrefix("/") ? path : (base as NSString).appendingPathComponent(path)
+        let realRoots = roots.compactMap(Self.realPath)
+        func inside(_ resolved: String) -> Bool {
+            realRoots.contains { resolved == $0 || resolved.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+        }
+        let outside = ExtrasError("\(path) is outside this thread's project and worktree folders; visuals read files only from there. Pass the HTML inline instead.")
+        guard let resolved = Self.realPath(candidate) else { throw ExtrasError("No file at \(candidate).") }
+        guard inside(resolved) else { throw outside }
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { throw ExtrasError("\(path) could not be opened.") }
+        defer { close(fd) }
+        // The descriptor is what is read: check what it actually is and where it actually lives (a folder swapped for
+        // a symlink after resolving is caught here).
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw ExtrasError("\(path) is not a regular file.") }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buffer) == 0 else { throw ExtrasError("\(path) could not be opened.") }
+        guard let opened = Self.realPath(String(cString: buffer)), inside(opened) else { throw outside }
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 << 10)
+        while true {
+            let count = read(fd, &chunk, chunk.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw ExtrasError("\(path) could not be read.")
+            }
+            if count == 0 { break }
+            data.append(contentsOf: chunk[0..<count])
+            guard data.count <= limit else { throw ExtrasError("The file is larger than \(limit >= 1 << 20 ? "\(limit >> 20) MB" : "\(limit) bytes").") }
+        }
+        guard let text = String(data: data, encoding: .utf8) else { throw ExtrasError("The file is not UTF-8 text.") }
         return text
+    }
+
+    nonisolated static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// `html_preview`: renders once (light), returns the facts the agent needs and a PNG path it may share.
@@ -209,8 +269,10 @@ public final class VisualService {
         if always {
             for host in hosts {
                 try? await store.setGrant(.network, scope: host, granted: true)
+                pendingRevocations.remove(host)
                 grantedHosts.insert(host)
             }
+            savePendingRevocations()
             revision += 1
         } else if var record = record(id) {
             record.approvedHosts = Array(Set(record.approvedHosts).union(hosts)).sorted()
@@ -226,10 +288,40 @@ public final class VisualService {
         return grantedHosts.sorted()
     }
 
-    public func revokeNetwork(_ host: String) async {
-        try? await store.setGrant(.network, scope: host, granted: false)
+    /// Revokes an "always" host grant. The host stops being allowed at once (fail closed in memory); the call succeeds
+    /// only when the grant is deleted from the store. Otherwise it throws, the host is listed in
+    /// `pendingRevocations` ("removal pending") and the deletion is retried on the next revoke or load, so a restart
+    /// cannot silently bring it back without the person having seen the failure (S7).
+    public func revokeNetwork(_ host: String) async throws {
         grantedHosts.remove(host)
+        pendingRevocations.insert(host)
         revision += 1
+        try await retryPendingRevocations()
+    }
+
+    /// Hosts whose revocation is not yet durable (shown as "removal pending").
+    public var pendingNetworkRevocations: [String] {
+        _ = revision
+        return pendingRevocations.sorted()
+    }
+
+    /// The last revocation that could not be made durable (shown in Settings until a retry succeeds).
+    public private(set) var revocationError: String?
+
+    /// Deletes every pending revocation from the store; throws the first failure (the rest stay pending).
+    public func retryPendingRevocations() async throws {
+        defer { savePendingRevocations() }
+        for host in pendingRevocations.sorted() {
+            do {
+                try await store.setGrant(.network, scope: host, granted: false)
+                pendingRevocations.remove(host)
+                revision += 1
+            } catch {
+                revocationError = "Access for \(host) is blocked now, but its saved approval could not be deleted (\(error.localizedDescription)). It is shown as pending; try again."
+                throw ExtrasError("Access for \(host) is blocked now, but its saved approval could not be deleted (\(error.localizedDescription)). It is shown as pending; try Revoke again.")
+            }
+        }
+        revocationError = nil
     }
 
     // MARK: Helpers

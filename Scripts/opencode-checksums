@@ -1,7 +1,8 @@
 # Pinned opencode release checksums, one line per version and platform.
 # Archive SHA-256 values come from the anomalyco/homebrew-tap formula `opencode-v2.rb`.
-# Binary SHA-256 is the `opencode` file inside the archive (also used to verify a local fallback copy).
+# Binary SHA-256 is the `opencode` file inside the archive (also used to verify a local fallback copy). Both are
+# required: Scripts/make-app.sh bundles only an opencode whose SHA-256 equals the binary column (D2).
 #
 # version  platform              archive-sha256                                                    binary-sha256
 2.3.0      darwin-arm64          7907df2b12720a840fbb49c5b978b9b82925b6bf75479a5fd216afa8932b6702  9f3147cae4ca323827d3ca39451b0d3431b2906e79a08e9b09d1eb34bb703f52
-2.3.0      darwin-x64-baseline   b4985f65e2e4d624ebe5a490df66cbbce06a4146b8ddfab86473f73c2cc57ea2  -
+2.3.0      darwin-x64-baseline   b4985f65e2e4d624ebe5a490df66cbbce06a4146b8ddfab86473f73c2cc57ea2  e3d8af509109b820369a3782f5062867f10b29edc5e7b0bd20ddfb34a1e867fb

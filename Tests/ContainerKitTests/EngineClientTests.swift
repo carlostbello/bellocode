@@ -199,3 +199,54 @@ struct EngineClientTests {
         }
     }
 }
+
+/// S5 (docs/reviews/deep-review-1.md): a secret command's one-shot container receives exactly the access its approval
+/// described. Checked on the create request the daemon receives.
+@Suite("Secret command mounts", .timeLimit(.minutes(3)))
+struct SecretCommandMountTests {
+    func createBody(policy: SecretCommandPolicy) async throws -> [String: Any] {
+        let server = try FakeEngineServer { request, stream in
+            if request.path.contains("/images/") {
+                try await stream.respond(200, json: #"{"Id":"sha256:1","RepoDigests":[]}"#)
+            } else if request.path.hasSuffix("/containers/create") {
+                try await stream.respond(201, json: #"{"Id":"c1","Warnings":[]}"#)
+            } else if request.method == "DELETE" {
+                try await stream.respond(204, json: "")
+            } else {
+                // Stop before anything runs: the create request is what is inspected.
+                try await stream.respond(500, json: #"{"message":"refused by the fake daemon"}"#)
+            }
+        }
+        defer { server.stop() }
+        let spec = WorkspaceSpec(
+            projectRoot: "/Users/me/src/app", extraMounts: ["/Users/me/wt"],
+            userMounts: [UserMount(path: "/Users/me/cache", readOnly: false), UserMount(path: "/Users/me/assets", readOnly: true)],
+            image: "img:1", user: "501:20", network: .bridge)
+        await #expect(throws: (any Error).self) {
+            _ = try await WorkspaceManager(client: server.client).runSecretCommand(
+                spec, shell: "/bin/sh", command: "true", workingDir: "/Users/me/src/app", name: "TOKEN", secret: Data("v".utf8), policy: policy)
+        }
+        let requests = server.requests.withLock { $0 }
+        #expect(requests.contains { $0.method == "DELETE" }, "the one-shot container is removed")
+        let create = try #require(requests.first { $0.path.hasSuffix("/containers/create") })
+        return try #require(try JSONSerialization.jsonObject(with: create.body) as? [String: Any])
+    }
+
+    func mounts(_ body: [String: Any]) throws -> [String: Bool] {
+        let host = try #require(body["HostConfig"] as? [String: Any])
+        let mounts = try #require(host["Mounts"] as? [[String: Any]])
+        return Dictionary(uniqueKeysWithValues: mounts.map { ($0["Source"] as? String ?? "", $0["ReadOnly"] as? Bool ?? false) })
+    }
+
+    @Test func noOptionalMountUnlessTheApprovalListsIt() async throws {
+        let body = try await createBody(policy: SecretCommandPolicy())
+        #expect(try mounts(body) == ["/Users/me/src/app": true, "/Users/me/wt": true], "only the read-only project folders")
+        #expect((body["HostConfig"] as? [String: Any])?["NetworkMode"] as? String == "none")
+    }
+
+    @Test func listedMountsArriveWithTheirListedAccess() async throws {
+        let body = try await createBody(policy: SecretCommandPolicy(mounts: [UserMount(path: "/Users/me/cache", readOnly: true)]))
+        #expect(try mounts(body) == ["/Users/me/src/app": true, "/Users/me/wt": true, "/Users/me/cache": true],
+                "the approved access (read-only), not the setting's read-write")
+    }
+}

@@ -137,4 +137,46 @@ struct SecretCommandApprovalTests {
         await fixture.engine.extras.secrets.delete(account: account)
         #expect(try await fixture.engine.store.grants(.secretCommand).isEmpty)
     }
+
+    /// S5 (docs/reviews/deep-review-1.md): optional host mounts reach a secret command only when the card listed them,
+    /// with the access it listed; a later change to the setting asks again or refuses.
+    @Test func optionalMountsOnlyAsListedOnTheCard() async throws {
+        let fixture = try await Fixture.start()
+        defer { Task { await fixture.stop() } }
+        // A real, shared folder (a missing one would block the environment before any command).
+        let cache = fixture.root.appending(path: "cache").path
+        try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "img:1"
+        settings.userMounts = [UserMount(path: cache, readOnly: false)]
+        await fixture.engine.environments.update(Self.project, settings: settings)
+        let session = try await fixture.engine.createThread(in: Self.project, title: "publish")
+        try await waitUntil("graph") { fixture.engine.orchestration.node(session.id) != nil }
+
+        // Not asked for: the card says so and the command gets none.
+        let first = try await fixture.reference(session.id)
+        _ = await fixture.call("secret_exec", ["secretRef": .string(first), "name": "T", "command": "make release"], session: session.id)
+        let (card, approval) = try #require(await fixture.approvalCard())
+        #expect(approval.detail.contains("no extra folders"), "\(approval.detail)")
+        try await fixture.engine.extras.respond(to: card.id, .approve(always: true))
+        #expect(fixture.runtime.secretCalls.withLock { $0.last?.policy.mounts } == [], "a writable optional mount is not passed")
+
+        // Asked for: listed with its access, and passed exactly so.
+        let second = try await fixture.reference(session.id)
+        _ = await fixture.call(
+            "secret_exec", ["secretRef": .string(second), "name": "T", "command": "make release", "includeMounts": true], session: session.id)
+        let (mountCard, mountApproval) = try #require(await fixture.approvalCard(), "a different access asks again despite Always")
+        #expect(mountApproval.detail.contains("\(cache) (read-write)"), "\(mountApproval.detail)")
+        try await fixture.engine.extras.respond(to: mountCard.id, .approve(always: true))
+        #expect(fixture.runtime.secretCalls.withLock { $0.last?.policy.mounts } == [UserMount(path: cache, readOnly: false)])
+
+        // The mount is made read-only afterwards: the saved approval (read-write) no longer matches, so it asks again.
+        settings.userMounts = [UserMount(path: cache, readOnly: true)]
+        await fixture.engine.environments.update(Self.project, settings: settings)
+        let third = try await fixture.reference(session.id)
+        let asked = await fixture.call(
+            "secret_exec", ["secretRef": .string(third), "name": "T", "command": "make release", "includeMounts": true], session: session.id)
+        #expect(asked.text.contains("Asked the user to approve"), "\(asked.text)")
+        #expect(fixture.runtime.secretCalls.withLock { $0.count } == 2)
+    }
 }

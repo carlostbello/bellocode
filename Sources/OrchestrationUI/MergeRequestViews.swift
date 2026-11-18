@@ -382,8 +382,12 @@ public final class GitLabSettingsModel {
     }
 
     public func remove(_ instance: GitLabInstance) async {
-        await service.removeInstance(instance)
-        results[instance.baseURL] = nil
+        do {
+            try await service.removeInstance(instance)
+            results[instance.baseURL] = nil
+        } catch {
+            results[instance.baseURL] = ExtrasError.message(error)
+        }
     }
 }
 
