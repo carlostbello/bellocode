@@ -62,13 +62,17 @@ func loadAuthorisedConfig() -> ExecHelperConfig {
     var code: Int32 = 126
     for attempt in 0..<20 {
         if attempt > 0 { usleep(100_000) }
-        guard let data = FileManager.default.contents(atPath: configPath),
-              let config = try? JSONDecoder().decode(ExecHelperConfig.self, from: data) else { continue }
         let requirement = FileManager.default.contents(atPath: requirementURL.path)
             .flatMap { try? JSONDecoder().decode(ExecHelperConfig.Requirement.self, from: $0) }
-        guard let message = config.refusal(requirement: requirement) else { return config }
-        refusal = message
-        code = 125
+        let config = FileManager.default.contents(atPath: configPath).flatMap { try? JSONDecoder().decode(ExecHelperConfig.self, from: $0) }
+        if let config {
+            guard let message = config.refusal(requirement: requirement) else { return config }
+            refusal = message
+            code = 125
+        }
+        // Waiting helps only while the app is between writing a requirement and its configuration; without a
+        // requirement nothing is on its way: refuse at once.
+        if requirement == nil { break }
     }
     fail(code, refusal)
 }
