@@ -116,6 +116,11 @@ public final class ThreadTerminals {
     /// The latest save; each save runs after the one before it (see `save()`).
     @ObservationIgnored private var lastSave: Task<Void, Never>?
     @ObservationIgnored private var loadWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Counts exits and ends known here first (a record's stream reported it, or it was closed while idle);
+    /// `endedLocally[id]` is the count at a record's latest one. A server list requested before that is older than the
+    /// record's state (see `refresh()`).
+    @ObservationIgnored private var localEndClock: UInt64 = 0
+    @ObservationIgnored private var endedLocally: [String: UInt64] = [:]
 
     init(sessionID: SessionID, service: TerminalService) {
         self.sessionID = sessionID
@@ -151,6 +156,7 @@ public final class ThreadTerminals {
     /// leaves everything as it is and sets `isStale`.
     public func refresh() async {
         await waitUntilLoaded()
+        let requested = localEndClock
         let infos: [PTYInfo]
         do {
             infos = try await client().terminals(sessionID: sessionID.rawValue)
@@ -163,6 +169,8 @@ public final class ThreadTerminals {
         var changed = false
         for index in set.records.indices {
             let record = set.records[index]
+            // It exited or ended here after the list was requested: the list is older; keep the record as it is.
+            if let ended = endedLocally[record.id], ended > requested { continue }
             if let info = byID[record.id] {
                 var updated = record
                 updated.title = info.title
@@ -273,6 +281,7 @@ public final class ThreadTerminals {
     public func close(_ id: String) async {
         guard let index = set.records.firstIndex(where: { $0.id == id }) else { return }
         let record = set.records.remove(at: index)
+        endedLocally[id] = nil
         reselect(after: record, at: index)
         markDirty()
         guard record.state.isRunning else { return }
@@ -381,6 +390,7 @@ public final class ThreadTerminals {
         for id in idle {
             guard let index = set.records.firstIndex(where: { $0.id == id }) else { continue }
             set.records[index].state = .ended(reason: "Closed while idle")
+            noteLocalEnd(id)
             try? await client().deleteTerminal(id)
         }
         if !idle.isEmpty { markDirty() }
@@ -400,6 +410,7 @@ public final class ThreadTerminals {
         guard let index = set.records.firstIndex(where: { $0.id == id }) else { return }
         set.records[index].state = .exited(code: code)
         set.records[index].foregroundProcess = nil
+        noteLocalEnd(id)
         markDirty()
         Task { await save() }
     }
@@ -407,7 +418,13 @@ public final class ThreadTerminals {
     func streamEnded(_ id: String, reason: String) {
         guard let index = set.records.firstIndex(where: { $0.id == id }), set.records[index].state.isRunning else { return }
         set.records[index].state = .ended(reason: reason)
+        noteLocalEnd(id)
         markDirty()
+    }
+
+    private func noteLocalEnd(_ id: String) {
+        localEndClock += 1
+        endedLocally[id] = localEndClock
     }
 
     func streamTitleChanged(_ id: String, title: String) {
