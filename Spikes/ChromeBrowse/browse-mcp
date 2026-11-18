@@ -1,0 +1,6 @@
+#!/bin/sh
+# What BelloCode registers as the MCP command (inside this container): `browse mcp` with the relay's extension-origin
+# allowlist set, so a relay it has to start on demand accepts the policy-installed extension too.
+OPENCODE_BROWSER_EXTENSION_ORIGINS="chrome-extension://$(cat /opt/browse-crx/id)"
+export OPENCODE_BROWSER_EXTENSION_ORIGINS
+exec browse mcp "$@"
