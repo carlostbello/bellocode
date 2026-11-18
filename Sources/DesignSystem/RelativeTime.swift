@@ -1,4 +1,6 @@
+import Combine
 import Foundation
+import SwiftUI
 
 /// Compact relative times for dense rows: "now", "4m", "3h", "2d", "5w", then a short date ("Mar 4", or "Mar 4, 2025"
 /// in another year). Deterministic for tests: pass `now` and a calendar.
@@ -27,4 +29,36 @@ public enum RelativeTime {
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: now)
     }
+}
+
+/// A `TimelineView(.periodic)` replacement for relative and elapsed times: re-renders `content` with the current date
+/// every `interval`, on `ContinuousClock`. SwiftUI's periodic schedule runs on run-loop timers, which were seen not to
+/// fire while the process is otherwise idle on macOS 27 (BelloCore `ContinuousTicker` has the details). The refresh
+/// task is owned by the view and ends when it leaves the hierarchy.
+public struct ContinuousTimeline<Content: View>: View {
+    private let interval: Duration
+    private let content: (Date) -> Content
+    // `@StateObject`, not `@State`: Command Line Tools have no SwiftUI macro plugin (see DSSwiftUI.swift).
+    @StateObject private var clock = TimelineClock()
+
+    public init(every interval: Duration, @ViewBuilder content: @escaping (Date) -> Content) {
+        self.interval = interval
+        self.content = content
+    }
+
+    public var body: some View {
+        content(clock.now)
+            .task(id: interval) {
+                clock.now = Date()
+                while true {
+                    do { try await Task.sleep(for: interval, clock: .continuous) } catch { return }
+                    clock.now = Date()
+                }
+            }
+    }
+}
+
+@MainActor
+final class TimelineClock: ObservableObject {
+    @Published var now = Date()
 }

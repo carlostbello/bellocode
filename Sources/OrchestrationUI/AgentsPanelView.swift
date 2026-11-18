@@ -287,8 +287,8 @@ struct AgentRowView: View {
     @ViewBuilder
     private func timing(_ node: TaskNode) -> some View {
         if node.ownStatus == .running || node.ownStatus == .stopping, let started = node.startedAt {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text("· " + OrchestrationText.elapsed(from: started.date, to: context.date)).monospacedDigit()
+            ContinuousTimeline(every: .seconds(1)) { now in
+                Text("· " + OrchestrationText.elapsed(from: started.date, to: now)).monospacedDigit()
                     .foregroundStyle(SwiftUI.Color.ds.text3)
             }
         } else {

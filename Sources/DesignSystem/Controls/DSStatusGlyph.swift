@@ -2,7 +2,8 @@ import AppKit
 import BelloCore
 import SwiftUI
 
-/// One shared, stepped animation clock for every spinner and sweep: a single main-run-loop timer, running only while
+/// One shared, stepped animation clock for every spinner and sweep: a single `ContinuousTicker` (a run-loop timer may
+/// not fire while the app is otherwise idle on macOS 27, which froze the "working" spinner), running only while
 /// at least one on-screen subscriber exists (visual-language.md §7: stepped, paused off-screen). Rows subscribe when
 /// they enter a window and unsubscribe when they leave, so a virtualised list costs one timer, not one per row.
 @MainActor
@@ -11,7 +12,7 @@ public final class DSStepClock {
 
     public private(set) var step = 0
     private let subscribers = NSHashTable<NSView>.weakObjects()
-    private var timer: Timer?
+    private var timer: ContinuousTicker?
 
     public var subscriberCount: Int { subscribers.allObjects.count }
 
@@ -19,11 +20,7 @@ public final class DSStepClock {
         subscribers.add(view)
         guard timer == nil else { return }
         let interval = DS.Motion.spinnerPeriod / Double(DS.Motion.spinnerSteps)
-        let timer = Timer(timeInterval: interval, repeats: true) { _ in
-            MainActor.assumeIsolated { DSStepClock.shared.tick() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        timer = ContinuousTicker(every: .seconds(interval)) { DSStepClock.shared.tick() }
     }
 
     public func unsubscribe(_ view: NSView) {
@@ -39,7 +36,7 @@ public final class DSStepClock {
     }
 
     private func stop() {
-        timer?.invalidate()
+        timer?.stop()
         timer = nil
     }
 }

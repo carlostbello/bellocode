@@ -68,7 +68,8 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     private var selectionLoop: ObservationLoop?
     private var isApplyingSelection = false
     private var isApplyingStructure = false
-    private var clock: Timer?
+    /// Refreshes relative times on ContinuousClock (run-loop timers may not fire in an idle process, macOS 27).
+    private var clock: ContinuousTicker?
     private var renamingID: SessionID?
     private var renameOriginal = ""
     private var draggedThreads: [SessionID] = []
@@ -221,9 +222,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
             self?.updateActiveRows()
         }
         workspace.undo.onToastChange = { [weak self] entry in self?.showToast(entry) }
-        clock = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshVisibleRows() }
-        }
+        clock = ContinuousTicker(every: .seconds(30), tolerance: .seconds(1)) { [weak self] in self?.refreshVisibleRows() }
         NotificationCenter.default.addObserver(
             self, selector: #selector(scrolled(_:)), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
     }
@@ -231,7 +230,7 @@ final class SidebarViewController: NSViewController, NSOutlineViewDataSource, NS
     isolated deinit {
         structureLoop?.cancel()
         selectionLoop?.cancel()
-        clock?.invalidate()
+        clock?.stop()
         scrollSaveTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }

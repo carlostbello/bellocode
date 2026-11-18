@@ -258,6 +258,21 @@ func key(_ characters: String, keyCode: UInt16, in window: NSWindow) -> NSEvent 
         window.close()
     }
 
+    /// The step clock ticks on ContinuousClock: across one idle sleep (no polling, nothing else waking the process) the
+    /// spinner advances. A run-loop `Timer` was seen not to fire in an idle process on macOS 27, freezing the spinner.
+    @Test func stepClockAdvancesWhileTheProcessIsIdle() async {
+        let glyph = DSStatusGlyphView()
+        let window = hostWindow(glyph)
+        DS.Accessibility.reduceMotionOverride = false
+        defer { DS.Accessibility.reduceMotionOverride = nil }
+        glyph.status = .running
+        let before = DSStepClock.shared.step
+        try? await Task.sleep(for: .seconds(DS.Motion.spinnerPeriod / Double(DS.Motion.spinnerSteps) * 6), clock: .continuous)
+        #expect(DSStepClock.shared.step - before >= 2)
+        glyph.removeFromSuperview()
+        window.close()
+    }
+
     @Test func countBadgeAndPill() {
         let badge = CountBadge()
         badge.noun = "threads need you"

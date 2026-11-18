@@ -1,4 +1,5 @@
 import AppKit
+import DesignSystem
 import SwiftUI
 
 /// Posts VoiceOver announcements. Callers announce a meaningful change once, never per streamed update.
@@ -17,8 +18,8 @@ struct AgeText: View {
     let date: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            Text(Self.format(context.date.timeIntervalSince(date)))
+        ContinuousTimeline(every: .seconds(30)) { now in
+            Text(Self.format(now.timeIntervalSince(date)))
         }
     }
 
