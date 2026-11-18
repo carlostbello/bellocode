@@ -148,8 +148,21 @@ extension GitRepository {
         let staged = try await git(["diff", "--cached", "--name-only"], allowFailure: true).text
         let cached = staged.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : ["--cached"]
         let stat = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--stat=120"] + cached + (cached.isEmpty ? ["HEAD"] : []), allowFailure: true).text
-        let patch = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U1"] + cached + (cached.isEmpty ? ["HEAD"] : []), limit: 4 << 20, allowFailure: true).text
-        return (stat, String(patch.prefix(patchLimit)))
+        var patch = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U1"] + cached + (cached.isEmpty ? ["HEAD"] : []), limit: 4 << 20, allowFailure: true).text
+        var summary = stat
+        // Untracked files are committed too when nothing is staged (commitAll stages them): list them and quote the
+        // start of each small text file.
+        if cached.isEmpty {
+            let untracked = GitStatusParser.split(try await git(["ls-files", "--others", "--exclude-standard", "-z"], allowFailure: true).stdout)
+            for path in untracked.prefix(50) {
+                summary += "\n new file: \(path)"
+                guard patch.count < patchLimit, let data = FileManager.default.contents(atPath: (directory as NSString).appendingPathComponent(path)),
+                      data.count < 64 << 10, !data.prefix(8_000).contains(0)
+                else { continue }
+                patch += "\n+++ new file \(path)\n" + String(decoding: data.prefix(2_000), as: UTF8.self)
+            }
+        }
+        return (summary, String(patch.prefix(patchLimit)))
     }
 
     /// Recent commit subjects (repository conventions for generated messages).
