@@ -331,16 +331,19 @@ public struct BoundedLogFile: Sendable {
                                          attributes: [.posixPermissions: 0o700])
             manager.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
         }
+        let size = ((try? manager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        if size + data.count > limit {
+            // Keep the newest half: rewrite the file (0600) with the tail of what it had plus the new bytes.
+            let existing = manager.contents(atPath: url.path) ?? Data()
+            let keep = (existing + data).suffix(limit / 2)
+            try? Data(keep).write(to: url, options: .atomic)
+            try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return
+        }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         defer { try? handle.close() }
-        let size = (try? handle.seekToEnd()) ?? 0
-        if Int(size) + data.count > limit, let existing = manager.contents(atPath: url.path) {
-            let keep = existing.suffix(limit / 2) + data.suffix(limit / 2)
-            try? handle.truncate(atOffset: 0)
-            try? handle.write(contentsOf: keep)
-        } else {
-            try? handle.write(contentsOf: data)
-        }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
     }
 
     public func read() -> String {

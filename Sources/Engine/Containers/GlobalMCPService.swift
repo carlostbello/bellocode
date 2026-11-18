@@ -127,7 +127,8 @@ extension EnvironmentService {
 
     /// A thread of the project is shown: register the global servers there (once; cheap when nothing changed).
     public func projectInUse(_ directory: String) {
-        guard isEnabled, let model = project(containing: directory) else { return }
+        guard isEnabled else { return }
+        let model = project(containing: directory) ?? environment(for: directory)
         let wasIdle = idledOut.remove(model.directory) != nil
         guard projectsInUse.insert(model.directory).inserted || wasIdle else { return }
         guard !globalMCP.servers.isEmpty || !configImageServers.isEmpty else { return }

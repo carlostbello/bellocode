@@ -121,8 +121,9 @@ public struct MCPKeyValue: Codable, Sendable, Equatable, Hashable, Identifiable 
     /// Names that usually carry credentials; import and the editor mark these secret by default.
     public static func looksSecret(_ name: String) -> Bool {
         let upper = name.uppercased()
-        return ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "KEY", "AUTH", "CREDENTIAL", "PAT", "COOKIE", "SESSION"]
-            .contains { upper.contains($0) }
+        if ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "APIKEY", "CREDENTIAL", "COOKIE"].contains(where: { upper.contains($0) }) { return true }
+        let words = Set(upper.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        return !words.isDisjoint(with: ["KEY", "PAT", "AUTH", "AUTHORIZATION", "SESSION", "PASS", "PWD"])
     }
 }
 

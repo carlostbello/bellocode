@@ -119,6 +119,18 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
         throw ContainerError.notFound("no forwarding in the fake")
     }
+
+    // Compose-stack MCP servers (GlobalMCPTests): the stack "starts" at once; the forwarder listens for real on loopback,
+    // and its relay fails (no daemon), which closes the connection after `prepare` ran.
+    let stackEnsures = Mutex<[[String]]>([])
+    func ensureMCPStack(_ specs: [ServiceSpec], root: String) async throws -> [String: ServiceOutcome] {
+        stackEnsures.withLock { $0.append(specs.map(\.name)) }
+        return Dictionary(uniqueKeysWithValues: specs.map { ($0.name, ServiceOutcome.running) })
+    }
+    func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
+        try PortForwarder(client: EngineClient(socketPath: "/nonexistent-bellocode-test.sock"), container: container, containerPort: port,
+                          hostPort: hostPort, prepare: prepare)
+    }
 }
 
 @MainActor

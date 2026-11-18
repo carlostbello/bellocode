@@ -119,7 +119,7 @@ public enum MCPImport {
 
     /// A value that is a reference rather than the secret itself (`${input:token}`, `${env:TOKEN}`, `{env:X}`).
     static func isPlaceholder(_ value: String) -> Bool {
-        value.contains("${") || (value.hasPrefix("{env:") && value.hasSuffix("}")) || value.hasPrefix("{file:")
+        value.contains("${") || value.contains("{env:") || value.contains("{file:")
     }
 
     static func sanitize(_ name: String, taken: Set<String>) -> String {
