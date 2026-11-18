@@ -181,7 +181,11 @@ revokes it. Guarantee and limits: [orchestration-extras.md](orchestration-extras
 ## Host requirements
 
 Only `git`, `/bin/sh` and the bundled `opencode`, `bellocode-exec` and `rg` (ripgrep 15.1.0, pinned SHA-256 in
-`Scripts/ripgrep-checksums`, system libraries only). Settings ▸ Containers lists them. `make plugin-test` runs the
+`Scripts/ripgrep-checksums`, system libraries only). **Provenance (D2):** `Scripts/make-app.sh` bundles opencode and rg
+only when their executable SHA-256 equals the pin for the build architecture (both architectures are pinned; rg is
+required), bellocode-exec only as built by that run, re-checks the bundled copies just before signing and refuses any
+other helper. Licence texts and NOTICE files of every shipped component (Swift packages, opencode at the pinned tag in
+`Scripts/notices/`, ripgrep from its verified archive) go to `Resources/Acknowledgements/`; a missing one fails the build. Settings ▸ Containers lists them. `make plugin-test` runs the
 plugin's `bun test` in a throwaway container. **Policy point:** the opencode binary embeds Bun; `BUN_BE_BUN` would make
 it a JavaScript runtime on the host. The server's environment drops every `BUN_*` variable and the helper never sets one.
 
