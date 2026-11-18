@@ -64,7 +64,7 @@ extension SecretManager {
         return try await grantAndDescribe(secret, sessionID: sessionID, projectDirectory: project)
     }
 
-    func grantAndDescribe(_ secret: ManagedSecret, sessionID: SessionID, projectDirectory: String) async throws -> String {
+    public func grantAndDescribe(_ secret: ManagedSecret, sessionID: SessionID, projectDirectory: String) async throws -> String {
         let bindings = secret.bindings.map(Self.describe).joined(separator: "; ")
         switch secret.mode {
         case .brokered:

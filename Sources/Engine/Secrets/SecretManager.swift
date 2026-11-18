@@ -343,7 +343,7 @@ public final class SecretManager {
         return grant
     }
 
-    func placeholder(account: String, sessionID: SessionID) -> String? {
+    public func placeholder(account: String, sessionID: SessionID) -> String? {
         grants.values.first { $0.account == account && $0.sessionID == sessionID.rawValue && Placeholder.isPlaceholder($0.placeholder) }?.placeholder
     }
 

@@ -51,3 +51,17 @@ extension OpenCodeClient {
         try await sendIgnoringBody("session.environment", request)
     }
 }
+
+struct SessionShellBody: Encodable, Sendable {
+    var command: String
+}
+
+extension OpenCodeClient {
+    /// `POST /api/session/{id}/shell` (session.shell): runs one command in the session's directory with the session's
+    /// environment, recorded in its transcript as a shell message (the person's `!` command). The secret manager's end
+    /// to end run uses it to prove placeholder delivery without a model.
+    public func runSessionShell(sessionID: String, command: String) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "shell"], body: SessionShellBody(command: command))
+        try await sendIgnoringBody("session.shell", request)
+    }
+}

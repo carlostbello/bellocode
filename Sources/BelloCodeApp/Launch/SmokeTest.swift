@@ -1,6 +1,7 @@
 import BelloCore
 import Darwin
 import Engine
+import SecretKit
 import Foundation
 import OpenCodeKit
 import Synchronization
@@ -43,6 +44,12 @@ enum SmokeTest {
             return false
         }
         let supervisor = ServerSupervisor(configuration: server)
+        // Secrets end to end (BELLOCODE_SMOKE_SECRETS=1): a loopback test API the proxy resolves, started first.
+        var secretsAPI: SecretsEndToEnd.TestAPI?
+        if ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_SECRETS"] == "1" {
+            secretsAPI = try? await SecretsEndToEnd.TestAPI(canary: "sk_live_CANARY_" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
+        }
+        defer { secretsAPI?.stop() }
         // Containerised execution: checked when Rancher Desktop is ready and the test image is present (never pulled
         // here); otherwise said plainly and the host-only checks run.
         let container = await containerPlan()
@@ -58,6 +65,7 @@ enum SmokeTest {
                     dataRoot: FileManager.default.temporaryDirectory.appending(path: "bellocode-smoke-egress-\(getpid())"),
                     authorityVault: InMemorySecretVault())
                 configuration.secretManager?.enforceEgress = true
+                if let secretsAPI { configuration.secretManager?.proxy = secretsAPI.proxyConfiguration }
                 configuration.secretVault = InMemorySecretVault()
             }
             engine = try Engine(configuration: configuration)
@@ -97,6 +105,17 @@ enum SmokeTest {
             containerProject = project
             guard await containerCheck(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: project, image: image) else {
                 if keep { log("kept \(root.path)") } else { await purgeScratch(engine, project) }
+                await engine.stop()
+                return false
+            }
+        }
+
+        if let containerProject, let secretsAPI {
+            let passed = await SecretsEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject,
+                                                   api: secretsAPI, opencodeData: server.dataRoot, log: log)
+            log(passed ? "secrets end-to-end passed" : "FAIL secrets end-to-end")
+            guard passed else {
+                if !keep { await purgeScratch(engine, containerProject) }
                 await engine.stop()
                 return false
             }
