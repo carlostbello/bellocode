@@ -39,6 +39,8 @@ struct ShellSurfaces {
     /// The Agents panel behind the "Agents" tab (OrchestrationUI, Content/AgentsSurface.swift); nil in tests.
     var agents: AgentsSurfaces? = nil
     var mergeRequests: MergeRequestSurfaces? = nil
+    /// The "Auto" audit tab (Content/AutoAuditSurface.swift); nil in tests.
+    var autoAudit: AutoAuditSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -53,6 +55,8 @@ struct ShellSurfaces {
         let agents = AgentsSurfaces()
         // OrchestrationUI (Content/MergeRequestSurface.swift, M3-B): the "Merge Requests" tab follows the displayed thread.
         let mergeRequests = MergeRequestSurfaces()
+        // Auto mode (Content/AutoAuditSurface.swift): the "Auto" tab shows the displayed thread's audit log.
+        let autoAudit = AutoAuditSurfaces()
         return ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
@@ -70,9 +74,10 @@ struct ShellSurfaces {
                 RightPanelTab(id: "mergeRequests", title: "Merge Requests", symbolName: "arrow.triangle.pull") {
                     mergeRequests.makePanelController()
                 },
+                RightPanelTab(id: "auto", title: "Auto", symbolName: "checkmark.shield") { autoAudit.makePanelController() },
             ],
             terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents,
-            mergeRequests: mergeRequests)
+            mergeRequests: mergeRequests, autoAudit: autoAudit)
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {

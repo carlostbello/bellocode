@@ -22,6 +22,8 @@ public struct RowID: Hashable, Sendable, Comparable, CustomStringConvertible {
     public static func error(_ id: MessageID) -> RowID { RowID("e:" + id.rawValue) }
     public static func lifecycle(_ id: MessageID) -> RowID { RowID("l:" + id.rawValue) }
     public static func working(_ turn: MessageID) -> RowID { RowID("w:" + turn.rawValue) }
+    /// The risk notice or Auto chip of a tool call (derived from the call's part ID).
+    public static func risk(_ part: PartID) -> RowID { RowID("r:" + part.rawValue) }
 
     public static func < (lhs: RowID, rhs: RowID) -> Bool { lhs.rawValue < rhs.rawValue }
     public var description: String { rawValue }
@@ -347,6 +349,12 @@ public struct ErrorBannerContent: Sendable, Equatable {
 public struct LifecycleContent: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
         case interrupted, compacted, modelChanged, agentChanged, note
+        /// A Full-access risk notice on the tool call above it (docs/features/auto-mode.md). Not a blocking approval.
+        case risk
+        /// Auto let the call above run once (chip with the reason).
+        case autoApproved
+        /// One thread's agent stopped another (shown in both threads).
+        case interruption
     }
 
     public var kind: Kind

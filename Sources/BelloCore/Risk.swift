@@ -178,3 +178,48 @@ public struct AutoEscalation: Hashable, Sendable, Codable {
         return "Auto asks you: " + explanation
     }
 }
+
+/// `metadata.bellocode_interrupt` on a thread another thread's agent stopped (Plugin/src/auto.ts `InterruptRecord`).
+public struct InterruptRecord: Hashable, Sendable, Codable {
+    /// The interrupting thread.
+    public var by: String
+    public var byTitle: String?
+    public var reason: String
+    /// Milliseconds since 1970.
+    public var at: Double
+    /// What was asked ("stop").
+    public var requested: String
+    /// What happened: `stopped`, `still_running`, `failed`, `not_running`.
+    public var actual: String
+    /// Queued work waits for the person's Resume.
+    public var held: Bool
+
+    public init(by: String, byTitle: String? = nil, reason: String, at: Double, requested: String = "stop", actual: String, held: Bool) {
+        self.by = by
+        self.byTitle = byTitle
+        self.reason = reason
+        self.at = at
+        self.requested = requested
+        self.actual = actual
+        self.held = held
+    }
+
+    public static let metadataKey = "bellocode_interrupt"
+
+    /// From a session's raw metadata JSON.
+    public static func from(metadata: RawJSON?) -> InterruptRecord? {
+        guard let data = metadata?.text.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let value = object[metadataKey],
+            let encoded = try? JSONSerialization.data(withJSONObject: value)
+        else { return nil }
+        return try? JSONDecoder().decode(InterruptRecord.self, from: encoded)
+    }
+
+    /// "Stopped by “Refactor parser”: it edits the same file"
+    public var summary: String {
+        let who = byTitle.map { "“\($0)”" } ?? "another thread"
+        let state = actual == "stopped" ? "" : actual == "still_running" ? " (still stopping)" : actual == "failed" ? " (the stop failed)" : ""
+        return "Stopped by \(who)\(state): \(reason)"
+    }
+}
