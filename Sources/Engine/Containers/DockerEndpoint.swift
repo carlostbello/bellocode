@@ -22,9 +22,9 @@ public final class DockerEndpoint {
     }
 
     /// The token commands of `scope` use; registering again updates the scope's folders and keeps the token.
-    func token(scope: String, roots: [String]) -> String? {
+    func token(scope: String, roots: [String], egress: DockerEgress? = nil) -> String? {
         guard !roots.isEmpty else { return nil }
-        return registerScope(DockerScope(key: scope, roots: roots))
+        return registerScope(DockerScope(key: scope, roots: roots, egress: egress))
     }
 }
 

@@ -409,17 +409,19 @@ public final class EgressProxy: Sendable {
         _ = state.withLock { $0.pendingTunnels.removeValue(forKey: localPort.rawValue) }
     }
 
+    /// Relays both directions until each has ended. A half-close is passed on (`docker run` closes its side of an
+    /// attach stream right away and then reads the container's output), so one direction ending never cuts the other;
+    /// the idle watchdog bounds a peer that never closes.
     private func splice(_ a: WireConnection, _ b: WireConnection) async {
+        let watchdog = self.watchdog([a, b])
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await Self.pump(from: a, to: b) }
             group.addTask { await Self.pump(from: b, to: a) }
-            await group.next()
-            // One side ended: give the other a moment to drain, then close both.
-            try? await Task.sleep(for: .milliseconds(200))
-            a.cancel()
-            b.cancel()
-            group.cancelAll()
+            await group.waitForAll()
         }
+        watchdog.cancel()
+        a.cancel()
+        b.cancel()
     }
 
     private static func pump(from source: WireConnection, to sink: WireConnection) async {

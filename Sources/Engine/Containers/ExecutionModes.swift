@@ -239,7 +239,13 @@ extension EnvironmentService {
 
     /// `DOCKER_HOST` for commands in a container of `scope`, when the filtered endpoint runs.
     func containerDockerAccess(scope: String, spec: WorkspaceSpec?) -> ExecHelperConfig.DockerAccess? {
-        guard let spec, let endpoint = dockerEndpoint, let token = endpoint.token(scope: scope, roots: spec.workspaceRoots + spec.userMounts.filter { !$0.readOnly }.map(\.path)) else { return nil }
+        // Enforced egress: the scope's own containers and networks get the same boundary as the workspace.
+        let egress = spec?.egress.map {
+            DockerEgress(network: $0.network, environment: $0.environment, certificateDirectory: spec?.corporateNetwork?.certificateDirectory)
+        }
+        guard let spec, let endpoint = dockerEndpoint,
+              let token = endpoint.token(scope: scope, roots: spec.workspaceRoots + spec.userMounts.filter { !$0.readOnly }.map(\.path), egress: egress)
+        else { return nil }
         // Enforced egress (secret manager): the container has no route to the Mac; its gateway relays the endpoint.
         if spec.egress != nil {
             return ExecHelperConfig.DockerAccess(host: "tcp://\(EgressAttachment.proxyAlias):\(EgressAttachment.dockerPort)/\(token)")

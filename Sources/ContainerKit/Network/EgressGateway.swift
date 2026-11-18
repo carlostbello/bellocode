@@ -100,7 +100,7 @@ public struct EgressGateway: Sendable {
     public static let labelEgress = "app.bellocode.egress"
     public static let labelScope = "app.bellocode.egress-scope"
     public static let labelConfig = "app.bellocode.egress-config"
-    static let relayScriptVersion = "3"
+    static let relayScriptVersion = "4"
 
     public let client: EngineClient
     public init(client: EngineClient) { self.client = client }
@@ -222,16 +222,16 @@ public struct EgressGateway: Sendable {
 
     /// Listens on the container's one non-loopback IPv4 address (the internal network) and relays each connection to
     /// the proxy with the token line first.
+    /// Half-closes are passed on (`allowHalfOpen`): `docker run` ends its side of an attach stream and then reads.
     static let nodeRelay = """
         const net=require('net'),os=require('os');
         const ip=Object.values(os.networkInterfaces()).flat().find(i=>i&&i.family==='IPv4'&&!i.internal);
         if(!ip){console.log('bellocode-relay no-address');process.exit(4)}
         const T=process.env.BC_TOKEN,H=process.env.BC_HOST,P=+process.env.BC_PORT;
-        net.createServer(c=>{c.pause();const u=net.connect(P,H,()=>{u.write('BCEGRESS '+T+'\\n');c.pipe(u);u.pipe(c);c.resume()});
-        const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)})
-        .listen(+process.env.BC_LISTEN_PORT,ip.address,()=>console.log('bellocode-relay ready '+ip.address));
-        net.createServer(c=>{c.pause();const u=net.connect(P,H,()=>{u.write('BCEGRESS '+T+' docker\\n');c.pipe(u);u.pipe(c);c.resume()});
-        const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)}).listen(+process.env.BC_DOCKER_LISTEN,ip.address);
+        const relay=(line)=>net.createServer({allowHalfOpen:true},c=>{c.pause();const u=net.connect({port:P,host:H,allowHalfOpen:true},()=>{u.write(line);c.pipe(u);u.pipe(c);c.resume()});
+        const end=()=>{c.destroy();u.destroy()};u.on('error',end);c.on('error',end);u.on('close',end);c.on('close',end)});
+        relay('BCEGRESS '+T+'\\n').listen(+process.env.BC_LISTEN_PORT,ip.address,()=>console.log('bellocode-relay ready '+ip.address));
+        relay('BCEGRESS '+T+' docker\\n').listen(+process.env.BC_DOCKER_LISTEN,ip.address);
         """
 
     static let pythonRelay = """
@@ -252,16 +252,18 @@ public struct EgressGateway: Sendable {
                     if not d:break
                     b.sendall(d)
             except Exception:pass
-            for s in (a,b):
-                try:s.close()
-                except Exception:pass
+            try:b.shutdown(socket.SHUT_WR)
+            except Exception:pass
         def serve(c,preamble):
             try:
                 u=socket.create_connection((H,P))
                 u.sendall(('BCEGRESS '+T+preamble+'\\n').encode())
             except Exception:
                 c.close();return
-            threading.Thread(target=pump,args=(c,u),daemon=True).start();pump(u,c)
+            t=threading.Thread(target=pump,args=(c,u),daemon=True);t.start();pump(u,c);t.join()
+            for s in (c,u):
+                try:s.close()
+                except Exception:pass
         def listen(port,preamble):
             l=socket.socket();l.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
             l.bind((ip,port));l.listen(128)
