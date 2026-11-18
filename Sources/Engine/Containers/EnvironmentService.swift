@@ -78,7 +78,7 @@ public final class ProjectEnvironment {
 
 /// Containerised execution for every project (docs/features/containers.md): the runtime's state, each project's
 /// workspace container (created on first use, stopped when idle, recreated when the setting, the image or the project
-/// folder changes, removed with the project), the helper's configuration file, idle stop and the stray-process
+/// folder changes; its volumes are deleted only by the explicit, confirmed purge), the helper's configuration file, idle stop and the stray-process
 /// reaper, the Ports list and its forwards, the file-watch bridge, secrets and setup scripts run in a container, and
 /// the isolation self-check. Never falls back to the host: every state that cannot run commands is written to the
 /// helper's configuration as a specific, actionable message and published as a banner.
@@ -173,9 +173,10 @@ public final class EnvironmentService {
 
     public var environments: [ProjectEnvironment] { models.values.sorted { $0.directory < $1.directory } }
 
-    /// Called by the engine when the project list changes: known projects get a model; removed (hidden) projects lose
-    /// their container and caches.
-    func projectsChanged(_ projects: [ProjectItem], removed: [ProjectItem]) {
+    /// Called by the engine when the project list changes: known projects get a model. Archiving (hiding) a project
+    /// only changes what the sidebar shows: its container, volumes, forwards and settings are untouched (U1 in
+    /// docs/reviews/deep-review-1.md). Deleting them is the separate, confirmed `purge`.
+    func projectsChanged(_ projects: [ProjectItem]) {
         for item in projects {
             let model = models[item.directory] ?? {
                 let model = ProjectEnvironment(directory: item.directory, stored: StoredEnvironment())
@@ -188,17 +189,6 @@ public final class EnvironmentService {
             }
         }
         guard isEnabled else { return }
-        for item in removed {
-            guard let model = models[item.directory] else { continue }
-            let key = model.projectKey
-            stopForwards(model)
-            bridges.removeValue(forKey: model.directory)?.stop()
-            model.phase = .idle
-            tasks.set("remove-\(key)", Task { [weak self, runtime = configuration!.runtime] in
-                try? await runtime.remove(projectKey: key, volumes: true)
-                self?.tasks.remove("remove-\(key)")
-            })
-        }
         scheduleConfigWrite()
     }
 
@@ -514,23 +504,56 @@ public final class EnvironmentService {
         })
     }
 
-    /// Removes the project's container (and, with `volumes`, its caches and $HOME). It is created again on next use.
-    public func removeContainer(_ directory: String, volumes: Bool) {
+    /// Removes the project's container (never its volumes: caches and $HOME stay). It is created again on next use.
+    public func removeContainer(_ directory: String) {
         let model = environment(for: directory)
         stopForwards(model)
         bridges.removeValue(forKey: model.directory)?.stop()
         let key = model.projectKey
         let runtimeRef = activeRuntime
         tasks.set("remove-\(key)", Task { [weak self] in
-            do { try await runtimeRef.remove(projectKey: key, volumes: volumes) } catch { model.lastError = Self.describe(error) }
+            do { try await runtimeRef.remove(projectKey: key) } catch { model.lastError = Self.describe(error) }
             model.record.containerID = nil
             self?.refreshImageAndPhase(model)
         })
     }
 
+    /// What "Delete Container and Data…" would delete for the project: shown in its confirmation (it cannot be undone).
+    public func storageToPurge(_ directory: String) async throws -> WorkspaceStorage {
+        guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
+        return try await activeRuntime.storage(projectKey: environment(for: directory).projectKey)
+    }
+
+    /// The explicit destructive action: removes the project's containers and exactly the volumes the person confirmed
+    /// (its persistent $HOME and caches). The only path in the app that deletes a volume. Throws when the runtime
+    /// refuses; the pane shows the error.
+    public func purge(_ directory: String, confirmed storage: WorkspaceStorage) async throws {
+        let model = environment(for: directory)
+        guard storage.projectKey == model.projectKey else {
+            throw EnvironmentBlockedError(message: "The confirmed list belongs to another project; nothing was deleted.")
+        }
+        stopForwards(model)
+        bridges.removeValue(forKey: model.directory)?.stop()
+        _ = nextGeneration(model.directory)
+        tasks.set("refresh-\(model.projectKey)", Task {})
+        tasks.set("activate-\(model.projectKey)", Task {})
+        do {
+            try await activeRuntime.purge(storage)
+        } catch {
+            model.lastError = Self.describe(error)
+            refreshImageAndPhase(model)
+            throw error
+        }
+        model.record.containerID = nil
+        model.record.inventory = nil
+        model.phase = .idle
+        await persist(model)
+        refreshImageAndPhase(model)
+    }
+
     /// Removes the project's container and waits for it (tests, `make smoke`).
-    public func removeContainerNow(_ directory: String, volumes: Bool) async {
-        removeContainer(directory, volumes: volumes)
+    public func removeContainerNow(_ directory: String) async {
+        removeContainer(directory)
         await tasks.take("remove-\(environment(for: directory).projectKey)")?.value
     }
 

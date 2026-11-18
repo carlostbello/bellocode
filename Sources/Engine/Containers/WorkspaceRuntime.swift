@@ -14,7 +14,12 @@ public protocol WorkspaceRuntime: Sendable {
     func stop(container: String) async throws
     func start(container: String) async throws
     func restart(container: String) async throws
-    func remove(projectKey: String, volumes: Bool) async throws
+    /// Removes the project's containers only; never a volume.
+    func remove(projectKey: String) async throws
+    /// The project's labelled containers and volumes (what an explicit purge would delete).
+    func storage(projectKey: String) async throws -> WorkspaceStorage
+    /// Removes the containers and the listed volumes: the explicit "Delete Container and Data" action only.
+    func purge(_ storage: WorkspaceStorage) async throws
     func removeContainer(_ id: String) async throws
     func managedContainers() async throws -> [ContainerSummary]
     func runningExecs(container: String) async -> Int
@@ -67,7 +72,9 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func stop(container: String) async throws { try await client.stopContainer(container, timeout: 3) }
     public func start(container: String) async throws { try await client.startContainer(container) }
     public func restart(container: String) async throws { try await client.restartContainer(container, timeout: 3) }
-    public func remove(projectKey: String, volumes: Bool) async throws { try await manager.remove(projectKey: projectKey, volumes: volumes) }
+    public func remove(projectKey: String) async throws { try await manager.remove(projectKey: projectKey) }
+    public func storage(projectKey: String) async throws -> WorkspaceStorage { try await manager.storage(projectKey: projectKey) }
+    public func purge(_ storage: WorkspaceStorage) async throws { try await manager.purge(storage) }
     public func removeContainer(_ id: String) async throws { try await client.removeContainer(id, force: true) }
     public func managedContainers() async throws -> [ContainerSummary] { try await manager.managedContainers() }
     public func runningExecs(container: String) async -> Int {

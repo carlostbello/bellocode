@@ -66,8 +66,10 @@ read-only by default), network (bridge / none), file-watch bridge, idle minutes.
 (`app.bellocode.registry`), sent only in the pull's `X-Registry-Auth` header. One container per project
 (`bellocode-ws-<key>`), project folder, BelloCode's and opencode's worktree folders mounted at the same absolute paths,
 host uid:gid, no capabilities, `no-new-privileges`, `init`. Recreated when the image, the setting or the folder identity
-(device:inode) changes; an outdated container keeps running until the next activation. Stopped when idle; removed with
-the project; stray processes (`setsid` leftovers) reaped after cancelled commands and on demand.
+(device:inode) changes; an outdated container keeps running until the next activation. Stopped when idle. **Archiving a
+project only hides it** (container, volumes and settings untouched; Undo and relaunch are safe). The persistent home and
+cache volumes are deleted only by Settings ▸ Environment ▸ **Delete Container and Data…**, which lists the containers
+and volumes it will delete and asks once (it cannot be undone); no other path deletes a volume. Stray processes (`setsid` leftovers) reaped after cancelled commands and on demand.
 
 ## Dev servers
 

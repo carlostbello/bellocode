@@ -389,7 +389,7 @@ public final class Engine {
         let signpost = EngineSignposts.publish.beginInterval("launchSnapshot")
         defer { EngineSignposts.publish.endInterval("launchSnapshot", signpost) }
         root.setProjects(snapshot.projects, registry: snapshot.registry)
-        environments.projectsChanged(root.projects, removed: root.hiddenProjects)
+        environments.projectsChanged(root.projects)
         root.setAttention(snapshot.attention)
         root.organisation = snapshot.organisation
         root.organisationRules = snapshot.organisationRules
@@ -457,7 +457,7 @@ public final class Engine {
             || !change.removedRegistry.isEmpty
         {
             root.apply(projectsChange: change)
-            environments.projectsChanged(root.projects, removed: root.hiddenProjects)
+            environments.projectsChanged(root.projects)
             for item in root.projects {
                 if let id = item.projectID, root.projectModels[id] == nil {
                     root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
@@ -478,7 +478,7 @@ public final class Engine {
                     let snapshot = await core.snapshot()
                     guard let self else { return }
                     self.root.setProjects(snapshot.projects, registry: snapshot.registry)
-                    self.environments.projectsChanged(self.root.projects, removed: self.root.hiddenProjects)
+                    self.environments.projectsChanged(self.root.projects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }

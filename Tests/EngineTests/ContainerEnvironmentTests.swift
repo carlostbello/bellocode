@@ -23,6 +23,9 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         var execs: [Exec] = []
         var output = Data("ok\n".utf8)
         var removed: [String] = []
+        /// Volumes per project key (created with the container) and every volume deleted (U1: only the explicit purge).
+        var volumes: [String: [String]] = [:]
+        var purgedVolumes: [String] = []
     }
 
     let state = Mutex(State())
@@ -48,16 +51,32 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         state.withLock { s in
             s.ensureCount += 1
             s.running[spec.containerName] = spec.configHash(imageID: "sha256:abc")
+            if s.volumes[spec.projectKey] == nil { s.volumes[spec.projectKey] = [spec.volumeName("home")] }
         }
         return spec.containerName
     }
     func stop(container: String) async throws { _ = state.withLock { $0.running.removeValue(forKey: container) } }
     func start(container: String) async throws {}
     func restart(container: String) async throws {}
-    func remove(projectKey: String, volumes: Bool) async throws {
+    func remove(projectKey: String) async throws {
         state.withLock { s in
             s.removed.append(projectKey)
             s.running = s.running.filter { !$0.key.hasSuffix(projectKey) }
+        }
+    }
+    func storage(projectKey: String) async throws -> WorkspaceStorage {
+        state.withLock { s in
+            WorkspaceStorage(projectKey: projectKey, containers: s.running.keys.filter { $0.hasSuffix(projectKey) }.sorted(),
+                             volumes: s.volumes[projectKey] ?? [])
+        }
+    }
+    func purge(_ storage: WorkspaceStorage) async throws {
+        try await remove(projectKey: storage.projectKey)
+        state.withLock { s in
+            let current = s.volumes[storage.projectKey] ?? []
+            let deleted = storage.volumes.filter(current.contains)
+            s.purgedVolumes += deleted
+            s.volumes[storage.projectKey] = current.filter { !deleted.contains($0) }
         }
     }
     func removeContainer(_ id: String) async throws {}

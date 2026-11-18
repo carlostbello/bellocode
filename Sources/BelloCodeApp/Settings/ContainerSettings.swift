@@ -414,6 +414,43 @@ final class EnvironmentSettingsModel: ObservableObject {
         logs = await service.logs(containerID: id)
     }
 
+    /// "Delete Container and Data…": lists exactly what will be deleted (containers and volumes, including the
+    /// persistent home), asks once (it cannot be undone), then deletes only that. Archiving a project never does this.
+    func confirmPurge() async {
+        guard let directory else { return }
+        let storage: WorkspaceStorage
+        do { storage = try await service.storageToPurge(directory) } catch {
+            message = "Could not list the project's container data: \(error)"
+            return
+        }
+        guard !storage.isEmpty else {
+            message = "This project has no container or container data to delete."
+            return
+        }
+        let name = (directory as NSString).lastPathComponent
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Delete the container and data of “\(name)”?"
+        var lines: [String] = []
+        if !storage.containers.isEmpty { lines.append("Containers:\n" + storage.containers.map { "• \($0)" }.joined(separator: "\n")) }
+        if !storage.volumes.isEmpty {
+            lines.append("Volumes (the container's home folder and caches):\n" + storage.volumes.map { "• \($0)" }.joined(separator: "\n"))
+        }
+        lines.append("Files saved only inside the container are lost. The project folder on this Mac is not touched. This cannot be undone.")
+        alert.informativeText = lines.joined(separator: "\n\n")
+        let delete = alert.addButton(withTitle: "Delete Container and Data")
+        delete.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
+        delete.keyEquivalent = ""
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try await service.purge(directory, confirmed: storage)
+            message = "Deleted \(storage.containers.count) container(s) and \(storage.volumes.count) volume(s)."
+        } catch {
+            message = "Not deleted: \(error)"
+        }
+    }
+
     func forward(_ port: Int) {
         guard let directory else { return }
         do { openBrowser(try service.forward(directory, port: port)) } catch { message = "Could not forward port \(port): \(error)" }
@@ -510,6 +547,9 @@ struct EnvironmentSettingsView: View {
                 Button("Clean Up Processes") { Task { _ = await service.cleanUpProcesses(environment.directory) } }
                     .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                     .help("Ends processes left behind by cancelled commands")
+                Button("Delete Container and Data…") { Task { await model.confirmPurge() } }
+                    .buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
+                    .help("Deletes the project's container and its volumes (home folder and caches) after listing them. Cannot be undone.")
             }
         }
         SettingsGroup("Isolation") {
