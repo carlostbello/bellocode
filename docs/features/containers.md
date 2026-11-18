@@ -11,7 +11,7 @@ native host process; nothing falls back to the Mac. Spike: [G6-containers.md](..
 ## Architecture
 
 - **ContainerKit**: Docker Engine API over `~/.rd/docker.sock` (no CLI), `WorkspaceManager`, `ServiceManager`,
-  `PortForwarder`, `StdioRelay`, `ImagePolicy`, `ImageMCPRunner`, `CorporateNetwork`, `NetworkProbe`.
+  `PortForwarder`, `StdioRelay`, `ImagePolicy`, `ImageMCPRunner`, `CorporateNetwork`, `ImageBuildNetwork`, `NetworkProbe`.
 - **bellocode-exec** (`Contents/Helpers`): opencode's shell and PTY command. Reads `<data>/opencode/bellocode-exec.json`
   (atomic, 0600), starts the container if needed (never pulls), relays command, stdin, window size and signals. Modes:
   `-c cmd`, interactive, `--stdio [--project DIR] -- argv…`, `--stdio --mcp ID [--project DIR]` (global image servers),
@@ -76,8 +76,8 @@ a file, the store, the helper configuration or a log; the editor shows "Saved in
   are listed with their access (off by default); `capDrop ALL`, `no-new-privileges`, 1 CPU, 1 GiB, 512 pids; network
   outbound or none; image policy applied. Secrets reach the create (`-e`, so `inspect` shows them while it runs) via
   the helper's environment. **Shared** (opt-in): one `bellocode-mcp-<id>` keep-alive (needs `/bin/sh`), secrets per
-  exec only, stopped when idle. Connections end when the project's container idles out. Pull, Restart, Logs (helper's stderr, 256 KiB);
-  leftovers of killed helpers are removed after a removal and at runtime start.
+  exec only, stopped when idle. Connections end when the project's container idles out. Pull, Restart, Logs (stderr,
+  256 KiB); leftovers of killed helpers are removed after a removal and at runtime start.
 - **Compose stack**: the project-services subset and refusals; `bellocode-svc-<key>-<svc>` on `bellocode-net-<key>`
   (key of `bellocode-mcp-stack:<id>`, label `app.bellocode.mcp-stack`). The endpoint (service, port, path) is forwarded
   to a stable `127.0.0.1` port through a relay in that service's container (socat, bash, python3, nc or perl; nothing
@@ -119,25 +119,22 @@ volumes and asks once. UI: Environment ▸ Services (state with health, Open per
 Data, refused/ignored keys, editor or Reload) and the Containers view. Agent tools: `list_services`, `service_logs`
 (≤ 500 lines, 16 KB, cut marked), `restart_service` (approval first time per project, "Always" grant); none removes data.
 
-## Image policy (workspace and services)
+## Image policy (base images and pulled images)
 
-Allowlist of registries (`registry.acme.internal`) or repository prefixes (`registry.acme.internal/dev/`,
-`docker.io/library/postgres`; Docker normalisation, boundary matching), optional digest pins (`@sha256:` + 64 hex), pull
-policy (`missing` default, `always` = pull before every create/recreate, `never`). A refused image is never pulled or
-run: phase "Image not allowed" with the specific message in the banner, the helper's refusal, the Services section.
+Images are unsigned and no internal registry distributes them (owner, 2026-11-18): most projects build from a
+Dockerfile on public base images. The policy covers what BelloCode pulls (base images, pulled workspace and service
+images): an allowlist (empty: any) of registries or repository prefixes (`docker.io/library/`; Docker normalisation,
+boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A refused image is never pulled or
+run ("Image not allowed", with the reason in the banner, the helper and Services).
 **For administrators** (managed preferences win over Settings, shown read-only): keys forced by a configuration profile
 in domain `com.bellocode.app`, or a root-owned, non-writable `/Library/Preferences/app.bellocode.policy.plist`:
 `ContainerImageAllowlist` (array), `ContainerImageRequireDigest` (bool), `ContainerImagePullPolicy` (string),
 `ContainerImageRequireSignature` (bool), `ContainerImageSignaturePublicKey` (PEM), `ContainerDefaultImage` (string);
 **Containers 3:** `NetworkTrustEnterpriseCertificates` (bool), `NetworkTrustedCertificates` (array of SHA-256
 fingerprints), `NetworkHTTPProxy`, `NetworkHTTPSProxy` (URLs), `NetworkNoProxy` (array or comma list),
-`NetworkDiagnosticsURLs` (array).
-Images BelloCode pulled that were absent before are recorded (for Prune).
+`NetworkDiagnosticsURLs` (array). Pulled images that were absent before are recorded (for Prune).
 
-**Image signatures: not verified (seam).** Key-based cosign is feasible natively (registry v2 API, referrers or the
-`sha256-<digest>.sig` tag, ECDSA P-256 with CryptoKit) but could not be validated here (no signed test image, no way to
-sign without a host CLI; cosign bundles, keyless and Notary v2 each need their own verifier). `ImageSignatureVerifier`
-is the seam; `ContainerImageRequireSignature` without a verifier **refuses every image** (never "unverified").
+**Signatures: off** (seam `ImageSignatureVerifier`; no switch; an administrator's key still **refuses every image**).
 
 ## Corporate network (transparent proxy, TLS interception)
 
@@ -158,12 +155,15 @@ running workspace (curl, node, python3 or wget) and from the Mac with opencode's
 bundle, refused without). **Needs the corporate network:** the proxy's signing root and its trust domain, which hosts it
 intercepts, PAC-only proxies, images without a trust-store tool, Bun accepting the real chain.
 
-## Registries
+## Image builds (API for the image-build feature)
 
-Allowlist empty by default. Settings suggests, never picks: `registry.gitlab.novacoast.com` (own domain) or
-`gitlab.novacoast.com:5050` (GitLab's default port; docs: "GitLab container registry administration"). **Use GitLab
-Token** signs in with Settings ▸ GitLab's token (docs: "Authenticate with the container registry", PAT with
-`read_registry`); only a reference is stored, the token is read at pull time.
+`ImageBuildNetwork` (`EnvironmentService.imageBuildNetwork(for:)` adds service names to `NO_PROXY`): `buildArgs()`
+(Docker's predefined proxy args, not in history), `contextEntries()` (bundles at `bellocode-ca/` in a tar context),
+`instrument(dockerfile:source:)` (after every `FROM`, heredocs and continuations respected: `COPY` of bundle and roots,
+`SSL_CERT_FILE` … `NODE_EXTRA_CA_CERTS`; no `RUN`), `cliArguments()` for `docker buildx` (`--build-context`,
+`--build-arg`). `EngineClient.buildImage` takes `buildArgs`, `dockerfile`, `networkMode`. Live: a `RUN` fetching from the
+test CA's server passes instrumented, fails without. `FROM` pulls and `ADD <url>` use the daemon's trust (Rancher
+Desktop's VM, which imports the Mac's roots): verify on the corporate network.
 
 ## Caches
 
@@ -201,7 +201,7 @@ editors, signing, helpers, `protocol.allow`), an allowlisted environment; 28 vec
 
 1. **Image provenance and signing**: allowed registries and prefixes, digest pins, which signature scheme (key-based
    cosign, keyless Fulcio/Rekor, Notary v2) with which keys or roots; until a verifier exists, requiring signatures
-   refuses everything. 2. **Registries and credentials** (per-host Keychain items; GitLab token reuse).
+   refuses everything (today: unsigned, public base images). 2. **Registries and credentials** (per-host Keychain items).
 3. **Egress**: containers default to outbound access; offline per project; organisation egress belongs in the network.
 4. **Mounts**: project and worktrees read-write by design; user and MCP mounts read-only by default, listed.
 5. **Host git at all** (confined, but on the Mac with the user's credentials and a deprecated sandbox).
@@ -236,4 +236,4 @@ thread header lets a long container crumb overlap the Agents chip at narrow widt
 Measured (Rancher Desktop 1.25, arm64): container ready 115–196 ms; terminal round trip 133–144 ms; watch bridge 61 ms;
 two redis services healthy 2.3 s; project MCP server connected in the container 4.7 s; global image server through
 opencode 4.5 s; stack endpoint started on first use 4.3 s; test CA trusted and diagnosed 6.9 s. Snapshots:
-`docs/snapshots/containers{,2,3}-*.png`. Commands: `make smoke`, `make e2e-containers`, `--snapshot containers3`, `Live` tests.
+`docs/snapshots/containers{,2,3}-*.png`. Commands: `make smoke`, `make e2e-containers`, `--snapshot containers3`, Live.

@@ -319,6 +319,31 @@ struct LiveGlobalMCPTests {
             #expect(result.proxyHeaders.contains { $0.lowercased().hasPrefix("via:") })
             #expect(run.interceptedBy.contains { $0.contains("BelloCode Test Enterprise Root") })
             #expect(run.mac.count == 1, "the Mac side ran too (tls is not a Mac host name, so it fails there)")
+
+            // An image build: a RUN step fetching from the test CA's server succeeds with the instrumented Dockerfile and
+            // fails without it (the image-build feature's path: context entries, instrumented Dockerfile, build args).
+            let (build, noProxy) = environments.imageBuildNetwork(for: harness.project.path)
+            #expect(build.hasCertificates && noProxy == ["tls"])
+            let dockerfile = """
+                FROM \(Self.image)
+                RUN node -e "require('https').get('https://tls:8443', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', (e) => { console.error(e.code); process.exit(1) })"
+                """
+            let network = ServiceLabels.networkName(projectKey: WorkspaceSpec.projectKey(for: harness.project.path), offline: false)
+            let tag = "bellocode-test-build:\(UUID().uuidString.prefix(8).lowercased())"
+            func context(_ text: String) throws -> Data {
+                var tar = TarArchive(try build.contextEntries())
+                tar.add("Dockerfile", text)
+                return tar.data()
+            }
+            let built = try await client.buildImage(context: try context(build.instrument(dockerfile: dockerfile)), tag: tag,
+                                                    labels: ["app.bellocode.test": "1"], buildArgs: build.buildArgs(noProxyExtra: noProxy),
+                                                    networkMode: network)
+            #expect(built != nil, "the build trusted the test CA")
+            if built != nil { try? await client.removeImage(tag, force: true) }
+            await #expect(throws: (any Error).self, "without the certificates the same RUN fails") {
+                _ = try await client.buildImage(context: try context(dockerfile), tag: tag + "x", labels: ["app.bellocode.test": "1"], networkMode: network)
+            }
+            try? await client.removeImage(tag + "x", force: true)
         } catch {
             Issue.record(error)
         }

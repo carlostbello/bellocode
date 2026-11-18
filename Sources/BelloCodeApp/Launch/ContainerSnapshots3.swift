@@ -9,7 +9,7 @@ import SwiftUI
 /// `--snapshot containers3` (Containers 3, docs/features/containers.md): mock data on the scripted runtime with the
 /// administrator's image policy (registry.acme.internal only) and two scripted enterprise roots. States: Settings ▸ MCP
 /// Servers with the three kinds, the image server editor, the Import review, Network diagnostics results, the
-/// certificate trust setting with the GitLab registry, and a project's opt-out; light and dark.
+/// certificate trust setting, and a project's opt-out; light and dark.
 extension SnapshotRunner {
     func runContainers3() async -> Bool {
         do {
@@ -111,9 +111,6 @@ extension SnapshotRunner {
                 SettingsPaneBody {
                     SettingsGroup("Corporate network", footer: "A transparent proxy needs no settings. If it inspects TLS with your organisation's root certificate, the Mac trusts it but containers do not until it is added here. Applies to new containers (existing ones are recreated on next use).") {
                         CorporateNetworkSettingsView(model: containers.network, service: environments)
-                    }
-                    SettingsGroup("GitLab registry", footer: "Suggestions only: which host your GitLab serves its registry on is your administrator's choice. Sign-in uses the access token saved in Settings ▸ GitLab (read_registry scope).") {
-                        GitLabRegistryView(model: containers.network, containers: containers, service: environments)
                     }
                 }
             }

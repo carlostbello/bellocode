@@ -297,6 +297,13 @@ extension EnvironmentService {
         return SHA256.hash(data: Data(enterprise.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The corporate network for image builds of `directory`'s project (the image-build feature calls this): the
+    /// exported certificates and proxies, with the project's service names added to `NO_PROXY`. See `ImageBuildNetwork`.
+    public func imageBuildNetwork(for directory: String? = nil) -> (network: ImageBuildNetwork, noProxyExtra: [String]) {
+        let services = directory.flatMap { project(containing: $0) }?.services.map(\.name).sorted() ?? []
+        return (ImageBuildNetwork(network.corporate), services)
+    }
+
     /// Saves the person's choice (ignored where an administrator's key applies) and applies it.
     public func setNetworkSettings(_ settings: NetworkSettings) async {
         try? await store.setPreference(NetworkSettings.preferenceKey, settings)

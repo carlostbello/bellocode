@@ -5,18 +5,14 @@ import DesignSystem
 import Engine
 import SwiftUI
 
-// Settings ▸ Containers ▸ Corporate network and the GitLab registry (docs/features/containers.md, "Corporate
-// network", "Registries"): enterprise root certificates for containers and opencode, proxy variables, Network
-// diagnostics, and the suggested GitLab registry hosts with sign-in through the GitLab token.
+// Settings ▸ Containers ▸ Corporate network (docs/features/containers.md, "Corporate network"): enterprise root
+// certificates for containers, image builds and opencode, proxy variables, and Network diagnostics.
 
 @MainActor
 final class NetworkSettingsModel: ObservableObject {
     let engine: Engine
     var service: EnvironmentService { engine.environments }
     @Published var urlsText: String
-    @Published var gitLabInstance: String
-    @Published var gitLabRegistry: String
-    @Published var gitLabUser: String
     @Published var message: String?
 
     static weak var last: NetworkSettingsModel?
@@ -24,15 +20,6 @@ final class NetworkSettingsModel: ObservableObject {
     init(engine: Engine) {
         self.engine = engine
         urlsText = engine.environments.network.diagnosticsURLs.joined(separator: "\n")
-        let instance = engine.extras?.mergeRequests.instances.first?.baseURL ?? "https://gitlab.novacoast.com"
-        gitLabInstance = instance
-        gitLabRegistry = EnvironmentService.gitLabRegistrySuggestions(instance: instance).first ?? ""
-        gitLabUser = engine.extras?.mergeRequests.instanceStatus[instance]?.user ?? ""
-    }
-
-    var gitLabInstances: [String] {
-        let known = engine.extras?.mergeRequests.instances.map(\.baseURL) ?? []
-        return known.isEmpty ? ["https://gitlab.novacoast.com"] : known
     }
 
     func setTrust(_ on: Bool) async {
@@ -66,23 +53,6 @@ final class NetworkSettingsModel: ObservableObject {
         await service.runNetworkDiagnostics(directory: EnvironmentSettingsModel.preferredDirectory)
     }
 
-    func addSuggestion(_ registry: String, to containers: ContainersSettingsModel) {
-        var lines = containers.allowlist.split(whereSeparator: \.isNewline).map(String.init)
-        guard !lines.contains(registry) else { return }
-        lines.append(registry)
-        containers.allowlist = lines.joined(separator: "\n")
-        message = "Added \(registry) to the allowlist below the policy. Choose Save Policy to apply it."
-    }
-
-    func signInWithGitLab() {
-        do {
-            try service.signInWithGitLabToken(registry: gitLabRegistry.trimmingCharacters(in: .whitespaces), instance: gitLabInstance,
-                                              username: gitLabUser.trimmingCharacters(in: .whitespaces))
-            message = "Signed in to \(gitLabRegistry) with the GitLab token of \(gitLabInstance). The token stays in its one Keychain item and needs the read_registry scope."
-        } catch {
-            message = "\(error)"
-        }
-    }
 }
 
 /// Trust enterprise certificates in containers: the switch (automatic, chosen or managed), the roots to trust, and
@@ -139,7 +109,7 @@ struct CorporateNetworkSettingsView: View {
     }
 
     private func trustDetail(_ network: NetworkState) -> String {
-        var text = "Exports the selected roots from the Mac's Keychain (certificates only, never keys) and mounts them read-only into every BelloCode container, with SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, PIP_CERT and GIT_SSL_CAINFO; opencode gets them too (at its next start)."
+        var text = "Exports the selected roots from the Mac's Keychain (certificates only, never keys) for every BelloCode container and image build (mounted read-only, or copied into each build stage), with SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE, PIP_CERT and GIT_SSL_CAINFO; opencode gets them too (at its next start)."
         if network.trustAutomatic { text += " Automatic: on when the Mac trusts roots installed for all users." }
         if let source = network.managedSource, network.managedTrust || network.managedCertificates { text += " Set by your organisation (\(source))." }
         return text
@@ -206,48 +176,6 @@ struct NetworkDiagnosticsView: View {
         if let error = result.error { parts.append(error) }
         return SettingsRow(result.url, detail: parts.joined(separator: " · ")) {
             DSPillView(result.ok ? "Reached" : "Failed", tone: result.ok ? .success : .danger, symbolName: result.ok ? "checkmark.circle" : "xmark.octagon")
-        }
-    }
-}
-
-/// The GitLab registry: suggested allowlist entries (never picked silently) and sign-in with the GitLab token.
-struct GitLabRegistryView: View {
-    @ObservedObject var model: NetworkSettingsModel
-    @ObservedObject var containers: ContainersSettingsModel
-    let service: EnvironmentService
-
-    var body: some View {
-        let suggestions = EnvironmentService.gitLabRegistrySuggestions(instance: model.gitLabInstance)
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.element) { index, registry in
-                let listed = containers.allowlist.split(whereSeparator: \.isNewline).map(String.init).contains(registry)
-                SettingsRow(registry, detail: index == 0 ? "If your GitLab serves its registry on its own domain." : "If your GitLab serves its registry on its own host name, port 5050 (GitLab's default).",
-                            divided: index > 0) {
-                    if service.managedPolicy != nil {
-                        DSPillView("Policy managed", tone: .info, symbolName: "building.2")
-                    } else if listed {
-                        DSPillView("In allowlist", tone: .success, symbolName: "checkmark")
-                    } else {
-                        Button("Add to Allowlist") { model.addSuggestion(registry, to: containers) }.buttonStyle(DSButtonStyle(.outline, size: .small))
-                    }
-                }
-            }
-            SettingsRow("Sign in with the GitLab token", detail: "The registry host and your GitLab user name; the token of the instance is used as the password.") {
-                DSMenuSelect("GitLab instance", options: model.gitLabInstances.map { (id: $0, title: $0) }, selection: $model.gitLabInstance)
-            }
-            SettingsFieldRow {
-                TextField("", text: $model.gitLabRegistry, prompt: Text(suggestions.first ?? "registry host")).textFieldStyle(DSTextFieldStyle())
-                    .accessibilityLabel("GitLab registry host")
-                TextField("", text: $model.gitLabUser, prompt: Text("GitLab user")).textFieldStyle(DSTextFieldStyle()).frame(width: 120)
-                    .accessibilityLabel("GitLab user name")
-                Button("Use GitLab Token") { model.signInWithGitLab() }.buttonStyle(DSButtonStyle(.outline, size: .small))
-                    .disabled(model.gitLabRegistry.isEmpty || model.gitLabUser.isEmpty)
-            }
-            if let instance = service.registryGitLabInstance(model.gitLabRegistry) {
-                SettingsRow("Signed in to \(model.gitLabRegistry)", detail: "With the token of \(instance).") {
-                    DSPillView("Signed in", tone: .success, symbolName: "checkmark.circle")
-                }
-            }
         }
     }
 }

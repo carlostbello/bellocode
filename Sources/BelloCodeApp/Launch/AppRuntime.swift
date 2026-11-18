@@ -83,8 +83,6 @@ final class AppRuntime {
         try requireBundledRuntime(server)
         var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         configuration.containers = containerConfiguration(for: server)
-        // Registry sign-in may reuse a GitLab token when the person chooses it (Settings ▸ Containers).
-        configuration.containers?.gitLabTokens = configuration.forgeTokens
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)

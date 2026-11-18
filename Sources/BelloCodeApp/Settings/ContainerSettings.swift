@@ -124,7 +124,7 @@ final class ContainersSettingsModel: ObservableObject {
 
     /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
     static weak var last: ContainersSettingsModel?
-    /// Corporate network, diagnostics and the GitLab registry (Containers 3).
+    /// Corporate network and diagnostics (Containers 3).
     let network: NetworkSettingsModel
 
     init(engine: Engine) {
@@ -145,9 +145,10 @@ final class ContainersSettingsModel: ObservableObject {
         guard service.managedPolicy == nil else { return }
         var defaults = service.defaults
         let prefixes = allowlist.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: requireSignature)
+        defaults.imagePolicy = ImagePolicy(allowedPrefixes: prefixes, requireDigest: requireDigest, pullPolicy: pullPolicy, requireSignature: false)
         await service.setDefaults(defaults)
-        message = prefixes.isEmpty && !requireDigest && !requireSignature
+        requireSignature = false
+        message = prefixes.isEmpty && !requireDigest
             ? "Image policy saved: any image may run." : "Image policy saved. Projects outside it are refused until their image is changed."
     }
 
@@ -290,8 +291,8 @@ struct ContainersSettingsView: View {
                 }
             }
             SettingsGroup("Image policy", footer: model.service.managedPolicy == nil
-                ? "Applies to every project's image and its services. One registry (registry.acme.internal) or repository prefix (registry.acme.internal/dev/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
-                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Images outside it are refused for the workspace and every service.") {
+                ? "Applies to the images BelloCode pulls: base images of the projects' own Dockerfiles, and the workspace and service images that are pulled rather than built. One registry (docker.io) or repository prefix (docker.io/library/) per line; empty allows any image. Administrators can manage this policy (docs/features/containers.md)."
+                : "Set by your organisation (\(model.service.managedPolicy?.source ?? "")). Applies to base images and pulled workspace and service images; others are refused.") {
                 ImagePolicySettingsView(model: model)
             }
             SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
@@ -303,10 +304,6 @@ struct ContainersSettingsView: View {
                     Button("Sign In") { model.signIn() }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         .disabled(model.registry.isEmpty || model.username.isEmpty || model.password.isEmpty)
                 }
-            }
-            SettingsGroup("GitLab registry", footer: "Suggestions only: which host your GitLab serves its registry on is your administrator's choice (GitLab supports its own domain on port 5050, or a separate registry domain). Sign-in uses the access token saved in Settings ▸ GitLab, which needs the read_registry scope (GitLab: “Authenticate with the container registry”).") {
-                GitLabRegistryView(model: model.network, containers: model, service: service)
-                if let message = model.network.message { SettingsNote(message).padding(DS.Space.s12) }
             }
             SettingsGroup("Corporate network", footer: "A transparent proxy needs no settings. If it inspects TLS with your organisation's root certificate, the Mac trusts it but containers do not until it is added here. Applies to new containers (existing ones are recreated on next use).") {
                 CorporateNetworkSettingsView(model: model.network, service: service)
@@ -452,14 +449,16 @@ struct ImagePolicySettingsView: View {
         let service = model.service
         if let managed = service.managedPolicy {
             let policy = managed.policy
-            SettingsRow("Allowed images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
+            SettingsRow("Allowed base and pulled images", detail: policy.allowedPrefixes.isEmpty ? "Any image" : policy.allowedPrefixes.joined(separator: ", "), divided: false) {
                 DSPillView("Managed", tone: .info, symbolName: "building.2")
             }
             SettingsRow("Pinned by digest", detail: policy.requireDigest ? "Required" : "Not required") { EmptyView() }
             SettingsRow("Pulling", detail: Self.pullText(policy.pullPolicy)) { EmptyView() }
-            SettingsRow("Verified signatures", detail: policy.requireSignature
-                ? "Required: BelloCode cannot verify signatures yet, so every image is refused" : "Not required") {
-                if policy.requireSignature { DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised") } else { EmptyView() }
+            // Images are not signed (owner, 2026-11-18): shown only if an administrator still requires signatures.
+            if policy.requireSignature {
+                SettingsRow("Verified signatures", detail: "Required by your organisation; BelloCode cannot verify signatures, so every image is refused") {
+                    DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised")
+                }
             }
         } else {
             VStack(alignment: .trailing, spacing: DS.Space.s8) {
@@ -475,8 +474,12 @@ struct ImagePolicySettingsView: View {
                 DSSegmentedPicker(options: [(id: ImagePolicy.PullPolicy.missing, title: "When missing"), (id: .always, title: "Always"), (id: .never, title: "Never")],
                                   selection: $model.pullPolicy).fixedSize()
             }
-            SettingsToggleRow("Require verified signatures", detail: "BelloCode cannot verify signatures yet: turning this on refuses every image.",
-                              isOn: $model.requireSignature)
+            if model.requireSignature {
+                // A policy saved before images were known to be unsigned (owner, 2026-11-18): it refuses every image.
+                SettingsRow("Verified signatures are required", detail: "BelloCode cannot verify signatures, so every image is refused. Saving the policy turns this off.") {
+                    DSPillView("Refusing all", tone: .danger, symbolName: "hand.raised")
+                }
+            }
             SettingsActionsRow {
                 Spacer()
                 Button("Save Policy") { Task { await model.savePolicy() } }.buttonStyle(DSButtonStyle(.primary, size: .small))

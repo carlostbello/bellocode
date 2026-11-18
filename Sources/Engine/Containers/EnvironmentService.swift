@@ -33,8 +33,6 @@ public struct ContainerConfiguration: Sendable {
     public var mcpLogDirectory: URL?
     /// The supervised server's isolated `XDG_CONFIG_HOME` (servers configured for all projects there are routed or refused).
     public var opencodeConfigDirectory: URL?
-    /// GitLab access tokens (read only to copy one into a registry sign-in when the person chooses it).
-    public var gitLabTokens: (any SecretVault)?
     /// The administrator's network settings (managed preferences) and the Mac's proxy settings.
     public var managedNetwork: @Sendable () -> ManagedNetworkPolicy.Managed? = { ManagedNetworkPolicy.read() }
     public var systemProxy: @Sendable () -> SystemProxySettings = { SystemProxySettings.current() }
@@ -946,41 +944,8 @@ public final class EnvironmentService {
         guard let value = try? configuration?.registryVault.read(account: registry),
               let object = try? JSONSerialization.jsonObject(with: value.utf8) as? [String: String],
               let username = object["u"] else { return nil }
-        if let instance = object["gitlab"] {
-            // Signed in with the GitLab instance's own access token: read it now (a renewed token is used at once).
-            guard let token = (try? configuration?.gitLabTokens?.read(account: instance)) ?? nil, !token.isEmpty else { return nil }
-            return RegistryAuth(username: username, password: String(decoding: token.utf8, as: UTF8.self), serverAddress: registry)
-        }
         guard let password = object["p"] else { return nil }
         return RegistryAuth(username: username, password: password, serverAddress: registry)
-    }
-
-    /// Signs in to a GitLab container registry with the access token already saved for that GitLab instance (Settings ▸
-    /// GitLab). GitLab's registry accepts a personal access token with the `read_registry` scope as the password
-    /// (docs.gitlab.com, "Authenticate with the container registry"). Only a reference to the instance is stored: the
-    /// token stays in its one Keychain item and is read at pull time.
-    public func signInWithGitLabToken(registry: String, instance: String, username: String) throws {
-        guard let vault = configuration?.registryVault else { return }
-        guard let tokens = configuration?.gitLabTokens, ((try? tokens.read(account: instance)) ?? nil)?.isEmpty == false else {
-            throw EnvironmentBlockedError(message: "No access token is saved for \(instance). Add it in Settings ▸ GitLab first.")
-        }
-        let document = try JSONSerialization.data(withJSONObject: ["u": username, "gitlab": instance])
-        try vault.store(account: registry, label: "BelloCode registry \(registry) (GitLab token of \(instance))", value: SecretValue(data: document))
-    }
-
-    /// The GitLab instance whose token signs in to `registry`, if it was signed in that way.
-    public func registryGitLabInstance(_ registry: String) -> String? {
-        guard let value = try? configuration?.registryVault.read(account: registry),
-              let object = try? JSONSerialization.jsonObject(with: value.utf8) as? [String: String] else { return nil }
-        return object["gitlab"]
-    }
-
-    /// Container registry hosts a self-managed GitLab commonly uses: its own domain on port 5050, or a `registry.`
-    /// subdomain (docs.gitlab.com, "GitLab container registry administration": registry under an existing domain or
-    /// its own). Which one an instance uses is its administrator's choice; Settings offers both, never picks one.
-    public nonisolated static func gitLabRegistrySuggestions(instance: String) -> [String] {
-        guard let host = URL(string: instance)?.host() else { return [] }
-        return ["registry.\(host)", "\(host):5050"]
     }
 
     // MARK: Commands BelloCode itself runs in the container

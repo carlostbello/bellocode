@@ -392,32 +392,6 @@ struct GlobalMCPTests {
             managed: .init(httpProxy: "http://corp:3128", source: "profile"))
         #expect(managed["HTTP_PROXY"] == "http://corp:3128" && managed["HTTPS_PROXY"] == nil, "an administrator's proxy replaces the Mac's")
     }
-
-    @Test func gitLabRegistryHostsAreSuggestedNotGuessed() {
-        #expect(EnvironmentService.gitLabRegistrySuggestions(instance: "https://gitlab.novacoast.com")
-            == ["registry.gitlab.novacoast.com", "gitlab.novacoast.com:5050"])
-    }
-
-    @Test func signingInWithTheGitLabTokenStoresAReferenceNotTheToken() async throws {
-        var (service, _) = try await makeService()
-        service.stop()
-        let tokens = InMemorySecretVault()
-        try tokens.store(account: "https://gitlab.example.com", label: "t", value: SecretValue("glpat-fixture"))
-        let registry = InMemorySecretVault()
-        var configuration = try #require(service.configuration)
-        configuration.gitLabTokens = tokens
-        configuration.registryVault = registry
-        service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
-        try service.signInWithGitLabToken(registry: "registry.gitlab.example.com", instance: "https://gitlab.example.com", username: "someone")
-        let stored = try #require(try registry.read(account: "registry.gitlab.example.com"))
-        #expect(!String(decoding: stored.utf8, as: UTF8.self).contains("glpat-fixture"), "the token stays in its own Keychain item")
-        let auth = try #require(service.registryAuth(for: "registry.gitlab.example.com/team/image:1"))
-        #expect(auth.username == "someone" && auth.password == "glpat-fixture")
-        #expect(service.registryGitLabInstance("registry.gitlab.example.com") == "https://gitlab.example.com")
-        #expect(throws: EnvironmentBlockedError.self) {
-            try service.signInWithGitLabToken(registry: "r", instance: "https://other.example.com", username: "x")
-        }
-    }
 }
 
 /// Every file the service wrote (path → bytes).
