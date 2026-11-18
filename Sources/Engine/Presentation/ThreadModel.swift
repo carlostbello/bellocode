@@ -253,6 +253,12 @@ public final class ThreadModel: Identifiable {
         await refreshUnconfirmed()
     }
 
+    /// Discards a send that opencode definitively does not have (it is not put back in the composer).
+    public func discardUnconfirmed(_ id: MessageID) async {
+        await core.discardUnconfirmed(id)
+        await refreshUnconfirmed()
+    }
+
     /// Removes a send that a retry found was not sent and returns its text, to edit and send again.
     public func takeUnconfirmed(_ id: MessageID) async -> String? {
         let text = await core.takeUnconfirmed(id)

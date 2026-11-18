@@ -316,6 +316,9 @@ public final class Engine {
         track(Task { await core.closeThread(id) })
     }
 
+    /// Attachment files that sends not yet settled still need (pass to `AttachmentFileStore.cleanUp(keeping:)`).
+    public func outboxAttachmentFiles() async -> Set<URL> { await core.outboxAttachmentFiles() }
+
     /// Keeps a short command task alive until it finishes, so `stop()` waits for it.
     func track(_ task: Task<Void, Never>) {
         nextTrackedID += 1

@@ -123,6 +123,9 @@ actor EngineCore {
     private var unconfirmed: [MessageID: (send: UnconfirmedSend, request: PromptRequest, order: Int)] = [:]
     private var unconfirmedOrder = 0
     let unconfirmedLimit = 32
+    /// Sends recorded in the durable outbox (`app_outbox`) and not yet settled: in flight, unknown or not sent.
+    private var outbox: [MessageID: OutboxEntry] = [:]
+    let outboxLimit = 64
 
     /// Counters for tests and diagnostics.
     struct Statistics: Sendable {
@@ -162,6 +165,7 @@ actor EngineCore {
         async let rules = store.preference(Self.organisationRulesKey, as: OrganisationRules.self)
         let (p, r, s, pe, q, t, c) = try await (projects, registry, sessions, pending, queue, threadUI, catalogs)
         if let stored = try? await rules { organisationRules = stored }
+        restoreOutbox((try? await store.outbox()) ?? [])
         var state = pipeline.state
         state.projects = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         state.registry = Dictionary(r.map { ($0.directory, $0) }, uniquingKeysWith: { $1 })
@@ -1407,7 +1411,7 @@ actor EngineCore {
         _ sessionID: SessionID, text: String, attachments: PromptAttachments = .none, delivery: PromptDelivery?
     ) async throws -> MessageID {
         guard let session = pipeline.state.sessions[sessionID] else { throw EngineError.notFound("The thread was not found.") }
-        guard unconfirmed.count < unconfirmedLimit else {
+        guard unconfirmed.count < unconfirmedLimit, outbox.count < outboxLimit else {
             throw EngineError.failed("Too many messages have unknown delivery. Retry them before sending more.")
         }
         let now = serverNow()
@@ -1435,16 +1439,24 @@ actor EngineCore {
         }
         commit(reduction)
 
-        let request = PromptRequest(
-            text: text, id: id.rawValue, files: attachments.files.map(Mapping.promptFile),
-            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
-            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
-            delivery: busy ? InboxDelivery(rawValue: (delivery ?? .queue).rawValue) : nil)
+        let entry = OutboxEntry(
+            id: id, sessionID: sessionID, text: text, attachments: attachments, delivery: delivery, isFollowUp: busy,
+            state: .dispatching, created: now)
+        let request = Self.promptRequest(entry)
+        // Durable before the first dispatch: if every answer is lost and BelloCode quits, the next launch still has the
+        // ID (to ask opencode) and the payload (for a same-ID retry). A failed write does not block the send; the
+        // storage status already reports that local state is not being saved.
+        outbox[id] = entry
+        do { try await store.saveOutbox(entry) } catch {
+            EngineSignposts.log.error("outbox write failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
         switch await deliver(request, id: id, sessionID: sessionID) {
         case .admitted(let created):
+            await settleOutbox(id)
             acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
             return id
         case .rejected(let error):
+            await settleOutbox(id)
             rollbackSend(id, sessionID: sessionID)
             throw EngineError.from(error)
         case .unknown:
@@ -1452,10 +1464,60 @@ actor EngineCore {
             unconfirmedOrder += 1
             let send = UnconfirmedSend(id: id, sessionID: sessionID, text: text, isFollowUp: busy, state: .unknown)
             unconfirmed[id] = (send, request, unconfirmedOrder)
+            await recordOutbox(id, .unknown)
             bus.publish([.unconfirmed(send)])
             throw EngineError.deliveryUnknown
         }
     }
+
+    /// The opencode request for an outbox entry (the same for the first dispatch and every same-ID retry).
+    static func promptRequest(_ entry: OutboxEntry) -> PromptRequest {
+        let attachments = entry.attachments
+        return PromptRequest(
+            text: entry.text, id: entry.id.rawValue, files: attachments.files.map(Mapping.promptFile),
+            agents: attachments.agents.map { .init(name: $0.name, mention: $0.mention.map(Mapping.promptMention)) },
+            skills: attachments.skills.map { .init(id: $0.id, mention: $0.mention.map(Mapping.promptMention)) },
+            delivery: entry.isFollowUp ? InboxDelivery(rawValue: (entry.delivery ?? .queue).rawValue) : nil)
+    }
+
+    // MARK: - Durable outbox (deep review 1, C6)
+
+    /// Restores unsettled sends from the previous run as delivery-unknown cards (never resent on their own: the first
+    /// successful resync asks opencode for each original ID; Retry resends under that ID only if it is absent).
+    private func restoreOutbox(_ entries: [OutboxEntry]) {
+        for entry in entries.prefix(outboxLimit) where unconfirmed[entry.id] == nil {
+            outbox[entry.id] = entry
+            let state: UnconfirmedSend.State
+            switch entry.state {
+            case .dispatching, .unknown: state = .unknown
+            case .notSent(let reason): state = .notSent(reason)
+            }
+            unconfirmedOrder += 1
+            let send = UnconfirmedSend(id: entry.id, sessionID: entry.sessionID, text: entry.text, isFollowUp: entry.isFollowUp, state: state)
+            unconfirmed[entry.id] = (send, Self.promptRequest(entry), unconfirmedOrder)
+        }
+    }
+
+    /// Records an entry's admission state durably.
+    private func recordOutbox(_ id: MessageID, _ state: OutboxEntry.State) async {
+        guard var entry = outbox[id], entry.state != state else { return }
+        entry.state = state
+        outbox[id] = entry
+        do { try await store.saveOutbox(entry) } catch {
+            EngineSignposts.log.error("outbox write failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
+    }
+
+    /// The send is settled (admitted, refused at first dispatch, or discarded): forget it durably.
+    private func settleOutbox(_ id: MessageID) async {
+        guard outbox.removeValue(forKey: id) != nil else { return }
+        do { try await store.deleteOutbox(id) } catch {
+            EngineSignposts.log.error("outbox delete failed: \(String(describing: type(of: error)), privacy: .public)")
+        }
+    }
+
+    /// Attachment files that unsettled sends still reference (the attachment store keeps them).
+    func outboxAttachmentFiles() -> Set<URL> { Set(outbox.values.flatMap(\.attachmentFiles)) }
 
     /// What became of a prompt request.
     enum DeliveryOutcome: Sendable {
@@ -1556,7 +1618,7 @@ actor EngineCore {
         guard let held = unconfirmed[id], held.send.state == .unknown else { return }
         setUnconfirmedState(id, .checking)
         let outcome = await deliver(held.request, id: id, sessionID: held.send.sessionID, attempts: 1)
-        resolveUnconfirmed(id, outcome)
+        await resolveUnconfirmed(id, outcome)
     }
 
     /// Asks the server about every unknown send (after a resync); never resends on its own.
@@ -1566,7 +1628,7 @@ actor EngineCore {
             guard let held = unconfirmed[id], held.send.state == .unknown else { continue }
             setUnconfirmedState(id, .checking)
             switch await lookUpPrompt(id, sessionID: held.send.sessionID) {
-            case .found(let created): resolveUnconfirmed(id, .admitted(created))
+            case .found(let created): await resolveUnconfirmed(id, .admitted(created))
             case .absent, .unreachable: setUnconfirmedState(id, .unknown)
             }
         }
@@ -1574,12 +1636,18 @@ actor EngineCore {
 
     /// Removes a not-sent entry and returns its text (to put back in the composer). Unknown entries stay: dropping
     /// one could invite sending the same instruction twice.
-    func takeUnconfirmed(_ id: MessageID) -> String? {
+    func takeUnconfirmed(_ id: MessageID) async -> String? {
         guard let held = unconfirmed[id], case .notSent = held.send.state else { return nil }
         unconfirmed[id] = nil
+        await settleOutbox(id)
         bus.publish([.unconfirmedRemoved(id, sessionID: held.send.sessionID)])
         return held.send.text
     }
+
+    /// Discards a send opencode definitively does not have (explicit, from the card). Unknown sends cannot be
+    /// discarded: dropping one could invite sending the same instruction twice.
+    @discardableResult
+    func discardUnconfirmed(_ id: MessageID) async -> Bool { await takeUnconfirmed(id) != nil }
 
     private func setUnconfirmedState(_ id: MessageID, _ state: UnconfirmedSend.State) {
         guard var held = unconfirmed[id], held.send.state != state else { return }
@@ -1588,7 +1656,7 @@ actor EngineCore {
         bus.publish([.unconfirmed(held.send)])
     }
 
-    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) {
+    private func resolveUnconfirmed(_ id: MessageID, _ outcome: DeliveryOutcome) async {
         guard let held = unconfirmed[id] else { return }
         let sessionID = held.send.sessionID
         switch outcome {
@@ -1596,9 +1664,12 @@ actor EngineCore {
             unconfirmed[id] = nil
             bus.publish([.unconfirmedRemoved(id, sessionID: sessionID)])
             acknowledgeSend(id, sessionID: sessionID, serverCreated: created)
+            await settleOutbox(id)
         case .rejected(let error):
             rollbackSend(id, sessionID: sessionID)
-            setUnconfirmedState(id, .notSent(EngineError.from(error).userMessage))
+            let reason = EngineError.from(error).userMessage
+            setUnconfirmedState(id, .notSent(reason))
+            await recordOutbox(id, .notSent(reason))
         case .unknown:
             setUnconfirmedState(id, .unknown)
         }

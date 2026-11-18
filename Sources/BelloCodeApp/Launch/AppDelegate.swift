@@ -47,7 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let settings = AppSettings(defaults: runtime.defaults)
                 settings.apply()
                 services = makeServices(settings: settings, auth: runtime.auth)
-                Task { await AttachmentFileStore.applicationDefault.cleanUp() }
                 // Quick Look copies of pasted content left by a crashed run.
                 Task { await PreviewFiles.current.cleanUpAbandoned() }
                 showMainWindow()
@@ -55,6 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.activate()
                 // Cached content first (start() returns once the cache is shown), then the server connects.
                 await runtime.engine.start()
+                // After the cache (and the outbox) loaded: files of sends not settled yet are kept.
+                let engine = runtime.engine
+                Task { await AttachmentFileStore.applicationDefault.cleanUp(keeping: await engine.outboxAttachmentFiles()) }
                 Task { await runtime.auth.refresh() }
                 if !settings.hasCompletedOnboarding { await showOnboardingWhenReady() }
             } catch let error as ProjectionStore.OpenError {

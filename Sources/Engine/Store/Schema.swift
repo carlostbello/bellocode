@@ -7,13 +7,13 @@ import GRDB
 /// `message_fts`, `pending_request`, `queued_prompt`, `catalog`, `session_sync`.
 /// Tables holding state only BelloCode owns (kept by `rebuild()`): `app_project`, `app_thread`, `app_preference`,
 /// `app_terminal`, `app_schedule`, `app_schedule_run`, `app_grant`, `app_mr_watch`, `app_secret`, `app_environment`,
-/// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them).
+/// `app_request` (BelloCode's own pending requests: opencode cannot rebuild them), `app_outbox` (sends not yet settled).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 7
+    static let currentVersion = 8
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -200,6 +200,18 @@ enum ProjectionSchema {
                 INSERT OR REPLACE INTO app_request (id, session_id, received, json)
                     SELECT id, session_id, received, json FROM pending_request WHERE substr(id, 1, 4) = 'app_';
                 DELETE FROM pending_request WHERE substr(id, 1, 4) = 'app_';
+                """)
+        }
+        // Deep review 1, C6: a send is recorded before its first dispatch and removed once opencode admits or refuses
+        // it, so a delivery-unknown send (retry payload and card) survives a quit.
+        migrator.registerMigration("v8-app-outbox") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_outbox (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    session_id TEXT NOT NULL,
+                    created REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
                 """)
         }
         return migrator

@@ -108,7 +108,7 @@ struct AppRequestDurabilityTests {
             try pool.close()
         }
         let store = try await ProjectionStore.open(location: .file(url))
-        #expect(try await store.appliedMigrations().last == "v7-app-requests")
+        #expect(try await store.appliedMigrations().contains("v7-app-requests"))
         #expect(try await store.pendingRequests().map(\.id) == [card.id])
         try await store.rebuild()
         #expect(try await store.pendingRequests().map(\.id) == [card.id], "moved out of the rebuildable cache")
