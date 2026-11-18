@@ -45,7 +45,7 @@ public enum StdioRelay {
     ///   - readInput: the next bytes of the host's stdin (at most `chunkSize`); empty means end of input. Called again
     ///     only after the previous bytes were written into the exec, so at most one chunk is buffered.
     ///   - writeOutput: writes one output chunk to the host's stdout or stderr (blocking until written).
-    public static func run(session: ExecSession, readInput: @escaping @Sendable () async throws -> Data,
+    public static func run(session: any StdioSession, readInput: @escaping @Sendable () async throws -> Data,
                            writeOutput: @escaping @Sendable (OutputChunk) throws -> Void) async throws -> Int {
         let state = signposter.beginInterval("stdio.relay")
         defer { signposter.endInterval("stdio.relay", state) }
@@ -77,6 +77,9 @@ public enum HelperInvocation: Sendable, Equatable {
     /// `--stdio --refuse NAME`: a local MCP server BelloCode cannot place in a project's container (configured for all
     /// projects); the helper explains and runs nothing.
     case refuse(name: String)
+    /// `--stdio --mcp ID [--project DIR]`: a global image-based MCP server (Settings ▸ MCP Servers), run in its own
+    /// container from its image with no project folder mounted; `--project` names the connection's project.
+    case globalMCP(id: String, project: String?)
     /// `--service NAME [--project DIR]`: an interactive shell in one of the project's service containers.
     case service(project: String?, name: String)
 
@@ -92,6 +95,7 @@ public enum HelperInvocation: Sendable, Equatable {
         if arguments.first == "--stdio" {
             arguments.removeFirst()
             var project: String?
+            var mcp: String?
             while let first = arguments.first, first != "--" {
                 switch first {
                 case "--project":
@@ -101,9 +105,17 @@ public enum HelperInvocation: Sendable, Equatable {
                 case "--refuse":
                     guard arguments.count >= 2 else { throw ParseError(description: "--refuse needs a server name.") }
                     return .refuse(name: arguments[1])
+                case "--mcp":
+                    guard arguments.count >= 2, !arguments[1].isEmpty else { throw ParseError(description: "--mcp needs a server id.") }
+                    mcp = arguments[1]
+                    arguments.removeFirst(2)
                 default:
                     throw ParseError(description: "unsupported --stdio option \(first); use --stdio [--project DIR] -- program args….")
                 }
+            }
+            if let mcp {
+                guard arguments.isEmpty else { throw ParseError(description: "--stdio --mcp takes no program: the image runs.") }
+                return .globalMCP(id: mcp, project: project)
             }
             guard arguments.first == "--", arguments.count >= 2 else {
                 throw ParseError(description: "--stdio needs a program after --.")
@@ -136,6 +148,6 @@ public enum HelperInvocation: Sendable, Equatable {
 
     /// The message a refused local MCP server reports (on stderr; opencode shows it as the server's failure).
     public static func refusalMessage(server name: String) -> String {
-        "the MCP server “\(name)” is configured for all projects in BelloCode's opencode configuration, so it has no project container to run in, and it never runs on this Mac. Add it to a project instead: Project Settings ▸ Environment ▸ MCP servers."
+        "the MCP server “\(name)” is configured for all projects in BelloCode's opencode configuration with a command, so it has no container to run in, and it never runs on this Mac. Add it as a container image in Settings ▸ MCP Servers (it then runs in its own container), or to a project: Project Settings ▸ Environment ▸ MCP servers."
     }
 }

@@ -37,12 +37,16 @@ public struct ImageSummary: Decodable, Sendable, Equatable {
     public var architecture: String?
     public var size: Int64?
     public var labels: [String: String]?
+    /// The image's `ENTRYPOINT`, `CMD` and `USER` (what `docker run IMAGE` runs).
+    public var entrypoint: [String]?
+    public var cmd: [String]?
+    public var user: String?
 
     enum CodingKeys: String, CodingKey {
         case id = "Id", repoDigests = "RepoDigests", architecture = "Architecture", size = "Size"
         case config = "Config"
     }
-    enum ConfigKeys: String, CodingKey { case labels = "Labels" }
+    enum ConfigKeys: String, CodingKey { case labels = "Labels", entrypoint = "Entrypoint", cmd = "Cmd", user = "User" }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -52,6 +56,9 @@ public struct ImageSummary: Decodable, Sendable, Equatable {
         size = try c.decodeIfPresent(Int64.self, forKey: .size)
         if let config = try? c.nestedContainer(keyedBy: ConfigKeys.self, forKey: .config) {
             labels = try config.decodeIfPresent([String: String].self, forKey: .labels)
+            entrypoint = try? config.decodeIfPresent([String].self, forKey: .entrypoint)
+            cmd = try? config.decodeIfPresent([String].self, forKey: .cmd)
+            user = try? config.decodeIfPresent(String.self, forKey: .user)
         }
     }
 }
@@ -165,6 +172,8 @@ public struct ContainerCreate: Codable, Sendable, Equatable {
     public var exposedPorts: [String: EmptyObject]?
     public var tty: Bool?
     public var openStdin: Bool?
+    /// Close stdin after the first attached client detaches (`docker run -i`: end of input reaches the program).
+    public var stdinOnce: Bool?
     public var attachStdin: Bool?
     public var attachStdout: Bool?
     public var attachStderr: Bool?
@@ -180,7 +189,7 @@ public struct ContainerCreate: Codable, Sendable, Equatable {
     enum CodingKeys: String, CodingKey {
         case image = "Image", cmd = "Cmd", entrypoint = "Entrypoint", env = "Env", user = "User"
         case workingDir = "WorkingDir", labels = "Labels", exposedPorts = "ExposedPorts", tty = "Tty"
-        case openStdin = "OpenStdin", attachStdin = "AttachStdin", attachStdout = "AttachStdout"
+        case openStdin = "OpenStdin", stdinOnce = "StdinOnce", attachStdin = "AttachStdin", attachStdout = "AttachStdout"
         case attachStderr = "AttachStderr", stopSignal = "StopSignal", stopTimeout = "StopTimeout"
         case hostConfig = "HostConfig", healthcheck = "Healthcheck", hostname = "Hostname", networkingConfig = "NetworkingConfig"
     }

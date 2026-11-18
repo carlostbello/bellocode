@@ -81,6 +81,8 @@ final class AppRuntime {
         try requireBundledRuntime(server)
         var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         configuration.containers = containerConfiguration(for: server)
+        // Registry sign-in may reuse a GitLab token when the person chooses it (Settings ▸ Containers).
+        configuration.containers?.gitLabTokens = configuration.forgeTokens
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
@@ -135,7 +137,18 @@ final class AppRuntime {
             helperURL: helpers.appending(path: "bellocode-exec"),
             execConfigURL: root.appending(path: "bellocode-exec.json"),
             gitShimDirectory: root.appending(path: "git-shim", directoryHint: .isDirectory))
+        // Corporate network (docs/features/containers.md): opencode's Bun runtime trusts the selected enterprise roots
+        // and uses the administrator's or the Mac's proxies (Bun reads neither the Keychain nor macOS proxy settings).
+        let enterprise = certificateDirectory(dataRoot: root).appending(path: CorporateNetwork.enterpriseName)
+        configuration.launchEnvironment = {
+            EnvironmentService.serverEnvironment(enterpriseBundle: enterprise, proxy: SystemProxySettings.current(), managed: ManagedNetworkPolicy.read())
+        }
         return configuration
+    }
+
+    /// Where the corporate network's certificate bundles are written (mounted read-only into containers).
+    nonisolated static func certificateDirectory(dataRoot: URL) -> URL {
+        dataRoot.appending(path: "network/certs", directoryHint: .isDirectory)
     }
 
     /// The engine's side of containerised execution for a bundled server configuration.
@@ -145,6 +158,9 @@ final class AppRuntime {
             helperURL: execution.helperURL, execConfigURL: execution.execConfigURL, opencodeDataDirectory: server.dataDirectory,
             runtime: LiveWorkspaceRuntime(socketOverride: socketOverride))
         configuration.gitShim = execution.gitShimDirectory?.appending(path: "git")
+        configuration.mcpLogDirectory = server.dataRoot.appending(path: "mcp-logs", directoryHint: .isDirectory)
+        configuration.opencodeConfigDirectory = server.configDirectory
+        configuration.certificateDirectory = certificateDirectory(dataRoot: server.dataRoot)
         return configuration
     }
 

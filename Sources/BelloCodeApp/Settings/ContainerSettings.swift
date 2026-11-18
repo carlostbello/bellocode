@@ -785,6 +785,23 @@ final class EnvironmentSettingsModel: ObservableObject {
         await service.update(directory, settings: settings)
     }
 
+    /// Whether this project uses the MCP servers set up for all projects (Settings ▸ MCP Servers).
+    func setUseGlobalMCP(_ value: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.useGlobalMCP = value
+        await service.update(directory, settings: settings)
+    }
+
+    /// Turns one global server on or off for this project only.
+    func setGlobalMCP(_ id: String, inProject enabled: Bool) async {
+        guard let directory, let environment else { return }
+        var settings = environment.settings
+        settings.globalMCPOptOut.removeAll { $0 == id }
+        if !enabled { settings.globalMCPOptOut.append(id) }
+        await service.update(directory, settings: settings)
+    }
+
     func showLogs() async {
         guard let id = environment?.record.containerID else { logs = "No container yet."; return }
         logs = await service.logs(containerID: id)
@@ -920,7 +937,10 @@ struct EnvironmentSettingsView: View {
         SettingsGroup("Caches", footer: "Named volumes for package-manager caches, kept when the container is rebuilt. “Shared” uses one volume for every project that also shares it; otherwise the cache is this project's own.") {
             ProjectCachesView(model: model, environment: environment)
         }
-        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. Servers configured for all projects are refused.") {
+        SettingsGroup("MCP servers for all projects", footer: "Set up in Settings ▸ MCP Servers. Turn them off here for this project only; a project server of the same name wins.") {
+            GlobalMCPOptOutView(model: model, environment: environment, service: model.service)
+        }
+        SettingsGroup("MCP servers", footer: "Local (stdio) MCP servers of this project run in its container through bellocode-exec --stdio; only their input and output cross to this Mac. A command configured for all projects in opencode's own files is refused unless it is a docker run of an image.") {
             MCPServersListView(model: model, environment: environment)
         }
         SettingsGroup("Ports") {

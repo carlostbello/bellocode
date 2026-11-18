@@ -80,6 +80,9 @@ func loadAuthorisedConfig() -> ExecHelperConfig {
 let config = loadAuthorisedConfig()
 let hostDirectory = FileManager.default.currentDirectoryPath
 if let blocked = config.runtimeBlocked { fail(125, blocked.message) }
+if case .globalMCP(let id, let project) = invocation {
+    await runGlobalMCP(id: id, project: project, config: config, environment: environment, hostDirectory: hostDirectory)
+}
 /// The project comes from `--project` when given (a local MCP server BelloCode routed: its working directory may be
 /// anywhere opencode chose); the command runs in the current directory when that is inside the project, else at the
 /// project's root.

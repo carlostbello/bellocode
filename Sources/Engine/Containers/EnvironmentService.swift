@@ -27,6 +27,21 @@ public struct ContainerConfiguration: Sendable {
     public var gitShim: URL?
     /// The administrator's image policy (managed preferences), read at start and when Settings asks.
     public var managedPolicy: @Sendable () -> ManagedImagePolicy.Managed? = { ManagedImagePolicy.read() }
+    /// Secret header and variable values of global MCP servers (Keychain service `app.bellocode.mcp`).
+    public var mcpVault: any SecretVault = KeychainSecretVault(service: GlobalMCPSecrets.service)
+    /// Where the helper keeps each image server's bounded error log (`<id>.log`).
+    public var mcpLogDirectory: URL?
+    /// The supervised server's isolated `XDG_CONFIG_HOME` (servers configured for all projects there are routed or refused).
+    public var opencodeConfigDirectory: URL?
+    /// GitLab access tokens (read only to copy one into a registry sign-in when the person chooses it).
+    public var gitLabTokens: (any SecretVault)?
+    /// The administrator's network settings (managed preferences) and the Mac's proxy settings.
+    public var managedNetwork: @Sendable () -> ManagedNetworkPolicy.Managed? = { ManagedNetworkPolicy.read() }
+    public var systemProxy: @Sendable () -> SystemProxySettings = { SystemProxySettings.current() }
+    /// The certificates the Keychain trusts (enterprise roots are picked from these); injected by tests.
+    public var certificateSource: any TrustedCertificateSource = KeychainCertificateSource()
+    /// Where the exported bundles are written (`ca-bundle.pem`, `enterprise-roots.pem`).
+    public var certificateDirectory: URL?
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -110,7 +125,7 @@ public final class EnvironmentService {
     public let isEnabled: Bool
 
     @ObservationIgnored let configuration: ContainerConfiguration?
-    @ObservationIgnored private let store: ProjectionStore
+    @ObservationIgnored let store: ProjectionStore
     @ObservationIgnored var models: [String: ProjectEnvironment] = [:]
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
@@ -156,6 +171,21 @@ public final class EnvironmentService {
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
     /// The isolation self-check's server access (set by the engine).
     @ObservationIgnored var isolationContext: IsolationCheck.Context?
+    /// Global MCP servers (Settings ▸ MCP Servers) and what BelloCode knows of each.
+    public internal(set) var globalMCP = GlobalMCPList()
+    public internal(set) var globalMCPStates: [String: GlobalMCPState] = [:]
+    /// Image servers from `docker run` entries of the isolated configuration files (`cfg-<name>`).
+    @ObservationIgnored var configImageServers: [ImageMCPSpec] = []
+    /// Projects whose threads were shown (global servers are registered for them) and those stopped when idle.
+    @ObservationIgnored var projectsInUse: Set<String> = []
+    @ObservationIgnored var idledOut: Set<String> = []
+    @ObservationIgnored var stackForwarders: [String: PortForwarder] = [:]
+    @ObservationIgnored var stackLastUse: [String: ContinuousClock.Instant] = [:]
+    @ObservationIgnored var stackSeenConnections: [String: Int] = [:]
+    /// The isolation self-check's scratch image server (present only while it runs).
+    @ObservationIgnored var verifyImageSpec: ImageMCPSpec?
+    /// Corporate network (certificates and proxies) as applied to containers and the server.
+    public internal(set) var network = NetworkState()
     @ObservationIgnored nonisolated static let log = Logger(subsystem: "app.bellocode", category: "containers")
     @ObservationIgnored private nonisolated static let signposter = OSSignposter(subsystem: "app.bellocode.engine", category: "containers")
 
@@ -193,6 +223,7 @@ public final class EnvironmentService {
         if let saved = try? await store.preference(EnvironmentDefaults.preferenceKey, as: EnvironmentDefaults.self) { defaults = saved }
         if let pulled = try? await store.preference(Self.pulledImagesKey, as: [String].self) { pulledImageIDs = Set(pulled) }
         managedPolicy = configuration?.managedPolicy()
+        await loadGlobalMCP()
         settingsLoaded = true
         for model in models.values { refreshImageAndPhase(model) }
         guard isEnabled else { return }
@@ -221,6 +252,7 @@ public final class EnvironmentService {
         serviceForwarders.removeAll()
         for bridge in bridges.values { bridge.stop() }
         bridges.removeAll()
+        stopStackForwarders()
         started = false
     }
 
@@ -295,6 +327,8 @@ public final class EnvironmentService {
         if model.phase == .ready {
             syncMCPServers(model)
             startServices(model)
+        } else if projectsInUse.contains(model.directory) {
+            syncMCPServers(model)
         }
     }
 
@@ -340,7 +374,12 @@ public final class EnvironmentService {
             // Secret-command containers a crash left behind (their command had the value in its environment).
             let runtime = activeRuntime
             tasks.set("secret-leftovers", Task { await runtime.removeLeftoverSecretContainers() })
+            // Containers of image MCP servers whose connection ended without cleaning up, or that no longer exist.
+            let known = Set(imageServerSpecs().map(\.id))
+            tasks.set("mcp-leftovers", Task { await runtime.removeMCPLeftovers(knownIDs: known) })
             for model in models.values { refreshImageAndPhase(model) }
+            checkGlobalImages()
+            reconcileStacks()
         } else if !state.isReady {
             tasks.set("events", Task {})
             for model in models.values {
@@ -746,7 +785,10 @@ public final class EnvironmentService {
                 stopServices(model)
                 model.phase = .idle
                 scheduleConfigWrite()
+                projectIdled(model)
             }
+            stopIdleStacks()
+            stopIdleSharedImageServers()
         }
     }
 
@@ -990,6 +1032,10 @@ public final class EnvironmentService {
             image: image, network: model.settings.network, resources: model.settings.resources,
             environment: model.settings.environment)
         spec.serviceNetwork = serviceNetwork(model)
+        if !network.corporate.isEmpty {
+            spec.corporateNetwork = network.corporate
+            spec.serviceNames = spec.serviceNetwork == nil ? nil : model.services.map(\.name).sorted()
+        }
         let caches = model.settings.cacheMounts(imageDeclared: model.record.imageCaches ?? [:])
         spec.cacheMounts = caches.isEmpty ? nil : caches
         return spec
@@ -1019,7 +1065,8 @@ public final class EnvironmentService {
                 mountIdentity: model.record.mountIdentity, image: model.image, inventory: model.record.inventory,
                 services: model.services.filter { $0.phase != .refused }.map(\.name))
         }
-        return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked)
+        return ExecHelperConfig(socket: socket, workspaces: workspaces, runtimeBlocked: runtimeBlocked, mcpServers: imageServerSpecs(),
+                                mcpLogDirectory: configuration?.mcpLogDirectory?.path)
     }
 
     /// Writes the helper configuration soon (coalesced, serialised). Off the main actor, atomically.
@@ -1110,12 +1157,13 @@ public final class EnvironmentService {
     public func prunePlan() async throws -> PrunePlan {
         guard isEnabled else { throw EnvironmentBlockedError(message: "Container execution is off in this build.") }
         guard runtime?.isReady == true else { throw EnvironmentBlockedError(message: runtime?.userMessage ?? "Rancher Desktop is not ready.") }
-        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+        return try await activeRuntime.prunePlan(keepProjectKeys: Set(models.values.map(\.projectKey)).union(stackProjectKeys), pulledImageIDs: pulledImageIDs)
     }
 
     /// Removes exactly the confirmed items that still qualify. Cannot be undone.
     public func prune(_ plan: PrunePlan) async throws -> PruneResult {
-        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey)), pulledImageIDs: pulledImageIDs)
+        let result = try await activeRuntime.prune(plan, keepProjectKeys: Set(models.values.map(\.projectKey)).union(stackProjectKeys),
+                                                   pulledImageIDs: pulledImageIDs)
         let removedImages = Set(plan.images.filter { result.removed.contains($0.name) }.map(\.id))
         if !removedImages.isEmpty {
             pulledImageIDs.subtract(removedImages)
