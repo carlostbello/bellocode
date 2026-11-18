@@ -295,3 +295,34 @@ struct AutoAuditStoreTests {
         #expect(try await store.autoAudit(sessionID: session).isEmpty)
     }
 }
+
+@Suite("Auto code roots end to end", .serialized, .timeLimit(.minutes(3)))
+@MainActor
+struct AutoCodeRootTests {
+    @Test func engineCodeRootsReachAutoDecisions() async throws {
+        let project = "/tmp/mock-roots/app"
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: "/tmp/mock-roots/lib", withIntermediateDirectories: true)
+        let harness = try await MockHarness.start(.empty(directory: project))
+        var configuration = EngineConfiguration(server: .fixed(harness.connection), store: .inMemory)
+        configuration.autoReviewerModel = AutoModeTests.ScriptedReviewer(AutoModeTests.escalate)
+        let engine = try Engine(configuration: configuration)
+        await engine.start()
+        defer { Task { await engine.stop(); await harness.stop() } }
+        try await waitUntil("live") { engine.root.connection == .live }
+        let session = try await engine.createThread(in: project, title: "roots", permissionMode: .auto)
+        let thread = engine.openThread(session.id)
+        defer { thread.close() }
+        // Without roots: the sibling repository escalates as outside the project.
+        _ = try await harness.client.evaluatePermission(sessionID: session.id.rawValue, PermissionCreateRequest(action: "external_directory", resources: ["/tmp/mock-roots/lib/*"]))
+        try await waitUntil("escalated") { thread.pendingRequests.count == 1 }
+        // With the developer's code root: the same kind of request is approved once by the policy.
+        engine.codeRoots = CodeRoots(["/tmp/mock-roots"])
+        // The setter pushes asynchronously; apply it now as a barrier (idempotent) before the next request.
+        await engine.core.setCodeRoots(engine.codeRoots)
+        let id = try await harness.client.evaluatePermission(sessionID: session.id.rawValue, PermissionCreateRequest(action: "external_directory", resources: ["/tmp/mock-roots/lib/src/*"])).id
+        try await waitUntil("approved") { engine.auto.audit[session.id]?.contains { $0.kind == .autoApproved && $0.reasonCode == "code_root" } == true }
+        #expect(try await !harness.client.permissions(sessionID: session.id.rawValue).map(\.id).contains(id))
+        #expect(thread.pendingRequests.count == 1, "only the earlier escalation is shown")
+    }
+}

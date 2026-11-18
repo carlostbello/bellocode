@@ -502,7 +502,7 @@ enum EventReducer {
         let evaluated = call.metadata.flatMap(RiskNoticeInput.evaluations) ?? []
         var roots = [owner.directory]
         if let project = state.projects[owner.projectID]?.directory { roots.append(project) }
-        let context = RiskPolicy.Context(directory: owner.directory, roots: roots)
+        let context = RiskPolicy.Context(directory: owner.directory, roots: roots, trusted: state.codeRoots)
         let notices = RiskPolicy.notices(tool: call.name, input: input, evaluated: evaluated, in: context)
         let previous = call.risk?.notices ?? []
         guard !notices.isEmpty || !previous.isEmpty else { return }

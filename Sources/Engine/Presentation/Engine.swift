@@ -135,6 +135,27 @@ public final class Engine {
     public private(set) var orchestration: OrchestrationService!
     /// Auto mode decisions, Full-access risk notices and their audit log (docs/features/auto-mode.md).
     public private(set) var auto: AutoModeService!
+    /// Folders the developer works across, in scope for Auto and Full-access notices (docs/features/auto-mode.md).
+    /// Default: none (only each thread's project and worktrees). Set by the code-roots settings, or via `codeRootsProvider`.
+    public var codeRoots: CodeRoots = .none {
+        didSet {
+            guard codeRoots != oldValue else { return }
+            // Each push sends the latest value, so quick successive changes cannot land out of order.
+            Task { [weak self, core] in
+                guard let roots = self?.codeRoots else { return }
+                await core.setCodeRoots(roots)
+            }
+        }
+    }
+    /// Optional source of `codeRoots`; read when set and by `refreshCodeRoots()`.
+    public weak var codeRootsProvider: (any CodeRootsProvider)? {
+        didSet { refreshCodeRoots() }
+    }
+
+    /// Re-reads `codeRootsProvider` (call when its roots change).
+    public func refreshCodeRoots() {
+        if let provider = codeRootsProvider { codeRoots = provider.codeRoots }
+    }
     /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
     public private(set) var extras: ExtrasHub!
     /// Containerised execution: runtime state, each project's workspace container, ports, the isolation self-check
@@ -201,6 +222,7 @@ public final class Engine {
         }
         orchestration = OrchestrationService(core: core, store: store, engine: self)
         auto = AutoModeService(core: core, store: store, engine: self, reviewerModel: configuration.autoReviewerModel)
+        codeRoots = configuration.codeRoots
         extras = ExtrasHub(core: core, store: store, engine: self, configuration: configuration)
         if configuration.containers != nil { extras.environments = environments }
         let mergeRequests = extras.mergeRequests
@@ -269,6 +291,7 @@ public final class Engine {
         // The helper's configuration exists before the server (and its shell) starts.
         await environments.writeConfigNow()
         orchestration.start()
+        await core.setCodeRoots(codeRoots)
         auto.start()
         await extras.start(store: store)
         await modelPreferences.load()

@@ -223,3 +223,22 @@ public struct InterruptRecord: Hashable, Sendable, Codable {
         return "Stopped by \(who)\(state): \(reason)"
     }
 }
+
+/// Folders a developer works across ("code roots", e.g. `~/Documents/Repos`), configured per developer (and optionally
+/// by an administrator). Paths inside any of them are in scope for Auto and Full-access notices: no escalation or notice
+/// for location alone, and another project inside them is not "cross-project". Secrets and risky actions still count.
+/// The default is empty: only the thread's project and its worktrees are in scope. Set `Engine.codeRoots`.
+public struct CodeRoots: Hashable, Sendable, Codable {
+    /// Absolute or `~/` paths.
+    public var directories: [String]
+
+    public init(_ directories: [String] = []) { self.directories = directories }
+
+    public static let none = CodeRoots()
+}
+
+/// What another package provides to keep `Engine.codeRoots` current (developer settings, an administrator key).
+@MainActor
+public protocol CodeRootsProvider: AnyObject {
+    var codeRoots: CodeRoots { get }
+}

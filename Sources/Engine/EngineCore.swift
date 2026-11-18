@@ -2390,6 +2390,8 @@ struct AutoRequestContext: Sendable {
     var threadTitle: String?
     /// The tool call that asked, when it is in the message cache.
     var tool: BelloCore.ToolCall?
+    /// Configured code roots (in scope).
+    var codeRoots: [String] = []
 }
 
 extension EngineCore {
@@ -2442,8 +2444,11 @@ extension EngineCore {
         if let messageID = request.toolMessageID, let callID = request.toolCallID, let message = state.messages[messageID] {
             tool = message.parts.lazy.compactMap(\.content.toolCall).first { $0.callID == callID }
         }
-        return AutoRequestContext(request: request, session: session, roots: roots, threadTitle: session.title, tool: tool)
+        return AutoRequestContext(request: request, session: session, roots: roots, threadTitle: session.title, tool: tool, codeRoots: state.codeRoots)
     }
+
+    /// Code roots in scope for the risk policy (Auto decisions and Full-access notices from now on).
+    func setCodeRoots(_ roots: CodeRoots) { pipeline.state.codeRoots = roots.directories }
 
     /// Shows a triaged request to the person (Auto escalated it, or its session left Auto).
     func escalateAutoRequest(_ id: PermissionRequestID, _ escalation: AutoEscalation?) {

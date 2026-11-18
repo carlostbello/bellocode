@@ -22,17 +22,26 @@ public enum RiskPolicy {
         /// BelloCode's and opencode's own data and configuration: touching them is a hard deny.
         public var protected: [String]
 
-        public init(directory: String, roots: [String], home: String = NSHomeDirectory(), protected: [String] = []) {
+        /// Configured code roots (`CodeRoots`): folders the developer works across. Inside one is in scope (no
+        /// escalation or notice for location alone; secrets and risky actions still count).
+        public var trusted: [String]
+
+        public init(
+            directory: String, roots: [String], home: String = NSHomeDirectory(), protected: [String] = [], trusted: [String] = []
+        ) {
             self.directory = directory
             self.roots = roots.isEmpty ? [directory] : roots
             self.home = home
             self.protected = protected + Self.standardProtected(home: home)
+            self.trusted = trusted
             self.canonicalRoots = self.roots.map { Paths.canonical($0, base: "/", home: home) }
             self.canonicalProtected = self.protected.map { Paths.canonical($0, base: "/", home: home) }
+            self.canonicalTrusted = trusted.filter { !$0.isEmpty }.map { Paths.canonical($0, base: "/", home: home) }.filter { $0 != "/" }
         }
 
         let canonicalRoots: [String]
         let canonicalProtected: [String]
+        let canonicalTrusted: [String]
 
         static func standardProtected(home: String) -> [String] {
             [
@@ -44,9 +53,14 @@ public enum RiskPolicy {
 
         public static func == (lhs: Context, rhs: Context) -> Bool {
             lhs.directory == rhs.directory && lhs.roots == rhs.roots && lhs.home == rhs.home && lhs.protected == rhs.protected
+                && lhs.trusted == rhs.trusted
         }
 
-        func inside(_ canonical: String) -> Bool { canonicalRoots.contains { Paths.contains($0, canonical) } }
+        /// In this project or its worktrees.
+        func inProject(_ canonical: String) -> Bool { canonicalRoots.contains { Paths.contains($0, canonical) } }
+        /// In scope: the project, its worktrees, or a configured code root.
+        func inside(_ canonical: String) -> Bool { inProject(canonical) || inCodeRoot(canonical) }
+        func inCodeRoot(_ canonical: String) -> Bool { canonicalTrusted.contains { Paths.contains($0, canonical) } }
         func isProtected(_ canonical: String) -> Bool {
             canonicalProtected.contains { Paths.contains($0, canonical) } || canonical.hasSuffix("/docker.sock")
                 || (canonical as NSString).lastPathComponent == "bellocode-exec.json"
@@ -152,10 +166,19 @@ public enum RiskPolicy {
         // Actions that are themselves the risk.
         switch verb {
         case "external_directory":
-            let targets = action.resources.map { context.label(Paths.canonical(stripGlob($0), base: context.directory, home: context.home)) }
-            found.append(RiskFinding(.outsidePath, targets.first ?? ""))
+            // Outside the project; in scope again when every directory is inside a configured code root.
+            let canonical = action.resources.map { Paths.canonical(stripGlob($0), base: context.directory, home: context.home) }
+            if let outside = canonical.first(where: { !context.inside($0) }) ?? (canonical.isEmpty ? "" : nil) {
+                found.append(RiskFinding(.outsidePath, outside.isEmpty ? "" : context.label(outside)))
+            }
         case "bellocode_other_project":
-            found.append(RiskFinding(.crossProject, action.resources.first.map { ($0 as NSString).lastPathComponent } ?? ""))
+            // Another project's threads: in scope when that project is inside a configured code root.
+            // Only a directory target can be in a root (the plugin sends the project's directory; an ID cannot).
+            let paths = action.resources.filter { $0.hasPrefix("/") || $0.hasPrefix("~/") }
+            let canonical = paths.map { Paths.canonical($0, base: context.directory, home: context.home) }
+            if paths.count != action.resources.count || canonical.isEmpty || canonical.contains(where: { !context.inCodeRoot($0) }) {
+                found.append(RiskFinding(.crossProject, action.resources.first.map { ($0 as NSString).lastPathComponent } ?? ""))
+            }
         default: break
         }
         // Paths: from file actions' resources and from the tool input.
@@ -192,7 +215,7 @@ public enum RiskPolicy {
         if let secret = secretPath(canonical, home: context.home) { found.append(RiskFinding(.secretRead, context.label(canonical).isEmpty ? secret : context.label(canonical))) }
         let exempt = shell && Paths.shellScratch.contains { Paths.contains($0, canonical) }
         if !context.inside(canonical), !exempt { found.append(RiskFinding(.outsidePath, context.label(canonical))) }
-        if writes, context.inside(canonical), let policy = policyFile(canonical, in: context) {
+        if writes, let policy = policyFile(canonical, in: context) {
             found.append(RiskFinding(policy.lowercased().contains("mcp") ? .mcpServer : .policyChange, policy))
         }
         return found
@@ -259,6 +282,8 @@ public enum RiskPolicy {
         let parts = label.split(separator: "/").map(String.init)
         if parts.contains(".opencode") || parts.contains(".devcontainer") || parts.contains(".bellocode") || parts.contains(".claude") { return label }
         if parts.count >= 2, parts[0] == ".git", parts[1] == "hooks" || parts[1] == "config" { return label }
+        // The same files in another repository under a code root.
+        if let git = parts.firstIndex(of: ".git"), git + 1 < parts.count, parts[git + 1] == "hooks" || parts[git + 1] == "config" { return label }
         if label.hasPrefix(".git/hooks") || label == ".git/config" { return label }
         return nil
     }
@@ -526,6 +551,9 @@ public enum RiskPolicy {
     static func deterministicAllow(_ action: Action, in context: Context) -> (String, String)? {
         if let text = alwaysAllowed[action.action] { return (action.action, text) }
         if action.action.hasPrefix("bellocode_app_") { return ("app_tool", "A BelloCode app tool (it asks you itself when it needs to)") }
+        // Findings were empty, so these are inside the configured code roots.
+        if action.action == "external_directory" { return ("code_root", "A folder inside your code roots") }
+        if action.action == "bellocode_other_project" { return ("code_root_project", "Another project inside your code roots") }
         switch action.action {
         case "read", "list", "glob", "grep":
             // Findings were empty, so every path is inside the project and nothing names a secret.

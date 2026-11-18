@@ -16,6 +16,8 @@ struct ProjectionState: Sendable {
     var autoDispatched: Set<String> = []
     /// Why Auto escalated a request, kept so a resync re-lists it with its reason.
     var autoEscalations: [String: AutoEscalation] = [:]
+    /// Configured code roots (`Engine.codeRoots`): in scope for the risk policy.
+    var codeRoots: [String] = []
     var queue: [MessageID: QueuedPrompt] = [:]
     var threadUI: [SessionID: ThreadUIState] = [:]
     var messages: MessageCache

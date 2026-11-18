@@ -52,6 +52,13 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
 
 Corpus: `RiskPolicyTests` (~150 cases incl. indirection and encoded commands). Shell analysis is best effort, not a boundary.
 
+**Code roots** (owner decision, PLAN §0): `Engine.codeRoots: CodeRoots` (BelloCore; or a `CodeRootsProvider`, then
+`refreshCodeRoots()`), default none = each thread's project and worktrees only. Paths inside any root are in scope for
+Auto and Full-access notices (no escalation or notice for location alone; `external_directory` inside roots is allowed
+once); `bellocode_other_project` whose target directory is inside a root is in scope (allowed once in Auto). Secrets,
+policy files, destructive or publishing actions inside a root still count; protected stores stay refused; outside every
+root still escalates. Tests: `RiskPolicyCodeRootTests`, `AutoCodeRootTests`.
+
 ## Reviewer (`AutoReviewer`)
 `POST /api/experimental/generate/text`: stateless, no session, no tools, nothing stored (chosen over a dedicated session:
 no transcript, no rule inheritance; over `session.generate`: that uses the working thread's history). Model: Settings value,

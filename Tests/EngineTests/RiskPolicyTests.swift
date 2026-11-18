@@ -231,3 +231,65 @@ struct RiskPolicyTests {
         #expect(RiskPolicy.version.hasPrefix("bellocode-auto-"))
     }
 }
+
+/// Code roots (owner decision, PLAN §0): folders the developer works across are in scope; outside them still counts.
+@Suite("Risk policy code roots")
+struct RiskPolicyCodeRootTests {
+    static let repos = "/Users/tester/Documents/Repos"
+    var plain: RiskPolicy.Context { RiskPolicy.Context(directory: Self.repos + "/app", roots: [Self.repos + "/app"], home: "/Users/tester") }
+    var rooted: RiskPolicy.Context {
+        RiskPolicy.Context(directory: Self.repos + "/app", roots: [Self.repos + "/app"], home: "/Users/tester", trusted: ["~/Documents/Repos"])
+    }
+
+    func categories(_ verdict: RiskPolicy.Verdict) -> Set<RiskCategory> {
+        switch verdict {
+        case .escalate(let findings): Set(findings.map(\.category))
+        case .deny(let finding): [finding.category]
+        default: []
+        }
+    }
+
+    @Test func pathsInsideACodeRootAreInScope() {
+        let sibling = RiskPolicy.Action(action: "read", resources: [Self.repos + "/lib/Sources/x.swift"])
+        #expect(categories(RiskPolicy.decide(sibling, in: plain)) == [.outsidePath], "default: the project and its worktrees only")
+        #expect(RiskPolicy.decide(sibling, in: rooted).isAllow)
+        let directory = RiskPolicy.Action(action: "external_directory", resources: [Self.repos + "/lib/*"])
+        #expect(RiskPolicy.decide(directory, in: rooted).isAllow)
+        let shell = RiskPolicy.Action(action: "shell", resources: ["cat ../lib/README.md"], command: "cat ../lib/README.md")
+        #expect(RiskPolicy.decide(shell, in: rooted).isAllow)
+        #expect(categories(RiskPolicy.decide(shell, in: plain)) == [.outsidePath])
+    }
+
+    @Test func outsideEveryRootStillEscalatesAndRiskStillCounts() {
+        #expect(categories(RiskPolicy.decide(.init(action: "read", resources: ["/Users/tester/Desktop/notes.txt"]), in: rooted)) == [.outsidePath])
+        #expect(categories(RiskPolicy.decide(.init(action: "external_directory", resources: ["/etc/*"]), in: rooted)) == [.outsidePath])
+        // Location is no longer the risk, but the content or action still is.
+        #expect(categories(RiskPolicy.decide(.init(action: "read", resources: [Self.repos + "/lib/.env"]), in: rooted)) == [.secretRead])
+        #expect(categories(RiskPolicy.decide(.init(action: "edit", resources: [Self.repos + "/lib/opencode.json"]), in: rooted)) == [.policyChange])
+        let reset = RiskPolicy.Action(action: "shell", resources: ["git -C ../lib reset --hard"], command: "git -C ../lib reset --hard")
+        #expect(categories(RiskPolicy.decide(reset, in: rooted)) == [.destructiveGit])
+        // A root never widens to the protected stores.
+        let wide = RiskPolicy.Context(directory: "/Users/tester/app", roots: ["/Users/tester/app"], home: "/Users/tester", trusted: ["~"])
+        guard case .deny = RiskPolicy.decide(.init(action: "read", resources: ["~/.config/opencode/opencode.json"]), in: wide) else {
+            Issue.record("protected stores stay refused inside a code root")
+            return
+        }
+    }
+
+    @Test func otherProjectsInsideACodeRootAreNotCrossProject() {
+        let inside = RiskPolicy.Action(action: "bellocode_other_project", resources: [Self.repos + "/lib"])
+        #expect(categories(RiskPolicy.decide(inside, in: plain)) == [.crossProject])
+        #expect(RiskPolicy.decide(inside, in: rooted).isAllow)
+        let outside = RiskPolicy.Action(action: "bellocode_other_project", resources: ["/Users/tester/elsewhere/proj"])
+        #expect(categories(RiskPolicy.decide(outside, in: rooted)) == [.crossProject])
+        // An unresolvable target (an ID, not a directory) stays cross-project.
+        #expect(categories(RiskPolicy.decide(.init(action: "bellocode_other_project", resources: ["ses_123"]), in: rooted)) == [.crossProject])
+    }
+
+    @Test func fullAccessNoticesFollowTheRoots() {
+        let input: [String: Any?] = ["filePath": Self.repos + "/lib/Package.swift"]
+        #expect(RiskPolicy.notices(tool: "read", input: input, evaluated: [], in: plain).map(\.category) == [.outsidePath])
+        #expect(RiskPolicy.notices(tool: "read", input: input, evaluated: [], in: rooted).isEmpty)
+        #expect(RiskPolicy.notices(tool: "read", input: ["filePath": "/opt/data/x"], evaluated: [], in: rooted).map(\.category) == [.outsidePath])
+    }
+}

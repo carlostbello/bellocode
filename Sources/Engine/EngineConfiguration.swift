@@ -52,6 +52,8 @@ public struct EngineConfiguration: Sendable {
     public var defaultDirectory: String?
     /// Auto's reviewer model backend; nil uses opencode's `generate.text` (tests inject a scripted one).
     public var autoReviewerModel: (any AutoReviewer.Model)?
+    /// Initial code roots (`Engine.codeRoots`); default none.
+    public var codeRoots: CodeRoots = .none
     public var time: any TimeSource = SystemTimeSource()
     /// Calendar time for the scheduler and the PR poller (docs/features/orchestration-extras.md).
     public var wallClock: any WallClock = SystemWallClock()

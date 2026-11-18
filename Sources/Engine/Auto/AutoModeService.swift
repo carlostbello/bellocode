@@ -221,7 +221,8 @@ public final class AutoModeService {
     static func policyContext(_ context: AutoRequestContext) -> RiskPolicy.Context {
         // The plan agent's own plan directory is writable by design (opencode's plan rules).
         let home = NSHomeDirectory()
-        return RiskPolicy.Context(directory: context.session.directory, roots: context.roots + [home + "/.opencode/plan"], home: home)
+        return RiskPolicy.Context(
+            directory: context.session.directory, roots: context.roots + [home + "/.opencode/plan"], home: home, trusted: context.codeRoots)
     }
 
     static func action(_ context: AutoRequestContext) -> RiskPolicy.Action {
