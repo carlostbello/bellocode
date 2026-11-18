@@ -22,6 +22,8 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     let statusPill = TerminalStatusPill()
     let endedBar = TerminalEndedBar()
     let observerBar = TerminalEndedBar()
+    /// Input typed while reconnecting overflowed the held buffer (U3): shown until the person sends or discards it.
+    let heldInputBar = TerminalEndedBar()
     /// Internal so tests can wait for the OSC 133 state instead of sleeping.
     let prompt = SemanticPromptTracker()
     private var oscObservation: TerminalOscObservation?
@@ -85,7 +87,7 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         ])
         terminalHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         terminalHost.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        let column = NSStackView(views: [findBar, terminalHost, endedBar, observerBar])
+        let column = NSStackView(views: [findBar, terminalHost, endedBar, observerBar, heldInputBar])
         column.orientation = .vertical
         column.spacing = 0
         column.alignment = .width
@@ -101,6 +103,7 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         statusPill.isHidden = true
         endedBar.isHidden = true
         observerBar.isHidden = true
+        heldInputBar.isHidden = true
         findBar.delegate = self
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: container.topAnchor),
@@ -113,6 +116,10 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
         endedBar.onPrimary = { [weak self] in self?.restart() }
         endedBar.onSecondary = { [weak self] in self?.closeTerminal() }
         observerBar.onPrimary = { [weak self] in self?.stream.takeControl() }
+        heldInputBar.onPrimary = { [weak self] in
+            if self?.stream.sendHeldInput() != true { NSSound.beep() }
+        }
+        heldInputBar.onSecondary = { [weak self] in self?.stream.discardHeldInput() }
         view = container
         applyAppearance()
         observation = TerminalObservation { [weak self] in self?.render() }
@@ -159,13 +166,23 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
                 endedBar.isHidden = true
             }
         }
+        let held = stream.heldInputBytes > 0 ? " Input held." : ""
         switch status {
         case .reconnecting(let attempt):
-            statusPill.show(attempt > 1 ? "Reconnecting (try \(attempt))…" : "Reconnecting…", symbol: "arrow.triangle.2.circlepath")
+            statusPill.show(
+                (attempt > 1 ? "Reconnecting (try \(attempt))…" : "Reconnecting…") + held, symbol: "arrow.triangle.2.circlepath")
         case .connecting where terminals.record(terminalID)?.state.isRunning == true:
-            statusPill.show("Connecting…", symbol: "arrow.triangle.2.circlepath")
+            statusPill.show("Connecting…" + held, symbol: "arrow.triangle.2.circlepath")
         default:
             if noticeTask == nil { statusPill.isHidden = true }
+        }
+        if stream.inputOverflowed {
+            let kilobytes = (stream.heldInputBytes + 1_023) / 1_024
+            heldInputBar.show(
+                text: "Input typed while disconnected was too long and was not accepted. \(kilobytes) KB is held; nothing more is sent until you choose.",
+                symbol: "exclamationmark.triangle", primary: "Send Held Input", secondary: "Discard")
+        } else {
+            heldInputBar.isHidden = true
         }
         if status == .observing {
             observerBar.show(
@@ -345,7 +362,8 @@ public final class TerminalPaneController: NSViewController, TerminalViewDelegat
     }
 
     public func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        stream.send(data)
+        // Refused input is never silent: a beep now, and the held-input bar until the person decides.
+        if stream.send(data) == .refused { NSSound.beep() }
     }
 
     public func scrolled(source: TerminalView, position: Double) {}

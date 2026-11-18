@@ -29,6 +29,19 @@ public enum TerminalStreamStatus: Sendable, Hashable {
     case ended
 }
 
+/// What became of input given to `TerminalStream.send` (deep review 1, U3: input is never dropped silently).
+public enum TerminalInputResult: Sendable, Hashable {
+    /// Written to the PTY's socket.
+    case sent
+    /// Kept while connecting or reconnecting; sent on attach.
+    case held
+    /// Not accepted: the held input would exceed `pendingInputLimit`, or earlier input already overflowed and the
+    /// person has not yet sent or discarded what is held (`inputOverflowed`).
+    case refused
+    /// Read-only or ended: there is no PTY to type into.
+    case ignored
+}
+
 /// An emulator's position in a PTY's output, kept across detach and re-attach of the same emulator so a re-attach
 /// replays only what it missed. Shared between the stream's receive task and the main actor.
 public final class TerminalStreamCursor: Sendable {
@@ -66,6 +79,11 @@ public final class TerminalStream {
     /// The grid size last sent to the server.
     public private(set) var sentSize: PTYSize?
     public let cursor: TerminalStreamCursor
+    /// Bytes typed while not attached, waiting to be sent (shown by the pane).
+    public private(set) var heldInputBytes = 0
+    /// Input did not fit in the held buffer and was refused. Until the person sends or discards what is held, all
+    /// further input is refused and nothing held is sent on attach: a later Return must not run a half-pasted command.
+    public private(set) var inputOverflowed = false
 
     @ObservationIgnored private let sink: any TerminalOutputSink
     @ObservationIgnored private let client: @Sendable () async throws -> OpenCodeClient
@@ -142,16 +160,52 @@ public final class TerminalStream {
 
     // MARK: Input
 
-    /// Bytes for the PTY (keystrokes, paste). Kept briefly while connecting; dropped while observing.
-    public func send(_ bytes: some Collection<UInt8>) {
+    /// Bytes for the PTY (keystrokes, paste). Held (bounded) while connecting or reconnecting and sent on attach; a
+    /// whole input that does not fit is refused, never partly kept. The result says which, for visible feedback.
+    @discardableResult
+    public func send(_ bytes: some Collection<UInt8>) -> TerminalInputResult {
+        if inputOverflowed { return .refused }
         switch status {
         case .live:
-            if let size = sentSize ?? desiredSize { socket.send(PTYWire.inputFrame(bytes, size: size)) }
+            if pendingInput.isEmpty, let size = sentSize ?? desiredSize {
+                socket.send(PTYWire.inputFrame(bytes, size: size))
+                return .sent
+            }
+            return hold(bytes)
         case .connecting, .reconnecting, .detached:
-            if pendingInput.count + bytes.count <= Self.pendingInputLimit { pendingInput.append(contentsOf: bytes) }
+            return hold(bytes)
         case .observing, .ended:
-            break
+            return .ignored
         }
+    }
+
+    private func hold(_ bytes: some Collection<UInt8>) -> TerminalInputResult {
+        guard pendingInput.count + bytes.count <= Self.pendingInputLimit else {
+            inputOverflowed = true
+            return .refused
+        }
+        pendingInput.append(contentsOf: bytes)
+        heldInputBytes = pendingInput.count
+        return .held
+    }
+
+    /// Sends what was held after an overflow, once attached as the controller (the person chose to). False when it
+    /// cannot be sent now.
+    @discardableResult
+    public func sendHeldInput() -> Bool {
+        guard status == .live, let size = sentSize ?? desiredSize else { return false }
+        if !pendingInput.isEmpty { socket.send(PTYWire.inputFrame(pendingInput, size: size)) }
+        pendingInput.removeAll()
+        heldInputBytes = 0
+        inputOverflowed = false
+        return true
+    }
+
+    /// Drops what was held (and clears an overflow), so typing works again.
+    public func discardHeldInput() {
+        pendingInput.removeAll()
+        heldInputBytes = 0
+        inputOverflowed = false
     }
 
     /// The view's grid changed. Sent after `resizeDebounce` if still different from what the server has.
@@ -170,6 +224,16 @@ public final class TerminalStream {
         guard status == .live, let size = desiredSize, size != sentSize else { return }
         sentSize = size
         socket.send(PTYWire.resizeFrame(size))
+        flushHeld()
+    }
+
+    /// Sends held input in order once live as the controller with a size. After an overflow the held input waits for
+    /// the person instead (Send Held Input or Discard).
+    private func flushHeld() {
+        guard status == .live, role == .controller, !inputOverflowed, !pendingInput.isEmpty, let size = sentSize ?? desiredSize else { return }
+        socket.send(PTYWire.inputFrame(pendingInput, size: size))
+        pendingInput.removeAll()
+        heldInputBytes = 0
     }
 
     // MARK: Connect loop
@@ -266,11 +330,9 @@ public final class TerminalStream {
                     sentSize = size
                     socket.send(PTYWire.resizeFrame(size))
                 }
-                if !pendingInput.isEmpty, let size = sentSize {
-                    socket.send(PTYWire.inputFrame(pendingInput, size: size))
-                }
+                flushHeld()
             }
-            pendingInput.removeAll()
+            // Attached read-only: held input stays held (shown), for Take Control or Discard.
         case .control(let message):
             switch message {
             case .exited(let code, _):
@@ -284,6 +346,7 @@ public final class TerminalStream {
                 } else if id == attachmentID {
                     role = .controller
                     status = .live
+                    flushHeld()
                 }
             case .resized(let size):
                 if role == .controller, size != sentSize, let desired = desiredSize, desired == sentSize {
