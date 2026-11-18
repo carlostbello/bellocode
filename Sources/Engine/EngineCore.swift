@@ -757,6 +757,8 @@ actor EngineCore {
         var gaps = SyncGaps()
         var inbox: [SessionID: [InboxItem]] = [:]
         var windows: [SessionID: Page<SessionMessage>] = [:]
+        /// Server time just before the windows were read (newer local admissions are kept by a whole-history reconcile).
+        var windowsReadAt = Timestamp(milliseconds: 0)
         var serverPID: Int?
     }
 
@@ -845,6 +847,7 @@ actor EngineCore {
         let known = Set(snapshot.sessions.map { SessionID($0.id) })
         let open = openThreads.keys.filter { known.contains($0) }.sorted()
         let windowSize = configuration.windowSize
+        snapshot.windowsReadAt = serverNow()
         let windows = try await boundedMap(open) { id in
             (id, try await client.messages(sessionID: id.rawValue, MessageListQuery(limit: windowSize, order: .descending)))
         }
@@ -883,7 +886,7 @@ actor EngineCore {
         // Disk reads first (they await); then one synchronous section that changes state.
         var windowInputs: [SessionID: WindowInput] = [:]
         for (id, page) in snapshot.windows {
-            windowInputs[id] = try await windowInput(id, page: page)
+            windowInputs[id] = try await windowInput(id, page: page, readAt: snapshot.windowsReadAt)
         }
         guard generation == syncGeneration, !Task.isCancelled else { return }
         let now = Timestamp.now
@@ -1047,9 +1050,13 @@ actor EngineCore {
         var full: Bool
         var cursor: String?
         var syncState: SessionSyncState?
+        /// Server time just before the page was requested.
+        var readAt: Timestamp
+        /// A short page (the whole history): every cached ID of the session up to `readAt`, in or out of the range.
+        var cachedWhole: [MessageID] = []
     }
 
-    private func windowInput(_ sessionID: SessionID, page: Page<SessionMessage>) async throws -> WindowInput {
+    private func windowInput(_ sessionID: SessionID, page: Page<SessionMessage>, readAt: Timestamp) async throws -> WindowInput {
         let server = page.data.map { Mapping.message($0, sessionID: sessionID) }.sorted { $0.sortKey < $1.sortKey }
         var local: [MessageID: Message] = [:]
         for message in try await store.messages(ids: server.map(\.id)) { local[message.id] = message }
@@ -1063,7 +1070,9 @@ actor EngineCore {
             server: server, local: local, cachedInRange: cachedInRange,
             oldestCached: server.first.map { local[$0.id] != nil } ?? false, hasOlderCached: hasOlderCached,
             full: page.data.count >= configuration.windowSize, cursor: page.cursor.next,
-            syncState: try await store.syncState(sessionID))
+            syncState: try await store.syncState(sessionID), readAt: readAt,
+            cachedWhole: page.data.count < configuration.windowSize
+                ? try await store.messageIDs(sessionID: sessionID, createdThrough: readAt) : [])
     }
 
     /// Merges a fetched window into the projection: server copies merged onto local ones, local messages missing from
@@ -1085,14 +1094,27 @@ actor EngineCore {
             }
         }
         if !input.full {
-            // The server holds fewer messages than a window: this is the whole history.
+            // The server holds fewer messages than a window: this is the whole history. Every local message is a
+            // candidate: in memory, and on disk outside the returned range (a deleted tail, or all of an empty one).
             for message in state.messages.messages(in: sessionID) where !serverIDs.contains(message.id) {
                 candidates.insert(message.id)
             }
+            candidates.formUnion(input.cachedWhole)
         }
         for id in candidates where !serverIDs.contains(id) {
             if let delivery = state.messages[id]?.delivery, delivery != .delivered { continue }
             state.removeMessage(id, sessionID: sessionID, into: &reduction)
+        }
+        if !input.full {
+            // The whole history, proven: reconcile the cache by session (not just the returned range), in one
+            // transaction with parts and search entries. Local sends not yet listed (still sending, or admitted after
+            // the read) are kept.
+            var keep = serverIDs.union(admittedDuringSync)
+            for message in state.messages.messages(in: sessionID) {
+                if let delivery = message.delivery, delivery != .delivered { keep.insert(message.id) }
+            }
+            keep.formUnion(outbox.keys)
+            reduction.writes.reconciledHistory[sessionID] = StoreBatch.HistoryReconcile(keep: keep, through: input.readAt)
         }
         reduction.changes.append(.threadHistory(sessionID, hasOlder: input.full))
         var sync = input.syncState ?? SessionSyncState(sessionID: sessionID)
@@ -1185,9 +1207,10 @@ actor EngineCore {
         guard let client = try? await currentClient() else { return }
         let generation = syncGeneration
         do {
+            let readAt = serverNow()
             let page = try await client.messages(
                 sessionID: sessionID.rawValue, MessageListQuery(limit: configuration.windowSize, order: .descending))
-            let input = try await windowInput(sessionID, page: page)
+            let input = try await windowInput(sessionID, page: page, readAt: readAt)
             guard generation == syncGeneration, !Task.isCancelled, pipeline.state.sessions[sessionID] != nil else { return }
             var reduction = Reduction()
             var state = pipeline.state

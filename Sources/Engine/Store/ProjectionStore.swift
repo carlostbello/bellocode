@@ -27,6 +27,22 @@ public struct StoreBatch: Sendable {
     public var removedRegistry: [String] = []
     public var threadUI: [ThreadUIState] = []
     public var syncStates: [SessionSyncState] = []
+    /// The server listed a session's whole history: cached messages of that session not in `keep` and created no later
+    /// than `through` are deleted (with their parts and search entries) in the same transaction. Applied before this
+    /// batch's message writes.
+    public var reconciledHistory: [SessionID: HistoryReconcile] = [:]
+
+    public struct HistoryReconcile: Sendable, Hashable {
+        /// The server's messages plus local ones that must survive (admitted after the read, still being sent).
+        public var keep: Set<MessageID>
+        /// When the history was read (server time): anything newer was admitted since and is kept.
+        public var through: Timestamp
+
+        public init(keep: Set<MessageID>, through: Timestamp) {
+            self.keep = keep
+            self.through = through
+        }
+    }
 
     public init() {}
 
@@ -35,7 +51,7 @@ public struct StoreBatch: Sendable {
             && removedMessages.isEmpty && truncatedHistory.isEmpty && pending.isEmpty && resolvedRequests.isEmpty
             && !replaceAllPending && queue.isEmpty && removedQueue.isEmpty && replaceQueue.isEmpty
             && catalogs.isEmpty && registry.isEmpty && removedRegistry.isEmpty && threadUI.isEmpty
-            && syncStates.isEmpty
+            && syncStates.isEmpty && reconciledHistory.isEmpty
     }
 
     /// Folds `other` (newer) into this batch. Later writes to the same row replace earlier ones, so a batch holds at most
@@ -58,6 +74,7 @@ public struct StoreBatch: Sendable {
             queue.removeAll { removedSessionIDs.contains($0.sessionID) }
             syncStates.removeAll { removedSessionIDs.contains($0.sessionID) }
             truncatedHistory = truncatedHistory.filter { !removedSessionIDs.contains($0.key) }
+            reconciledHistory = reconciledHistory.filter { !removedSessionIDs.contains($0.key) }
         }
         removedSessions = Self.unique(removedSessions + other.removedSessions)
         sessions = Self.upserting(sessions, other.sessions, by: \.id)
@@ -66,6 +83,11 @@ public struct StoreBatch: Sendable {
         for (sessionID, key) in other.truncatedHistory {
             messages.removeAll { $0.sessionID == sessionID && $0.sortKey < key }
         }
+        // So does a whole-history reconcile (the newer one decides).
+        for (sessionID, rule) in other.reconciledHistory {
+            messages.removeAll { $0.sessionID == sessionID && !rule.keep.contains($0.id) && $0.created <= rule.through }
+        }
+        reconciledHistory.merge(other.reconciledHistory) { $1 }
         truncatedHistory.merge(other.truncatedHistory) { $1 }
         let removedMessageIDs = Set(other.removedMessages)
         if !removedMessageIDs.isEmpty { messages.removeAll { removedMessageIDs.contains($0.id) } }
@@ -130,6 +152,7 @@ public struct StoreBatch: Sendable {
         projects.count + sessions.count + removedSessions.count + messages.count + removedMessages.count
             + truncatedHistory.count + pending.count + resolvedRequests.count + queue.count + removedQueue.count
             + catalogs.count + registry.count + removedRegistry.count + threadUI.count + syncStates.count
+            + reconciledHistory.count
     }
 
     /// `existing` with `newer` applied: a row already present is replaced in place, a new one appended.
@@ -449,6 +472,14 @@ public actor ProjectionStore {
                 arguments: [sessionID.rawValue, key.created.milliseconds, key.created.milliseconds, key.id.rawValue])
             for seq in seqs { try deleteMessage(seq: seq, db: db) }
         }
+        for (sessionID, rule) in batch.reconciledHistory {
+            let rows = try Row.fetchAll(
+                db, sql: "SELECT seq, id FROM message WHERE session_id = ? AND created <= ?",
+                arguments: [sessionID.rawValue, rule.through.milliseconds])
+            for row in rows where !rule.keep.contains(MessageID(row["id"] as String)) {
+                try deleteMessage(seq: row["seq"], db: db)
+            }
+        }
         for id in batch.removedMessages {
             if let seq = try Int64.fetchOne(db, sql: "SELECT seq FROM message WHERE id = ?", arguments: [id.rawValue]) {
                 try deleteMessage(seq: seq, db: db)
@@ -603,6 +634,23 @@ public actor ProjectionStore {
 
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         try decoder.decode(type, from: data)
+    }
+
+    /// IDs of a session's cached messages created no later than `through` (a whole-history reconcile).
+    public func messageIDs(sessionID: SessionID, createdThrough through: Timestamp) async throws -> [MessageID] {
+        try await read("messageIDsThrough") { db in
+            try String.fetchAll(
+                db, sql: "SELECT id FROM message WHERE session_id = ? AND created <= ?",
+                arguments: [sessionID.rawValue, through.milliseconds]
+            ).map { MessageID($0) }
+        }
+    }
+
+    /// Stored parts of a message (tests: deletions take their parts with them).
+    func partCount(messageID: MessageID) async throws -> Int {
+        try await read("partCount") { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM part WHERE message_id = ?", arguments: [messageID.rawValue]) ?? 0
+        }
     }
 
     public func projects() async throws -> [Project] {
