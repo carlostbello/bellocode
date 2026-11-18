@@ -23,7 +23,7 @@ import Testing
 
         static func start() async throws -> Shell {
             _ = NSApplication.shared
-            let server = MockOpenCodeServer(scenario: .demo(), options: MockServerOptions(clock: .realTime))
+            let server = MockOpenCodeServer(scenario: privateScenario(), options: MockServerOptions(clock: .realTime))
             let endpoint = try await server.start()
             let connection = ServerConnection(baseURL: endpoint.url, credentials: ServerCredentials(password: endpoint.password ?? ""))
             let engine = try Engine(configuration: EngineConfiguration(server: .fixed(connection), store: .inMemory))
@@ -42,6 +42,21 @@ import Testing
             }
             #expect(live)
             return Shell(server: server, engine: engine, controller: controller, driver: ShellDriver(controller: controller), attachments: attachments)
+        }
+
+        /// The demo workspace under a folder of its own that never exists. The fixture's folders
+        /// (`/tmp/mock-workspace/project-N`) are shared by every run on the machine; while another process has them on
+        /// disk (the app's `--snapshot` modes use the same fixture), the mock's file search lists their real contents
+        /// instead of the fixture's files, and `@Pars` completion lost "Parser.swift" under a full run.
+        static func privateScenario() -> Scenario {
+            var scenario = Scenario.demo()
+            let shared = "/tmp/mock-workspace"
+            let root = FileManager.default.temporaryDirectory.appending(path: "bellocode-shell-\(UUID().uuidString)").path
+            func moved(_ path: String) -> String { path.hasPrefix(shared) ? root + path.dropFirst(shared.count) : path }
+            scenario.defaultDirectory = moved(scenario.defaultDirectory)
+            for index in scenario.projects.indices { scenario.projects[index].directory = moved(scenario.projects[index].directory) }
+            for index in scenario.sessions.indices { scenario.sessions[index].directory = moved(scenario.sessions[index].directory) }
+            return scenario
         }
 
         func stop() async {
@@ -202,6 +217,19 @@ import Testing
         #expect(files.first?["source"]?["type"]?.stringValue == "uri")
         let written = try #require(files.last?["uri"]?.stringValue.flatMap(URL.init(string:)))
         #expect(written.path.hasPrefix(shell.attachments.path), "pasted image written to the app's attachments folder")
+    }
+
+    /// The shell's mock workspace is private: no folder another run can create, so the mock's file search always answers
+    /// from the fixture's file list.
+    @Test func shellScenarioUsesFoldersNoOtherRunShares() {
+        let scenario = Shell.privateScenario()
+        let directories = [scenario.defaultDirectory] + scenario.projects.map(\.directory) + scenario.sessions.map(\.directory)
+        #expect(!scenario.projects.isEmpty)
+        for directory in Set(directories) {
+            #expect(!directory.hasPrefix("/tmp/mock-"), "\(directory) is shared with other runs")
+            #expect(!FileManager.default.fileExists(atPath: directory), "\(directory) exists on disk")
+        }
+        #expect(Shell.privateScenario().projects.first?.directory != scenario.projects.first?.directory, "a folder per shell")
     }
 
     @Test func completionUsesServerCommandsAndFiles() async throws {
