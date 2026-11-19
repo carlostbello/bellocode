@@ -111,10 +111,13 @@ extension SecretManager {
             }
             resolved[name] = (secret, value)
         }
-        let broker = SecretBroker(extraAnchors: engine?.configuration.brokerAnchors ?? [])
+        // Uses count against the binding in the ledger the proxy shares, reserved before each hop is sent (R12).
+        let broker = SecretBroker(extraAnchors: engine?.configuration.brokerAnchors ?? [], ledger: useLedger) { [weak self] uses in
+            await self?.recordUses(uses) ?? false
+        }
         let outcome = await broker.perform(request, secrets: resolved, sessionID: caller.sessionID.rawValue, projectDirectory: caller.projectDirectory)
         for entry in outcome.audit { await record(entry) }
-        for account in Set(outcome.used) { await noteUse(account: account, bindingID: nil) }
+        _ = await recordUses(outcome.reserved)
         return ClientMCPResult(text: outcome.text, isError: outcome.text.hasPrefix("BelloCode refused"))
     }
 

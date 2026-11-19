@@ -39,15 +39,24 @@ public struct SecretBroker: Sendable {
         public var text: String
         public var audit: [SecretAuditEntry]
         public var used: [String]
+        /// Every use reserved in the ledger (each hop sent), for the owner to persist.
+        public var reserved: [SubstitutionUse] = []
     }
 
     /// Extra roots for TLS (tests' loopback servers); production uses the Mac's trust settings.
     public var extraAnchors: [Data]
     public var timeout: Duration
+    /// Per-binding use counts, shared with the egress proxy (R12): each hop reserves its uses before it is sent.
+    public var ledger: SecretUseLedger
+    /// Persists reserved uses of limited bindings before the request is sent; false refuses it.
+    public var recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)?
 
-    public init(extraAnchors: [Data] = [], timeout: Duration = .seconds(30)) {
+    public init(extraAnchors: [Data] = [], timeout: Duration = .seconds(30), ledger: SecretUseLedger = SecretUseLedger(),
+                recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)? = nil) {
         self.extraAnchors = extraAnchors
         self.timeout = timeout
+        self.ledger = ledger
+        self.recordUses = recordUses
     }
 
     /// Names referenced by `{{secret:NAME}}` in the URL, headers and body.
@@ -67,11 +76,12 @@ public struct SecretBroker: Sendable {
     /// and mode by the caller); `sessionID` is the calling thread (audit).
     public func perform(_ request: Request, secrets: [String: (ManagedSecret, SecretValue)], sessionID: String, projectDirectory: String) async -> Outcome {
         var audit: [SecretAuditEntry] = []
+        var reserved: [SubstitutionUse] = []
         func refuse(_ text: String, _ account: String?, destination: String) -> Outcome {
             if let account {
                 audit.append(SecretAuditEntry(account: account, destination: destination, method: request.method, sessionID: sessionID, outcome: .refused, detail: text))
             }
-            return Outcome(text: "BelloCode refused this request: \(text)", audit: audit, used: [])
+            return Outcome(text: "BelloCode refused this request: \(text)", audit: audit, used: [], reserved: reserved)
         }
         // Handles → one-off placeholders, resolved only to their secret.
         var substitutions: [String: ResolvedPlaceholder] = [:]
@@ -109,7 +119,9 @@ public struct SecretBroker: Sendable {
             fields.remove("Host")
             fields.remove("Content-Length")
             let outbound = OutboundRequest(method: method, scheme: scheme, host: host, port: port, target: target, headers: fields, body: body)
-            let decision = RequestRewriter(admitsProject: { _ in true }).rewrite(outbound) { substitutions[$0] }
+            let ledger = self.ledger
+            let decision = RequestRewriter(admitsProject: { _ in true }, useCount: { ledger.count(account: $0, bindingID: $1) })
+                .rewrite(outbound) { substitutions[$0] }
             let rewritten: OutboundRequest
             var uses: [SubstitutionUse] = []
             switch decision {
@@ -121,6 +133,20 @@ public struct SecretBroker: Sendable {
             case .substituted(let request, let made):
                 rewritten = request
                 uses = made
+            }
+            // Count against the binding before anything is sent (every hop is a use); concurrent calls cannot both take
+            // a binding's last use.
+            let limit = { (use: SubstitutionUse) -> Int? in
+                secrets.values.first { $0.0.account == use.account }?.0.bindings.first { $0.id == use.bindingID }?.maxUses
+            }
+            guard ledger.reserve(uses, limit: limit) else {
+                let label = secrets.values.first { $0.0.account == uses.first?.account }?.0.label ?? "the secret"
+                return refuse(SecretRefusal.useLimit(label: label).message, uses.first?.account ?? account, destination: outbound.auditDestination)
+            }
+            reserved += uses
+            if uses.contains(where: { limit($0) != nil }), let recordUses, !(await recordUses(uses)) {
+                return refuse("BelloCode could not record this use of a limited secret, so it was not sent.", uses.first?.account ?? account,
+                              destination: outbound.auditDestination)
             }
             // Perform on the Mac.
             let response: (HTTPURLResponse, Data)
@@ -137,7 +163,7 @@ public struct SecretBroker: Sendable {
                 audit.append(SecretAuditEntry(account: secret.account, destination: outbound.auditDestination, method: method, sessionID: sessionID,
                                               outcome: .responseBlocked, detail: "Response contained the value", status: http.statusCode))
                 return Outcome(text: "BelloCode withheld the response from \(outbound.origin) (status \(http.statusCode)): it contained the secret's value in some form, so nothing of it is returned.",
-                               audit: audit, used: uses.map(\.account))
+                               audit: audit, used: uses.map(\.account), reserved: reserved)
             }
             for use in uses {
                 audit.append(SecretAuditEntry(account: use.account, destination: outbound.auditDestination, method: method, sessionID: sessionID,
@@ -153,7 +179,7 @@ public struct SecretBroker: Sendable {
                 }
                 continue
             }
-            return Outcome(text: Self.describe(http, data), audit: audit, used: uses.map(\.account))
+            return Outcome(text: Self.describe(http, data), audit: audit, used: uses.map(\.account), reserved: reserved)
         }
         return refuse("too many redirects.", account, destination: request.url)
     }

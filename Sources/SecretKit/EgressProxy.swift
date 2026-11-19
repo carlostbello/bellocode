@@ -148,10 +148,13 @@ public final class EgressProxy: Sendable {
         var dropped = 0
         var stopped = false
         var dockerEndpointPort: UInt16?
+        var useRecorder: (@Sendable ([SubstitutionUse]) async -> Bool)?
     }
 
     public let authority: CertificateAuthority
     public let configuration: EgressProxyConfiguration
+    /// Per-binding use counts, shared with the brokered tool (R12).
+    public let ledger: SecretUseLedger
     private let state = Mutex(State())
     private let queue = DispatchQueue(label: "app.bellocode.egress-proxy", qos: .userInitiated, attributes: .concurrent)
     private let eventContinuation: AsyncStream<EgressEvent>.Continuation
@@ -161,9 +164,10 @@ public final class EgressProxy: Sendable {
     private let signposts = OSSignposter(subsystem: "app.bellocode", category: "egress-proxy")
     static let maxTLSListeners = 64
 
-    public init(authority: CertificateAuthority, configuration: EgressProxyConfiguration = .init()) {
+    public init(authority: CertificateAuthority, configuration: EgressProxyConfiguration = .init(), ledger: SecretUseLedger = SecretUseLedger()) {
         self.authority = authority
         self.configuration = configuration
+        self.ledger = ledger
         (events, eventContinuation) = AsyncStream.makeStream(of: EgressEvent.self, bufferingPolicy: .bufferingNewest(1_024))
     }
 
@@ -211,6 +215,9 @@ public final class EgressProxy: Sendable {
     }
 
     public func update(_ snapshot: EgressSnapshot) { state.withLock { $0.snapshot = snapshot } }
+
+    /// Persists reserved uses of limited bindings before the request is dispatched (R12); false refuses the request.
+    public func setUseRecorder(_ recorder: (@Sendable ([SubstitutionUse]) async -> Bool)?) { state.withLock { $0.useRecorder = recorder } }
 
     /// BelloCode's filtered Docker endpoint on the Mac's loopback (execution modes). Gateways relay workspace `docker`
     /// connections here (preamble `BCEGRESS <token> docker`), byte for byte: that endpoint authenticates and filters
@@ -576,7 +583,9 @@ public final class EgressProxy: Sendable {
                                       target: originTarget, headers: fields, body: body)
         let snapshot = state.withLock { $0.snapshot }
         let bound = snapshot.secretsBound(to: scheme, host: destination.host, port: destination.port)
-        let decision = RequestRewriter(admitsProject: scope.admitsProject).rewrite(request) { snapshot.resolve($0) }
+        let ledger = self.ledger
+        let decision = RequestRewriter(admitsProject: scope.admitsProject, useCount: { ledger.count(account: $0, bindingID: $1) })
+            .rewrite(request) { snapshot.resolve($0) }
         var uses: [SubstitutionUse] = []
         switch decision {
         case .refused(let reason, let account, let session):
@@ -585,15 +594,12 @@ public final class EgressProxy: Sendable {
             return !clientCloses
         case .unchanged: break
         case .substituted(let rewritten, let made):
-            // Count uses atomically against the limits (another connection may have used the last one).
-            let allowed = state.withLock { state -> Bool in
-                for use in made {
-                    guard var secret = state.snapshot.secrets[use.account] else { return false }
-                    if let limit = secret.bindings.first(where: { $0.id == use.bindingID })?.maxUses, (secret.uses[use.bindingID] ?? 0) >= limit { return false }
-                    secret.uses[use.bindingID, default: 0] += 1
-                    state.snapshot.secrets[use.account] = secret
-                }
-                return true
+            // Reserve uses atomically against the limits in the ledger the brokered tool shares (another connection, or
+            // a brokered call, may have used the last one); limited bindings are recorded durably before dispatch.
+            let limit = { (use: SubstitutionUse) -> Int? in snapshot.secrets[use.account]?.bindings.first { $0.id == use.bindingID }?.maxUses }
+            var allowed = made.allSatisfy { snapshot.secrets[$0.account] != nil } && ledger.reserve(made, limit: limit)
+            if allowed, made.contains(where: { limit($0) != nil }) {
+                if let recorder = state.withLock({ $0.useRecorder }) { allowed = await recorder(made) }
             }
             guard allowed else {
                 let label = snapshot.secrets[made.first?.account ?? ""]?.label ?? "the secret"

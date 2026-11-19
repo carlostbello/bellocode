@@ -114,6 +114,8 @@ public final class SecretManager {
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
     @ObservationIgnored private var started = false
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
+    /// Per-binding use counts shared by the proxy and the brokered tool (R12).
+    @ObservationIgnored let useLedger = SecretUseLedger()
     /// The shared browser's routing (docs/features/shared-browser.md): wraps the configured router before the proxy
     /// starts, so `*.bc` names reach project containers. Nil: the configured router alone.
     @ObservationIgnored public var routerOverride: (@Sendable (any EgressRouter) -> any EgressRouter)?
@@ -226,6 +228,7 @@ public final class SecretManager {
             metadataProblem = "The settings of \(what) could not be read, so \(quarantined.count == 1 ? "it is" : "they are") unavailable to agents and commands. Delete \(quarantined.count == 1 ? "it" : "them") and save again."
         }
         secrets = loaded.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        useLedger.seed(secrets)
         grants = Dictionary(((try? await store.placeholderGrants()) ?? []).map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
         recentAudit = (try? await store.auditEntries(limit: 100)) ?? []
         await refreshProxySnapshot()
@@ -515,10 +518,23 @@ public final class SecretManager {
         try? await store.appendAudit(batch)
     }
 
-    func noteUse(account: String, bindingID: String?) async {
-        guard var secret = secret(account) else { return }
-        if let bindingID { secret.uses[bindingID, default: 0] += 1 } else { secret.uses["brokered", default: 0] += 1 }
-        try? await persist(secret)
+    /// A proxy substitution happened: its count (already reserved in the ledger) is persisted.
+    func noteUse(account: String, bindingID: String) async {
+        _ = await recordUses([SubstitutionUse(account: account, bindingID: bindingID, sessionID: "", placeholder: "")])
+    }
+
+    /// Persists the ledger's counts for these uses (idempotent: counts only rise to the ledger's). False when a count
+    /// could not be stored, which refuses a request on a limited binding (R12).
+    func recordUses(_ uses: [SubstitutionUse]) async -> Bool {
+        var stored = true
+        for account in Set(uses.map(\.account)) {
+            guard let index = secrets.firstIndex(where: { $0.account == account }) else { stored = false; continue }
+            for use in uses where use.account == account {
+                secrets[index].uses[use.bindingID] = max(secrets[index].uses[use.bindingID] ?? 0, useLedger.count(account: account, bindingID: use.bindingID))
+            }
+            do { try await store.saveManagedSecret(secrets[index]) } catch { stored = false }
+        }
+        return stored
     }
 
     public var lastUse: [String: SecretAuditEntry] {
@@ -538,7 +554,8 @@ extension SecretManager {
             authorityFingerprint = authority.fingerprint
             var proxyConfiguration = configuration.proxy
             if let routerOverride { proxyConfiguration.router = routerOverride(proxyConfiguration.router) }
-            let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration)
+            let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration, ledger: useLedger)
+            proxy.setUseRecorder { [weak self] uses in await self?.recordUses(uses) ?? false }
             let port = try await proxy.start()
             self.proxy = proxy
             try await writeCertificates(configuration, authority: authority)
