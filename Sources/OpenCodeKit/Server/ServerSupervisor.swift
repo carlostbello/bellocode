@@ -119,6 +119,13 @@ public actor ServerSupervisor {
         stopTask = nil
     }
 
+    /// Stops the child (stdin lease, then signals) and starts a fresh one with a new password and the configuration's
+    /// current launch values (`repositoryConfigProvider`, `launchEnvironment`). Clients reconnect and resync.
+    public func restart() async {
+        await stop()
+        start()
+    }
+
     /// State changes, starting with the current state. States are snapshots, so a consumer that falls more than 32
     /// changes behind sees the newest ones only.
     ///
@@ -255,9 +262,17 @@ public actor ServerSupervisor {
         Instrumentation.serverLog.info(
             "opencode ready pid \(info.pid, privacy: .public) in \((readyAt - launchedAt).milliseconds, privacy: .public) ms"
         )
+        publishCLIConnection(endpoint: endpoint, credentials: credentials, pid: child.pid)
         publish(.ready(endpoint))
 
-        let exit = try await child.waitForExit()
+        let exit: ProcessExit
+        do {
+            exit = try await child.waitForExit()
+        } catch {
+            withdrawCLIConnection(pid: child.pid)
+            throw error
+        }
+        withdrawCLIConnection(pid: child.pid)
         return ("server \(exit)", readyAt)
     }
 
@@ -309,6 +324,8 @@ public actor ServerSupervisor {
     private func performStop() async {
         stopping = true
         if let child = current {
+            // `bellocode-opencode` must not reach a server that is going away (or fall back to a stale address).
+            withdrawCLIConnection(pid: child.pid)
             await shutDown(child)
         }
         runTask?.cancel()
@@ -339,6 +356,24 @@ public actor ServerSupervisor {
         } catch {
             return false
         }
+    }
+
+    // MARK: - CLI connection (docs/features/opencode-config.md)
+
+    /// Writes `run/server.json` (0600) so `bellocode-opencode` uses this server; failures only disable the CLI path.
+    private func publishCLIConnection(endpoint: ServerEndpoint, credentials: ServerCredentials, pid: Int32) {
+        guard configuration.publishesCLIConnection else { return }
+        let file = CLIConnectionFile(url: endpoint.baseURL, pid: pid, version: endpoint.version, password: credentials.password)
+        do {
+            try file.write(to: configuration.directories.connectionFile)
+        } catch {
+            Instrumentation.serverLog.error("could not write the CLI connection file: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func withdrawCLIConnection(pid: Int32) {
+        guard configuration.publishesCLIConnection else { return }
+        CLIConnectionFile.remove(at: configuration.directories.connectionFile, ifPID: pid)
     }
 
     // MARK: - Observation

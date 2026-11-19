@@ -19,7 +19,8 @@ docker-only mode, as one filtered `docker` command; opencode stays a native host
   `--stdio --refuse NAME`, `--service NAME`. Blocked: exit 125 and one `BelloCode: … The command was not run.` line.
   **Policy currency (S4):** each write puts `bellocode-exec.required` (launch epoch, generation) first; the helper runs
   only a configuration of this launch at least that generation (re-reads ~2 s), else refuses ("Commands refused").
-- **Server launch** (`ContainerExecution`): helper as shell, `OPENCODE_DISABLE_PROJECT_CONFIG=1`, no formatter, LSP or
+- **Server launch** (`ContainerExecution`): helper as shell, `OPENCODE_DISABLE_PROJECT_CONFIG=1` (by default; see
+  [opencode-config.md](opencode-config.md)), no formatter, LSP or
   `BUN_*`, git through the shim, the plugin's shell guard, routes or refusals for the isolated files' local MCP servers
   (`MCPRouting`), `NODE_EXTRA_CA_CERTS` and proxies computed at each launch.
 - **EnvironmentService** (Engine, `@MainActor`, owned tasks, generation-checked): runtime polling and events, one
@@ -47,7 +48,7 @@ approvals); **Project container** (as above); **Host shell, docker only** (one p
 | Remote MCP servers; compose stacks (Rancher's `docker compose`) | nothing on the Mac but the loopback forward | unit + live test |
 | MCP servers added at runtime by another client | flagged (command unknown) | self-check "MCP servers added at runtime" |
 | **Project services** | sibling containers, project network | live test (two services, health gate) |
-| Repository plugins/agents/commands, `"shell"` | ignored (`OPENCODE_DISABLE_PROJECT_CONFIG`) | spike e2e |
+| Repository plugins/agents/commands, `"shell"` | ignored by default (`OPENCODE_DISABLE_PROJECT_CONFIG`); trusted projects' text config via the plugin; a repository `"shell"` never wins over the inline one ([opencode-config.md](opencode-config.md)) | spike e2e; `OpenCodeConfigRealBinaryTests` |
 | BelloCode's and opencode's host git | host, sandboxed (`HostGit`, shim) | hostile-repository matrix + "Host git" check |
 | Shared workspace (any folder in the code roots); `docker` inside; host docker-only | shared container; filtered endpoint; Mac, one `docker` argv | unit, live, `make e2e-exec`; hostile matrix; `HostDockerCommandTests` |
 | Commands receiving a secret (`secret_exec`; "the command can reveal this value") | one-shot sibling container, no network | fake-runtime e2e + live test |

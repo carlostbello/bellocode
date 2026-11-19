@@ -3,6 +3,7 @@ import ComposerKit
 import DesignSystem
 import Engine
 import Observation
+import OpenCodeKit
 import TerminalKit
 
 /// App preferences (Settings ▸ General) plus first-run state. Persisted in `UserDefaults` (no secrets here).
@@ -62,6 +63,9 @@ final class AppSettings {
     var terminalLinksOpenInBuiltInBrowser: Bool { didSet { save(terminalLinksOpenInBuiltInBrowser, Keys.terminalLinksBuiltIn) } }
     /// Settings ▸ Browser: offer dev-server URLs seen in terminal or agent output.
     var offersDevServers: Bool { didSet { save(offersDevServers, Keys.offersDevServers) } }
+    /// Settings ▸ opencode: whether opencode loads every repository's config and plugins natively (server-wide; applies
+    /// at the next server start). docs/features/opencode-config.md.
+    var repositoryConfigPolicy: RepositoryConfigPolicy { didSet { save(repositoryConfigPolicy.rawValue, Keys.repositoryConfig) } }
     /// Onboarding finished or skipped once; it is then offered from Settings ▸ Accounts only.
     var hasCompletedOnboarding: Bool { didSet { save(hasCompletedOnboarding, Keys.onboarding) } }
 
@@ -80,6 +84,12 @@ final class AppSettings {
         static let notifications = "BelloCodeNotifications"
         static let terminalLinksBuiltIn = "BelloCodeTerminalLinksOpenInBuiltInBrowser"
         static let offersDevServers = "BelloCodeBrowserOffersDevServers"
+        static let repositoryConfig = "BelloCodeOpenCodeRepositoryConfig"
+    }
+
+    /// The stored policy, read by the server configuration at each launch (any thread).
+    nonisolated static func storedRepositoryConfig(_ defaults: UserDefaults = .standard) -> RepositoryConfigPolicy {
+        defaults.string(forKey: Keys.repositoryConfig).flatMap(RepositoryConfigPolicy.init(rawValue:)) ?? .bellocode
     }
 
     /// `defaults` nil keeps everything in memory (tests and snapshots).
@@ -94,6 +104,7 @@ final class AppSettings {
             ?? NotificationSettings()
         terminalLinksOpenInBuiltInBrowser = defaults?.object(forKey: Keys.terminalLinksBuiltIn) as? Bool ?? true
         offersDevServers = defaults?.object(forKey: Keys.offersDevServers) as? Bool ?? true
+        repositoryConfigPolicy = defaults.map { Self.storedRepositoryConfig($0) } ?? .bellocode
         let defaultTerminal = TerminalPreferences()
         terminalPreferences = TerminalPreferences(
             fontSize: CGFloat(defaults?.object(forKey: Keys.terminalFontSize) as? Double ?? Double(defaultTerminal.fontSize)),

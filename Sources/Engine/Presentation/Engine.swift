@@ -169,6 +169,9 @@ public final class Engine {
     /// The one shared Chromium for every thread and project: lifecycle, approvals, tab groups, routes, live view
     /// (docs/features/shared-browser.md).
     public private(set) var sharedBrowser: SharedBrowserService!
+    /// opencode's global configuration folder, per-project trust of repository configuration, what the server reports,
+    /// reload and restart (docs/features/opencode-config.md).
+    public private(set) var openCodeConfig: OpenCodeConfigService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -253,6 +256,7 @@ public final class Engine {
             secretManager.routerOverride = { [weak sharedBrowser] fallback in sharedBrowser?.makeRouter(fallback: fallback) ?? fallback }
         }
         self.sharedBrowser = sharedBrowser
+        openCodeConfig = OpenCodeConfigService.make(configuration: configuration, store: store, core: core)
         let mergeRequests = extras.mergeRequests
         secretManager.builtInBrokered = { [weak mergeRequests] in
             guard let mergeRequests else { return [] }
@@ -326,6 +330,8 @@ public final class Engine {
         if let snapshot = try? await core.loadCache() { applyLaunchSnapshot(snapshot) }
         // The helper's configuration exists before the server (and its shell) starts.
         await environments.writeConfigNow()
+        // The plugin reads the trust file when each location is set up.
+        await openCodeConfig.load()
         orchestration.start()
         await core.setCodeRoots(codeRoots)
         auto.start()

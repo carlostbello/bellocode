@@ -102,6 +102,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     controller.sizingOptions = [.preferredContentSize]
                     return controller
                 })
+            // opencode configuration folder, trust, CLI (docs/features/opencode-config.md).
+            panes.append(
+                SettingsPane(id: "opencode", title: "opencode", symbolName: "chevron.left.forwardslash.chevron.right") {
+                    let model = OpenCodeSettingsModel(service: engine.openCodeConfig, settings: settings, engine: engine)
+                    if let directory = OpenCodeSettingsModel.preferredDirectory { model.selectedProject = directory }
+                    OpenCodeSettingsModel.last = model
+                    let controller = NSHostingController(rootView: OpenCodeSettingsView(model: model))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
             if let extras = engine.extras, let secretManager = engine.secretManager {
                 // M3-B (docs/features/orchestration-extras.md).
                 panes.append(

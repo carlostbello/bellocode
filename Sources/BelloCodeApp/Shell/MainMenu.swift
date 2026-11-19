@@ -43,6 +43,9 @@ enum MainMenu {
         menu.add(.showSettings)
         menu.add(.connectProvider)
         menu.addItem(.separator())
+        menu.add(.installCommandLineTool)
+        menu.add(.uninstallCommandLineTool)
+        menu.addItem(.separator())
         let services = NSMenu(title: "Services")
         menu.addItem(submenu: services, title: "Services")
         NSApp.servicesMenu = services
@@ -344,6 +347,8 @@ enum MainMenu {
         menu.add(.showContainers)
         menu.add(.showEnvironment)
         menu.add(.showMCPServers)
+        menu.add(.showOpenCodeSettings)
+        menu.add(.reloadOpenCode)
         menu.add(.showSecrets)
         menu.add(.verifyIsolation)
         menu.add(.pruneContainerResources)

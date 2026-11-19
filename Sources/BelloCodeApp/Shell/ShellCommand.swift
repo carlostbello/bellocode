@@ -111,6 +111,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showMCPServers
     /// Settings ▸ Secrets (secret manager, docs/features/secrets.md).
     case showSecrets
+    /// Settings ▸ opencode, reload, and the command-line tool (docs/features/opencode-config.md).
+    case showOpenCodeSettings, reloadOpenCode, installCommandLineTool, uninstallCommandLineTool
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
     // Auto mode, risk notices and interrupts (docs/features/auto-mode.md, MainWindowController+Auto.swift).
@@ -239,6 +241,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
         case .showMCPServers: #selector(AppDelegate.showMCPServers(_:))
+        case .showOpenCodeSettings: #selector(AppDelegate.showOpenCodeSettings(_:))
+        case .reloadOpenCode: #selector(AppDelegate.reloadOpenCode(_:))
+        case .installCommandLineTool: #selector(AppDelegate.installCommandLineTool(_:))
+        case .uninstallCommandLineTool: #selector(AppDelegate.uninstallCommandLineTool(_:))
         case .showSecrets: #selector(AppDelegate.showSecrets(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .gitQuickAction: #selector(MainWindowController.gitQuickAction(_:))
@@ -380,6 +386,10 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: "Containers…"
         case .showEnvironment: "Project Environment…"
         case .showMCPServers: "MCP Servers…"
+        case .showOpenCodeSettings: "opencode…"
+        case .reloadOpenCode: "Reload opencode Configuration"
+        case .installCommandLineTool: "Install Command Line Tool…"
+        case .uninstallCommandLineTool: "Uninstall Command Line Tool…"
         case .showSecrets: "Secrets…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
@@ -544,6 +554,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: ("", [])
+        case .showOpenCodeSettings, .reloadOpenCode, .installCommandLineTool, .uninstallCommandLineTool: ("", [])
         case .pruneContainerResources: ("", [])
         case .modeAsk: ("1", [.command, .control, .option])
         case .modeAutoEdit: ("2", [.command, .control, .option])
@@ -762,6 +773,7 @@ struct CommandContext: Equatable, Sendable {
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: return true
+        case .showOpenCodeSettings, .reloadOpenCode, .installCommandLineTool, .uninstallCommandLineTool: return true
         case .pruneContainerResources: return true
         case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess: return composerVisible
         case .showAutoAudit: return target?.threadID != nil
