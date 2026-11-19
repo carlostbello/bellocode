@@ -644,11 +644,33 @@ public final class EgressProxy: Sendable {
                 if attempt == 1 || !["GET", "HEAD", "OPTIONS"].contains(method) || !uses.isEmpty { break }
             }
         }
-        guard let (responseHead, wire) = response else {
+        guard let (firstHead, wire) = response else {
             try await client.send(Self.plainResponse(502, "Bad Gateway", "\(destination) closed the connection."))
             return false
         }
-        let status = Int(responseHead.startLine[1]) ?? 0
+        // Interim responses (100 Continue, 103 Early Hints) are not passed on: the proxy answered Expect itself, and an
+        // interim head is metadata the inspection below would otherwise have to cover separately. Bounded.
+        var responseHead = firstHead
+        var interim = 0
+        while let code = Self.statusCode(responseHead), (100..<200).contains(code), code != 101 {
+            interim += 1
+            guard interim <= 8, let data = try? await wire.readHead(limit: 128 * 1024), let parsed = HTTPHead(data) else {
+                wire.cancel()
+                upstream = nil
+                try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination sent an invalid interim response."))
+                return false
+            }
+            responseHead = parsed
+        }
+        // The status line the client sees is built here: the code is checked, the reason phrase is BelloCode's own (a
+        // destination could reflect a submitted value into it).
+        guard let status = Self.statusCode(responseHead), responseHead.version.hasPrefix("HTTP/1.") else {
+            wire.cancel()
+            upstream = nil
+            try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination's status line is invalid."))
+            return false
+        }
+        let statusLine = ["HTTP/1.1", String(status), Self.reasonPhrase(status)]
         for use in uses { emit(.substituted(use, destination: request.auditDestination, method: method, status: status)) }
         guard let responseFraming = responseHead.responseFraming(requestMethod: method) else {
             try await client.send(Self.plainResponse(502, "Bad Gateway", "The destination's response framing is invalid."))
@@ -657,8 +679,17 @@ public final class EgressProxy: Sendable {
         let upstreamCloses = (responseHead.fields.first("Connection") ?? "").lowercased().contains("close") || responseHead.version == "HTTP/1.0"
 
         if status == 101 {
-            // Upgrade accepted by a destination that never receives secrets: from now on raw bytes both ways.
-            try await client.send(responseHead.serialized)
+            // Only an upgrade the client asked for, to a destination that never receives secrets, becomes a raw tunnel.
+            // An unsolicited 101 (or one from a secret-bound destination) would leave the inspected path entirely.
+            guard wantsUpgrade, bound.isEmpty, uses.isEmpty else {
+                wire.cancel()
+                upstream = nil
+                emit(.responseBlocked(accounts: bound.map(\.account), destination: request.auditDestination, method: method,
+                                      reason: "The destination switched protocols without a negotiated upgrade.", sessionID: session))
+                try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination switched protocols without a negotiated upgrade."))
+                return false
+            }
+            try await client.send(HTTPHead(startLine: statusLine, fields: responseHead.fields).serialized)
             await splice(client, wire)
             upstream = nil
             return false
@@ -672,7 +703,7 @@ public final class EgressProxy: Sendable {
             if responseFraming == .untilClose && !(100..<200).contains(status) {
                 fields.append(HTTPField("Connection", "close"))
             }
-            try await client.send(HTTPHead(startLine: responseHead.startLine, fields: fields).serialized)
+            try await client.send(HTTPHead(startLine: statusLine, fields: fields).serialized)
             try await wire.relayBody(responseFraming, to: client)
             if upstreamCloses || responseFraming == .untilClose { wire.cancel(); upstream = nil }
             return !clientCloses && responseFraming != .untilClose
@@ -714,8 +745,10 @@ public final class EgressProxy: Sendable {
             }
             fields.remove("Connection")
             fields.remove("Keep-Alive")
+            // The body goes out with a length: trailers were read and dropped, so none are announced.
+            fields.remove("Trailer")
             if method == "HEAD" { fields.remove("Content-Length") }
-            try await client.send(HTTPHead(startLine: responseHead.startLine, fields: fields).serialized + (method == "HEAD" ? Data() : body))
+            try await client.send(HTTPHead(startLine: statusLine, fields: fields).serialized + (method == "HEAD" ? Data() : body))
             return !clientCloses
         }
     }
@@ -832,6 +865,60 @@ public final class EgressProxy: Sendable {
     }
 
     // MARK: Messages
+
+    /// The response's status code when it is exactly three digits (100–599); nil otherwise.
+    static func statusCode(_ head: HTTPHead) -> Int? {
+        guard head.startLine.count > 1 else { return nil }
+        let text = head.startLine[1]
+        guard text.utf8.count == 3, text.utf8.allSatisfy({ (0x30...0x39).contains($0) }), let code = Int(text), (100...599).contains(code) else { return nil }
+        return code
+    }
+
+    /// BelloCode's own reason phrase for a status code (never the destination's).
+    static func reasonPhrase(_ status: Int) -> String {
+        switch status {
+        case 100: "Continue"
+        case 101: "Switching Protocols"
+        case 200: "OK"
+        case 201: "Created"
+        case 202: "Accepted"
+        case 203: "Non-Authoritative Information"
+        case 204: "No Content"
+        case 205: "Reset Content"
+        case 206: "Partial Content"
+        case 300: "Multiple Choices"
+        case 301: "Moved Permanently"
+        case 302: "Found"
+        case 303: "See Other"
+        case 304: "Not Modified"
+        case 307: "Temporary Redirect"
+        case 308: "Permanent Redirect"
+        case 400: "Bad Request"
+        case 401: "Unauthorized"
+        case 403: "Forbidden"
+        case 404: "Not Found"
+        case 405: "Method Not Allowed"
+        case 406: "Not Acceptable"
+        case 408: "Request Timeout"
+        case 409: "Conflict"
+        case 410: "Gone"
+        case 411: "Length Required"
+        case 412: "Precondition Failed"
+        case 413: "Content Too Large"
+        case 415: "Unsupported Media Type"
+        case 416: "Range Not Satisfiable"
+        case 421: "Misdirected Request"
+        case 422: "Unprocessable Content"
+        case 428: "Precondition Required"
+        case 429: "Too Many Requests"
+        case 500: "Internal Server Error"
+        case 501: "Not Implemented"
+        case 502: "Bad Gateway"
+        case 503: "Service Unavailable"
+        case 504: "Gateway Timeout"
+        default: "Status"
+        }
+    }
 
     static func hostOnly(_ hostHeader: String) -> String {
         if hostHeader.hasPrefix("["), let close = hostHeader.firstIndex(of: "]") {

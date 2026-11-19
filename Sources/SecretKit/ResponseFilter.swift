@@ -138,8 +138,9 @@ public struct ResponseFilter: Sendable {
         let decoded: Data
         do {
             decoded = try ContentDecoding.decode(body, contentEncoding: headers.first("Content-Encoding"), limit: bodyLimit)
-        } catch let error as ContentDecoding.Unsupported {
-            return .block(reason: "The response uses a content encoding BelloCode cannot inspect (\(error.encoding)).", accounts: [])
+        } catch is ContentDecoding.Unsupported {
+            // The encoding's name is the destination's text (it could carry a reflected value): never echoed.
+            return .block(reason: "The response uses a content encoding BelloCode cannot inspect.", accounts: [])
         } catch is ContentDecoding.TooLarge {
             return .block(reason: "The response is too large for BelloCode to inspect (more than \(bodyLimit >> 20) MB).", accounts: [])
         } catch {
