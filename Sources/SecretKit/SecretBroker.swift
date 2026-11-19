@@ -1,7 +1,6 @@
 import BelloCore
 import Foundation
 
-import SecretKit
 import Synchronization
 
 /// The brokered HTTP tool (`http_request`, shown to agents as `bellocode_app_http_request`; docs/features/secrets.md
