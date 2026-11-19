@@ -28,6 +28,8 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         var purgedVolumes: [String] = []
         /// Every spec a container was ensured from (what Docker would be asked to create).
         var specs: [WorkspaceSpec] = []
+        /// Every image pulled.
+        var pulled: [String] = []
     }
 
     let state = Mutex(State())
@@ -39,7 +41,10 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         return try JSONDecoder().decode(ImageSummary.self, from: Data(#"{"Id":"sha256:abc"}"#.utf8))
     }
     func pull(_ reference: String, auth: RegistryAuth?, progress: @escaping @Sendable (ProgressMessage) -> Void) async throws {
-        _ = state.withLock { $0.images.insert(reference) }
+        state.withLock { s in
+            s.images.insert(reference)
+            s.pulled.append(reference)
+        }
     }
     func status(_ spec: WorkspaceSpec) async throws -> WorkspaceStatus {
         state.withLock { s in

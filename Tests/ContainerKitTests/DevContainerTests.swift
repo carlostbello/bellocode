@@ -111,6 +111,58 @@ struct DevContainerTests {
         if case .success = DevContainerBuildInputs.verify(build, projectRoot: root) { Issue.record("a Dockerfile swapped for an outside link was accepted") }
     }
 
+    /// R15: `.dockerignore` as Docker's CLI reads it.
+    @Test func dockerignoreMatchesLikeTheCLI() {
+        let ignore = DockerIgnore("""
+            # comment
+            node_modules
+            **/*.log
+            /build/
+            docs/*.md
+            !docs/README.md
+            secret?.txt
+            [ab].tmp
+            """)
+        #expect(ignore.ignores("node_modules") && ignore.ignores("node_modules/x/y.js"), "a folder covers what is in it")
+        #expect(ignore.ignores("a.log") && ignore.ignores("deep/er/b.log"))
+        #expect(ignore.ignores("build/out.o"))
+        #expect(ignore.ignores("docs/guide.md") && !ignore.ignores("docs/README.md"), "the last matching pattern wins")
+        #expect(!ignore.ignores("docs/sub/guide.md"), "* stays within one folder")
+        #expect(ignore.ignores("secret1.txt") && !ignore.ignores("secret12.txt"))
+        #expect(ignore.ignores("a.tmp") && !ignore.ignores("c.tmp"))
+        #expect(!ignore.ignores("src/main.js") && !ignore.ignores("src/node_modules.txt"))
+    }
+
+    /// R15: the tag follows the content of what the context sends.
+    @Test func theTagFollowsTheContextContent() throws {
+        let (root, outside) = try temporaryProject()
+        defer { try? FileManager.default.removeItem(atPath: (root as NSString).deletingLastPathComponent) }
+        try FileManager.default.createDirectory(atPath: root + "/src", withIntermediateDirectories: true)
+        try "a".write(toFile: root + "/src/a.txt", atomically: true, encoding: .utf8)
+        try "tmp\n".write(toFile: root + "/.dockerignore", atomically: true, encoding: .utf8)
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let cache = DevContextDigestCache()
+        func tag() throws -> String { try DevContainerBuildInputs.verify(build, projectRoot: root).get().tag(projectKey: "k", build: build, cache: cache).get() }
+        let first = try tag()
+        #expect(first.hasPrefix("bellocode-dev-k:"))
+        #expect(try tag() == first, "stable")
+        try "b".write(toFile: root + "/src/a.txt", atomically: true, encoding: .utf8)
+        let second = try tag()
+        #expect(second != first, "a changed file changes the tag")
+        try FileManager.default.createDirectory(atPath: root + "/tmp", withIntermediateDirectories: true)
+        try "x".write(toFile: root + "/tmp/scratch", atomically: true, encoding: .utf8)
+        #expect(try tag() == second, "an ignored file does not")
+        // A link is hashed as a link: its target's contents are never read (and changing them changes nothing).
+        try FileManager.default.createSymbolicLink(atPath: root + "/src/out", withDestinationPath: outside + "/Dockerfile")
+        let linked = try tag()
+        #expect(linked != second)
+        try "FROM other\n".write(toFile: outside + "/Dockerfile", atomically: true, encoding: .utf8)
+        #expect(try tag() == linked)
+        // Same-size, same-second edits are still seen (the cache is keyed by inode, size and nanosecond times).
+        try "c".write(toFile: root + "/src/a.txt", atomically: false, encoding: .utf8)
+        #expect(try tag() != linked)
+    }
+
     @Test func hostCommandsFeaturesAndPrivilegesAreRefusedWithReasons() {
         let result = plan("""
         {

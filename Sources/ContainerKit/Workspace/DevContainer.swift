@@ -46,17 +46,6 @@ public struct DevContainerPlan: Sendable, Equatable {
         return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16).description
     }
 
-    /// The tag BelloCode builds the image as (changes when the Dockerfile, context or arguments change).
-    public func buildTag(projectKey: String) -> String? {
-        guard let build else { return nil }
-        let dockerfile = (try? Data(contentsOf: URL(filePath: build.dockerfile))) ?? Data()
-        var hasher = SHA256()
-        hasher.update(data: dockerfile)
-        hasher.update(data: Data("\(build.context)\n\(build.args.sorted { $0.key < $1.key })\n\(build.target ?? "")".utf8))
-        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined().prefix(12)
-        return "bellocode-dev-\(projectKey):\(digest)"
-    }
-
     /// `docker buildx build` arguments (argv after the docker binary). No secrets, no shell. The Dockerfile comes on
     /// standard input (`-f -`, the bytes `DevContainerBuildInputs` verified) and `context` is the verified canonical
     /// folder, so the CLI never opens a project path BelloCode did not just check (R16).

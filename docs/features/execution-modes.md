@@ -68,7 +68,10 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
 Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
 Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
-without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
+without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
+context file `.dockerignore` keeps, links as links; computed in the background, bounded to 200 000 files / 4 GiB), so a
+changed input rebuilds; Rebuild runs the build again and replaces the container after it succeeded; a built tag is never
+pulled; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
 `forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;

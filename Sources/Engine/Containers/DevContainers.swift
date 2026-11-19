@@ -45,7 +45,62 @@ extension EnvironmentService {
 
     /// Builds the dev container image with Rancher Desktop's `docker buildx` (BelloCode's own use of the host CLI;
     /// the Dockerfile's steps run in the builder, never on the Mac), then re-evaluates the project.
-    func buildDevImage(_ model: ProjectEnvironment, plan: DevContainerPlan, tag: String) {
+    nonisolated static let checkingDevContext = "checking the dev container's build context"
+
+    /// Computes the content tag of the project's dev container build in the background (R15). One computation per
+    /// project at a time; a refresh meanwhile asks for one more after it. A changed tag re-evaluates the project: the
+    /// missing image is built, and the running container is replaced on its next activation.
+    func refreshDevTag(_ model: ProjectEnvironment, plan: DevContainerPlan) {
+        guard let build = plan.build else { return }
+        let directory = model.directory
+        guard !devTagsInFlight.contains(directory) else {
+            devTagsStale.insert(directory)
+            return
+        }
+        devTagsInFlight.insert(directory)
+        let cache = devDigestCache
+        let key = model.projectKey
+        tasks.set("devtag-\(key)", Task { [weak self] in
+            let result = await Self.computeDevTag(build, projectRoot: directory, projectKey: key, cache: cache)
+            guard let self else { return }
+            self.devTagsInFlight.remove(directory)
+            guard !Task.isCancelled else { return }
+            let again = self.devTagsStale.remove(directory) != nil
+            // The file may have changed meanwhile (another build section): only a result for the current plan counts.
+            guard let current = self.devContainerPlan(model), current.build == build else {
+                if again, let current = self.devContainerPlan(model), current.build != nil { self.refreshDevTag(model, plan: current) }
+                return
+            }
+            switch result {
+            case .failure(let problem):
+                // The build inputs are no longer valid: nothing may start from the old tag meanwhile.
+                self.devTags[directory] = nil
+                _ = self.nextGeneration(directory)
+                model.phase = .failed(problem.description)
+                self.scheduleConfigWrite()
+            case .success(let tag):
+                let changed = self.devTags[directory] != tag
+                self.devTags[directory] = tag
+                if case .pulling(let progress) = model.phase, progress.detail == Self.checkingDevContext { model.phase = .unknown }
+                if changed || again { self.refreshImageAndPhase(model) }
+            }
+        })
+    }
+
+    @concurrent
+    nonisolated static func computeDevTag(_ build: DevContainerPlan.Build, projectRoot: String, projectKey: String,
+                                          cache: DevContextDigestCache) async -> Result<String, DevContainerBuildInputs.Problem> {
+        switch DevContainerBuildInputs.verify(build, projectRoot: projectRoot) {
+        case .failure(let problem): return .failure(problem)
+        case .success(let inputs): return inputs.tag(projectKey: projectKey, build: build, cache: cache)
+        }
+    }
+
+    /// Builds the dev container image with Rancher Desktop's `docker buildx` (BelloCode's own use of the host CLI;
+    /// the Dockerfile's steps run in the builder, never on the Mac), then re-evaluates the project. The tag is the
+    /// content tag of exactly the inputs built (R15). With `recreate` (Rebuild) the container is replaced once the build
+    /// succeeded.
+    func buildDevImage(_ model: ProjectEnvironment, plan: DevContainerPlan, recreate: Bool = false) {
         let builder = configuration?.devImageBuilder
         guard let docker = Self.rancherDocker() ?? (builder != nil ? "docker" : nil), let build = plan.build else {
             model.phase = .failed("Building the dev container needs Rancher Desktop's docker (~/.rd/bin/docker), which was not found.")
@@ -57,18 +112,21 @@ extension EnvironmentService {
         let socket = activeRuntime.socketPath
         let config = configuration.map { Self.prepareHostDockerConfig(next: $0.execConfigURL) } ?? nil
         let projectRoot = model.directory
+        let projectKey = model.projectKey
+        let cache = devDigestCache
         tasks.set("devbuild-\(model.projectKey)", Task { [weak self] in
             // Right before the CLI runs (R16): links resolved, the context and Dockerfile proven inside the project, the
             // Dockerfile's bytes read once. The CLI gets the canonical context and those bytes on standard input.
-            let verified = await Self.verifyBuildInputs(build, projectRoot: projectRoot)
+            let verified = await Self.verifyBuildInputs(build, projectRoot: projectRoot, projectKey: projectKey, cache: cache)
             guard let self, !Task.isCancelled else { return }
             let inputs: DevContainerBuildInputs
+            let tag: String
             switch verified {
             case .failure(let problem):
                 model.phase = .failed(problem.description)
                 self.scheduleConfigWrite()
                 return
-            case .success(let value): inputs = value
+            case .success(let value): (inputs, tag) = value
             }
             // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
             let bases = DockerfileBases.images(in: String(decoding: inputs.dockerfile, as: UTF8.self), buildArgs: build.args)
@@ -82,8 +140,9 @@ extension EnvironmentService {
             let result = if let builder { await builder(request) } else { await Self.runDocker(request) }
             guard !Task.isCancelled else { return }
             if result.status == 0 {
+                self.devTags[projectRoot] = tag
                 model.phase = .unknown
-                self.refreshImageAndPhase(model)
+                self.refreshImageAndPhase(model, recreate: recreate)
             } else {
                 model.phase = .failed("Building the dev container image failed (exit \(result.status)): \(result.tail)")
                 self.scheduleConfigWrite()
@@ -91,10 +150,15 @@ extension EnvironmentService {
         })
     }
 
+    /// The verified inputs and their content tag, off the main actor.
     @concurrent
-    nonisolated static func verifyBuildInputs(_ build: DevContainerPlan.Build, projectRoot: String) async
-        -> Result<DevContainerBuildInputs, DevContainerBuildInputs.Problem> {
-        DevContainerBuildInputs.verify(build, projectRoot: projectRoot)
+    nonisolated static func verifyBuildInputs(_ build: DevContainerPlan.Build, projectRoot: String, projectKey: String,
+                                              cache: DevContextDigestCache) async
+        -> Result<(DevContainerBuildInputs, String), DevContainerBuildInputs.Problem> {
+        switch DevContainerBuildInputs.verify(build, projectRoot: projectRoot) {
+        case .failure(let problem): return .failure(problem)
+        case .success(let inputs): return inputs.tag(projectKey: projectKey, build: build, cache: cache).map { (inputs, $0) }
+        }
     }
 
     /// Why the Dockerfile's base images may not be used, or nil (each one under the image policy).

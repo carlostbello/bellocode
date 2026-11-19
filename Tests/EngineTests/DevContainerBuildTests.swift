@@ -121,4 +121,45 @@ struct DevContainerBuildTests {
         if case .failed(let message) = model.phase { #expect(message.contains("inside the project")) }
         #expect(builds.count == 1, "nothing outside the project reaches the builder")
     }
+
+    // MARK: R15
+
+    /// A file copied into the image changes the tag, so the image is built again; an ignored file does not. Rebuild
+    /// runs the build plan (never a pull of the local tag), also under pull policy "always".
+    @Test func contextChangesRebuildAndALocalTagIsNeverPulled() async throws {
+        try write("node_modules\n*.log\n", "/.dockerignore")
+        let service = try await makeService(policy: ImagePolicy(pullPolicy: .always))
+        defer { service.stop() }
+        let model = service.environment(for: project)
+        #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
+        let first = try #require(builds.list.withLock { $0.first }.flatMap(Self.tag))
+        #expect(await waitFor { model.image == first })
+        service.activate(project)
+        #expect(await waitFor { model.phase == .ready }, "\(model.phase)")
+
+        // An ignored file: same tag, nothing built.
+        try FileManager.default.createDirectory(atPath: project + "/node_modules", withIntermediateDirectories: true)
+        try write("x", "/node_modules/big.js")
+        try write("x", "/debug.log")
+        await service.retry(project)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(builds.count == 1 && model.image == first, "ignored files leave the tag alone")
+
+        // A file the Dockerfile copies: a new tag, built (not pulled), and the container follows it.
+        try write("console.log(2)\n", "/src/main.js")
+        await service.retry(project)
+        #expect(await waitFor { builds.count == 2 }, "\(model.phase)")
+        let second = try #require(builds.list.withLock { $0.last }.flatMap(Self.tag))
+        #expect(second != first)
+        #expect(await waitFor { model.image == second })
+
+        // Rebuild: the build plan runs again (same tag), never a pull.
+        service.rebuild(project)
+        #expect(await waitFor { builds.count == 3 }, "\(model.phase)")
+        #expect(builds.list.withLock { $0.last }.flatMap(Self.tag) == second)
+        service.activate(project)
+        try await Task.sleep(for: .milliseconds(100))
+        let pulled = runtime.state.withLock { $0.pulled }
+        #expect(!pulled.contains { $0.hasPrefix("bellocode-dev-") }, "a locally built tag is never pulled: \(pulled)")
+    }
 }

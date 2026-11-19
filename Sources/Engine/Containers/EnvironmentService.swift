@@ -202,6 +202,12 @@ public final class EnvironmentService {
     var sharedKey: String { WorkspaceSpec.projectKey(for: sharedKeySeed) }
     /// Dev container plans by project (file stamp and plan), read again when the file changes.
     @ObservationIgnored var devContainerCache: [String: (stamp: String, plan: DevContainerPlan?)] = [:]
+    /// The content tag of each project's dev container build (R15), computed off the main actor from its build context.
+    @ObservationIgnored var devTags: [String: String] = [:]
+    /// Projects whose dev tag is being computed, and those changed meanwhile (computed once more after).
+    @ObservationIgnored var devTagsInFlight: Set<String> = []
+    @ObservationIgnored var devTagsStale: Set<String> = []
+    @ObservationIgnored let devDigestCache = DevContextDigestCache()
     @ObservationIgnored var gitWorktrees: @Sendable (String) async -> [String] = { _ in [] }
     /// BelloCode's filtered Docker endpoint (nil until started, and in tests that do not use it).
     @ObservationIgnored public internal(set) var dockerEndpoint: DockerEndpoint?
@@ -493,8 +499,19 @@ public final class EnvironmentService {
         let containerName = "bellocode-ws-\(key)"
         if model.containerName != containerName { model.containerName = containerName }
         model.image = mode == .hostDocker ? nil : mode == .sharedWorkspace ? defaultImage
-            : devContainerPlan(model).flatMap { $0.image ?? $0.buildTag(projectKey: model.projectKey) } ?? model.settings.image ?? defaultImage
+            : devContainerPlan(model).map { $0.image ?? devTags[model.directory] } ?? model.settings.image ?? defaultImage
         guard isEnabled, started else { return }
+        // A dev container built here: its tag follows the build context's content (R15), computed in the background;
+        // until the first one is known nothing else is used in its place.
+        let devBuildPlan = mode == .projectContainer ? devContainerPlan(model).flatMap { $0.build != nil ? $0 : nil } : nil
+        if let devBuildPlan {
+            refreshDevTag(model, plan: devBuildPlan)
+            if devTags[model.directory] == nil, runtime?.isReady == true, policyBlock(model) == nil {
+                model.phase = .pulling(PullProgress(detail: Self.checkingDevContext))
+                scheduleConfigWrite()
+                return
+            }
+        }
         loadServices(model)
         if let message = policyBlock(model) {
             if settingsLoaded { model.phase = .policyUnavailable(message) }
@@ -550,7 +567,7 @@ public final class EnvironmentService {
                 guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 guard let image else {
                     if let plan = self.devContainerPlan(model), plan.build != nil {
-                        self.buildDevImage(model, plan: plan, tag: spec.image)
+                        self.buildDevImage(model, plan: plan)
                         return
                     }
                     if self.imagePolicy.pullPolicy == .never {
@@ -610,7 +627,7 @@ public final class EnvironmentService {
         })
     }
 
-    private func nextGeneration(_ directory: String) -> Int {
+    func nextGeneration(_ directory: String) -> Int {
         let value = (generations[directory] ?? 0) + 1
         generations[directory] = value
         return value
@@ -623,7 +640,8 @@ public final class EnvironmentService {
         let model = environment(for: directory)
         guard policyBlock(model) == nil, model.mode != .hostDocker else { return }
         guard let spec = workspaceSpec(model) else {
-            if model.image == nil { model.phase = .noImage }
+            // A dev build whose content tag is still being computed is not "no image": the refresh continues it.
+            if model.image == nil, devContainerPlan(model)?.build == nil { model.phase = .noImage }
             return
         }
         switch model.phase {
@@ -637,11 +655,13 @@ public final class EnvironmentService {
         let generation = nextGeneration(model.directory)
         let runtimeRef = activeRuntime
         let firstInventory = model.record.inventory == nil || model.outdatedReason != nil
-        // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed.
-        let pullFirst = imagePolicy.pullPolicy == .always && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
+        let devBuild = devContainerPlan(model)?.build != nil
+        // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed. Never a tag built
+        // here (R15): it exists nowhere to pull from.
+        let pullFirst = !devBuild && imagePolicy.pullPolicy == .always
+            && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
         let auth = pullFirst ? registryAuth(for: spec.image) : nil
         let egressPreflight = egress?.preflight
-        let devBuild = devContainerPlan(model)?.build != nil
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
             let interval = Self.signposter.beginInterval("ensureRunning")
             defer { Self.signposter.endInterval("ensureRunning", interval) }
@@ -649,7 +669,7 @@ public final class EnvironmentService {
                 // A dev container image built here that is missing (its inputs changed) is built, never pulled.
                 if devBuild, try await runtimeRef.image(spec.image) == nil {
                     guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
-                    if let plan = self.devContainerPlan(model), plan.build != nil { self.buildDevImage(model, plan: plan, tag: spec.image) }
+                    if let plan = self.devContainerPlan(model), plan.build != nil { self.buildDevImage(model, plan: plan) }
                     return
                 }
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
@@ -697,6 +717,11 @@ public final class EnvironmentService {
     /// header only). On success the container is created on first use.
     public func pull(_ model: ProjectEnvironment) {
         guard isEnabled, policyBlock(model) == nil, let image = model.image else { return }
+        // A dev container image built here is built again, never pulled (R15).
+        if let plan = devContainerPlan(model), plan.build != nil {
+            buildDevImage(model, plan: plan)
+            return
+        }
         if let refusal = imageRefusal(image) {
             model.phase = .imageRefused(refusal)
             scheduleConfigWrite()
@@ -738,10 +763,16 @@ public final class EnvironmentService {
         })
     }
 
-    /// Pulls the image again and recreates the container ("Rebuild").
+    /// Pulls the image again and recreates the container ("Rebuild"). A dev container built here runs its build plan
+    /// again instead (the builder's cache skips unchanged steps), and the container is replaced only after the build
+    /// succeeded (R15).
     public func rebuild(_ directory: String) {
         let model = environment(for: directory)
         model.outdatedReason = "rebuild requested"
+        if let plan = devContainerPlan(model), plan.build != nil {
+            buildDevImage(model, plan: plan, recreate: true)
+            return
+        }
         pull(model)
     }
 
@@ -1145,7 +1176,8 @@ public final class EnvironmentService {
         case .projectContainer: break
         }
         let dev = devContainerPlan(model)
-        guard let image = dev.flatMap({ $0.image ?? $0.buildTag(projectKey: model.projectKey) }) ?? model.settings.image ?? defaultImage,
+        // A dev build without a known content tag yet has no spec (never another image in its place).
+        guard let image = dev.map({ $0.image ?? devTags[model.directory] }) ?? model.settings.image ?? defaultImage,
               dev?.build != nil || imageRefusal(image) == nil else { return nil }
         let roots = workspaceRoots(model, create: true)
         var spec = WorkspaceSpec(
