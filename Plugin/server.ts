@@ -12,6 +12,7 @@
 import * as L from "./src/logic.ts"
 import * as C from "./src/container.ts"
 import * as A from "./src/auto.ts"
+import * as P from "./src/project.ts"
 import { readFileSync } from "fs"
 
 type Ctx = any
@@ -31,6 +32,8 @@ const GUIDANCE_KEY = "bellocode.orchestration"
 const seenEvents = new Set<string>()
 const cascading = new Map<string, number>()
 const guided = new Set<string>()
+/** The repository instruction text last written per session (rewritten only when the files change). */
+const projectInstructionsWritten = new Map<string, string>()
 const CASCADE_WINDOW_MS = 15_000
 /** Session list page size, pages per parent and sessions per tree walk (beyond these a walk reports incomplete). */
 const PAGE_SIZE = 200
@@ -106,6 +109,91 @@ export default {
       } catch {
         return undefined
       }
+    }
+
+    // MARK: Repository opencode configuration (docs/features/opencode-config.md)
+    // Default ("bellocode") mode: opencode's own project config is off for the whole server. Every session gets its
+    // repository's AGENTS.md text as an instruction entry; a trusted project's location also gets the repository's
+    // `.opencode/` agents, commands and skills. Transforms only use editor methods verified on 2.3.2 (agent `update`,
+    // command and skill `add`) and never throw: a throwing transform disables the whole plugin.
+    const projectConfig = P.projectConfigOptions(ctx.options)
+    const locationDirectory: string | undefined = ctx.location?.directory
+    let projectLoaded: P.Loaded = P.EMPTY
+    const refreshProjectConfig = () => {
+      projectLoaded = projectConfig?.mode === "bellocode"
+        ? P.loadProjectConfig(locationDirectory, P.readTrust(projectConfig.trustFile))
+        : P.EMPTY
+    }
+    if (projectConfig?.mode === "bellocode") {
+      refreshProjectConfig()
+      await ctx.skill?.transform?.((editor: any) => {
+        for (const skill of projectLoaded.skills) {
+          try {
+            editor.add({ id: skill.id, name: skill.name, description: skill.description, path: skill.path, content: skill.content })
+          } catch {}
+        }
+      })
+      await ctx.agent?.transform?.((editor: any) => {
+        for (const spec of projectLoaded.agents) {
+          try {
+            editor.update(spec.id, (agent: any) => {
+              if (!agent.name || agent.name === agent.id) agent.name = spec.id
+              agent.system = spec.system
+              if (spec.description !== undefined) agent.description = spec.description
+              if (spec.mode !== undefined) agent.mode = spec.mode
+              if (spec.hidden !== undefined) agent.hidden = spec.hidden
+              if (spec.color !== undefined) agent.color = spec.color
+              if (spec.steps !== undefined) agent.steps = spec.steps
+              if (spec.model !== undefined) agent.model = spec.model
+            })
+          } catch {}
+        }
+      })
+      await ctx.command?.transform?.((editor: any) => {
+        for (const spec of projectLoaded.commands) {
+          try {
+            editor.add({
+              name: spec.name,
+              description: spec.description,
+              execute: async (invocation: any) => {
+                const prompt = invocation?.prompt ?? {}
+                await ctx.session.prompt({
+                  sessionID: invocation.sessionID,
+                  text: P.expandTemplate(spec.template, String(prompt.text ?? "")),
+                  ...(prompt.files ? { files: prompt.files } : {}),
+                  ...(prompt.agents ? { agents: prompt.agents } : {}),
+                  ...(prompt.skills ? { skills: prompt.skills } : {}),
+                  ...(invocation.delivery ? { delivery: invocation.delivery } : {}),
+                })
+              },
+            })
+          } catch {}
+        }
+      })
+    }
+
+    /** Writes (or removes) the session's repository AGENTS.md entry when the text changed. Bounded by a time limit so
+     * a slow write never holds up a prompt. */
+    const putProjectInstructions = async (sessionID: string, directory: string | undefined) => {
+      if (projectConfig?.mode !== "bellocode") return
+      const text = P.instructionsText(P.instructionFiles(directory)) ?? ""
+      if (projectInstructionsWritten.get(sessionID) === text) return
+      const write = text
+        ? ctx.session.instructions.entry.put({ sessionID, key: P.INSTRUCTIONS_KEY, value: text })
+        : ctx.session.instructions.entry.remove({ sessionID, key: P.INSTRUCTIONS_KEY })
+      const done = await Promise.race([write.then(() => true, () => false), sleep(2_000).then(() => false)])
+      if (!done) return
+      projectInstructionsWritten.set(sessionID, text)
+      if (projectInstructionsWritten.size > 4_000) projectInstructionsWritten.delete(projectInstructionsWritten.keys().next().value as string)
+    }
+    if (projectConfig?.mode === "bellocode" && ctx.session?.hook) {
+      // Awaited by opencode before a prompt is admitted (SessionPrompt.prepare), so even the first turn has the text.
+      await ctx.session.hook("prompt", async (event: any) => {
+        const sessionID = event?.sessionID as string | undefined
+        if (!sessionID) return
+        const session = await ctx.session.get({ sessionID }).then((value: any) => value?.data ?? value, () => undefined)
+        await putProjectInstructions(sessionID, session?.location?.directory)
+      })
     }
 
     // MARK: Session helpers
@@ -326,6 +414,7 @@ export default {
       const depth = L.depthOf([session, ...(await ancestors(session))])
       const value = L.guidance({ depth, limits, delegated: Boolean(session.parentID) })
       await ctx.session.instructions.entry.put({ sessionID: session.id, key: GUIDANCE_KEY, value }).catch(() => undefined)
+      await putProjectInstructions(session.id, session.location?.directory).catch(() => undefined)
       if (container) {
         // Where commands run: rewritten at each run so it reflects the image and any blocked state.
         const text = C.containerGuidance(readExecConfig(), session.location?.directory)
@@ -899,6 +988,7 @@ export default {
         methods: {
           info: { input: { type: "object" }, output: { type: "object" } },
           trace: { input: { type: "object" }, output: { type: "object" } },
+          projectConfig: { input: { type: "object" }, output: { type: "object" } },
         },
         events: {},
       },
@@ -917,6 +1007,21 @@ export default {
             .filter(L.isAppTool)
             .map((tool) => ({ id: tool.id ?? tool.name, codemode: tool.options?.codemode !== false })),
         }),
+        // Re-reads the trust file and this location's repository files, then replays the transforms. Names only.
+        projectConfig: async () => {
+          refreshProjectConfig()
+          if (projectConfig?.mode === "bellocode") {
+            await Promise.allSettled([ctx.skill?.reload?.(), ctx.agent?.reload?.(), ctx.command?.reload?.()])
+          }
+          return {
+            mode: projectConfig?.mode ?? "off",
+            trusted: projectLoaded.trusted,
+            agents: projectLoaded.agents.map((agent) => agent.id),
+            commands: projectLoaded.commands.map((command) => command.name),
+            skills: projectLoaded.skills.map((skill) => skill.id),
+            skipped: projectLoaded.skipped,
+          }
+        },
         // Hook order and coverage for the contract tests and diagnostics: names, effects and counts, never content.
         trace: async (input: any) => {
           try {
@@ -973,6 +1078,7 @@ export default {
           // Sessions created before the plugin (or while it reloaded) get their guidance at their next run; with
           // containers, every run refreshes it (image, tools, blocked state).
           if (!guided.has(sessionID) || container) await putGuidance(await get(sessionID)).catch(() => undefined)
+          else if (started) await putProjectInstructions(sessionID, started.location?.directory).catch(() => undefined)
           // A child's cancelled report wakes its parent; inside a cascade window that restart is cut at once.
           const until = cascading.get(sessionID)
           if (until && until > Date.now()) await ctx.session.interrupt({ sessionID }).catch(() => undefined)
