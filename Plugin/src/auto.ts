@@ -16,7 +16,8 @@ export const PROBE_ACTION = "bellocode_contract_probe"
 
 export type Effect = "allow" | "ask" | "deny"
 export type Rule = { readonly action?: string; readonly resource?: string; readonly effect?: string }
-export type Mode = "auto" | "full" | "other"
+/** `unknown`: the session's rules could not be read, so its mode is not known (never treated as "other", R11). */
+export type Mode = "auto" | "full" | "other" | "unknown"
 
 /** The BelloCode mode a session's rules describe (children inherit their parent's rules, so their mode too). */
 export function modeOf(rules: readonly Rule[] | null | undefined): Mode {
@@ -28,13 +29,16 @@ export function modeOf(rules: readonly Rule[] | null | undefined): Mode {
 }
 
 /** What the evaluate hook does to an effect in a session of `mode`. Auto: every `allow` (a saved grant, or a rule) is
- *  turned into `ask`, so BelloCode's policy reviews it; `deny` never reaches the hook. Other modes: unchanged. */
+ *  turned into `ask`, so BelloCode's policy reviews it; `deny` never reaches the hook. Unknown (the session lookup
+ *  failed): fail closed the same way, so a saved allow is never kept without Auto or a person deciding; a deny or ask
+ *  is preserved. Other modes: unchanged. */
 export function autoEffect(mode: Mode, effect: Effect): { effect: Effect; changed: boolean } {
-  if (mode === "auto" && effect === "allow") return { effect: "ask", changed: true }
+  if ((mode === "auto" || mode === "unknown") && effect === "allow") return { effect: "ask", changed: true }
   return { effect, changed: false }
 }
 
 export const AUTO_MESSAGE = "BelloCode Auto reviews this request"
+export const UNKNOWN_MODE_MESSAGE = "BelloCode could not read this thread's permission mode, so you decide"
 
 // MARK: - Contract trace (no content: names, effects and counts only)
 

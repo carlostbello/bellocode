@@ -346,7 +346,8 @@ export default {
       try {
         return A.modeOf((await get(sessionID)).permissions as A.Rule[] | undefined)
       } catch {
-        return "other"
+        // Never "other": an unreadable session must not keep a saved allow (R11).
+        return "unknown"
       }
     }
     if (ctx.permission?.hook) {
@@ -365,7 +366,7 @@ export default {
         const decided = A.autoEffect(mode, effectIn)
         if (decided.changed) {
           event.effect = decided.effect
-          event.message = A.AUTO_MESSAGE
+          event.message = mode === "unknown" ? A.UNKNOWN_MODE_MESSAGE : A.AUTO_MESSAGE
         }
         callPermissions.record(callID, { action: String(event.action), resources: list<string>(event.resources), effect: event.effect })
         trace.add({
