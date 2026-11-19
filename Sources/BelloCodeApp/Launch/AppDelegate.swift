@@ -228,6 +228,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Window ▸ Secrets… (secret manager).
     @objc func showSecrets(_ sender: Any?) { openSettings(pane: "secrets") }
 
+    // MARK: opencode configuration (docs/features/opencode-config.md)
+
+    /// Window ▸ opencode…: Settings ▸ opencode on the front window's project.
+    @objc func showOpenCodeSettings(_ sender: Any?) {
+        if let directory = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first?.currentProjectDirectory {
+            OpenCodeSettingsModel.preferredDirectory = directory
+            OpenCodeSettingsModel.last?.select(directory)
+        }
+        openSettings(pane: "opencode")
+    }
+
+    /// Window ▸ Reload opencode Configuration (`POST /api/location/reload`; confirms when approvals would be cancelled).
+    @objc func reloadOpenCode(_ sender: Any?) {
+        guard let engine = runtime?.engine, let services else { return }
+        let model = OpenCodeSettingsModel.last ?? OpenCodeSettingsModel(service: engine.openCodeConfig, settings: services.settings, engine: engine)
+        model.reload()
+    }
+
+    /// BelloCode ▸ Install Command Line Tool…: links bellocode-opencode into ~/.local/bin after confirming.
+    @objc func installCommandLineTool(_ sender: Any?) {
+        let installer = CommandLineToolInstaller.live()
+        switch installer.status() {
+        case .unavailable:
+            OpenCodeSettingsActions.live.report("This build has no bundled bellocode-opencode. Run BelloCode from its app bundle.")
+            return
+        case .installed(let link):
+            OpenCodeSettingsActions.live.report("bellocode-opencode is already installed at \((link.path as NSString).abbreviatingWithTildeInPath).")
+            return
+        case .notInstalled, .conflict:
+            break
+        }
+        let folder = installer.targetFolder().map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "~/.local/bin"
+        guard OpenCodeSettingsActions.live.confirm(
+            "Install the bellocode-opencode command?",
+            "Creates a link at \(folder)/bellocode-opencode to the copy inside this app. It runs opencode commands (auth login, models, mcp list, run…) on BelloCode's own configuration and credentials, through the running server. Uninstall removes only that link.",
+            "Install")
+        else { return }
+        let model = OpenCodeSettingsModel.last
+        do {
+            let link = try installer.install()
+            model?.refreshToolStatus()
+            OpenCodeSettingsActions.live.report("Installed at \((link.path as NSString).abbreviatingWithTildeInPath). If your shell does not find it, add \(folder) to PATH.")
+        } catch {
+            OpenCodeSettingsActions.live.report(String(describing: error))
+        }
+    }
+
+    /// BelloCode ▸ Uninstall Command Line Tool…: removes BelloCode's links (never another file).
+    @objc func uninstallCommandLineTool(_ sender: Any?) {
+        let installer = CommandLineToolInstaller.live()
+        guard case .installed(let link) = installer.status() else {
+            OpenCodeSettingsActions.live.report("bellocode-opencode is not installed by this BelloCode.")
+            return
+        }
+        guard OpenCodeSettingsActions.live.confirm(
+            "Uninstall the bellocode-opencode command?", "Removes the link at \((link.path as NSString).abbreviatingWithTildeInPath). BelloCode's configuration and credentials are not touched.", "Uninstall")
+        else { return }
+        do {
+            try installer.uninstall()
+            OpenCodeSettingsModel.last?.refreshToolStatus()
+        } catch {
+            OpenCodeSettingsActions.live.report("Could not remove the link: \(error.localizedDescription)")
+        }
+    }
+
     @objc func showEnvironment(_ sender: Any?) {
         if let directory = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first?.currentProjectDirectory {
             EnvironmentSettingsModel.preferredDirectory = directory

@@ -142,6 +142,9 @@ final class AppRuntime {
             gitShimDirectory: root.appending(path: "git-shim", directoryHint: .isDirectory))
         // Corporate network (docs/features/containers.md): opencode's Bun runtime trusts the selected enterprise roots
         // and uses the administrator's or the Mac's proxies (Bun reads neither the Keychain nor macOS proxy settings).
+        // Repository opencode configuration (docs/features/opencode-config.md): the person's server-wide choice, read at
+        // each launch so a change applies at the next restart.
+        configuration.repositoryConfigProvider = { AppSettings.storedRepositoryConfig() }
         let enterprise = certificateDirectory(dataRoot: root).appending(path: CorporateNetwork.enterpriseName)
         configuration.launchEnvironment = {
             EnvironmentService.serverEnvironment(enterpriseBundle: enterprise, proxy: SystemProxySettings.current(), managed: ManagedNetworkPolicy.read())

@@ -298,7 +298,7 @@ public final class OpenCodeConfigService {
         var problem: String?
         if bello?.status != "active" {
             let why = denyPolicy ?? bello.map { "its state is \($0.status)\($0.error.map { ": \($0)" } ?? "")" } ?? "it is not loaded"
-            problem = "BelloCode's opencode plugin is off: \(why). Orchestration tools, the container guard hook and the environment contract are unavailable until this is fixed."
+            problem = "\(why.prefix(1).uppercased() + why.dropFirst()). Orchestration tools, the container guard hook and the environment contract are unavailable until this is fixed."
         }
         var skipped: [String] = []
         if projectLoaded, let directory, let status = try? await client.reloadStatus(directory: directory) { skipped = status }
@@ -317,6 +317,18 @@ public final class OpenCodeConfigService {
                 skipped: skipped),
             ignored
         )
+    }
+
+    /// Snapshots and demos only: shows fixed values without a server.
+    public func presentForSnapshots(inventory: OpenCodeInventory?, configProblem: String?, refreshError: String? = nil, trusted: [String] = [],
+                                    runningPolicy: RepositoryConfigPolicy = .bellocode) {
+        loaded = true
+        self.inventory = inventory
+        self.configProblem = configProblem
+        self.refreshError = refreshError
+        self.trusted = Dictionary(uniqueKeysWithValues: trusted.map { ($0, Date()) })
+        self.runningPolicy = runningPolicy
+        generation += 1
     }
 
     // MARK: Reload and restart
