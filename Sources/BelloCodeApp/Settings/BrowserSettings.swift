@@ -1,5 +1,6 @@
 import BelloCore
 import DesignSystem
+import Engine
 import Foundation
 import Observation
 import Synchronization
@@ -119,9 +120,12 @@ private final class OutputBuffer: Sendable {
 struct BrowserSettingsView: View {
     @Bindable var settings: AppSettings
     @Bindable var browse: BrowseStatusModel
+    /// The shared Chromium (docs/features/shared-browser.md); nil without an engine.
+    var sharedBrowser: SharedBrowserService? = nil
 
     var body: some View {
         SettingsPaneBody {
+            if let sharedBrowser { SharedChromeSettingsGroup(service: sharedBrowser) }
             SettingsGroup("Links", footer: "Hold ⇧ while clicking a link to use the other browser.") {
                 SettingsToggleRow("Open terminal links in the built-in browser", divided: false, isOn: $settings.terminalLinksOpenInBuiltInBrowser)
                 SettingsToggleRow("Offer to open dev servers seen in terminal or agent output", isOn: $settings.offersDevServers)

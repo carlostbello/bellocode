@@ -256,6 +256,7 @@ struct AppApprovalCard: View {
         case .serviceRestart: "arrow.clockwise"
         case .gitPush: "arrow.up"
         case .gitForcePush: "exclamationmark.arrow.triangle.2.circlepath"
+        case .browserMCP: "globe"
         }
     }
 
@@ -268,6 +269,7 @@ struct AppApprovalCard: View {
         case .gitlabWrite: "Always"
         case .serviceRestart: "Always in This Project"
         case .gitPush, .gitForcePush: "Always"
+        case .browserMCP: "Always in This Project"
         }
     }
 
@@ -280,6 +282,7 @@ struct AppApprovalCard: View {
         case .gitlabWrite: "Nothing is sent to GitLab; the agent is told."
         case .serviceRestart: "The service keeps running as it is."
         case .gitPush, .gitForcePush: "Nothing is pushed; the agent is told."
+        case .browserMCP: "The agent gets no browser tools; it is told."
         }
     }
 
@@ -301,6 +304,8 @@ struct AppApprovalCard: View {
             "Remote: \(approval.scope). Pushed once from this Mac with your GitLab token, exactly as shown; GitLab's branch rules still apply."
         case .gitForcePush:
             "Remote: \(approval.scope). A force push replaces the remote branch's history: commits only on the remote are lost there. Sent with --force-with-lease, so it fails if the remote moved since this card."
+        case .browserMCP:
+            "Project: \(approval.scope). The shared Chrome is signed in as you, and its sign-ins are shared by every thread allowed to use it: an agent can read and act on any site you are signed in to there. “Allow Once” covers this thread only; “Always” covers every thread of this project (Settings ▸ Browser can revoke it)."
         }
     }
 }

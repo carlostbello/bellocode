@@ -11,13 +11,14 @@ import GRDB
 /// `app_gitlab_instance`, `app_mr_snapshot`, `app_mr_wake` (GitLab, migration `v9-gitlab`), `app_review_draft` (GitLab 2
 /// review drafts, migration `v10-gitlab-review`), `app_auto_audit` (Auto decisions and Full-access notices, migration
 /// `v11-auto-audit`; no content or secrets), `app_managed_secret`, `app_secret_placeholder`, `app_secret_audit`
-/// (secret manager, migration `v12-secret-manager`).
+/// (secret manager, migration `v12-secret-manager`), `app_browser_binding`, `app_browser_share`, `app_browser_label`
+/// (shared browser: per-thread tab groups, deliberate tab sharing, canonical project names; migration `v13-shared-browser`).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 12
+    static let currentVersion = 13
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -299,6 +300,36 @@ enum ProjectionSchema {
                     json BLOB NOT NULL
                 );
                 CREATE INDEX app_secret_audit_by_account ON app_secret_audit(account, at DESC);
+                """)
+        }
+        // Shared browser (docs/features/shared-browser.md): each thread's named tab group and default tab in the one shared
+        // Chromium (keyed by the immutable opencode session ID, never a title), tabs a thread deliberately shared with
+        // another (recorded with who, what and until when), and the stable DNS label of each project's canonical
+        // `https://<label>.bc:<port>/` URLs. No URLs, page titles or cookies. Named distinctly (`v13-shared-browser`):
+        // another branch may add its own thirteenth migration; GRDB applies by name, so only `currentVersion` needs
+        // reconciling on merge.
+        migrator.registerMigration("v13-shared-browser") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_browser_binding (
+                    session_id TEXT PRIMARY KEY NOT NULL,
+                    group_slug TEXT NOT NULL UNIQUE,
+                    project TEXT NOT NULL,
+                    updated REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE TABLE app_browser_share (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    owner_session TEXT NOT NULL,
+                    grantee_session TEXT NOT NULL,
+                    tab TEXT NOT NULL,
+                    created REAL NOT NULL,
+                    json BLOB NOT NULL
+                );
+                CREATE INDEX app_browser_share_by_grantee ON app_browser_share(grantee_session);
+                CREATE TABLE app_browser_label (
+                    project TEXT PRIMARY KEY NOT NULL,
+                    label TEXT NOT NULL UNIQUE
+                );
                 """)
         }
         return migrator

@@ -137,13 +137,13 @@ extension SnapshotRunner {
     }
 
     /// Renders a SwiftUI view in its own window, light and dark.
-    func renderHosted<V: View>(_ view: V, state: String) async -> [String] {
+    func renderHosted<V: View>(_ view: V, state: String, title: String = "Secrets") async -> [String] {
         guard only.isEmpty || only.contains(state) else { return [] }
         let host = NSHostingController(rootView: view)
         host.sizingOptions = [.preferredContentSize]
         let window = NSWindow(contentViewController: host)
         window.styleMask = [.titled]
-        window.title = "Secrets"
+        window.title = title
         window.setFrameOrigin(NSPoint(x: 60, y: 60))
         window.orderFront(nil)
         try? await Task.sleep(for: .milliseconds(300))

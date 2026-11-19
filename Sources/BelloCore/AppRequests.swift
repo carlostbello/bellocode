@@ -128,6 +128,9 @@ public struct AppApproval: Hashable, Sendable, Codable {
         case gitPush
         /// Git parity: an agent asks to force-push (always its own card; never "Always").
         case gitForcePush
+        /// Shared browser: agents in a project may use the browse MCP server in the shared Chrome container (MCP servers
+        /// always need a person, even in Auto or Full access; sign-ins in that browser are shared by every thread).
+        case browserMCP
     }
 
     public var action: Action

@@ -85,6 +85,7 @@ final class AppRuntime {
         var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         configuration.containers = containerConfiguration(for: server)
         configuration.secretManager = secretManagerConfiguration(dataRoot: server.dataRoot)
+        configuration.sharedBrowser = sharedBrowserConfiguration(dataRoot: server.dataRoot, bundle: bundle)
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
@@ -176,6 +177,13 @@ final class AppRuntime {
         if let authorityVault { configuration.authorityVault = authorityVault }
         configuration.enforceEgress = SecretManagerConfiguration.egressEnforced(userDefaults: .standard)
         return configuration
+    }
+
+    /// The shared browser (docs/features/shared-browser.md): its image context from the bundle, BelloCode's own docker
+    /// configuration for builds, the packing key in the Keychain.
+    nonisolated static func sharedBrowserConfiguration(dataRoot: URL, bundle: Bundle = .main) -> SharedBrowserConfiguration {
+        SharedBrowserConfiguration(contextDirectory: BrowserImageContext.locate(bundle: bundle),
+                                   dockerConfigDirectory: dataRoot.appending(path: "browser/docker", directoryHint: .isDirectory))
     }
 
     /// `Contents/Resources/opencode-plugin` (the "bellocode" server plugin, docs/features/orchestration.md), if bundled.

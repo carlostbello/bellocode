@@ -8,7 +8,7 @@ export SWIFTTERM_BUILD_COMMIT ?= 282c3c3a932b55c129628876b70f37d993af1615
 export SWIFTTERM_BUILD_BRANCH ?= HEAD
 export SWIFTTERM_BUILD_DIRTY ?= false
 
-.PHONY: build test fetch app run smoke e2e-containers e2e-exec plugin-test opencode-upgrade opencode-verify clean
+.PHONY: build test fetch app run smoke e2e-containers e2e-exec plugin-test opencode-upgrade opencode-verify browser-verify clean
 
 build:
 	swift build
@@ -52,6 +52,12 @@ opencode-upgrade:
 opencode-verify:
 	@test -n "$(VERSION)" || { echo "usage: make opencode-verify VERSION=x.y.z"; exit 2; }
 	Scripts/opencode-verify.sh $(VERSION)
+
+# The shared browser image's regression gate (docs/features/shared-browser.md): build Containers/browser (or
+# CONTEXT=<candidate folder>) with a throwaway key, run it hardened, check sandbox, pairing, MCP schema, CA trust and the
+# cookie flush. Report in build/browser-verify/<hash>/REPORT.md. Run it for every Chromium or browse pin change.
+browser-verify:
+	Scripts/browser-verify.sh $(CONTEXT)
 
 clean:
 	rm -rf .build build

@@ -774,7 +774,7 @@ public final class EgressProxy: Sendable {
             throw DestinationRefused(message: "BelloCode: " + reason)
         case .dial(let dial):
             // Plain HTTP to the container (dev servers, services); TLS to a routed container is not offered.
-            guard scheme == "http" else { throw DestinationRefused(message: "BelloCode: \(destination) is reached over http only.") }
+            guard scheme == "http" || dial.terminatesTLS else { throw DestinationRefused(message: "BelloCode: \(destination) is reached over http only.") }
             let wire = WireConnection(NWConnection(to: endpoint(dial.endpoint), using: .tcp), queue: queue)
             try await wire.start()
             if let preamble = dial.preamble { try await wire.send(preamble) }

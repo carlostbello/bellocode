@@ -25,6 +25,7 @@ final class BrowserProfiles {
     func store(forProject directory: String) -> WKWebsiteDataStore {
         if let store = persistent[directory] { return store }
         let store = isolated ? WKWebsiteDataStore.nonPersistent() : WKWebsiteDataStore(forIdentifier: Self.identifier(forProject: directory))
+        CanonicalPreviewProxy.apply(to: store)
         persistent[directory] = store
         return store
     }
@@ -32,6 +33,7 @@ final class BrowserProfiles {
     func privateStore(forThread key: String) -> WKWebsiteDataStore {
         if let store = ephemeral[key] { return store }
         let store = WKWebsiteDataStore.nonPersistent()
+        CanonicalPreviewProxy.apply(to: store)
         ephemeral[key] = store
         return store
     }

@@ -55,6 +55,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     /// The window's "Merge Requests" tab (M3-B; MainWindowController+MergeRequests.swift).
     private(set) var mergeRequests: MergeRequestSurfaces?
     private(set) var autoAudit: AutoAuditSurfaces?
+    /// The shared Chromium's live view ("Chrome" tab).
+    private(set) var sharedChrome: SharedChromeSurfaces?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -121,6 +123,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             self?.browser?.display(context)
             self?.agents?.display(context)
             self?.autoAudit?.display(context)
+            self?.sharedChrome?.display(context)
             self?.attachAuto(context)
             context?.onShowAgents = { [weak self] in self?.showAgentsPanel() }
             self?.attachExtras(context)
@@ -144,6 +147,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         mergeRequests?.bind(engine: workspace.engine)
         autoAudit = surfaces.autoAudit
         autoAudit?.bind(engine: workspace.engine)
+        sharedChrome = surfaces.sharedChrome
+        sharedChrome?.bind(engine: workspace.engine)
         wireCreateMergeRequest()
         wireStartThreadFromIssue()
         titleLoop = ObservationLoop { [weak self] in self?.updateTitle() }
@@ -649,6 +654,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     var isBrowserPanelShown: Bool { !split.panelItem.isCollapsed && rightPanel.selectedID == "browser" }
+
+    /// Shows the right panel on its "Chrome" tab (the shared Chromium's live view).
+    func showSharedChromePanel() {
+        if split.panelItem.isCollapsed {
+            split.setCollapsed(split.panelItem, false)
+            recordLayout()
+        }
+        rightPanel.select("chrome")
+    }
 
     // MARK: - TerminalShell
 

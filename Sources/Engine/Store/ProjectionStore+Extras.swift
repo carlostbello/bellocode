@@ -34,6 +34,8 @@ public enum AppGrantKind: String, Sendable {
     case gitlabBabysit
     /// Agents may restart this project's services without asking (scope: the project directory).
     case serviceRestart
+    /// Agents in this project may use the shared Chrome's MCP server (the person approved it; scope: the project).
+    case browserMCP
 }
 
 extension ProjectionStore {
