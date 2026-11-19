@@ -80,6 +80,7 @@ extension EnvironmentService {
             workingDirectory = folder
             try await Self.writeFile(Data(stack.composeYAML.utf8), to: file)
         }
+        try await verifyStackOwnership(project: project, id: server.id)
         let probe = StackPlan(id: server.id, project: project, files: [file], workingDirectory: workingDirectory, endpointContainer: "",
                               model: ComposeModel(name: project, services: []), executable: executable, configDirectory: dockerConfig)
         let config = try await probe.run(activeRuntime, ["config", "--format", "json"], timeout: .seconds(60))
@@ -100,6 +101,22 @@ extension EnvironmentService {
         try await Self.writeFile(Data(model.override(label: (Self.stackLabel, server.id), corporate: corporate).utf8), to: override)
         return StackPlan(id: server.id, project: project, files: [file, override], workingDirectory: workingDirectory, endpointContainer: endpoint,
                          model: model, executable: executable, configDirectory: dockerConfig)
+    }
+
+    /// The name of a container in the compose project that BelloCode's override did not label for this server, if any.
+    nonisolated static func foreignStackContainer(_ containers: [ContainerSummary], id: String) -> String? {
+        containers.first { $0.labels[stackLabel] != id }.map { $0.name }
+    }
+
+    /// R07: `up --remove-orphans`, `stop` and `down` act on every container of the compose project. When the project
+    /// holds a container BelloCode did not create for this server (a manual stack that happens to share the name),
+    /// nothing is run and the server shows why.
+    func verifyStackOwnership(project: String, id: String) async throws {
+        let containers = try await activeRuntime.composeProjectContainers(project)
+        if let name = Self.foreignStackContainer(containers, id: id) {
+            throw EnvironmentBlockedError(message: ForeignResourceError(kind: .container, name: name).description
+                + " It is part of the compose project \(project), which BelloCode uses for this MCP server.")
+        }
     }
 
     /// Starts forwarders for enabled stack servers and stops those that are off or gone (their stack stops; a removed
@@ -182,6 +199,15 @@ extension EnvironmentService {
     private func runCompose(_ plan: StackPlan, _ command: [String], key: String, then: (@MainActor () -> Void)? = nil) {
         let runtimeRef = activeRuntime
         tasks.set(key, Task { [weak self] in
+            do {
+                try await self?.verifyStackOwnership(project: plan.project, id: plan.id)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                var state = self.globalMCPStates[plan.id] ?? GlobalMCPState()
+                state.problem = Self.describe(error)
+                self.globalMCPStates[plan.id] = state
+                return
+            }
             _ = try? await plan.run(runtimeRef, command, timeout: .seconds(120))
             guard self != nil, !Task.isCancelled else { return }
             then?()

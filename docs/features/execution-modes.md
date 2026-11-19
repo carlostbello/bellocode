@@ -24,7 +24,9 @@ shared workspace runs a marker written on the Mac must be visible in each root. 
 `EnvironmentService.trustedRoots` (BelloCore `TrustedRoots`) and `policyRoots(for:)` (project roots, then code roots)
 are what Auto mode and risk notices treat as in scope; the helper configuration carries `trustedRoots` for the plugin.
 **Migration** (once, `containers.executionModesMigrated`): projects whose record shows a container keep Project
-container; the rest follow the default. **Administrators:** `ContainerCodeRoots` (array, `~/` allowed),
+container; the rest follow the default. The settings and the marker are one transaction; after a failed write nothing is
+marked done (retried next launch, the project keeps its container meanwhile, the pane says why), and an unreadable row
+keeps the migration open. **Administrators:** `ContainerCodeRoots` (array, `~/` allowed),
 `ContainerCodeRootsLocked`, `ContainerDefaultExecutionMode` (`shared`/`project`/`host-docker`),
 `ContainerAllowedExecutionModes`.
 
@@ -49,8 +51,12 @@ Containers view and Prune. The image needs the CLI and Compose plugin (`docs/fea
 `docker:29-cli`). **Hostile matrix:** 89 requests through the proxy to an in-process fake daemon (`DockerFilterTests`,
 every case named in its source) all refused, none reached the daemon; bad tokens, smuggling and CL/TE conflicts refused.
 Live: 24 hostile CLI commands from inside the shared workspace refused by the real daemon path; compose
-up/exec/run/logs/ps/build and classic build work. **Residual risk:** a symlink swapped inside a root between check and
-mount (TOCTOU) is followed in the Rancher VM; Dockerfile `FROM` images are not checked; the agent sees its token.
+up/exec/run/logs/ps/build and classic build work. **Build base images (R14):** the proxy finds the Dockerfile in the streamed
+classic `/build` context (`BuildContextScanner`; plain tar only) and checks its `FROM`, `COPY --from` and `RUN --mount=from=`
+images (`DockerfileBases`, global `ARG`s and `buildargs` expanded; unresolvable refused) against the image policy unless
+the scope built them; a refused build is cut off before the context completes. Under enforced egress, `RUN` steps get
+the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
+between check and mount (TOCTOU) is followed in the Rancher VM; the agent sees its token.
 
 ## Environment contract
 
@@ -62,8 +68,14 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 ## Dev containers (Project container only)
 
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
-Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project) built by BelloCode with
-Rancher's `docker buildx build --load`; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
+Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
+Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
+without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
+context file `.dockerignore` keeps, links as links; computed in the background, bounded to 200 000 files / 4 GiB), so a
+changed input rebuilds; Rebuild runs the build again and replaces the container after it succeeded; a built tag is never
+pulled; the build belongs to the project's task: a project or mode change, stopping the service or its 60-minute
+deadline stops docker (TERM, KILL after 10 s) and waits until it is gone, and a result is used only for the plan still
+in force; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
 `forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;

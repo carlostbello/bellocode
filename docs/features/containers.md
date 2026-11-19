@@ -69,7 +69,8 @@ registered per location (`PUT /api/experimental/mcp/{name}?location[directory]=�
 at once) as `bellocode-exec --stdio --project <dir> -- <command>`: a non-TTY exec whose wrapper gives it the real stdin,
 records its process group, passes TERM/INT/HUP on; bytes unchanged, one 64 KiB chunk in flight, EOF and exit code kept.
 One sync per location at a time (requests coalesce; each registration is recorded as made, so removals are never
-lost): when the container is ready, after a reconnect, on every change. Relayed execs do not keep a container awake.
+lost; a removal counts only once opencode's list no longer has the server: until then the row shows Removing…, it stays
+recorded and the sync is retried with backoff): when the container is ready, after a reconnect, on every change. Relayed execs do not keep a container awake.
 
 ## Global MCP servers (Settings ▸ MCP Servers, Window ▸ MCP Servers…)
 
@@ -136,7 +137,8 @@ Data, refused/ignored keys, editor or Reload) and the Containers view. Agent too
 Images are unsigned and no internal registry distributes them (owner, 2026-11-18): most projects build from a
 Dockerfile on public base images. The policy covers what BelloCode pulls (base images, pulled workspace and service
 images): an allowlist (empty: any) of registries or repository prefixes (`docker.io/library/`; Docker normalisation,
-boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A refused image is never pulled or
+boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A dev container built here is checked by its
+Dockerfile's base images (`FROM`, `COPY --from`, `RUN --mount=from=`, before each build), never by the local tag it gets. A refused image is never pulled or
 run ("Image not allowed", with the reason in the banner, the helper and Services).
 **For administrators** (managed preferences win over Settings, shown read-only): keys forced by a configuration profile
 in domain `com.bellocode.app`, or a root-owned, non-writable `/Library/Preferences/app.bellocode.policy.plist`:
@@ -191,6 +193,10 @@ Settings ▸ Containers ▸ Caches lists sizes and empties one after confirming 
 BelloCode volumes of projects (and stacks) BelloCode no longer has (never a known project's home or data, never a shared
 cache), unattached BelloCode networks, unused images BelloCode pulled. One confirmation; items that changed since are kept
 and named. Anything without BelloCode's labels is never listed.
+**Ownership:** a container, volume or network with one of BelloCode's names but without the labels of its role (shared
+browser and profile, egress gateway and network, workspace home and caches, service volumes and networks, image MCP
+containers, compose-stack projects) is never stopped, removed, recreated or adopted: the operation fails with "…was not
+created by BelloCode…", naming it (`ForeignResourceError`, `ResourceOwnershipTests`, `BrowserOwnershipTests`).
 
 ## Workspace, failures, ports, file watching
 
@@ -203,7 +209,9 @@ item, context line). Ports forward on demand to `127.0.0.1` through an exec rela
 ## Host git, secrets, host requirements
 
 Host git stays on the Mac for BelloCode and opencode (shim), confined at one choke point (`HostGit`): `sandbox-exec`
-(only the real git, no network except fetch/push, writes only in the repository), `GIT_CONFIG_COUNT` overrides (hooks,
+(only the real git, no network except fetch/push, writes only in the repository and its own metadata: a linked
+worktree's gitdir only as `<commondir>/worktrees/<name>` whose `gitdir` points back at this checkout, a submodule's only
+under an enclosing superproject's `.git/modules`, a `commondir` only for such a worktree; `HostGitWritableRootsTests`), `GIT_CONFIG_COUNT` overrides (hooks,
 fsmonitor, pagers, editors, signing, helpers, `protocol.allow`), an allowlisted environment; 28 configuration vectors
 and 15 hooks fire nothing (`HostGitIsolationTests`, also with BelloCode's credential helper present). HTTPS remotes on a
 configured GitLab instance authenticate through `bellocode-exec --git-credential`, the only program the network profile

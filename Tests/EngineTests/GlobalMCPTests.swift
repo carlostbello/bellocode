@@ -241,6 +241,33 @@ struct GlobalMCPTests {
         #expect(await waitFor { runtime.composeCommands.contains("stop") })
     }
 
+    /// R07: a compose project of the same name holding a container BelloCode's override did not label (a manual stack)
+    /// is never brought up (`--remove-orphans` would delete it), stopped or taken down; the server shows why.
+    @Test func aStackNeverTouchesAComposeProjectHoldingSomeoneElsesContainer() async throws {
+        runtime.composeConfig.withLock { $0 = Self.composeJSON(["mcp": ["image": "acme/mcp:1"]]) }
+        runtime.projectContainers.withLock {
+            $0 = [ContainerSummary(id: "theirs", names: ["/manual-db"], image: "postgres", state: "running",
+                                   labels: ["com.docker.compose.project": EnvironmentService.stackProject(Self.stack.id)])]
+        }
+        let (service, _) = try await makeService()
+        defer { service.stop() }
+        try await service.saveGlobalMCP([Self.stack])
+        #expect(await waitFor { service.globalMCPStates[Self.stack.id]?.problem != nil })
+        let problem = try #require(service.globalMCPStates[Self.stack.id]?.problem)
+        #expect(problem.contains("manual-db") && problem.contains("not created by BelloCode"))
+        #expect(runtime.composeCommands.isEmpty, "no compose command ran: \(runtime.composeCommands)")
+        #expect(service.stackForwarders[Self.stack.id] == nil)
+        // Its own labelled containers are fine.
+        runtime.projectContainers.withLock {
+            $0 = [ContainerSummary(id: "ours", names: ["/x-mcp-1"], image: "acme/mcp:1", state: "running",
+                                   labels: [EnvironmentService.stackLabel: Self.stack.id])]
+        }
+        var changed = Self.stack
+        changed.name = "notes2"
+        try await service.saveGlobalMCP([changed])
+        #expect(await waitFor { service.stackForwarders[Self.stack.id] != nil })
+    }
+
     @Test func elevatedStacksNeedRunAsWrittenAndTheEngineSocketIsNeverAllowed() async throws {
         runtime.composeConfig.withLock {
             $0 = Self.composeJSON(["mcp": ["image": "acme/mcp:1", "privileged": true,

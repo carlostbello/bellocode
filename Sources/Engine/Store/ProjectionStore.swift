@@ -899,6 +899,25 @@ public actor ProjectionStore {
         }
     }
 
+    /// Saves several project environments and one preference in one transaction: all of them or none (R17, a
+    /// migration and its completion marker).
+    public func saveEnvironments(_ values: [String: StoredEnvironment], andPreference key: String, _ value: some Encodable & Sendable) async throws {
+        if let writeHook { try await writeHook(StoreBatch()) }
+        let environmentEncoder = JSONEncoder()
+        environmentEncoder.outputFormatting = [.sortedKeys]
+        let rows = try values.map { ($0.key, try environmentEncoder.encode($0.value)) }
+        let preference = try Self.json(value, Self.encoder)
+        let now = Date().timeIntervalSince1970
+        try await writer.write { db in
+            for (directory, data) in rows {
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO app_environment (directory, updated, json) VALUES (?, ?, ?)", arguments: [directory, now, data])
+            }
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO app_preference (key, updated, json) VALUES (?, ?, ?)", arguments: [key, now, preference])
+        }
+    }
+
     // MARK: - Terminals
 
     /// A thread's terminal set (`app_terminal`, kept by `rebuild()`), or nil when none was saved or it is unreadable.

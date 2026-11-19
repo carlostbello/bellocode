@@ -77,6 +77,8 @@ public protocol WorkspaceRuntime: Sendable {
     func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder
     /// Containers of global image servers.
     func mcpContainers() async throws -> [ContainerSummary]
+    /// Every container of a compose project (`com.docker.compose.project=<project>`), whoever created it.
+    func composeProjectContainers(_ project: String) async throws -> [ContainerSummary]
     /// Removes stopped image-server containers and those of servers that no longer exist.
     func removeMCPLeftovers(knownIDs: Set<String>) async
     /// Fetches `urls` from inside a container (network diagnostics); nil when the container cannot run the probe.
@@ -109,6 +111,7 @@ extension WorkspaceRuntime {
         throw ContainerError.notFound("stack forwarding is not available here")
     }
     public func mcpContainers() async throws -> [ContainerSummary] { [] }
+    public func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] { [] }
     public func removeMCPLeftovers(knownIDs: Set<String>) async {}
     public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] { [] }
     public func updateTrustStore(container: String) async -> String { "skipped" }
@@ -227,6 +230,9 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         try PortForwarder(client: client, container: container, containerPort: port, containerHost: "127.0.0.1", hostPort: hostPort, prepare: prepare)
     }
     public func mcpContainers() async throws -> [ContainerSummary] { try await ImageMCPRunner(client: client).containers() }
+    public func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] {
+        try await client.listContainers(labels: ["com.docker.compose.project=\(project)"])
+    }
     public func removeMCPLeftovers(knownIDs: Set<String>) async { await ImageMCPRunner(client: client).removeLeftovers(knownIDs: knownIDs) }
     public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] {
         let result = try await ExecSession.run(client: client, container: container, argv: NetworkProbe.script(urls: urls), user: user,

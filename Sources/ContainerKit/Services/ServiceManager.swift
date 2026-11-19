@@ -144,13 +144,15 @@ public struct ServiceManager: Sendable {
     public func ensureNetwork(projectRoot: String, offline: Bool, extraLabels: [String: String] = [:]) async throws -> String {
         let key = WorkspaceSpec.projectKey(for: projectRoot)
         let name = ServiceLabels.networkName(projectKey: key, offline: offline)
-        if try await client.inspectNetwork(name) != nil { return name }
+        let ownership = [ServiceLabels.network: "1", WorkspaceSpec.labelProjectKey: key]
+        if try await client.ownedNetwork(name, required: ownership) != nil { return name }
         let labels = [ServiceLabels.network: "1", WorkspaceSpec.labelProject: projectRoot, WorkspaceSpec.labelProjectKey: key]
             .merging(extraLabels) { a, _ in a }
         do {
             _ = try await client.createNetwork(name: name, labels: labels, isInternal: offline)
         } catch ContainerError.conflict {
-            // Created meanwhile by the helper or another window.
+            // Created meanwhile by the helper or another window: fine if it is ours.
+            guard try await client.ownedNetwork(name, required: ownership) != nil else { throw ForeignResourceError(kind: .network, name: name) }
         }
         return name
     }
@@ -274,9 +276,10 @@ public struct ServiceManager: Sendable {
             try await client.removeContainer(current.id, force: true)
         }
         for volume in Set(spec.definition.volumes.map(\.name)) {
-            try await client.createVolume(name: spec.volumeName(volume), labels: [
+            // A same-name volume without this project's service labels is someone else's data: never mounted (R07).
+            try await client.ensureOwnedVolume(name: spec.volumeName(volume), labels: [
                 ServiceLabels.volume: volume, WorkspaceSpec.labelProject: spec.projectRoot, WorkspaceSpec.labelProjectKey: spec.projectKey,
-            ].merging(spec.extraLabels) { a, _ in a })
+            ].merging(spec.extraLabels) { a, _ in a }, required: [ServiceLabels.volume: volume, WorkspaceSpec.labelProjectKey: spec.projectKey])
         }
         var body = spec.createBody(imageID: image.id)
         body.labels?[WorkspaceSpec.labelConfig] = hash

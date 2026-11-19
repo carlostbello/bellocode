@@ -116,19 +116,43 @@ extension EnvironmentService {
         await update(directory, settings: settings)
     }
 
+    /// Where the image that applies to a project is chosen (R32): the shared workspace (and anything without a project)
+    /// uses the default image of Settings ▸ Containers; a project container its own image in Project Environment.
+    public func imageSettingsTarget(for directory: String?) -> ImageSettingsTarget {
+        guard let directory else { return .containersDefault }
+        return mode(forDirectory: directory) == .sharedWorkspace ? .containersDefault : .projectEnvironment
+    }
+
     // MARK: Migration
 
     /// Once: projects that already have a workspace container with state keep running in it ("Project container");
-    /// every other project follows the default (the shared workspace).
+    /// every other project follows the default (the shared workspace). The settings and the completion marker are
+    /// written in one transaction (R17): after a failed write nothing is marked done, so the migration runs again at
+    /// the next launch, and this launch keeps those projects on their own container in memory meanwhile. A project
+    /// whose row is unreadable is left as it is (blocked until its settings are reviewed) and retried later.
     func migrateExecutionModes() async {
         guard policyReadFailure == nil else { return }
         guard (try? await store.preference(Self.modesMigratedKey, as: Bool.self)) != true else { return }
+        var migrated: [String: StoredEnvironment] = [:]
         for model in models.values where model.settings.executionMode == nil && Self.hasContainerState(model.record)
             && !unreadablePolicies.contains(model.directory) {
             model.settings.executionMode = .projectContainer
-            await persist(model)
+            migrated[model.directory] = StoredEnvironment(settings: model.settings, record: model.record)
         }
-        try? await store.setPreference(Self.modesMigratedKey, true)
+        // Done only when no project's saved setting is still unknown.
+        let complete = unreadablePolicies.isEmpty
+        do {
+            if complete {
+                try await store.saveEnvironments(migrated, andPreference: Self.modesMigratedKey, true)
+            } else {
+                for (directory, value) in migrated { try await store.saveEnvironment(value, directory: directory) }
+            }
+            modesMigrationProblem = nil
+        } catch {
+            let message = "BelloCode could not save this project's execution mode (\(error)). It keeps its own container for now; the setting is saved again at the next launch."
+            modesMigrationProblem = message
+            for directory in migrated.keys { models[directory]?.lastError = message }
+        }
     }
 
     /// A container was created for the project before (its record names one, or it ran).
@@ -263,4 +287,15 @@ extension EnvironmentService {
         return ExecHelperConfig.DockerAccess(host: "tcp://127.0.0.1:\(endpoint.port)/\(token)", binary: endpoint.hostDockerBinary,
                                              configDirectory: endpoint.hostDockerConfig)
     }
+}
+
+/// The settings field that sets the image a project actually uses.
+public enum ImageSettingsTarget: Sendable, Equatable {
+    /// Settings ▸ Containers ▸ Default image.
+    case containersDefault
+    /// Project Settings ▸ Environment ▸ Image.
+    case projectEnvironment
+
+    /// The settings pane that holds it.
+    public var pane: String { self == .containersDefault ? "containers" : "environment" }
 }

@@ -46,25 +46,16 @@ public struct DevContainerPlan: Sendable, Equatable {
         return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16).description
     }
 
-    /// The tag BelloCode builds the image as (changes when the Dockerfile, context or arguments change).
-    public func buildTag(projectKey: String) -> String? {
+    /// `docker buildx build` arguments (argv after the docker binary). No secrets, no shell. The Dockerfile comes on
+    /// standard input (`-f -`, the bytes `DevContainerBuildInputs` verified) and `context` is the verified canonical
+    /// folder, so the CLI never opens a project path BelloCode did not just check (R16).
+    public func buildArguments(tag: String, context: String) -> [String]? {
         guard let build else { return nil }
-        let dockerfile = (try? Data(contentsOf: URL(filePath: build.dockerfile))) ?? Data()
-        var hasher = SHA256()
-        hasher.update(data: dockerfile)
-        hasher.update(data: Data("\(build.context)\n\(build.args.sorted { $0.key < $1.key })\n\(build.target ?? "")".utf8))
-        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined().prefix(12)
-        return "bellocode-dev-\(projectKey):\(digest)"
-    }
-
-    /// `docker buildx build` arguments (argv after the docker binary). No secrets, no shell.
-    public func buildArguments(tag: String) -> [String]? {
-        guard let build else { return nil }
-        var argv = ["buildx", "build", "--load", "--progress", "plain", "-t", tag, "-f", build.dockerfile,
+        var argv = ["buildx", "build", "--load", "--progress", "plain", "-t", tag, "-f", "-",
                     "--label", "\(WorkspaceSpec.labelWorkspace)=1", "--label", "app.bellocode.devcontainer=1"]
         for (key, value) in build.args.sorted(by: { $0.key < $1.key }) { argv += ["--build-arg", "\(key)=\(value)"] }
         if let target = build.target { argv += ["--target", target] }
-        argv.append(build.context)
+        argv.append(context)
         return argv
     }
 
@@ -121,8 +112,9 @@ public struct DevContainerPlan: Sendable, Equatable {
         func resolve(_ value: String) -> String {
             let substituted = value.replacingOccurrences(of: "${localWorkspaceFolder}", with: projectRoot)
                 .replacingOccurrences(of: "${containerWorkspaceFolder}", with: projectRoot)
-            return substituted.hasPrefix("/") ? (substituted as NSString).standardizingPath
-                : ((directory as NSString).appendingPathComponent(substituted) as NSString).standardizingPath
+            // Lexical only (`standardizingPath` would also drop a leading /private); containment is checked on the
+            // canonical paths below.
+            return CodeRootPaths.lexicallyNormalized(substituted.hasPrefix("/") ? substituted : (directory as NSString).appendingPathComponent(substituted))
         }
         for key in json.keys.sorted() {
             let value = json[key]
@@ -192,8 +184,10 @@ public struct DevContainerPlan: Sendable, Equatable {
             for extra in build.keys.sorted() where !["dockerfile", "context", "args", "target"].contains(extra) {
                 plan.refused.append(Refusal(key: "build.\(extra)", reason: "not supported (cache, options and secrets are BelloCode's to set)"))
             }
-            if !CodeRootPaths.inside(context, projectRoot) || !CodeRootPaths.inside(file, projectRoot) {
-                plan.refused.append(Refusal(key: "build.context", reason: "the build context and Dockerfile must be inside the project"))
+            // Links resolved on both sides (R16): a linked folder or Dockerfile under the project that points elsewhere
+            // is outside it. Checked again, on the objects themselves, right before each build (DevContainerBuildInputs).
+            if let refusal = DevContainerBuildInputs.containmentProblem(context: context, dockerfile: file, projectRoot: projectRoot) {
+                plan.refused.append(Refusal(key: "build.context", reason: refusal))
             }
             plan.build = Build(dockerfile: file, context: context, args: args, target: build["target"] as? String)
         } else if !build.isEmpty {
@@ -254,5 +248,61 @@ public struct DevContainerPlan: Sendable, Equatable {
             index += 1
         }
         return Data(String(output).utf8)
+    }
+}
+
+/// The verified inputs of one dev-container build, taken right before the CLI runs (R16): the canonical context folder
+/// and the Dockerfile's bytes, read through a descriptor opened without following a final link, both proven inside the
+/// canonical project folder. The CLI then gets the canonical context path and the Dockerfile on standard input.
+public struct DevContainerBuildInputs: Sendable, Equatable {
+    public var context: String
+    public var dockerfile: Data
+
+    public struct Problem: Error, Sendable, Equatable, CustomStringConvertible {
+        public var description: String
+        public init(_ description: String) { self.description = description }
+    }
+
+    public static let dockerfileLimit = 1 << 20
+
+    /// Why the context or Dockerfile is not inside the project once links are resolved, or nil.
+    public static func containmentProblem(context: String, dockerfile: String, projectRoot: String) -> String? {
+        guard let root = CodeRootPaths.canonical(projectRoot) else { return "the project folder does not exist" }
+        guard let canonicalContext = CodeRootPaths.canonical(context) else { return "the build context \(context) does not exist" }
+        guard let canonicalFile = CodeRootPaths.canonical(dockerfile) else { return "the Dockerfile \(dockerfile) does not exist" }
+        guard CodeRootPaths.inside(canonicalContext, root), CodeRootPaths.inside(canonicalFile, root) else {
+            return "the build context and Dockerfile must be inside the project (links are followed: \(canonicalContext), \(canonicalFile))"
+        }
+        return nil
+    }
+
+    public static func verify(_ build: DevContainerPlan.Build, projectRoot: String) -> Result<DevContainerBuildInputs, Problem> {
+        if let problem = containmentProblem(context: build.context, dockerfile: build.dockerfile, projectRoot: projectRoot) {
+            return .failure(Problem("The dev container was not built: \(problem)."))
+        }
+        guard let context = CodeRootPaths.canonical(build.context), let file = CodeRootPaths.canonical(build.dockerfile) else {
+            return .failure(Problem("The dev container was not built: its build context or Dockerfile disappeared."))
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: context, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return .failure(Problem("The dev container was not built: its build context \(context) is not a folder."))
+        }
+        // The canonical path has no links; O_NOFOLLOW refuses one swapped in since, and fstat proves a regular file.
+        let fd = open(file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return .failure(Problem("The dev container was not built: its Dockerfile could not be opened (\(String(cString: strerror(errno))))."))}
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
+            return .failure(Problem("The dev container was not built: its Dockerfile is not a regular file."))
+        }
+        guard Int(info.st_size) <= dockerfileLimit else { return .failure(Problem("The dev container was not built: its Dockerfile is larger than 1 MiB.")) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        let data = (try? handle.read(upToCount: dockerfileLimit + 1)) ?? Data()
+        guard data.count <= dockerfileLimit else { return .failure(Problem("The dev container was not built: its Dockerfile is larger than 1 MiB.")) }
+        // Still inside after opening (a parent folder swapped for a link between the checks and the open).
+        if let problem = containmentProblem(context: context, dockerfile: file, projectRoot: projectRoot) {
+            return .failure(Problem("The dev container was not built: \(problem)."))
+        }
+        return .success(DevContainerBuildInputs(context: context, dockerfile: data))
     }
 }

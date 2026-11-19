@@ -629,7 +629,8 @@ struct GlobalMCPOptOutView: View {
                     let shadowed = environment.settings.mcpServers.contains { $0.name == server.name }
                     SettingsRow(server.name, detail: shadowed ? "This project's own server of the same name is used instead." : "\(server.kind.title) · \(server.summary)") {
                         HStack(spacing: DS.Space.s4) {
-                            MCPStatusPill(enabled: server.enabled && !off && !shadowed, status: environment.mcpStatus.first { $0.name == server.name }?.status)
+                            MCPStatusPill(enabled: server.enabled && !off && !shadowed, status: environment.mcpStatus.first { $0.name == server.name }?.status,
+                                          removing: environment.mcpPendingRemoval.contains(server.name))
                             Toggle(isOn: Binding(get: { !off }, set: { value in Task { await model.setGlobalMCP(server.id, inProject: value) } })) { EmptyView() }
                                 .toggleStyle(DSToggleStyle(.switch)).accessibilityLabel("Use \(server.name) in this project").disabled(!server.enabled)
                         }

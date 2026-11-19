@@ -298,7 +298,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
         switch self {
         case .unknown, .ready, .idle, .starting: nil
         case .noImage:
-            .init(message: "No container image is set for this project, so commands cannot run. Choose an image in Project Settings ▸ Environment (or set a default in Settings ▸ Containers).",
+            .init(message: "No container image is set for this project, so commands cannot run. Choose one: the shared workspace uses the default image (Settings ▸ Containers), a project container its own image (Project Settings ▸ Environment).",
                   fix: EnvironmentFix.chooseImage.title)
         case .runtimeUnavailable(let state): .init(message: state.userMessage, fix: EnvironmentFix(state.fix)?.title)
         case .pulling(let progress):

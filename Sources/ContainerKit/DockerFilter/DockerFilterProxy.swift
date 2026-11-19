@@ -316,18 +316,15 @@ public final class DockerFilterProxy: Sendable {
             let decision = await policy.decide(request, scope: scope)
             switch decision {
             case .refuse(let status, let message):
-                let refusal = Refusal(scope: scope.key, method: request.method, path: request.path, message: message, date: Date())
-                refusals.withLock { list in
-                    list.append(refusal)
-                    if list.count > 50 { list.removeFirst(list.count - 50) }
-                }
-                onRefusal(refusal)
-                log.info("refused \(request.method, privacy: .public) \(request.path, privacy: .public)")
+                record(scope: scope, request: request, message: message)
                 try await respond(peer, status, message)
             case .forward(let forwarded, let streamBody, let hijack, let after):
                 guard streamBody == streams else { return try await respond(peer, 500, "internal routing mismatch") }
+                // A classic build's Dockerfile is checked as its context streams through (R14).
+                let check: BuildCheck? = request.method == "POST" && request.path.split(separator: "/") == ["build"]
+                    ? BuildCheck(scanner: BuildContextScanner(dockerfile: forwarded.value("dockerfile")), request: forwarded, scope: scope) : nil
                 try await forward(forwarded, head: head, reader: &reader, streamBody: streamBody, hijack: hijack, peer: peer,
-                                  after: after.map { (scope.key, $0) })
+                                  after: after.map { (scope.key, $0) }, buildCheck: check)
             }
         } catch {
             try? await respond(peer, 400, "BelloCode could not read this Docker request (\(error)).")
@@ -360,8 +357,34 @@ public final class DockerFilterProxy: Sendable {
     /// Headers passed to the daemon (everything else, including hop-by-hop headers and framing, is dropped).
     static let forwardedHeaders: Set<String> = ["content-type", "x-registry-auth", "x-registry-config", "accept", "user-agent", "x-docker-expose-session-uuid", "x-docker-expose-session-name", "x-docker-expose-session-sharedkey", "x-docker-expose-session-grpc-method"]
 
+    func record(scope: DockerScope, request: DockerAPIRequest, message: String) {
+        let refusal = Refusal(scope: scope.key, method: request.method, path: request.path, message: message, date: Date())
+        refusals.withLock { list in
+            list.append(refusal)
+            if list.count > 50 { list.removeFirst(list.count - 50) }
+        }
+        onRefusal(refusal)
+        log.info("refused \(request.method, privacy: .public) \(request.path, privacy: .public)")
+    }
+
+    /// The streamed check of a build context: the scanner, and what the policy needs to judge the Dockerfile.
+    struct BuildCheck {
+        var scanner: BuildContextScanner
+        var request: DockerAPIRequest
+        var scope: DockerScope
+    }
+
+    /// nil: allowed; otherwise the refusal message (`.missing` refuses too: an unchecked Dockerfile is never built).
+    func judge(_ outcome: BuildContextScanner.Outcome, _ check: BuildCheck) async -> String? {
+        switch outcome {
+        case .found(let dockerfile): return await policy.buildBaseRefusal(dockerfile: dockerfile, request: check.request, scope: check.scope)
+        case .missing: return DockerFilterPolicy.prefix + "the build context has no Dockerfile at “\(check.scanner.target)”, so its base images cannot be checked."
+        case .refused(let reason): return DockerFilterPolicy.prefix + reason
+        }
+    }
+
     func forward(_ request: DockerAPIRequest, head: RequestHead, reader: inout BodyReader, streamBody: Bool, hijack: Bool,
-                 peer: FileStream, after: (String, AfterAction)?) async throws {
+                 peer: FileStream, after: (String, AfterAction)?, buildCheck: BuildCheck? = nil) async throws {
         let daemon: FileStream
         do { daemon = try FileStream.connect(unixPath: daemonSocket) } catch {
             return try await respond(peer, 503, "Docker (Rancher Desktop) is not reachable from BelloCode right now.")
@@ -384,10 +407,28 @@ public final class DockerFilterProxy: Sendable {
             try await daemon.write(Data(text.utf8))
             // The daemon may answer (and close) before the whole context is sent, e.g. a refused Dockerfile: its
             // answer is still relayed below.
+            var check = buildCheck
+            var judged = check == nil
+            var refusal: String?
             do {
                 while let piece = try await reader.next() {
                     if piece.isEmpty { continue }
+                    if !judged, let outcome = check?.scanner.feed(piece) ?? nil, let current = check {
+                        judged = true
+                        refusal = await judge(outcome, current)
+                        if refusal != nil { break }
+                    }
                     try await daemon.write(Data(String(piece.count, radix: 16).utf8) + Data("\r\n".utf8) + piece + Data("\r\n".utf8))
+                }
+                if !judged, let outcome = check?.scanner.finish(), let current = check {
+                    refusal = await judge(outcome, current)
+                }
+                // The context is completed only once its Dockerfile passed: a refused build is cut off unfinished, so the
+                // daemon never builds it.
+                if let refusal, let current = check {
+                    daemon.cancel()
+                    record(scope: current.scope, request: current.request, message: refusal)
+                    return try await respond(peer, 403, refusal)
                 }
                 try await daemon.write(Data("0\r\n\r\n".utf8))
             } catch let error as HTTPParseError {

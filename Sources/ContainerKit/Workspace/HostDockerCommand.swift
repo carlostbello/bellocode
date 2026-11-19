@@ -17,6 +17,7 @@ public enum HostDockerCommand {
         case globalOption(String)
         case subcommand(String)
         case option(String)
+        case unknownOption(String)
 
         public var description: String {
             let tail = " This project runs in “Host shell, docker only” mode: only one plain docker, docker compose or docker buildx command per call is run on this Mac. Run other commands inside a container (for example docker compose run SERVICE …), or switch the project to the shared workspace in Project Settings ▸ Environment."
@@ -28,6 +29,7 @@ public enum HostDockerCommand {
             case .globalOption(let option): "the docker option \(option) chooses another daemon, context or configuration, which is not allowed." + tail
             case .subcommand(let name): "“docker \(name)” is not allowed in this mode (it changes the docker configuration or writes files on the Mac)." + tail
             case .option(let option): "the option \(option) writes files on the Mac, which is not allowed." + tail
+            case .unknownOption(let option): "the option \(option) is not one this mode understands, so the command is refused rather than guessed." + tail
             }
         }
     }
@@ -114,26 +116,74 @@ public enum HostDockerCommand {
         return [docker] + words.dropFirst()
     }
 
-    /// Validates docker's arguments (also used for relayed `--stdio` programs).
+    /// Global options accepted before the subcommand (they only change what docker prints).
+    public static let harmlessGlobalOptions: Set<String> = ["-D", "--debug"]
+    /// Global options accepted only as the whole remaining command line.
+    public static let terminalGlobalOptions: Set<String> = ["-v", "--version", "-h", "--help"]
+    /// Group options that may appear between a group and its subcommand, and whether each takes a value.
+    public static let groupOptions: [String: [String: Bool]] = [
+        "compose": [
+            "-f": true, "--file": true, "-p": true, "--project-name": true, "--project-directory": true, "--env-file": true,
+            "--profile": true, "--ansi": true, "--progress": true, "--parallel": true,
+            "--compatibility": false, "--dry-run": false, "--all-resources": false,
+        ],
+        "container": [:], "image": [:], "network": [:], "volume": [:], "buildx": [:],
+    ]
+    /// `docker buildx` subcommands allowed (builder changes, bake, dial-stdio, imagetools … are refused).
+    public static let allowedBuildx: Set<String> = ["build", "ls", "inspect", "version", "du"]
+    /// Options refused anywhere on the line: they pick another daemon, context, configuration or builder.
+    public static let endpointOptionsAnywhere: Set<String> = ["-H", "--host", "--context", "--config", "--builder"]
+
+    /// Validates docker's arguments (also used for relayed `--stdio` programs). The whole argument vector is checked:
+    /// leading global options are consumed one by one (only harmless ones), the subcommand and, for groups, the group's
+    /// options and nested subcommand are parsed, and then every remaining word is scanned for options that write on the
+    /// Mac or change the endpoint, including attached (`-ofile`, `--output=x`) and clustered (`-qo x`) short forms.
     public static func check(arguments: [String]) throws(Refusal) {
-        guard let subcommand = arguments.first else { return }
-        if subcommand.hasPrefix("-") {
-            let name = String(subcommand.split(separator: "=").first ?? "")
-            if endpointOptions.contains(name) || !["-v", "--version", "-D", "--debug", "--help", "-h"].contains(name) {
-                throw .globalOption(name)
+        var index = 0
+        while index < arguments.count, arguments[index].hasPrefix("-") {
+            let name = optionName(arguments[index])
+            if harmlessGlobalOptions.contains(name), !arguments[index].contains("=") {
+                index += 1
+                continue
             }
-            return
+            if terminalGlobalOptions.contains(name), !arguments[index].contains("="), index == arguments.count - 1 { return }
+            throw .globalOption(name)
         }
+        guard index < arguments.count else { return }
+        let subcommand = arguments[index]
         guard allowedSubcommands.contains(subcommand) else { throw .subcommand(subcommand) }
-        let rest = arguments.dropFirst()
-        if let nested = refusedNested[subcommand], let second = rest.first(where: { !$0.hasPrefix("-") }), nested.contains(second) {
-            throw .subcommand("\(subcommand) \(second)")
+        index += 1
+        if let options = groupOptions[subcommand] {
+            while index < arguments.count, arguments[index].hasPrefix("-") {
+                let word = arguments[index]
+                let name = optionName(word)
+                if endpointOptionsAnywhere.contains(name) { throw .globalOption(name) }
+                if terminalGlobalOptions.contains(name), index == arguments.count - 1 { return }
+                guard let takesValue = options[name] else { throw .unknownOption("\(subcommand) \(name)") }
+                index += takesValue && !word.contains("=") ? 2 : 1
+            }
+            if index < arguments.count {
+                let nested = arguments[index]
+                if refusedNested[subcommand]?.contains(nested) == true { throw .subcommand("\(subcommand) \(nested)") }
+                if subcommand == "buildx", !allowedBuildx.contains(nested) { throw .subcommand("buildx \(nested)") }
+            }
         }
-        for argument in rest {
-            let name = String(argument.split(separator: "=", maxSplits: 1).first ?? "")
+        for argument in arguments {
+            let name = optionName(argument)
             if writingOptions.contains(name) { throw .option(name) }
             // Anywhere on the line (strict: a container argument spelled the same is refused too, never guessed).
-            if ["-H", "--host", "--context", "--config"].contains(name) { throw .globalOption(name) }
+            if endpointOptionsAnywhere.contains(name) { throw .globalOption(name) }
+            // Short options attached or clustered: `-o/tmp/x`, `-qo x`, `-Hunix:///…`.
+            if argument.hasPrefix("-"), !argument.hasPrefix("--"), argument.count > 2 {
+                let cluster = argument.dropFirst().prefix { $0 != "=" }
+                if cluster.contains("o") { throw .option("-o") }
+                if cluster.contains("H") { throw .globalOption("-H") }
+            }
         }
+    }
+
+    /// `--name=value` → `--name`; `-x` → `-x`.
+    static func optionName(_ word: String) -> String {
+        String(word.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
     }
 }

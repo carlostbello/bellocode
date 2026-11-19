@@ -54,6 +54,8 @@ public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible 
     case unmountable([String])
     /// A container with our name exists but is not BelloCode's.
     case nameTaken(String)
+    /// A volume or network with one of the project's names exists without BelloCode's labels (R07).
+    case foreign(ForeignResourceError)
     case engine(ContainerError)
 
     public var description: String {
@@ -62,6 +64,7 @@ public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible 
         case .unmountable(let paths):
             "These folders cannot be mounted (missing, or not shared with Rancher Desktop): \(paths.joined(separator: ", "))"
         case .nameTaken(let name): "A container named \(name) exists and is not BelloCode's workspace; rename or remove it."
+        case .foreign(let error): error.description
         case .engine(let error): error.description
         }
     }
@@ -147,6 +150,8 @@ public struct WorkspaceManager: Sendable {
             }
         } catch let error as WorkspaceError {
             throw error
+        } catch let error as ForeignResourceError {
+            throw WorkspaceError.foreign(error)
         } catch {
             throw WorkspaceError.engine(ContainerError.from(error))
         }
@@ -180,16 +185,18 @@ public struct WorkspaceManager: Sendable {
             try await ServiceManager(client: client).ensureNetwork(projectRoot: spec.projectRoot, offline: spec.network == .none, extraLabels: spec.extraLabels)
         }
         for cache in Array(spec.caches.keys) + ["home"] {
-            // Idempotent: creating an existing volume with the same name succeeds.
-            try await client.createVolume(name: spec.volumeName(cache), labels: [
+            // Creating an existing volume "succeeds" in Docker: a same-name volume without this project's labels is
+            // someone else's and is never mounted (R07).
+            try await client.ensureOwnedVolume(name: spec.volumeName(cache), labels: [
                 WorkspaceSpec.labelWorkspace: "1", WorkspaceSpec.labelProject: spec.projectRoot,
                 WorkspaceSpec.labelProjectKey: spec.projectKey,
-            ].merging(spec.extraLabels) { a, _ in a })
+            ].merging(spec.extraLabels) { a, _ in a }, required: [WorkspaceSpec.labelWorkspace: "1", WorkspaceSpec.labelProjectKey: spec.projectKey])
         }
         for cache in spec.cacheMounts ?? [] {
-            try await client.createVolume(
-                name: cache.volumeName(projectKey: spec.projectKey),
-                labels: cache.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey).merging(spec.extraLabels) { a, _ in a })
+            let labels = cache.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey)
+            try await client.ensureOwnedVolume(
+                name: cache.volumeName(projectKey: spec.projectKey), labels: labels.merging(spec.extraLabels) { a, _ in a },
+                required: labels.filter { $0.key != WorkspaceSpec.labelProject })
         }
         var body = spec.createBody(imageID: imageID)
         body.labels?[WorkspaceSpec.labelConfig] = spec.configHash(imageID: imageID)
