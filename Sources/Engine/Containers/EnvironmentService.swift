@@ -204,6 +204,8 @@ public final class EnvironmentService {
     @ObservationIgnored var devContainerCache: [String: (stamp: String, plan: DevContainerPlan?)] = [:]
     /// The content tag of each project's dev container build (R15), computed off the main actor from its build context.
     @ObservationIgnored var devTags: [String: String] = [:]
+    /// Why the one-time execution-mode migration could not be saved (R17), nil when it was (or was not needed).
+    public internal(set) var modesMigrationProblem: String?
     /// Projects whose dev tag is being computed, and those changed meanwhile (computed once more after).
     @ObservationIgnored var devTagsInFlight: Set<String> = []
     @ObservationIgnored var devTagsStale: Set<String> = []

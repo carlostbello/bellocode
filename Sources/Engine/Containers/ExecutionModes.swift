@@ -119,16 +119,33 @@ extension EnvironmentService {
     // MARK: Migration
 
     /// Once: projects that already have a workspace container with state keep running in it ("Project container");
-    /// every other project follows the default (the shared workspace).
+    /// every other project follows the default (the shared workspace). The settings and the completion marker are
+    /// written in one transaction (R17): after a failed write nothing is marked done, so the migration runs again at
+    /// the next launch, and this launch keeps those projects on their own container in memory meanwhile. A project
+    /// whose row is unreadable is left as it is (blocked until its settings are reviewed) and retried later.
     func migrateExecutionModes() async {
         guard policyReadFailure == nil else { return }
         guard (try? await store.preference(Self.modesMigratedKey, as: Bool.self)) != true else { return }
+        var migrated: [String: StoredEnvironment] = [:]
         for model in models.values where model.settings.executionMode == nil && Self.hasContainerState(model.record)
             && !unreadablePolicies.contains(model.directory) {
             model.settings.executionMode = .projectContainer
-            await persist(model)
+            migrated[model.directory] = StoredEnvironment(settings: model.settings, record: model.record)
         }
-        try? await store.setPreference(Self.modesMigratedKey, true)
+        // Done only when no project's saved setting is still unknown.
+        let complete = unreadablePolicies.isEmpty
+        do {
+            if complete {
+                try await store.saveEnvironments(migrated, andPreference: Self.modesMigratedKey, true)
+            } else {
+                for (directory, value) in migrated { try await store.saveEnvironment(value, directory: directory) }
+            }
+            modesMigrationProblem = nil
+        } catch {
+            let message = "BelloCode could not save this project's execution mode (\(error)). It keeps its own container for now; the setting is saved again at the next launch."
+            modesMigrationProblem = message
+            for directory in migrated.keys { models[directory]?.lastError = message }
+        }
     }
 
     /// A container was created for the project before (its record names one, or it ran).

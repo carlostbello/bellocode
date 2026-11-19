@@ -175,6 +175,62 @@ struct ExecutionModeTests {
         #expect(try await service.store.preference(EnvironmentService.modesMigratedKey, as: Bool.self) == true)
     }
 
+    /// R17: the migrated settings and the completion marker are one transaction. A failed write marks nothing done
+    /// (the next launch migrates again), the project keeps its own container meanwhile, and no saved row is half-written.
+    @Test func aFailedMigrationWriteIsRetriedAndNeverMarkedDone() async throws {
+        let store = try ProjectionStore(location: .inMemory)
+        var record = EnvironmentRecord()
+        record.containerID = "abc"
+        try await store.saveEnvironment(StoredEnvironment(settings: ProjectEnvironmentSettings(image: "own:1"), record: record), directory: repoA)
+        try await store.saveEnvironment(StoredEnvironment(settings: ProjectEnvironmentSettings(image: "own:1"), record: record), directory: repoB)
+        try await store.setPreference(EnvironmentDefaults.preferenceKey, EnvironmentDefaults(defaultImage: "default:1"))
+        struct DiskFull: Error {}
+        await store.setWriteHook { _ in throw DiskFull() }
+        func launch() async -> EnvironmentService {
+            let configuration = ContainerConfiguration(
+                helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
+                execConfigURL: URL(filePath: base + "/exec.json"), opencodeDataDirectory: nil, runtime: runtime, registryVault: InMemorySecretVault())
+            let service = EnvironmentService(configuration: configuration, store: store)
+            service.worktreeParent = { [base] directory in base + "/worktrees/" + (directory as NSString).lastPathComponent }
+            await service.start()
+            return service
+        }
+        let first = await launch()
+        #expect(first.environment(for: repoA).settings.executionMode == .projectContainer, "kept on its own container this launch")
+        #expect(first.modesMigrationProblem != nil)
+        #expect(first.environment(for: repoA).lastError?.contains("execution mode") == true, "shown on the project")
+        #expect(try await store.preference(EnvironmentService.modesMigratedKey, as: Bool.self) != true, "not marked done")
+        let unsaved = try await store.environmentsChecked().0
+        #expect(unsaved[repoA]?.settings.executionMode == nil && unsaved[repoB]?.settings.executionMode == nil, "all or nothing")
+        first.stop()
+
+        // The next launch, with a working disk, migrates and marks it done.
+        await store.setWriteHook(nil)
+        let second = await launch()
+        defer { second.stop() }
+        #expect(second.modesMigrationProblem == nil)
+        let saved = try await store.environmentsChecked().0
+        #expect(saved[repoA]?.settings.executionMode == .projectContainer && saved[repoB]?.settings.executionMode == .projectContainer)
+        #expect(try await store.preference(EnvironmentService.modesMigratedKey, as: Bool.self) == true)
+    }
+
+    /// R17: while a project's saved row is unreadable, the migration is not marked done (that project's setting is still
+    /// unknown); the readable ones are saved.
+    @Test func anUnreadableRowKeepsTheMigrationOpen() async throws {
+        let service = try await makeService(before: { store in
+            var record = EnvironmentRecord()
+            record.containerID = "abc"
+            try await store.saveEnvironment(StoredEnvironment(settings: ProjectEnvironmentSettings(image: "own:1"), record: record), directory: repoA)
+            try await store.saveEnvironment(StoredEnvironment(settings: ProjectEnvironmentSettings()), directory: repoB)
+            try await store.writer.write { db in
+                try db.execute(sql: "UPDATE app_environment SET json = ? WHERE directory = ?", arguments: [Data("{not json".utf8), repoB])
+            }
+        })
+        defer { service.stop() }
+        #expect(try await service.store.environmentsChecked().0[repoA]?.settings.executionMode == .projectContainer)
+        #expect(try await service.store.preference(EnvironmentService.modesMigratedKey, as: Bool.self) != true)
+    }
+
     @Test func administratorDefaultsAndAllowedModesWin() async throws {
         let managed = ManagedExecutionPolicy.Managed(codeRoots: [codeRoot], codeRootsLocked: true, defaultMode: .projectContainer,
                                                      allowedModes: [.projectContainer, .sharedWorkspace], source: "test")

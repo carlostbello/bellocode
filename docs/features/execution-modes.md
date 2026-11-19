@@ -24,7 +24,9 @@ shared workspace runs a marker written on the Mac must be visible in each root. 
 `EnvironmentService.trustedRoots` (BelloCore `TrustedRoots`) and `policyRoots(for:)` (project roots, then code roots)
 are what Auto mode and risk notices treat as in scope; the helper configuration carries `trustedRoots` for the plugin.
 **Migration** (once, `containers.executionModesMigrated`): projects whose record shows a container keep Project
-container; the rest follow the default. **Administrators:** `ContainerCodeRoots` (array, `~/` allowed),
+container; the rest follow the default. The settings and the marker are one transaction; after a failed write nothing is
+marked done (retried next launch, the project keeps its container meanwhile, the pane says why), and an unreadable row
+keeps the migration open. **Administrators:** `ContainerCodeRoots` (array, `~/` allowed),
 `ContainerCodeRootsLocked`, `ContainerDefaultExecutionMode` (`shared`/`project`/`host-docker`),
 `ContainerAllowedExecutionModes`.
 
