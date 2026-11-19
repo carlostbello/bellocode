@@ -179,4 +179,47 @@ struct SecretCommandApprovalTests {
         #expect(asked.text.contains("Asked the user to approve"), "\(asked.text)")
         #expect(fixture.runtime.secretCalls.withLock { $0.count } == 2)
     }
+
+    /// R03 (docs/reviews/release-1.0-review.md): a command reference, a pending approval and a saved "Always" approval
+    /// are bound to the secret's mode and value when issued. After the owner protects the secret (Brokered) and rotates
+    /// it, none of them may read the new value.
+    @Test func referencesAndApprovalsEndWhenTheSecretIsProtectedAndRotated() async throws {
+        let fixture = try await Fixture.start()
+        defer { Task { await fixture.stop() } }
+        let session = try await fixture.engine.createThread(in: Self.project, title: "publish")
+        try await waitUntil("graph") { fixture.engine.orchestration.node(session.id) != nil }
+        // An Always approval, a still-unused reference and a pending approval, all issued while commands-only.
+        let first = try await fixture.reference(session.id)
+        _ = await fixture.call("secret_exec", ["secretRef": .string(first), "name": "T", "command": "npm publish"], session: session.id)
+        let (card, _) = try #require(await fixture.approvalCard())
+        try await fixture.engine.extras.respond(to: card.id, .approve(always: true))
+        #expect(fixture.runtime.secretCalls.withLock { $0.count } == 1)
+        let unused = try await fixture.reference(session.id)
+        let pendingRef = try await fixture.reference(session.id)
+        _ = await fixture.call("secret_exec", ["secretRef": .string(pendingRef), "name": "T", "command": "make release"], session: session.id)
+        let (pendingCard, _) = try #require(await fixture.approvalCard())
+
+        // The owner makes it Brokered and rotates it.
+        let manager = try #require(fixture.engine.secretManager)
+        var secret = try #require(manager.secrets.first { $0.label == "Publish token" })
+        #expect(secret.mode == .visible && !secret.visibleConfirmed, "adopted as commands-only")
+        secret.mode = .brokered
+        try await manager.update(secret)
+        try await manager.rotate(account: secret.account, value: SecretValue("zz-NEW-protected-value"))
+
+        // The saved Always approval with the old reference: refused, nothing runs.
+        let reused = await fixture.call("secret_exec", ["secretRef": .string(unused), "name": "T", "command": "npm publish"], session: session.id)
+        #expect(reused.isError, "\(reused.text)")
+        // The pending card approved afterwards: refused before the value is read.
+        try? await fixture.engine.extras.respond(to: pendingCard.id, .approve(always: false))
+        let calls = fixture.runtime.secretCalls.withLock { $0 }
+        #expect(calls.count == 1, "only the command approved before the change ran")
+        #expect(!calls.contains { String(decoding: $0.secret, as: UTF8.self) == "zz-NEW-protected-value" }, "the protected value never reached a command")
+        // A fresh request for the protected secret gets no reference at all.
+        _ = await fixture.call("request_secret", ["label": "Publish token", "reason": "Again."], session: session.id)
+        let again = try #require(await fixture.engine.core.appRequests().first { if case .secret = $0.kind { true } else { false } })
+        try await fixture.engine.extras.respond(to: again.id, .useSavedSecret)
+        let wake = try #require(await fixture.harness.server.syntheticTexts.last)
+        #expect(!wake.contains(ContainerSecretReferences.prefix), "\(wake)")
+    }
 }

@@ -200,6 +200,34 @@ public final class SecretManager {
     }
 
     public func secret(_ account: String) -> ManagedSecret? { secrets.first { $0.account == account } }
+
+    /// The approved-command path's authorization (R03): the secret's current policy revision when commands may receive
+    /// it now (a commands-only or visible secret, not revoked, in scope for `projectDirectory`), else nil. References
+    /// and approvals carry the revision they were issued under; any change of mode, scope, confirmation, revocation or
+    /// value changes it, so they stop working.
+    public func commandRevision(account: String, projectDirectory: String?) -> String? {
+        guard let secret = secret(account), secret.mode == .visible, !secret.revoked else { return nil }
+        if let projectDirectory, !projectDirectory.isEmpty,
+           !secret.scope.admits(projectDirectory: projectDirectory, codeRoots: codeRoots()) { return nil }
+        return Self.policyRevision(secret)
+    }
+
+    /// Strictly later than the previous rotation, so every rotation changes the policy revision (even within one clock tick).
+    nonisolated static func nextRotation(after previous: Date?, now: Date) -> Date {
+        guard let previous, previous >= now else { return now }
+        return previous.addingTimeInterval(0.001)
+    }
+
+    nonisolated static func policyRevision(_ secret: ManagedSecret) -> String {
+        let scope: String = switch secret.scope {
+        case .global: "global"
+        case .codeRoots: "code-roots"
+        case .project(let root): "project:" + root
+        }
+        let parts = [secret.account, secret.mode.rawValue, secret.revoked ? "revoked" : "live", secret.visibleConfirmed ? "confirmed" : "commands",
+                     scope, String(secret.rotated?.timeIntervalSince1970 ?? 0), String(secret.created.timeIntervalSince1970)]
+        return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
+    }
     public func secret(named name: String) -> ManagedSecret? { secrets.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } }
 
     /// Placeholder mode needs the proxy: unavailable (never silently downgraded) when egress is not enforced.
@@ -224,7 +252,10 @@ public final class SecretManager {
             throw ExtrasError("Another secret is already named \(handle).")
         }
         let account = try await legacy.save(label: trimmed, value: value)
+        let replaced = self.secret(account) != nil
         var secret = self.secret(account) ?? ManagedSecret(account: account, name: handle, label: trimmed, mode: mode, created: clock.now())
+        // A new value under an existing label is a rotation: outstanding command references and approvals end (R03).
+        if replaced { secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now()) }
         secret.name = handle
         secret.mode = mode
         secret.scope = scope
@@ -259,7 +290,7 @@ public final class SecretManager {
         guard var secret = secret(account) else { throw ExtrasError("That secret no longer exists.") }
         try validate(mode: secret.mode, bindings: secret.bindings, value: value, confirmVisible: true)
         _ = try await legacy.save(label: secret.label, value: value)
-        secret.rotated = clock.now()
+        secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now())
         try await persist(secret)
         await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .rotated, detail: "New value; placeholders unchanged"))
         await refreshProxySnapshot()

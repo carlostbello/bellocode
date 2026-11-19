@@ -16,6 +16,9 @@ final class ContainerSecretReferences {
         var label: String
         var sessionID: SessionID
         var expires: Date
+        /// The secret's command-policy revision when the reference was issued (R03): a mode change, rotation, revocation
+        /// or scope change since then makes the reference unusable.
+        var revision: String
     }
 
     static let prefix = "bcsecretc_"
@@ -23,11 +26,11 @@ final class ContainerSecretReferences {
     static let limit = 64
     private var entries: [String: Entry] = [:]
 
-    func issue(account: String, label: String, for sessionID: SessionID, now: Date) -> String {
+    func issue(account: String, label: String, for sessionID: SessionID, now: Date, revision: String = "") -> String {
         entries = entries.filter { $0.value.expires > now }
         if entries.count >= Self.limit, let oldest = entries.min(by: { $0.value.expires < $1.value.expires })?.key { entries[oldest] = nil }
         let reference = Self.prefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        entries[reference] = Entry(account: account, label: label, sessionID: sessionID, expires: now.addingTimeInterval(Self.lifetime))
+        entries[reference] = Entry(account: account, label: label, sessionID: sessionID, expires: now.addingTimeInterval(Self.lifetime), revision: revision)
         return reference
     }
 
