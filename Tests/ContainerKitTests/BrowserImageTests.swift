@@ -114,7 +114,28 @@ struct BrowserImageTests {
     }
 
     @Test func contextIsLocatedFromTheEnvironment() {
-        let found = BrowserImageContext.locate(bundle: .main, environment: ["BELLOCODE_BROWSER_CONTEXT": Self.repoContext.path])
+        let found = BrowserImageContext.locate(
+            bundle: .main, environment: ["BELLOCODE_BROWSER_CONTEXT": Self.repoContext.path], allowDevelopmentSources: true)
         #expect(found?.path == Self.repoContext.path)
+    }
+
+    /// R18: a release build never takes the context from the environment or the working directory (the test runs
+    /// inside the repository, whose `Containers/browser` a development search would find); only the bundle counts.
+    @Test func releaseBuildsUseOnlyTheBundledContext() throws {
+        #expect(BrowserImageContext.locate(bundle: .main, environment: ["BELLOCODE_BROWSER_CONTEXT": Self.repoContext.path],
+                                           allowDevelopmentSources: false) == nil)
+        #expect(BrowserImageContext.locate(bundle: .main, environment: [:], allowDevelopmentSources: true) != nil)
+        // A bundle that carries the context: release takes exactly that folder.
+        let root = FileManager.default.temporaryDirectory.appending(path: "bc-bundle-\(UUID().uuidString)/Test.app")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let resources = root.appending(path: "Contents/Resources/browser-image")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try Data("FROM scratch\n".utf8).write(to: resources.appending(path: "Dockerfile"))
+        try Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>t.t</string></dict></plist>".utf8)
+            .write(to: root.appending(path: "Contents/Info.plist"))
+        let bundle = try #require(Bundle(url: root))
+        let found = BrowserImageContext.locate(bundle: bundle, environment: ["BELLOCODE_BROWSER_CONTEXT": Self.repoContext.path],
+                                               allowDevelopmentSources: false)
+        #expect(found?.resolvingSymlinksInPath().path == resources.resolvingSymlinksInPath().path)
     }
 }

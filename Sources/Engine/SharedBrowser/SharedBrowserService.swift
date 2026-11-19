@@ -18,6 +18,13 @@ public struct SharedBrowserConfiguration: Sendable {
     public var extraLabels: [String: String]
     public var containerName: String
     public var volume: String
+    /// The Keychain account of the packing key. Debug builds use their own disposable key, so a development context
+    /// never receives the installation's production key (R18).
+    public var keyAccount: String = SharedBrowserConfiguration.defaultKeyAccount
+
+    public static var defaultKeyAccount: String {
+        BrowserImageContext.allowsDevelopmentSources ? SharedBrowserService.developmentKeyAccount : SharedBrowserService.keyAccount
+    }
 
     public init(contextDirectory: URL?, dockerConfigDirectory: URL,
                 keyVault: any SecretVault = KeychainSecretVault(service: SharedBrowserService.keyService),
@@ -52,7 +59,8 @@ public struct BrowserNotice: Sendable, Equatable, Identifiable {
 @Observable
 public final class SharedBrowserService {
     nonisolated public static let keyService = "app.bellocode.browser-extension-key"
-    nonisolated static let keyAccount = "extension-packing-key"
+    nonisolated public static let keyAccount = "extension-packing-key"
+    nonisolated public static let developmentKeyAccount = "extension-packing-key-development"
     nonisolated public static let instructionKey = "bellocode.chrome"
 
     public private(set) var phase: BrowserPhase = .stopped
@@ -146,7 +154,7 @@ public final class SharedBrowserService {
         let runtime = DockerBrowserRuntime(
             socketPath: environments.activeRuntime.socketPath ?? (NSHomeDirectory() + "/.rd/docker.sock"),
             docker: configuration.docker, contextDirectory: configuration.contextDirectory, configDirectory: configuration.dockerConfigDirectory,
-            key: { [vault = configuration.keyVault] in try await Self.packingKey(vault) },
+            key: { [vault = configuration.keyVault, account = configuration.keyAccount] in try await Self.packingKey(vault, account: account) },
             network: { [weak self] image in
                 guard let self else { throw BrowserStartError.unavailable("BelloCode is shutting down.") }
                 return try await self.placeNetwork(image: image)
@@ -170,12 +178,13 @@ public final class SharedBrowserService {
     }
 
     /// The packing key from the Keychain, made once (RSA-2048, PKCS#8). Never logged, never in argv or a file.
-    nonisolated static func packingKey(_ vault: any SecretVault) async throws -> String {
-        if let stored = try? vault.read(account: keyAccount), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
+    nonisolated static func packingKey(_ vault: any SecretVault, account: String = keyAccount) async throws -> String {
+        if let stored = try? vault.read(account: account), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
             return text
         }
         let pem = try BrowserExtensionKey.generatePEM()
-        try vault.store(account: keyAccount, label: "BelloCode shared browser extension packing key", value: SecretValue(pem))
+        let label = account == keyAccount ? "BelloCode shared browser extension packing key" : "BelloCode shared browser extension packing key (development)"
+        try vault.store(account: account, label: label, value: SecretValue(pem))
         return pem
     }
 
