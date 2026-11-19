@@ -234,6 +234,25 @@ extension MainWindowController {
         }
     }
 
+    /// Stashed work that could not be put back: the recovery steps stay on screen until dismissed, and can be copied.
+    func presentStashRecovery(_ recovery: StashRecoveryError) {
+        let alert = NSAlert()
+        alert.messageText = recovery.userMessage
+        alert.informativeText = recovery.instructions
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Copy Instructions")
+        alert.alertStyle = .critical
+        let copy = {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(recovery.instructions, forType: .string)
+        }
+        guard let window else {
+            if alert.runModal() == .alertSecondButtonReturn { copy() }
+            return
+        }
+        alert.beginSheetModal(for: window) { if $0 == .alertSecondButtonReturn { copy() } }
+    }
+
     // MARK: Clone, publish, new project
 
     func presentClone() {
@@ -329,6 +348,10 @@ extension MainWindowController {
                 engine.git.refreshAll(under: project)
                 workspace.undo.showNotice("Moved changes to \(created.branch)")
                 workspace.newThread(in: created.directory)
+            } catch let recovery as StashRecoveryError {
+                // Never a transient notice: the work is only in the stash until the person restores it (R04).
+                engine.git.refreshAll(under: project)
+                presentStashRecovery(recovery)
             } catch {
                 workspace.undo.showNotice((error as? GitError)?.userMessage ?? (error as? WorktreeError)?.userMessage ?? "The changes could not be moved.")
             }

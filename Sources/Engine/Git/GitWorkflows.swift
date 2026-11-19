@@ -187,12 +187,19 @@ extension GitRepository {
 
     /// Stashes every change (untracked included) under `message`; returns the stash commit's hash, or nil when there
     /// was nothing to stash. The hash, not `stash@{n}`, identifies it later (the stash list is shared by every
-    /// worktree and may move).
+    /// worktree and may move). The entry is found by a per-operation token in its message, inside the process-wide
+    /// stash lock, never by comparing separate reads of `refs/stash` (another worktree may push in between, R04).
     public func stash(message: String) async throws -> String? {
-        let before = try await revParse("refs/stash")
-        _ = try await git(["stash", "push", "--include-untracked", "--quiet", "-m", message])
-        let after = try await revParse("refs/stash")
-        return after != before ? after : nil
+        try await GitStashLock.shared.run {
+            let token = "bc-\(UUID().uuidString.prefix(12).lowercased())"
+            _ = try await git(["stash", "push", "--include-untracked", "--quiet", "-m", "\(message) [\(token)]"])
+            let list = try await git(["stash", "list", "--format=%H%x09%gs"], allowFailure: true).text
+            for line in list.split(separator: "\n") {
+                let fields = line.split(separator: "\t", maxSplits: 1)
+                if fields.count == 2, fields[1].contains("[\(token)]") { return String(fields[0]) }
+            }
+            return nil
+        }
     }
 
     /// Applies the stash `hash` (no index restore; conflicts are reported by git). Kept in the list until dropped.
@@ -200,11 +207,69 @@ extension GitRepository {
         _ = try await git(["stash", "apply", "--quiet", hash])
     }
 
-    /// Drops the stash entry whose commit is `hash` (found by hash, never by position).
+    /// Drops the stash entry whose commit is `hash` (found by hash, never by a remembered position: the entry's
+    /// position is read and verified inside the stash lock immediately before the drop).
     public func dropStash(_ hash: String) async throws {
-        let list = try await git(["stash", "list", "--format=%H"], allowFailure: true).text.split(separator: "\n").map(String.init)
-        guard let index = list.firstIndex(of: hash) else { return }
-        _ = try await git(["stash", "drop", "--quiet", "stash@{\(index)}"])
+        try await GitStashLock.shared.run {
+            let list = try await git(["stash", "list", "--format=%H"], allowFailure: true).text.split(separator: "\n").map(String.init)
+            guard let index = list.firstIndex(of: hash) else { return }
+            guard try await revParse("stash@{\(index)}") == hash else {
+                throw GitError.failed(command: "stash", status: 1, message: "The stash list changed; the entry was kept.")
+            }
+            _ = try await git(["stash", "drop", "--quiet", "stash@{\(index)}"])
+        }
+    }
+
+    /// Keeps `hash` reachable under an operation-specific ref until the work it holds is verifiably restored, so a
+    /// dropped or garbage-collected stash entry never loses it. Returns the ref.
+    public func keepRecoveryRef(_ hash: String) async throws -> String {
+        let ref = "refs/bellocode/recovery/\(UUID().uuidString.lowercased())"
+        _ = try await git(["update-ref", ref, hash])
+        return ref
+    }
+
+    public func deleteRecoveryRef(_ ref: String) async {
+        _ = try? await git(["update-ref", "-d", ref], allowFailure: true)
+    }
+
+    /// Applies `hash` and reports what stopped it: nil when it applied cleanly with no unmerged paths, otherwise git's
+    /// message and the paths left unresolved (an untracked file in the way, a conflict).
+    ///
+    /// Untracked files already in the way are checked first: git would otherwise apply the tracked changes and then
+    /// stop, leaving a half-restored checkout that the recovery instructions could not describe.
+    func restore(_ hash: String) async -> (message: String, unresolved: [String])? {
+        let inTheWay = await untrackedInTheWay(hash: hash)
+        if !inTheWay.isEmpty { return ("Untracked files are in the way; nothing was applied.", inTheWay) }
+        do {
+            try await applyStash(hash)
+        } catch {
+            let message = (error as? GitError)?.userMessage ?? String(describing: error)
+            return (message, await unresolvedPaths(hash: hash))
+        }
+        let unmerged = (try? await git(["diff", "--name-only", "--diff-filter=U", "-z"], allowFailure: true).text) ?? ""
+        let paths = unmerged.split(separator: "\0").map(String.init)
+        return paths.isEmpty ? nil : ("Some changes conflict.", paths)
+    }
+
+    /// The paths the stash would restore that are in the way or unmerged here (best effort, for the recovery message).
+    private func unresolvedPaths(hash: String) async -> [String] {
+        var paths = await untrackedInTheWay(hash: hash)
+        let unmerged = (try? await git(["diff", "--name-only", "--diff-filter=U", "-z"], allowFailure: true).text) ?? ""
+        paths += unmerged.split(separator: "\0").map(String.init)
+        return Array(Set(paths)).sorted()
+    }
+
+    /// The stash's untracked files (its third parent) that already exist here.
+    private func untrackedInTheWay(hash: String) async -> [String] {
+        guard case .some(.some) = try? await revParse("\(hash)^3") else { return [] }
+        let untracked = (try? await git(["ls-tree", "-r", "-z", "--name-only", "\(hash)^3"], allowFailure: true).text) ?? ""
+        return untracked.split(separator: "\0").map(String.init).filter {
+            FileManager.default.fileExists(atPath: directory + "/" + $0) || isSymlink(directory + "/" + $0)
+        }
+    }
+
+    private func isSymlink(_ path: String) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: path)[.type] as? FileAttributeType) == .typeSymbolicLink
     }
 
     // MARK: Operations in progress
@@ -228,6 +293,75 @@ extension GitRepository {
         let environmentIdentity = runner.environment["GIT_AUTHOR_EMAIL"] != nil
         guard identity.status == 0 || environmentIdentity else { return false }
         return try await repository.git(["commit", "-q", "-m", "Initial commit"], allowFailure: true).status == 0
+    }
+}
+
+/// Stashed work that could not be put back. The stash entry and an operation-specific ref both still hold it, and
+/// nothing that holds a copy (the stash, the ref, a kept worktree) was removed (R04).
+public struct StashRecoveryError: Error, Sendable, Equatable, CustomStringConvertible {
+    /// The stash commit holding the work.
+    public let stash: String
+    /// A ref that keeps the commit reachable even if the stash entry is dropped.
+    public let ref: String
+    /// Where the work belongs.
+    public let directory: String
+    /// A worktree kept because it may already hold part of the work.
+    public let keptWorktree: String?
+    /// Paths in the way or left unmerged.
+    public let unresolved: [String]
+    /// git's reason.
+    public let reason: String
+
+    public init(stash: String, ref: String, directory: String, keptWorktree: String? = nil, unresolved: [String], reason: String) {
+        self.stash = stash
+        self.ref = ref
+        self.directory = directory
+        self.keptWorktree = keptWorktree
+        self.unresolved = unresolved
+        self.reason = reason
+    }
+
+    public var description: String { userMessage }
+
+    public var userMessage: String {
+        "Your uncommitted changes could not be put back automatically. They are safe in stash \(stash.prefix(12))."
+    }
+
+    /// What the person does to recover, in the order to do it.
+    public var instructions: String {
+        var lines: [String] = []
+        if !unresolved.isEmpty {
+            let list = unresolved.prefix(8).joined(separator: ", ") + (unresolved.count > 8 ? " and \(unresolved.count - 8) more" : "")
+            lines.append("In the way or unresolved: \(list). Move or delete these files first.")
+        }
+        lines.append("Then, in \((directory as NSString).abbreviatingWithTildeInPath), run:")
+        lines.append("    git stash apply \(stash)")
+        lines.append("When it applies cleanly: git stash drop (the matching entry) and git update-ref -d \(ref)")
+        if let keptWorktree {
+            lines.append("The new worktree at \((keptWorktree as NSString).abbreviatingWithTildeInPath) was kept; remove it once your changes are back.")
+        }
+        lines.append("git said: \(reason)")
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// Serialises stash mutations across this process's repositories and worktrees (the stash list is shared by a
+/// repository's worktrees, so position lookups must not interleave with pushes or drops).
+actor GitStashLock {
+    static let shared = GitStashLock()
+    private var held = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+        if held {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            held = true
+        }
+        defer {
+            if waiters.isEmpty { held = false } else { waiters.removeFirst().resume() }
+        }
+        return try await body()
     }
 }
 

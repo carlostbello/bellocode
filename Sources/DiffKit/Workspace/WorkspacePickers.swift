@@ -285,6 +285,9 @@ public struct BranchPickerView: View {
                 blocked.value = BlockedSwitch(branch: name, create: create)
                 let list = files.prefix(3).joined(separator: ", ") + (files.count > 3 ? " and \(files.count - 3) more" : "")
                 self.error.value = "Local changes would be overwritten\(list.isEmpty ? "" : " (\(list))"). Stash them and switch, or commit first."
+            } catch let recovery as StashRecoveryError {
+                blocked.value = nil
+                self.error.value = recovery.userMessage + "\n" + recovery.instructions
             } catch {
                 blocked.value = nil
                 self.error.value = (error as? GitError)?.userMessage ?? (create ? "Could not create the branch." : "Could not switch branches.")
