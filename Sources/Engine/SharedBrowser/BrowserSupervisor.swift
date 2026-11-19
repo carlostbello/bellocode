@@ -439,7 +439,6 @@ public actor BrowserSupervisor {
 
     static func describe(_ error: any Error) -> String {
         if let error = error as? BrowserStartError { return error.description }
-        if let error = error as? CustomStringConvertible { return error.description }
         return String(describing: error)
     }
 }
