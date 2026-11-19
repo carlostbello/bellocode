@@ -117,7 +117,10 @@ from `WorkspaceSpec` on Rancher Desktop, run as a **project container and as a s
 everything the attackers received are scanned for the canary in every encoding. **57 attempts per workspace kind,
 canary absent in all; every claimed path held.** Agent containers (default and agent-created networks, through the
 real filtered endpoint): proxy forced, CA trusted, no DNS or direct route, substitution only for the binding, attacker
-403, canary absent; host and egress networks refused.
+403, canary absent; host and egress networks refused. The workspace image `bellocode-secrets-test:1` is built by the suite on
+first use (`Tests/SecretKitTests/SecretsTestImage.swift`: the pinned `node:22-bookworm-slim` base plus curl, dig,
+netcat and python3 from Debian; no Docker Hub pull when the base is cached), and the suite refuses to run if a probe's
+tool is missing, so no "unreachable" row can pass on "command not found".
 
 | Attempt | Outcome |
 | --- | --- |

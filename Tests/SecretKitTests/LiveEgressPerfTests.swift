@@ -24,6 +24,7 @@ struct LiveEgressPerfTests {
 
     @Test func installsThroughTheProxy() async throws {
         let image = LiveEgressTests.image
+        try await SecretsTestImage.ensure(image, client: client)
         let scopeKey = "p" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10).lowercased()
         let root = NSHomeDirectory() + "/Library/Caches/BelloCode/tests/egress-\(scopeKey)"
         let certs = root + "-certs"
