@@ -1,4 +1,6 @@
+import BelloCore
 import ContainerKit
+import Darwin
 import Foundation
 import Synchronization
 
@@ -12,15 +14,59 @@ public struct DevImageBuildRequest: Sendable, Equatable {
     public var dockerfile: Data?
     public var socket: String
     public var config: String?
+    /// The build is stopped past this (R31): TERM, then KILL after `grace`.
+    public var timeout: Duration = DevImageBuildRequest.defaultTimeout
+    public var grace: Duration = .seconds(10)
+
+    public static let defaultTimeout: Duration = .seconds(60 * 60)
+
+    public init(docker: String, arguments: [String], dockerfile: Data?, socket: String, config: String?,
+                timeout: Duration = DevImageBuildRequest.defaultTimeout, grace: Duration = .seconds(10)) {
+        self.docker = docker
+        self.arguments = arguments
+        self.dockerfile = dockerfile
+        self.socket = socket
+        self.config = config
+        self.timeout = timeout
+        self.grace = grace
+    }
+}
+
+/// The exit status of one child, awaited by a continuation (not a stream: waiting must outlast a cancellation until
+/// the child is really gone).
+final class ChildExit: Sendable {
+    private let state = Mutex<(status: Int32?, waiter: CheckedContinuation<Int32, Never>?)>((nil, nil))
+
+    func exited(_ status: Int32) {
+        let waiter = state.withLock { state -> CheckedContinuation<Int32, Never>? in
+            state.status = status
+            defer { state.waiter = nil }
+            return state.waiter
+        }
+        waiter?.resume(returning: status)
+    }
+
+    func wait() async -> Int32 {
+        await withCheckedContinuation { continuation in
+            let status = state.withLock { state -> Int32? in
+                if state.status == nil { state.waiter = continuation }
+                return state.status
+            }
+            if let status { continuation.resume(returning: status) }
+        }
+    }
 }
 
 public struct DevImageBuildResult: Sendable, Equatable {
     public var status: Int32
     /// The last lines of output (bounded).
     public var tail: String
-    public init(status: Int32, tail: String) {
+    /// Stopped by BelloCode (cancelled or past its deadline), not finished.
+    public var stopped: Bool
+    public init(status: Int32, tail: String, stopped: Bool = false) {
         self.status = status
         self.tail = tail
+        self.stopped = stopped
     }
 }
 
@@ -46,6 +92,7 @@ extension EnvironmentService {
     /// Builds the dev container image with Rancher Desktop's `docker buildx` (BelloCode's own use of the host CLI;
     /// the Dockerfile's steps run in the builder, never on the Mac), then re-evaluates the project.
     nonisolated static let checkingDevContext = "checking the dev container's build context"
+    nonisolated static let buildingDevImage = "building the dev container image"
 
     /// Computes the content tag of the project's dev container build in the background (R15). One computation per
     /// project at a time; a refresh meanwhile asks for one more after it. A changed tag re-evaluates the project: the
@@ -107,7 +154,7 @@ extension EnvironmentService {
             scheduleConfigWrite()
             return
         }
-        model.phase = .pulling(PullProgress(detail: "building the dev container image"))
+        model.phase = .pulling(PullProgress(detail: Self.buildingDevImage))
         scheduleConfigWrite()
         let socket = activeRuntime.socketPath
         let config = configuration.map { Self.prepareHostDockerConfig(next: $0.execConfigURL) } ?? nil
@@ -138,8 +185,12 @@ extension EnvironmentService {
             guard let arguments = plan.buildArguments(tag: tag, context: inputs.context) else { return }
             let request = DevImageBuildRequest(docker: docker, arguments: arguments, dockerfile: inputs.dockerfile, socket: socket, config: config)
             let result = if let builder { await builder(request) } else { await Self.runDocker(request) }
-            guard !Task.isCancelled else { return }
-            if result.status == 0 {
+            // Published only for the project as it is now (R31): same mode and build section, not cancelled.
+            guard !Task.isCancelled, self.mode(for: model) == .projectContainer, self.devContainerPlan(model)?.build == build else { return }
+            if result.stopped {
+                model.phase = .failed("Building the dev container image was stopped (\(result.tail)). Retry to build it again.")
+                self.scheduleConfigWrite()
+            } else if result.status == 0 {
                 self.devTags[projectRoot] = tag
                 model.phase = .unknown
                 self.refreshImageAndPhase(model, recreate: recreate)
@@ -200,24 +251,55 @@ extension EnvironmentService {
                 if buffer.count > 16_384 { buffer = buffer.suffix(8_192) }
             }
         }
-        let status: Int32 = await withCheckedContinuation { continuation in
-            process.terminationHandler = { finished in continuation.resume(returning: finished.terminationStatus) }
-            do {
-                try process.run()
-                if let input, let dockerfile = request.dockerfile {
-                    // Bounded (≤ 1 MiB) and read by the CLI at once; a closed pipe (docker exited) is not an error here.
-                    try? input.fileHandleForWriting.write(contentsOf: dockerfile)
-                    try? input.fileHandleForWriting.close()
-                }
-            } catch {
-                process.terminationHandler = nil
-                continuation.resume(returning: 127)
+        defer { pipe.fileHandleForReading.readabilityHandler = nil }
+        let exit = ChildExit()
+        process.terminationHandler = { finished in exit.exited(finished.terminationStatus) }
+        do {
+            try process.run()
+        } catch {
+            process.terminationHandler = nil
+            return DevImageBuildResult(status: 127, tail: "could not start docker")
+        }
+        if let input, let dockerfile = request.dockerfile {
+            // Bounded (≤ 1 MiB); written off this task so a docker that never reads cannot hold it.
+            let writer = input.fileHandleForWriting
+            DispatchQueue.global(qos: .utility).async {
+                try? writer.write(contentsOf: dockerfile)
+                try? writer.close()
             }
         }
-        pipe.fileHandleForReading.readabilityHandler = nil
+        // R31: the build is owned by the calling task. Cancellation (project changed, service stopped) or the deadline
+        // sends TERM (buildx cancels the build in the builder), then KILL after the grace period; the child is always
+        // awaited until it is gone.
+        let stopped = Mutex<String?>(nil)
+        let killer = ContinuousDeadline()
+        let pid = process.processIdentifier
+        let stop: @Sendable (String) -> Void = { reason in
+            let first = stopped.withLock { current -> Bool in
+                defer { if current == nil { current = reason } }
+                return current == nil
+            }
+            guard first else { return }
+            if process.isRunning { kill(pid, SIGTERM) }
+            killer.schedule(after: request.grace) { if process.isRunning { kill(pid, SIGKILL) } }
+        }
+        let minutes = max(1, Int(request.timeout.components.seconds / 60))
+        let watchdog = ContinuousDeadline(after: request.timeout) {
+            stop(request.timeout < .seconds(60) ? "it did not finish in time" : "it did not finish within \(minutes) minutes")
+        }
+        let status = await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            stop("it was cancelled")
+        }
+        watchdog.cancel()
+        killer.cancel()
+        if let reason = stopped.withLock({ $0 }) {
+            return DevImageBuildResult(status: status == 0 ? 130 : status, tail: reason, stopped: true)
+        }
         let text = String(decoding: tail.withLock { $0 }, as: UTF8.self)
         let lines = text.split(separator: "\n").suffix(4).joined(separator: " · ")
-        return DevImageBuildResult(status: status, tail: status == 127 && text.isEmpty ? "could not start docker" : String(lines.prefix(600)))
+        return DevImageBuildResult(status: status, tail: String(lines.prefix(600)))
     }
 
     /// After the container runs: forward the file's ports and run its lifecycle commands once the person approved them

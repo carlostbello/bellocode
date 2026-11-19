@@ -71,7 +71,9 @@ Rancher's `docker buildx build --load` (right before each build the canonical co
 without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
 context file `.dockerignore` keeps, links as links; computed in the background, bounded to 200 000 files / 4 GiB), so a
 changed input rebuilds; Rebuild runs the build again and replaces the container after it succeeded; a built tag is never
-pulled; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
+pulled; the build belongs to the project's task: a project or mode change, stopping the service or its 60-minute
+deadline stops docker (TERM, KILL after 10 s) and waits until it is gone, and a result is used only for the plan still
+in force; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
 `forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;

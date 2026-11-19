@@ -19,6 +19,11 @@ final class TaskBox: Sendable {
         tasks.withLock { $0.removeValue(forKey: key) }
     }
 
+    /// Cancels and forgets the task under `key`, if any.
+    func cancel(_ key: String) {
+        tasks.withLock { $0.removeValue(forKey: key) }?.cancel()
+    }
+
     func remove(_ key: String) {
         _ = tasks.withLock { $0.removeValue(forKey: key) }
     }

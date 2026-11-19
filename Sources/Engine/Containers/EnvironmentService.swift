@@ -504,6 +504,15 @@ public final class EnvironmentService {
         // A dev container built here: its tag follows the build context's content (R15), computed in the background;
         // until the first one is known nothing else is used in its place.
         let devBuildPlan = mode == .projectContainer ? devContainerPlan(model).flatMap { $0.build != nil ? $0 : nil } : nil
+        if devBuildPlan == nil {
+            // No longer a dev container built here (mode or setting changed): a build in progress is stopped (R31).
+            tasks.cancel("devbuild-\(model.projectKey)")
+            tasks.cancel("devtag-\(model.projectKey)")
+            devTagsInFlight.remove(model.directory)
+            if case .pulling(let progress) = model.phase, progress.detail == Self.buildingDevImage || progress.detail == Self.checkingDevContext {
+                model.phase = .unknown
+            }
+        }
         if let devBuildPlan {
             refreshDevTag(model, plan: devBuildPlan)
             if devTags[model.directory] == nil, runtime?.isReady == true, policyBlock(model) == nil {

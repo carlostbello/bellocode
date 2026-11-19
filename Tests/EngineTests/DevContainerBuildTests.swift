@@ -162,4 +162,101 @@ struct DevContainerBuildTests {
         let pulled = runtime.state.withLock { $0.pulled }
         #expect(!pulled.contains { $0.hasPrefix("bellocode-dev-") }, "a locally built tag is never pulled: \(pulled)")
     }
+
+    // MARK: R31
+
+    /// A build in progress is cancelled when the project stops being a dev container built here, and its result is
+    /// never published; stopping the service cancels it too.
+    @Test func aBuildIsCancelledWhenTheProjectChangesAndWhenTheServiceStops() async throws {
+        let started = Builds()
+        let cancelled = Mutex(0)
+        let service = try await makeService(builder: { request in
+            started.append(request)
+            // A build that never finishes on its own; only cancellation ends it.
+            await withTaskCancellationHandler {
+                while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(20)) }
+            } onCancel: {
+                cancelled.withLock { $0 += 1 }
+            }
+            return DevImageBuildResult(status: 0, tail: "")
+        })
+        let model = service.environment(for: project)
+        #expect(await waitFor { started.count == 1 }, "\(model.phase)")
+        var settings = model.settings
+        settings.executionMode = .sharedWorkspace
+        await service.update(project, settings: settings)
+        #expect(await waitFor { cancelled.withLock { $0 } == 1 }, "the build is stopped with the project change")
+        try await Task.sleep(for: .milliseconds(100))
+        if case .pulling(let progress) = model.phase { Issue.record("still shown as building: \(progress.detail)") }
+
+        settings.executionMode = .projectContainer
+        await service.update(project, settings: settings)
+        #expect(await waitFor { started.count == 2 }, "\(model.phase)")
+        service.stop()
+        #expect(await waitFor { cancelled.withLock { $0 } == 2 }, "stopping the service stops the build")
+    }
+}
+
+/// R31: Rancher Desktop's docker as a child process of the build: owned by the task, stopped on cancellation or at its
+/// deadline (TERM, then KILL), always reaped. A shell script stands in for docker.
+@Suite("Dev container build process", .timeLimit(.minutes(3)))
+struct DevBuildProcessTests {
+    let folder: String
+
+    init() throws {
+        folder = NSTemporaryDirectory() + "bc-devproc-\(UUID().uuidString.prefix(8))"
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    }
+
+    /// A stand-in docker: writes its process ID to the file named by its first argument, then runs `body`.
+    func script(_ body: String) throws -> String {
+        let path = folder + "/docker-\(UUID().uuidString.prefix(6))"
+        try "#!/bin/sh\necho $$ > \"$1\"\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return path
+    }
+
+    func pid(_ file: String) async -> pid_t? {
+        for _ in 0..<200 {
+            if let text = try? String(contentsOfFile: file, encoding: .utf8), let value = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return value
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return nil
+    }
+
+    static func gone(_ pid: pid_t) -> Bool { kill(pid, 0) != 0 && errno == ESRCH }
+
+    @Test func cancellingTheTaskStopsAndReapsTheChild() async throws {
+        let pidFile = folder + "/cancel.pid"
+        let docker = try script("exec /bin/sleep 60")
+        let request = DevImageBuildRequest(docker: docker, arguments: [pidFile], dockerfile: Data("FROM x\n".utf8), socket: "/nonexistent.sock", config: nil)
+        let build = Task { await EnvironmentService.runDocker(request) }
+        let child = try #require(await pid(pidFile))
+        build.cancel()
+        let result = await build.value
+        #expect(result.stopped && result.tail.contains("cancelled"))
+        #expect(Self.gone(child), "the child is gone once the call returns")
+    }
+
+    @Test func theDeadlineStopsAChildThatIgnoresTerm() async throws {
+        let pidFile = folder + "/deadline.pid"
+        let docker = try script("trap '' TERM\nwhile :; do /bin/sleep 0.2; done")
+        let request = DevImageBuildRequest(docker: docker, arguments: [pidFile], dockerfile: nil, socket: "/nonexistent.sock", config: nil,
+                                           timeout: .milliseconds(300), grace: .milliseconds(300))
+        let result = await EnvironmentService.runDocker(request)
+        let child = try #require(await pid(pidFile))
+        #expect(result.stopped && result.tail.contains("did not finish"))
+        #expect(result.status != 0)
+        #expect(Self.gone(child), "killed after the grace period and reaped")
+    }
+
+    @Test func aFinishedBuildReportsItsStatusAndOutput() async throws {
+        let docker = try script("echo step one\necho failed >&2\nexit 3")
+        let result = await EnvironmentService.runDocker(DevImageBuildRequest(docker: docker, arguments: [folder + "/ok.pid"], dockerfile: nil,
+                                                                             socket: "/nonexistent.sock", config: nil))
+        #expect(result.status == 3 && !result.stopped)
+        #expect(result.tail.contains("failed"))
+    }
 }
