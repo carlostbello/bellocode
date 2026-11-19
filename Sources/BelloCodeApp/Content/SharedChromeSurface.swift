@@ -92,7 +92,7 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
     private var placeholder: NSHostingController<SharedChromePlaceholder>!
     private var visible = false
     private var loop: ObservationLoop?
-    private var occlusion: NSObjectProtocol?
+    private var occlusion: (any NSObjectProtocol)?
     private var loadedURL: URL?
 
     init(service: SharedBrowserService, detached: Bool) {
