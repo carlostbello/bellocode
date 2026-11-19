@@ -72,22 +72,98 @@ public enum GitCheckpoints {
         public var paths: [String] { changes.map(\.path) }
     }
 
-    /// Plans restoring `checkpoint`: captures the current state (`undoRef`), lists the files that differ and reads
-    /// both sides. Nothing in the working tree changes.
+    /// The most files one restore plans. Beyond it the plan is refused (never silently cut, R26).
+    public static let restoreLimit = 5_000
+
+    /// Plans restoring `checkpoint`: captures the current state (`undoRef`), lists the entries that differ and reads
+    /// both sides. Nothing in the working tree changes. The plan is complete or it throws (`RestoreError`): every
+    /// differing path is planned with the checkpoint's entry type and mode (regular, executable, symlink), and
+    /// entries a file restore cannot reproduce (submodules) or more than `restoreLimit` paths are refused, so the
+    /// conversation is never rewound over a partial restore (R26).
     @concurrent
-    public static func planRestore(directory: String, checkpoint: String, undoRef: String, runner: GitRunner) async throws -> RestorePlan {
+    public static func planRestore(directory: String, checkpoint: String, undoRef: String, runner: GitRunner,
+                                   limit: Int = restoreLimit) async throws -> RestorePlan {
         guard let current = try await capture(directory: directory, ref: undoRef, runner: runner) else { throw GitError.notARepository(directory) }
         let repository = GitRepository(directory: directory, runner: runner)
         guard let root = try await repository.location()?.root else { throw GitError.notARepository(directory) }
-        let names = try await repository.git(["diff", "--name-only", "-z", "--no-renames", checkpoint, current]).stdout
+        // `--raw`: ":<checkpoint mode> <current mode> <sha> <sha> <status>\0<path>\0" per entry.
+        let raw = try await repository.git(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", checkpoint, current]).stdout
+        let entries = try RawDiffEntry.parse(raw)
+        guard entries.count <= limit else { throw RestoreError.tooManyFiles(count: entries.count, limit: limit) }
         let copy = WorkingCopy(root: root)
         var changes: [FileChangePlan] = []
-        for path in GitStatusParser.split(names).prefix(5_000) {
+        for entry in entries {
             try Task.checkCancellation()
-            let target = try await repository.content(at: checkpoint, path: path)
-            changes.append(copy.planRestore(path: path, to: target))
+            let before = copy.snapshot(entry.path)
+            switch entry.targetMode {
+            case "000000":
+                changes.append(FileChangePlan(before: before, after: nil))
+            case "100644", "100755", "120000":
+                guard let target = try await repository.content(at: checkpoint, path: entry.path) else {
+                    throw RestoreError.unreadable(entry.path)
+                }
+                if entry.targetMode == "120000" {
+                    changes.append(FileChangePlan(before: before, after: target, afterKind: .symlink))
+                } else {
+                    let executable = entry.targetMode == "100755"
+                    changes.append(FileChangePlan(
+                        before: before, after: target, afterKind: .regular,
+                        afterPermissions: Self.permissions(executable: executable, current: before.kind == .regular ? before.permissions : nil)))
+                }
+            default:
+                throw RestoreError.unsupportedEntry(path: entry.path, mode: entry.targetMode)
+            }
         }
         return RestorePlan(directory: root, checkpoint: checkpoint, undoCheckpoint: current, changes: changes)
+    }
+
+    /// Git records only the executable bit: keep the file's other bits, add or remove execute where it is readable.
+    static func permissions(executable: Bool, current: Int?) -> Int {
+        guard let current else { return executable ? 0o755 : 0o644 }
+        let base = current & 0o7666
+        return executable ? base | ((current & 0o444) >> 2) | 0o100 : base
+    }
+
+    /// One entry of `git diff --raw -z`.
+    struct RawDiffEntry: Equatable {
+        var targetMode: String
+        var currentMode: String
+        var path: String
+
+        static func parse(_ data: Data) throws -> [RawDiffEntry] {
+            let fields = data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+            var entries: [RawDiffEntry] = []
+            var index = 0
+            while index < fields.count {
+                let header = fields[index]
+                if header.isEmpty { index += 1; continue }
+                guard header.hasPrefix(":"), index + 1 < fields.count else { throw RestoreError.unreadable(header) }
+                let parts = header.dropFirst().split(separator: " ")
+                guard parts.count >= 5 else { throw RestoreError.unreadable(header) }
+                entries.append(RawDiffEntry(targetMode: String(parts[0]), currentMode: String(parts[1]), path: fields[index + 1]))
+                index += 2
+            }
+            return entries
+        }
+    }
+
+    public enum RestoreError: Error, Sendable, Equatable, CustomStringConvertible {
+        case tooManyFiles(count: Int, limit: Int)
+        case unsupportedEntry(path: String, mode: String)
+        case unreadable(String)
+
+        public var description: String { userMessage }
+
+        public var userMessage: String {
+            switch self {
+            case .tooManyFiles(let count, let limit):
+                "\(count) files differ from the checkpoint, more than BelloCode restores at once (\(limit)). Nothing was changed; rewind without restoring files, or restore them with git."
+            case .unsupportedEntry(let path, let mode):
+                "\(path) is a \(mode == "160000" ? "submodule" : "Git entry of mode \(mode)") that a file restore cannot reproduce. Nothing was changed; rewind without restoring files."
+            case .unreadable(let path):
+                "\(path) could not be read from the checkpoint. Nothing was changed."
+            }
+        }
     }
 
     /// Writes the plan (all or nothing, compare-and-swap per file). Returns what was written (the Undo state).
