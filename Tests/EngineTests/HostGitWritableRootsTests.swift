@@ -26,6 +26,7 @@ struct HostGitWritableRootsTests {
         process.executableURL = URL(filePath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = URL(filePath: directory)
+        process.standardInput = FileHandle.nullDevice
         process.environment = ["PATH": "/usr/bin:/bin", "HOME": base, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
                                "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "T",
                                "GIT_COMMITTER_EMAIL": "t@example.invalid"]
