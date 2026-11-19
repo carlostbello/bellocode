@@ -1,0 +1,6 @@
+#!/bin/sh
+# The one MCP server BelloCode talks to (pooled, docs/features/shared-browser.md "Multi-agent"): `browse mcp` with the
+# relay's extension-origin allowlist, so a relay it has to start on demand accepts the policy-installed extension too.
+OPENCODE_BROWSER_EXTENSION_ORIGINS="chrome-extension://$(cat /opt/browse-crx/id)"
+export OPENCODE_BROWSER_EXTENSION_ORIGINS
+exec browse mcp "$@"

@@ -1,0 +1,15 @@
+{
+  "DefaultBrowserSettingEnabled": false,
+  "MetricsReportingEnabled": false,
+  "BackgroundModeEnabled": false,
+  "PromptForDownloadLocation": false,
+  "DownloadDirectory": "/data/downloads",
+  "DiskCacheDir": "/tmp/cache/chromium",
+  "DiskCacheSize": 134217728,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PasswordManagerEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "RestoreOnStartup": 5,
+  "HardwareAccelerationModeEnabled": true
+}

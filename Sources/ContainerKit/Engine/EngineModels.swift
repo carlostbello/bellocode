@@ -150,6 +150,8 @@ public struct HostConfig: Codable, Sendable, Equatable {
     public var shmSize: Int64?
     /// Namespaced kernel parameters (the egress attachment turns IPv6 off in the container).
     public var sysctls: [String: String]?
+    /// tmpfs mounts (path → options), e.g. the shared browser's `/tmp` on a read-only root.
+    public var tmpfs: [String: String]?
 
     public init() {}
 
@@ -157,7 +159,7 @@ public struct HostConfig: Codable, Sendable, Equatable {
         case mounts = "Mounts", portBindings = "PortBindings", init_ = "Init", privileged = "Privileged"
         case readonlyRootfs = "ReadonlyRootfs", capDrop = "CapDrop", capAdd = "CapAdd", securityOpt = "SecurityOpt"
         case nanoCPUs = "NanoCpus", memory = "Memory", pidsLimit = "PidsLimit", networkMode = "NetworkMode"
-        case autoRemove = "AutoRemove", shmSize = "ShmSize", sysctls = "Sysctls"
+        case autoRemove = "AutoRemove", shmSize = "ShmSize", sysctls = "Sysctls", tmpfs = "Tmpfs"
     }
 }
 

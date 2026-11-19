@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- BelloCode's live view of the shared browser: noVNC's RFB client only (no noVNC UI). The app connects it by calling
+     bellocodeConnect(password, options) from native code (the password never appears in a URL), and hears status,
+     clipboard and errors through the `bellocode` message handler. View-only until the app sets viewOnly=false. -->
+<html><head><meta charset="utf-8"><title>Shared Chrome</title>
+<style>html,body{margin:0;height:100%;background:#1e1e1e;overflow:hidden}#screen{width:100%;height:100%}</style>
+</head><body><div id="screen"></div>
+<script type="module">
+import RFB from './core/rfb.js';
+let rfb = null;
+const post = (m) => { try { window.webkit.messageHandlers.bellocode.postMessage(m); } catch (e) {} };
+window.bellocodeConnect = (password, o) => {
+  if (rfb) { rfb.disconnect(); rfb = null; }
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/websockify';
+  rfb = new RFB(document.getElementById('screen'), url, { credentials: { password } });
+  rfb.viewOnly = !!o.viewOnly;
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false;
+  rfb.qualityLevel = o.quality ?? 6;
+  rfb.compressionLevel = o.compression ?? 2;
+  rfb.showDotCursor = true;
+  const t0 = performance.now();
+  rfb.addEventListener('connect', () => post({ event: 'connect', ms: Math.round(performance.now() - t0) }));
+  rfb.addEventListener('disconnect', (e) => post({ event: 'disconnect', clean: !!e.detail.clean }));
+  rfb.addEventListener('securityfailure', (e) => post({ event: 'securityfailure', reason: String(e.detail.reason || '') }));
+  rfb.addEventListener('clipboard', (e) => post({ event: 'clipboard', text: e.detail.text }));
+  rfb.addEventListener('desktopname', (e) => post({ event: 'desktopname', name: e.detail.name }));
+};
+window.bellocodeSetViewOnly = (v) => { if (rfb) rfb.viewOnly = !!v; };
+window.bellocodePaste = (text) => { if (rfb) rfb.clipboardPasteFrom(text); };
+window.bellocodeDisconnect = () => { if (rfb) { rfb.disconnect(); rfb = null; } };
+window.bellocodeFocus = () => { if (rfb) rfb.focus(); };
+post({ event: 'ready' });
+</script></body></html>

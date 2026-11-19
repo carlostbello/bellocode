@@ -119,6 +119,15 @@ for name in $(sed -n 's/.*Acknowledgement(name: "\([^"]*\)".*/\1/p' "$ROOT/Sourc
   [[ "$name" == "T3 Code" ]] || [[ -s "$ACK/$name.txt" ]] || die "no bundled licence text for acknowledgement '$name'"
 done
 
+# The shared browser image's build context (docs/features/shared-browser.md): BelloCode builds it locally with
+# Rancher's buildx on first use. Only the listed files (the packing key is never in the bundle).
+BROWSER_CONTEXT="$CONTENTS/Resources/browser-image"
+mkdir -p "$BROWSER_CONTEXT"
+for f in Dockerfile entrypoint.sh ctl.sh browse-mcp policy.json view.html versions.env seccomp-chromium.json; do
+  [[ -s "$ROOT/Containers/browser/$f" ]] || die "missing Containers/browser/$f"
+  cp -p "$ROOT/Containers/browser/$f" "$BROWSER_CONTEXT/$f"
+done
+
 # SwiftPM resource bundles (none yet). Copied for when modules gain resources; check Bundle.module lookup then.
 shopt -s nullglob
 for bundle in "$BIN_DIR"/*.bundle; do
