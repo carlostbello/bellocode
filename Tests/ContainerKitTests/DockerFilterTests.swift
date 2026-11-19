@@ -360,7 +360,10 @@ struct DockerFilterTests {
              "evil.example.com/y", nil),
             ("unresolvable base", "/build?t=x:1", "ARG B\nFROM $B\n", "cannot check", nil),
             ("Dockerfile elsewhere", "/build?t=x:1&dockerfile=ci/Dockerfile", "FROM registry.acme.internal/base:1\n", "no Dockerfile", nil),
-            ("compressed context", "/build?t=x:1", nil, "compressed", Data([0x1f, 0x8b, 8, 0, 0, 0, 0, 0] + [UInt8](repeating: 0, count: 600))),
+            ("corrupt gzip context", "/build?t=x:1", nil, "compressed", Data([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3] + [UInt8](repeating: 0xFF, count: 600))),
+            ("bzip2 context", "/build?t=x:1", nil, "compressed", Data([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41] + [UInt8](repeating: 0, count: 600))),
+            ("refused base in a gzip context (Compose, --compress)", "/build?t=x:1", nil, "evil.example.com/miner:1",
+             try BuildContextScannerTests.gzip(gzipContext("FROM evil.example.com/miner:1\n"))),
         ]
         for (name, path, dockerfile, expected, context) in refusedCases {
             let answer = try await sendBuild(path, dockerfile: dockerfile, context: context)
@@ -373,6 +376,18 @@ struct DockerFilterTests {
         let nested = try await sendBuild("/build?t=x:2&dockerfile=./ci/Dockerfile", dockerfile: "FROM registry.acme.internal/base:1 AS b\nFROM b\nFROM scratch\n",
                                          name: "ci/Dockerfile")
         #expect(nested.status == 200, "\(nested.body)")
+        // Compose's classic builder gzips the context: an allowed base passes (the daemon gets the original bytes).
+        let compressed = try BuildContextScannerTests.gzip(gzipContext("FROM registry.acme.internal/base:1\n"))
+        let gzipped = try await sendBuild("/build?t=x:3", dockerfile: nil, context: compressed)
+        #expect(gzipped.status == 200, "\(gzipped.body)")
+        #expect(forwarded.contains { $0.path == "/v1.47/build" && $0.target.contains("t=x%3A3") || $0.target.contains("t=x:3") })
+    }
+
+    func gzipContext(_ dockerfile: String) -> Data {
+        var archive = TarArchive()
+        archive.add("app/main.js", "console.log(1)\n")
+        archive.add("Dockerfile", dockerfile)
+        return archive.data()
     }
 
     /// R14: with enforced egress, build steps get the scope's egress network and the proxy as build arguments.

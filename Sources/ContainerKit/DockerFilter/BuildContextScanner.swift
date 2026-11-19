@@ -2,8 +2,9 @@ import Foundation
 
 /// Finds the Dockerfile in a classic `POST /build` context while it streams through the filtered endpoint (R14): the
 /// body is a tar; headers are parsed as bytes pass, only the Dockerfile's contents are kept (at most 1 MiB), nothing
-/// else is buffered. ustar names with prefixes, GNU long names (`L`) and PAX `path` records are understood. Compressed
-/// contexts are refused (the CLI sends plain tar unless `--compress` is given).
+/// else is buffered. ustar names with prefixes, GNU long names (`L`) and PAX `path` records are understood. A gzip
+/// context (Compose's classic builder, `docker build --compress`) is decompressed as it streams (`GzipInflater`) and
+/// scanned the same way; the daemon still receives the original bytes. Other compressions (bzip2, xz) are refused.
 struct BuildContextScanner {
     enum Outcome: Equatable {
         case found(Data)
@@ -27,8 +28,15 @@ struct BuildContextScanner {
     private var buffer = Data()
     private var captured = Data()
     private var nextName: String?
-    private var started = false
+    private var format = Format.unknown
+    private var sniffed = Data()
     private(set) var outcome: Outcome?
+
+    private enum Format {
+        case unknown
+        case tar
+        case gzip(GzipInflater)
+    }
 
     init(dockerfile: String?) {
         target = Self.normalise(dockerfile.flatMap { $0.isEmpty ? nil : $0 } ?? "Dockerfile")
@@ -41,14 +49,40 @@ struct BuildContextScanner {
     /// Feeds the next bytes of the body; returns the outcome once known (then ignores further bytes).
     mutating func feed(_ data: Data) -> Outcome? {
         guard outcome == nil else { return outcome }
-        if !started, !data.isEmpty {
-            started = true
-            let magic = [UInt8](data.prefix(6))
-            if magic.starts(with: [0x1f, 0x8b]) || magic.starts(with: [0x42, 0x5a, 0x68]) || magic.starts(with: [0xfd, 0x37, 0x7a, 0x58, 0x5a]) {
-                outcome = .refused("compressed build contexts cannot be checked; build without --compress.")
+        switch format {
+        case .unknown:
+            // The format is known from the first six bytes, whatever the chunking.
+            sniffed.append(data)
+            guard sniffed.count >= 6 else { return nil }
+            let first = sniffed
+            sniffed = Data()
+            let magic = [UInt8](first.prefix(6))
+            if magic.starts(with: [0x1f, 0x8b]) {
+                format = .gzip(GzipInflater())
+            } else if magic.starts(with: [0x42, 0x5a, 0x68]) || magic.starts(with: [0xfd, 0x37, 0x7a, 0x58, 0x5a]) {
+                outcome = .refused("bzip2 and xz compressed build contexts cannot be checked; build without --compress.")
                 return outcome
+            } else {
+                format = .tar
             }
+            return feed(first)
+        case .tar:
+            return feedTar(data)
+        case .gzip(let inflater):
+            do {
+                try inflater.feed(data) { piece in feedTar(piece) == nil }
+                // The compressed stream ended: so did the archive.
+                if outcome == nil, inflater.finished { outcome = .missing }
+            } catch {
+                outcome = .refused("the compressed build context is not valid gzip, so its Dockerfile cannot be checked.")
+            }
+            return outcome
         }
+    }
+
+    /// The tar archive's next bytes (decompressed already).
+    private mutating func feedTar(_ data: Data) -> Outcome? {
+        guard outcome == nil else { return outcome }
         buffer.append(data)
         while outcome == nil {
             switch state {
@@ -121,6 +155,11 @@ struct BuildContextScanner {
 
     /// The end of the body: the archive ended without the Dockerfile unless it was found.
     mutating func finish() -> Outcome {
+        if case .unknown = format, !sniffed.isEmpty {
+            format = .tar
+            _ = feedTar(sniffed)
+            sniffed = Data()
+        }
         if let outcome { return outcome }
         outcome = .missing
         return .missing
