@@ -338,13 +338,15 @@ enum BrowserMenu {
                 menu.addItem(appearanceItem)
             }
         }
+        // The shared Chromium (Content/SharedChromeSurface.swift).
+        SharedChromeMenu.append(to: menu)
         return menu
     }
 
     /// Every shortcut the Browser menu uses ("key-modifiers"), for the uniqueness test.
     static var shortcuts: [String] {
         (items.flatMap { $0 }.filter { !$0.key.isEmpty }.map { "\($0.key)-\($0.modifiers.rawValue)" })
-            + ["b-\(NSEvent.ModifierFlags([.command, .control]).rawValue)"]
+            + ["b-\(NSEvent.ModifierFlags([.command, .control]).rawValue)", "b-\(NSEvent.ModifierFlags([.command, .control, .option]).rawValue)"]
     }
 }
 

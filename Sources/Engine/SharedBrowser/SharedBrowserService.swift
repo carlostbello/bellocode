@@ -243,6 +243,7 @@ public final class SharedBrowserService {
     public func expectedImageTag() async -> String? { try? await runtime?.expectedTag() }
 
     public func refreshStatus() async {
+        if imageTag == nil { imageTag = await expectedImageTag() }
         if let fresh = await supervisor?.refreshStatus() { status = fresh }
         if phase.isReady, let runtime { downloads = (try? await runtime.downloads()) ?? downloads }
     }

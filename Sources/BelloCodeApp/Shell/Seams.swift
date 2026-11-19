@@ -41,6 +41,8 @@ struct ShellSurfaces {
     var mergeRequests: MergeRequestSurfaces? = nil
     /// The "Auto" audit tab (Content/AutoAuditSurface.swift); nil in tests.
     var autoAudit: AutoAuditSurfaces? = nil
+    /// The shared Chromium's live view, the "Chrome" tab (Content/SharedChromeSurface.swift); nil in tests.
+    var sharedChrome: SharedChromeSurfaces? = nil
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -57,7 +59,9 @@ struct ShellSurfaces {
         let mergeRequests = MergeRequestSurfaces()
         // Auto mode (Content/AutoAuditSurface.swift): the "Auto" tab shows the displayed thread's audit log.
         let autoAudit = AutoAuditSurfaces()
-        return ShellSurfaces(
+        // Shared browser (Content/SharedChromeSurface.swift): the "Chrome" tab shows the one shared Chromium.
+        let sharedChrome = SharedChromeSurfaces()
+        var surfaces = ShellSurfaces(
             transcript: { TranscriptSurfaceController(context: $0, settings: services.settings) },
             requestStack: { RequestStackSurfaceController(context: $0) },
             composer: { ComposerSurfaceController(context: $0, services: services) },
@@ -75,9 +79,12 @@ struct ShellSurfaces {
                     mergeRequests.makePanelController()
                 },
                 RightPanelTab(id: "auto", title: "Auto", symbolName: "checkmark.shield") { autoAudit.makePanelController() },
+                RightPanelTab(id: "chrome", title: "Chrome", symbolName: "globe.americas") { sharedChrome.makePanelController() },
             ],
             terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents,
             mergeRequests: mergeRequests, autoAudit: autoAudit)
+        surfaces.sharedChrome = sharedChrome
+        return surfaces
     }
 
     static func placeholder(_ title: String, symbol: String, detail: String) -> NSViewController {

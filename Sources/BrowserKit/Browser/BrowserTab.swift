@@ -730,6 +730,10 @@ extension BrowserTab: WKNavigationDelegate, WKUIDelegate {
 
     public func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         let method = challenge.protectionSpace.authenticationMethod
+        if method == NSURLAuthenticationMethodServerTrust, CanonicalPreviewProxy.isCanonical(challenge.protectionSpace.host) {
+            // Canonical project names (shared browser): only BelloCode's egress CA is trusted for `*.bc`.
+            return CanonicalPreviewProxy.trust(challenge).map { (.useCredential, $0) } ?? (.cancelAuthenticationChallenge, nil)
+        }
         guard [NSURLAuthenticationMethodHTTPBasic, NSURLAuthenticationMethodHTTPDigest, NSURLAuthenticationMethodNTLM].contains(method) else {
             return (.performDefaultHandling, nil)
         }
