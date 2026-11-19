@@ -52,6 +52,7 @@ final class GzipInflater {
             stream.pointee.src_ptr = base
             stream.pointee.src_size = raw.count
             repeat {
+                let pending = stream.pointee.src_size
                 let status = output.withUnsafeMutableBufferPointer { buffer -> compression_status in
                     stream.pointee.dst_ptr = buffer.baseAddress!
                     stream.pointee.dst_size = buffer.count
@@ -69,6 +70,8 @@ final class GzipInflater {
                 }
                 // More output may be pending while the destination was filled; otherwise all input was consumed.
                 if produced < Self.chunk, stream.pointee.src_size == 0 { return }
+                // Neither consumed nor produced anything: never spin on input the decoder will not take.
+                if produced == 0, stream.pointee.src_size == pending { throw Failure.corrupt }
             } while true
         }
     }
