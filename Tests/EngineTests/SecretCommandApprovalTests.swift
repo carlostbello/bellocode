@@ -222,4 +222,25 @@ struct SecretCommandApprovalTests {
         let wake = try #require(await fixture.harness.server.syntheticTexts.last)
         #expect(!wake.contains(ContainerSecretReferences.prefix), "\(wake)")
     }
+
+    /// R25: the card's "Approved command" choice saves a new secret (commands-only, no visibility grant) and the thread
+    /// gets a command reference that works.
+    @Test func approvedCommandChoiceSavesANewSecret() async throws {
+        let fixture = try await Fixture.start()
+        defer { Task { await fixture.stop() } }
+        let session = try await fixture.engine.createThread(in: Self.project, title: "publish")
+        try await waitUntil("graph") { fixture.engine.orchestration.node(session.id) != nil }
+        _ = await fixture.call("request_secret", ["label": "Release token", "reason": "To release."], session: session.id)
+        let card = try #require(await fixture.engine.core.appRequests().first { if case .secret = $0.kind { true } else { false } })
+        try await fixture.engine.extras.respond(to: card.id, .saveManagedSecret(SecretValue("zz-COMMAND-only-value"), SecretChoice(mode: .command)))
+        let secret = try #require(fixture.engine.secretManager.secrets.first { $0.label == "Release token" })
+        #expect(secret.mode == .visible && !secret.visibleConfirmed, "commands-only: never given to the thread's environment")
+        #expect(await fixture.engine.secretManager.secretVariables(for: session.id.rawValue).isEmpty)
+        let wake = try #require(await fixture.harness.server.syntheticTexts.last)
+        #expect(!wake.contains("zz-COMMAND-only-value"))
+        let reference = try #require(wake.split(separator: " ").first { $0.hasPrefix(ContainerSecretReferences.prefix) }.map(String.init), "\(wake)")
+        let asked = await fixture.call("secret_exec", ["secretRef": .string(reference), "name": "T", "command": "make release"], session: session.id)
+        #expect(asked.text.contains("Asked the user to approve"), "\(asked.text)")
+        #expect(await fixture.engine.core.appRequests().allSatisfy { if case .secret = $0.kind { false } else { true } }, "the secret card is resolved")
+    }
 }

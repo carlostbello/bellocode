@@ -50,8 +50,10 @@ extension SecretManager {
             mode = .visible
         }
         let name = choice.name.isEmpty ? ManagedSecret.handle(from: prompt.label) : choice.name
+        // "Approved command" is its own delivery (R25): saved without any visibility grant, given only to commands the
+        // person approves.
         let secret = try await create(label: prompt.label, name: name, value: value, mode: mode, scope: scope, bindings: bindings,
-                                      confirmVisible: choice.mode == .visible && choice.confirmVisible)
+                                      confirmVisible: choice.mode == .visible && choice.confirmVisible, commandsOnly: choice.mode == .command)
         if choice.mode == .command { return "" }
         return try await grantAndDescribe(secret, sessionID: sessionID, projectDirectory: project)
     }

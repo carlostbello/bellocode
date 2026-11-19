@@ -184,6 +184,34 @@ struct PendingRequestStackModelTests {
             dismissed.append(id.rawValue)
             pendingRequests.removeAll { $0.id == id.rawValue }
         }
+
+        /// App requests: resolved unless `failAppResponses` (the engine threw; the card stays).
+        var failAppResponses = false
+        var appResponses: [AppRequestResponse] = []
+        func respond(to request: AppRequest, _ response: AppRequestResponse) async {
+            appResponses.append(response)
+            if failAppResponses { lastError = .failed("save failed"); return }
+            pendingRequests.removeAll { $0.id == request.id }
+        }
+    }
+
+    /// R25: the secret card keeps the typed value until the save succeeds.
+    @Test func secretValueIsClearedOnlyAfterASuccessfulSave() async {
+        let source = FakeSource()
+        let request = AppRequest(id: "app_sec_1", sessionID: SessionID("ses_parent"),
+                                 kind: .secret(SecretPrompt(label: "Publish token", reason: "To publish.")), received: Timestamp(milliseconds: 1))
+        source.pendingRequests = [.app(request)]
+        let model = PendingRequestStackModel(source: source, announce: { _ in })
+        let draft = model.secretDraft(for: request)
+        draft.text = "typed-value-123"
+        draft.choice = SecretChoice(mode: .command)
+        source.failAppResponses = true
+        await model.saveSecret(request, draft: draft)
+        #expect(draft.text == "typed-value-123", "a failed save keeps what the person typed")
+        source.failAppResponses = false
+        await model.saveSecret(request, draft: draft)
+        #expect(draft.text.isEmpty, "cleared once saved")
+        #expect(source.appResponses.count == 2)
     }
 
     func permission(_ id: String, session: String = "ses_parent", action: String = "shell") -> PendingRequest {

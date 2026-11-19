@@ -276,14 +276,17 @@ public final class SecretManager {
 
     // MARK: Create, change, rotate, revoke, delete
 
-    /// Saves a new secret (value to the Keychain, the rest to the store). Visible mode requires `confirmVisible`.
+    /// Saves a new secret (value to the Keychain, the rest to the store). Visible mode requires `confirmVisible`, unless
+    /// `commandsOnly`: the "Approved command" choice (R25), stored as an unconfirmed visible secret that only commands
+    /// the person approves receive (never the thread's environment).
     @discardableResult
     public func create(label: String, name: String? = nil, value: SecretValue, mode: SecretUseMode, scope: SecretScope = .global,
-                       bindings: [SecretBinding] = [], confirmVisible: Bool = false) async throws -> ManagedSecret {
+                       bindings: [SecretBinding] = [], confirmVisible: Bool = false, commandsOnly: Bool = false) async throws -> ManagedSecret {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ExtrasError("Give the secret a label.") }
         guard secrets.count < Self.maxSecrets else { throw ExtrasError("BelloCode keeps at most \(Self.maxSecrets) secrets.") }
-        try validate(mode: mode, bindings: bindings, value: value, confirmVisible: confirmVisible)
+        guard !commandsOnly || (mode == .visible && !confirmVisible) else { throw ExtrasError("A commands-only secret is never visible to the agent.") }
+        try validate(mode: mode, bindings: bindings, value: value, confirmVisible: confirmVisible || commandsOnly)
         let handle = name.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 } ?? ManagedSecret.handle(from: trimmed)
         guard ManagedSecret.isValidHandle(handle) else { throw ExtrasError("“\(handle)” cannot be a name (letters, digits and _; not PATH, HOME or a proxy variable).") }
         if let other = secret(named: handle), other.label.caseInsensitiveCompare(trimmed) != .orderedSame {
