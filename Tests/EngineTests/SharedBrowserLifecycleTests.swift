@@ -80,10 +80,17 @@ final class FakeBrowserRuntime: BrowserRuntime {
         var creates = 0
     }
     let state = Mutex(State())
+    /// When set, image preparation parks on it (an image build in progress) until fired or cancelled.
+    let imageHold: ManualSleeper?
+    init(imageHold: ManualSleeper? = nil) { self.imageHold = imageHold }
     func log(_ entry: String) { state.withLock { $0.log.append(entry) } }
     var entries: [String] { state.withLock { $0.log } }
 
-    func prepareImage(progress: @escaping @Sendable (String) -> Void) async throws -> String { log("image"); return "bellocode-browser:test" }
+    func prepareImage(progress: @escaping @Sendable (String) -> Void) async throws -> String {
+        log("image")
+        if let imageHold { try await imageHold.sleep(.seconds(3_600)) }
+        return "bellocode-browser:test"
+    }
     func prepareNetwork() async throws -> BrowserNetworkPlacement { log("network"); return BrowserNetworkPlacement(network: "bellocode-egress-browser", proxy: "http://bellocode-proxy:3128") }
     func inspect() async throws -> BrowserContainerState? {
         state.withLock { $0.exists ? BrowserContainerState(running: $0.running, configHash: $0.configHash, exitCode: $0.exitCode) : nil }
@@ -181,6 +188,60 @@ struct SharedBrowserLifecycleTests {
         #expect(journal.firstIndex(of: "drain")! < journal.firstIndex(of: "orderly-stop")!)
         #expect(runtime.entries.last == "stop(30)")
         #expect(await supervisor.phase == .stopped)
+    }
+
+    /// R23: a call that runs far longer than the drain limit (a browse call may take 660 s) does not hold Stop past it.
+    @Test func stopHonoursTheDrainDeadline() async throws {
+        let runtime = FakeBrowserRuntime()
+        let sleeper = ManualSleeper()
+        let supervisor = make(runtime, sleeper)
+        try await supervisor.begin(.call)
+        let stopping = Task { await supervisor.stop(reason: "test") }
+        #expect(await sleeper.waitUntil(.seconds(30)), "the drain limit is armed")
+        await sleeper.fire(.seconds(30))
+        await stopping.value  // returns although the call never ended
+        let journal = await supervisor.journal
+        #expect(journal.contains("drain-timeout"), "\(journal)")
+        #expect(runtime.entries.last == "stop(30)")
+        #expect(await supervisor.phase == .stopped)
+    }
+
+    /// R23: Stop during image preparation cancels and joins the start: it never returns while the start goes on, and
+    /// the start never publishes Ready or creates a container afterwards.
+    @Test func stopDuringImagePreparationCancelsTheStart() async throws {
+        let hold = ManualSleeper()
+        let runtime = FakeBrowserRuntime(imageHold: hold)
+        let sleeper = ManualSleeper()
+        let supervisor = make(runtime, sleeper)
+        let start = Task { try await supervisor.begin(.call) }
+        #expect(await hold.waitUntil(.seconds(3_600)), "the image is being prepared")
+        await supervisor.stop(reason: "test")
+        #expect(await supervisor.phase == .stopped, "Stop returned only after the start ended")
+        await #expect(throws: (any Error).self) { try await start.value }
+        #expect(!runtime.entries.contains("createAndStart"))
+        #expect(await supervisor.phase == .stopped)
+        // The browser can start again afterwards.
+        await hold.fire()
+        let again = Task { try await supervisor.begin(.call) }
+        #expect(await hold.waitUntil(.seconds(3_600)))
+        await hold.fire()
+        try await again.value
+        #expect(await supervisor.phase == .ready)
+    }
+
+    /// R23: a start that fails readiness stops the container it started instead of leaving it running behind Failed.
+    @Test func aFailedReadinessStopsTheOwnedContainer() async throws {
+        let runtime = FakeBrowserRuntime()
+        let sleeper = ManualSleeper()
+        var timing = BrowserSupervisor.Timing(idle: .seconds(600))
+        timing.readyTimeout = .zero
+        let supervisor = BrowserSupervisor(runtime: runtime, timing: timing, viewerPassword: "pw", spec: { image, placement, seccomp in
+            BrowserContainerSpec(image: image, seccompProfile: seccomp, network: placement.network, proxy: placement.proxy)
+        }, sleep: { try await sleeper.sleep($0) })
+        await #expect(throws: BrowserStartError.timedOut) { try await supervisor.begin(.call) }
+        guard case .failed = await supervisor.phase else { Issue.record("expected Failed"); return }
+        #expect(runtime.entries.contains("stop(30)"), "\(runtime.entries)")
+        #expect(runtime.state.withLock { $0.running } == false)
     }
 
     @Test func callDuringStopRestartsAfterIt() async throws {
