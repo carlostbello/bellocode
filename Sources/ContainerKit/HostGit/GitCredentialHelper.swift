@@ -8,7 +8,7 @@ import Foundation
 /// and adds `bellocode-exec --git-credential`), and it answers only for a git process the app itself launched:
 ///
 /// - the app (`GitCredentialBroker`, Engine) listens on a Unix socket in a private per-launch folder (0700);
-/// - before launching an authenticated git, the app registers a one-shot *grant* bound to the allowed origins and,
+/// - before launching an authenticated git, the app registers a one-shot *grant* bound to the allowed installations and,
 ///   once launched, to that git's process ID; the grant's random identifier and the socket path are put in that git's
 ///   environment only (never opencode's, never a container's, never an agent shell's);
 /// - this helper forwards git's request plus the grant to the socket; the broker checks the grant, that the peer
@@ -179,7 +179,8 @@ public struct GitCredentialSetup: Sendable, Hashable {
             pairs += [
                 ("credential.\(url).helper", ""),
                 ("credential.\(url).helper", GitCredentialHelper.helperValue(path: helperPath)),
-                ("credential.\(url).useHttpPath", "false"),
+                // git sends the repository path, so the broker can tell installations behind one host apart.
+                ("credential.\(url).useHttpPath", "true"),
                 ("http.\(url).sslVerify", "true"),
                 ("http.\(url).proxy", ""),
                 ("http.\(url).curloptResolve", ""),

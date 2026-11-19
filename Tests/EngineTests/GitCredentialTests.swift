@@ -44,32 +44,89 @@ struct GitCredentialTests {
         let vault = InMemorySecretVault()
         try vault.store(account: "https://gitlab.example.com", label: "t", value: SecretValue(Self.token))
         let broker = try GitCredentialBroker(tokens: vault)
-        broker.setInstances([GitLabInstance(baseURL: "https://gitlab.example.com")!])
-        let origin = GitCredentialBroker.Origin(host: "gitlab.example.com", port: 443)
-        let grant = broker.grant(origins: [origin])
+        let instance = GitLabInstance(baseURL: "https://gitlab.example.com")!
+        broker.setInstances([instance])
+        let grant = broker.grant(instances: [instance])
         broker.bind(grant, pid: getpid())
         func ask(_ fields: [String: String], peer: pid_t = getpid()) -> [String: String]? {
             broker.answer(fields.merging(["grant": grant.identifier, "operation": "get"]) { $1 }, peer: peer)
                 .map(GitCredentialHelper.parse)
         }
-        #expect(ask(["protocol": "https", "host": "gitlab.example.com"])?["password"] == Self.token)
-        #expect(ask(["protocol": "http", "host": "gitlab.example.com"]) == nil)
-        #expect(ask(["protocol": "https", "host": "gitlab.example.com:8443"]) == nil)
-        #expect(ask(["protocol": "https", "host": "evil.example.com"]) == nil)
+        let path = "group/project.git"
+        #expect(ask(["protocol": "https", "host": "gitlab.example.com", "path": path])?["password"] == Self.token)
+        #expect(ask(["protocol": "http", "host": "gitlab.example.com", "path": path]) == nil)
+        #expect(ask(["protocol": "https", "host": "gitlab.example.com:8443", "path": path]) == nil)
+        #expect(ask(["protocol": "https", "host": "evil.example.com", "path": path]) == nil)
+        #expect(ask(["protocol": "https", "host": "gitlab.example.com"]) == nil, "git always sends the path (useHttpPath); none: no answer")
         // A wrong grant, and a peer that is not the granted process or its descendant.
-        #expect(broker.answer(["grant": "00", "operation": "get", "protocol": "https", "host": "gitlab.example.com"], peer: getpid()) == nil)
+        #expect(broker.answer(["grant": "00", "operation": "get", "protocol": "https", "host": "gitlab.example.com", "path": path], peer: getpid()) == nil)
         let other = Process()
         other.executableURL = URL(filePath: "/bin/cat")
         other.standardInput = Pipe()
         try other.run()
         defer { other.terminate() }
-        let foreign = broker.grant(origins: [origin])
+        let foreign = broker.grant(instances: [instance])
         broker.bind(foreign, pid: other.processIdentifier)
-        #expect(broker.answer(["grant": foreign.identifier, "operation": "get", "protocol": "https", "host": "gitlab.example.com"], peer: getpid()) == nil)
+        #expect(broker.answer(["grant": foreign.identifier, "operation": "get", "protocol": "https", "host": "gitlab.example.com", "path": path],
+                              peer: getpid()) == nil)
         #expect(broker.outcomes(foreign) == [.refused("not a process BelloCode launched")])
         // Revoked grants answer nothing.
         broker.revoke(grant)
-        #expect(ask(["protocol": "https", "host": "gitlab.example.com"]) == nil)
+        #expect(ask(["protocol": "https", "host": "gitlab.example.com", "path": path]) == nil)
+    }
+
+    /// R10: two GitLab installations behind different path prefixes of one HTTPS host (a reverse proxy) each get only
+    /// their own token, whatever order they are configured in; a grant for one never answers for the other.
+    @Test func installationsSharingAHostNeverReceiveEachOthersToken() throws {
+        let vault = InMemorySecretVault()
+        let a = GitLabInstance(baseURL: "https://code.example.com/team-a")!
+        let b = GitLabInstance(baseURL: "https://code.example.com/team-b")!
+        let root = GitLabInstance(baseURL: "https://code.example.com")!
+        try vault.store(account: a.baseURL, label: "a", value: SecretValue("glpat-team-a"))
+        try vault.store(account: b.baseURL, label: "b", value: SecretValue("glpat-team-b"))
+        try vault.store(account: root.baseURL, label: "r", value: SecretValue("glpat-root"))
+        let broker = try GitCredentialBroker(tokens: vault)
+        broker.setInstances([root, a, b])
+        let both = broker.grant(instances: [a, b, root])
+        broker.bind(both, pid: getpid())
+        func ask(_ grant: GitCredentialBroker.Grant, _ path: String) -> String? {
+            broker.answer(["grant": grant.identifier, "operation": "get", "protocol": "https", "host": "code.example.com", "path": path], peer: getpid())
+                .map(GitCredentialHelper.parse)?["password"]
+        }
+        #expect(ask(both, "team-a/group/project.git") == "glpat-team-a")
+        #expect(ask(both, "team-b/group/project.git") == "glpat-team-b")
+        #expect(ask(both, "other/project.git") == "glpat-root")
+        // A grant made for team-a's remote never answers a request for team-b's (or the root installation's) path.
+        let onlyA = broker.grant(instances: [a])
+        broker.bind(onlyA, pid: getpid())
+        #expect(ask(onlyA, "team-a/group/project.git") == "glpat-team-a")
+        #expect(ask(onlyA, "team-b/group/project.git") == nil)
+        #expect(ask(onlyA, "other/project.git") == nil)
+        #expect(broker.outcomes(onlyA).contains(.refused("the repository is not on a GitLab instance this git was allowed to use")))
+        // The same installation configured twice is ambiguous: no answer.
+        broker.setInstances([a, GitLabInstance(baseURL: "https://code.example.com/team-a/")!])
+        #expect(ask(both, "team-a/group/project.git") == nil)
+        // git is told to send the path.
+        let setup = GitCredentialSetup(helperPath: "/x", socketPath: "/s", grant: "g", urls: ["https://code.example.com/team-a/p.git"], remoteNames: [])
+        #expect(setup.overrides.contains { $0 == ("credential.https://code.example.com/team-a/p.git.useHttpPath", "true") })
+    }
+
+    /// R10 end to end: the remote is on the more specific installation; the one configured first on the same host has
+    /// a different (wrong) token. Push authenticates only when git sends the path and the broker resolves it.
+    @Test func gitSendsTheRepositoryPathAndTheMostSpecificInstallationAnswers() async throws {
+        _ = try #require(HostGitIsolationTests.helper, "bellocode-exec is not built")
+        let setup = try await Self.setup(storedToken: "glpat-wrong-installation")
+        defer { setup.cleanup() }
+        let specific = try #require(GitLabInstance(baseURL: setup.server.url + "/group"))
+        let vault = InMemorySecretVault()
+        try vault.store(account: setup.instance.baseURL, label: "root", value: SecretValue("glpat-wrong-installation"))
+        try vault.store(account: specific.baseURL, label: "group", value: SecretValue(Self.token))
+        let broker = try GitCredentialBroker(tokens: vault)
+        broker.setInstances([setup.instance, specific])
+        var runner = setup.runner
+        runner.credentials = GitCredentials(broker: broker, helperPath: try #require(HostGitIsolationTests.helper))
+        try await GitRepository(directory: setup.repo.path, runner: runner).push()
+        #expect(setup.server.recorded().contains { $0.authorized && $0.path.hasSuffix("git-receive-pack") })
     }
 
     // MARK: End to end over HTTPS

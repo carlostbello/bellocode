@@ -14,8 +14,11 @@ import os
 ///    one authenticated git, bound to that git's process ID once launched, and revoked when it exits (or after 10
 ///    minutes, or 8 answers). The peer of every connection must descend from the granted process (checked with
 ///    `LOCAL_PEERPID` and the kernel's parent chain), so another process that learns a grant cannot use it.
-/// 2. **Only the configured instances, only HTTPS.** The request's protocol must be `https` and its host and port one
-///    of the grant's origins, which come from Settings ▸ GitLab. Anything else gets no answer.
+/// 2. **Only the granted installations, only HTTPS.** The request's protocol must be `https`, and its host, port and
+///    repository path (git sends the path: `credential.<url>.useHttpPath`) must resolve, by the most specific path
+///    prefix, to one of the GitLab installations the grant was made for (Settings ▸ GitLab). Two installations behind
+///    different prefixes of one HTTPS host never receive each other's token; a request without a path, or matching
+///    two installations equally, gets no answer.
 /// 3. **Token read per request** from the Keychain (`tokens`), sent once over a socket in a 0700 folder of the app's
 ///    temporary directory, never written, logged or kept.
 /// 4. **Refusals are recorded** per grant (reason only), and `erase` from git (the server rejected the token) is
@@ -58,7 +61,8 @@ public final class GitCredentialBroker: Sendable {
     }
 
     struct GrantState {
-        var origins: Set<Origin>
+        /// The installations (`GitLabInstance.baseURL`) this git may authenticate to.
+        var instances: Set<String>
         var pid: pid_t?
         var created: ContinuousClock.Instant
         var answers = 0
@@ -131,10 +135,29 @@ public final class GitCredentialBroker: Sendable {
         }.max { $0.pathPrefix.count < $1.pathPrefix.count }
     }
 
+    /// The installation of a credential request (git's `host` and `path`), or why there is none: the most specific
+    /// path prefix wins, and two configured installations with the same origin and prefix are ambiguous.
+    func instance(gitHost: String, path: String?) -> Result<GitLabInstance, Refusal> {
+        guard let path, !path.isEmpty else { return .failure(.init("git did not say which repository the request is for")) }
+        guard let instance = instance(forURL: "https://\(gitHost)/\(path.drop { $0 == "/" })") else {
+            return .failure(.init("host is not a configured GitLab instance"))
+        }
+        let origin = Origin(instance: instance)
+        if instances.filter({ Origin(instance: $0) == origin && $0.pathPrefix == instance.pathPrefix }).count > 1 {
+            return .failure(.init("two configured GitLab instances match this repository"))
+        }
+        return .success(instance)
+    }
+
+    struct Refusal: Error {
+        var reason: String
+        init(_ reason: String) { self.reason = reason }
+    }
+
     // MARK: Grants
 
-    /// Registers a grant for `origins` (call `bind` once the process runs, `revoke` when it ends).
-    public func grant(origins: Set<Origin>) -> Grant {
+    /// Registers a grant for these installations (call `bind` once the process runs, `revoke` when it ends).
+    public func grant(instances: [GitLabInstance]) -> Grant {
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         let identifier = bytes.map { String(format: "%02x", $0) }.joined()
@@ -143,7 +166,7 @@ public final class GitCredentialBroker: Sendable {
             if state.grants.count >= Self.maxGrants, let oldest = state.grants.min(by: { $0.value.created < $1.value.created })?.key {
                 state.grants.removeValue(forKey: oldest)
             }
-            state.grants[identifier] = GrantState(origins: origins, created: .now)
+            state.grants[identifier] = GrantState(instances: Set(instances.map(\.baseURL)), created: .now)
         }
         return Grant(identifier: identifier)
     }
@@ -218,11 +241,13 @@ public final class GitCredentialBroker: Sendable {
         }
         guard operation == "get" else { return nil }
         guard request["protocol"] == "https" else { return refuse("not HTTPS") }
-        guard let host = request["host"], let origin = Origin(gitHost: host), grant.origins.contains(origin) else {
-            return refuse("host is not a configured GitLab instance")
+        guard let host = request["host"], Origin(gitHost: host) != nil else { return refuse("host is not a configured GitLab instance") }
+        let instance: GitLabInstance
+        switch self.instance(gitHost: host, path: request["path"]) {
+        case .success(let resolved): instance = resolved
+        case .failure(let refusal): return refuse(refusal.reason)
         }
-        let instance = instances.first { Origin(instance: $0) == origin }
-        guard let instance else { return refuse("host is not a configured GitLab instance") }
+        guard grant.instances.contains(instance.baseURL) else { return refuse("the repository is not on a GitLab instance this git was allowed to use") }
         let allowed = state.withLock { state -> Bool in
             guard state.grants[identifier] != nil, state.grants[identifier]!.answers < Self.maxAnswers else { return false }
             state.grants[identifier]!.answers += 1

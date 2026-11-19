@@ -167,10 +167,8 @@ public struct GitRunner: Sendable {
         if Self.mode(of: arguments) == .network, let credentials {
             let targets = await authenticationTargets(arguments, in: directory, broker: credentials.broker)
             if !targets.urls.isEmpty {
-                let origins = Set(targets.urls.compactMap { url in
-                    credentials.broker.instance(forURL: url).flatMap(GitCredentialBroker.Origin.init(instance:))
-                })
-                let granted = credentials.broker.grant(origins: origins)
+                // Bound to the installations the remotes resolve to (most specific path prefix), not their host.
+                let granted = credentials.broker.grant(instances: targets.urls.compactMap { credentials.broker.instance(forURL: $0) })
                 grant = granted
                 setup = GitCredentialSetup(
                     helperPath: credentials.helperPath, socketPath: credentials.broker.socketPath, grant: granted.identifier,

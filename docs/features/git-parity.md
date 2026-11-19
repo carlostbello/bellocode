@@ -55,8 +55,9 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   the helper only for network operations.
 - **Broker** (`GitCredentialBroker`, app process): Unix socket in a 0700 per-launch folder; a 32-byte one-shot grant
   per git launch, bound to the git process ID after launch, revoked at exit (≤ 10 min, ≤ 8 answers). It answers only a
-  peer that descends from the granted process, only `https` to an instance's host and port, reading the token from the
-  Keychain per request. `erase` (GitLab refused the token) becomes "GitLab rejected your token…".
+  peer that descends from the granted process, only `https`, and only for the installation the request's host, port and
+  repository path resolve to (most specific path prefix; git sends the path via `credential.<url>.useHttpPath`) when the
+  grant was made for it; no path or an ambiguous match gets no answer. The token is read from the Keychain per request. `erase` (GitLab refused the token) becomes "GitLab rejected your token…".
 - **Never** in arguments, environment (only the grant ID and socket path, in that git's own environment), `.git/config`,
   remote URLs, logs, the store, transcripts, opencode's shim or containers. Tested: `GitCredentialTests` (9, against
   `git http-backend` behind an in-process TLS server with a throwaway CA), `HostGitIsolationTests` (matrix with the
