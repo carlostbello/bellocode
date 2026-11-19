@@ -574,13 +574,19 @@ public final class ExtrasHub {
                 }
                 return
             case (.browserMCP, let response):
-                // Shared browser (docs/features/shared-browser.md): the person allows the browse MCP server.
-                await core.resolveAppRequest(id)
-                if case .approve(let always) = response {
-                    await engine?.sharedBrowser?.answerApproval(approval, approved: true, always: always)
+                // Shared browser (docs/features/shared-browser.md): the person allows the browse MCP server. The card
+                // goes only after the decision is recorded and the thread told (R20); a failure keeps it pinned.
+                var approved = false, always = false
+                if case .approve(let alwaysAnswer) = response { approved = true; always = alwaysAnswer }
+                if let browser = engine?.sharedBrowser {
+                    try await browser.answerApproval(approval, session: request.sessionID, approved: approved, always: always)
                 } else {
-                    await engine?.sharedBrowser?.answerApproval(approval, approved: false, always: false)
+                    try await core.postSynthetic(
+                        request.sessionID,
+                        text: "[BelloCode Chrome] The shared Chrome is not available in this BelloCode session, so the request could not be applied. Use the built-in browser preview (browser.*) or explain what you need.",
+                        metadata: .object(["bellocode": .object(["wake": .string("chrome"), "outcome": .string("unavailable")])]))
                 }
+                await core.resolveAppRequest(id)
                 return
             case (.secretCommand, _):
                 await core.resolveAppRequest(id)

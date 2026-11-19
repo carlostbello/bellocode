@@ -111,7 +111,8 @@ public actor BrowserSupervisor {
     private var failures: [ContinuousClock.Instant] = []
     private var stopRequested = false
     private var admissionClosed = false
-    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    private var drainWaiters: [(id: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var nextDrainID = 0
     private var observer: Observer?
     private var onRestart: RestartNotice?
     private var knownChromiumRestarts = 0
@@ -181,7 +182,7 @@ public actor BrowserSupervisor {
         if kind == .call, (activity[.call] ?? 0) == 0 {
             let waiters = drainWaiters
             drainWaiters = []
-            waiters.forEach { $0.resume() }
+            waiters.forEach { $0.continuation.resume() }
         }
         if total == 0 { armIdle() }
     }
@@ -223,6 +224,7 @@ public actor BrowserSupervisor {
         admissionClosed = false
         set(.preparingImage("Checking the browser image"))
         note("prepare-image")
+        var touchedContainer = false
         do {
             let tag = try await runtime.prepareImage { [weak self] line in Task { await self?.progress(line) } }
             set(.starting)
@@ -233,15 +235,19 @@ public actor BrowserSupervisor {
             if let current, current.configHash == wanted.configHash {
                 if !current.running {
                     note("start")
+                    touchedContainer = true
                     try await runtime.start()
                 }
             } else {
                 note(current == nil ? "create" : "recreate")
+                touchedContainer = true
                 try await runtime.createAndStart(wanted)
             }
             try await waitReady()
             note("viewer-password")
             try await runtime.setViewerPassword(viewerPassword)
+            // A Stop that arrived during the start wins: never publish Ready for a start that was cancelled (R23).
+            if stopRequested || Task.isCancelled { throw CancellationError() }
             knownChromiumRestarts = lastStatus?.chromiumRestarts ?? 0
             set(.ready)
             note("ready")
@@ -251,7 +257,18 @@ public actor BrowserSupervisor {
             set(.sandboxUnavailable)
             throw error
         } catch {
-            set(.failed(Self.describe(error)))
+            // The container this attempt created or started is ours to stop: a failed or cancelled start never leaves
+            // it running behind a Failed or Stopped phase (R23).
+            if touchedContainer {
+                note("cleanup-stop")
+                try? await runtime.stop(timeout: timing.stopTimeoutSeconds)
+            }
+            if error is CancellationError || stopRequested {
+                note("start-cancelled")
+                set(.stopped)
+            } else {
+                set(.failed(Self.describe(error)))
+            }
             throw error
         }
     }
@@ -284,6 +301,15 @@ public actor BrowserSupervisor {
     /// inside, cookies committed) → stopped.
     public func stop(reason: String) async {
         if let stopping { return await stopping.value }
+        if let starting {
+            // Stop during a start (image build, network, readiness): cancel it and wait until it has cleaned up the
+            // container it touched, so Stop never returns while a start is still going (R23).
+            stopRequested = true
+            note("cancel-start")
+            starting.cancel()
+            _ = try? await starting.value
+            if phase != .ready { return }
+        }
         guard phase == .ready || phase == .starting || phase.isRecovering else {
             if case .failed = phase { set(.stopped) }
             return
@@ -305,9 +331,11 @@ public actor BrowserSupervisor {
         note("close-admission")
         if (activity[.call] ?? 0) > 0 {
             note("drain")
+            // Both waiters end on cancellation, so the drain limit is honoured even while a call runs for minutes (R23).
+            let limit = timing.drainLimit
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await withCheckedContinuation { c in Task { await self.addDrainWaiter(c) } } }
-                group.addTask { try? await self.sleep(self.timing.drainLimit) }
+                group.addTask { await self.waitForDrain() }
+                group.addTask { try? await self.sleep(limit) }
                 await group.next()
                 group.cancelAll()
             }
@@ -324,8 +352,22 @@ public actor BrowserSupervisor {
         set(.stopped)
     }
 
-    private func addDrainWaiter(_ continuation: CheckedContinuation<Void, Never>) {
-        if (activity[.call] ?? 0) == 0 { continuation.resume() } else { drainWaiters.append(continuation) }
+    /// Returns when no call is running, or as soon as the waiting task is cancelled.
+    private func waitForDrain() async {
+        nextDrainID += 1
+        let id = nextDrainID
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if (activity[.call] ?? 0) == 0 || Task.isCancelled { continuation.resume() } else { drainWaiters.append((id, continuation)) }
+            }
+        } onCancel: {
+            Task { await self.cancelDrainWaiter(id) }
+        }
+    }
+
+    private func cancelDrainWaiter(_ id: Int) {
+        guard let index = drainWaiters.firstIndex(where: { $0.id == id }) else { return }
+        drainWaiters.remove(at: index).continuation.resume()
     }
 
     public var isAdmitting: Bool { !admissionClosed }
@@ -425,6 +467,8 @@ public actor BrowserSupervisor {
             startMonitor()
             if total == 0 { armIdle() }
         } catch {
+            // The restarted container is ours: never leave it running behind Failed (R23).
+            try? await runtime.stop(timeout: timing.stopTimeoutSeconds)
             set(.failed(Self.describe(error)))
         }
     }

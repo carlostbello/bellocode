@@ -58,6 +58,10 @@ public struct DockerBrowserRuntime: BrowserRuntime {
             return tag
         }
         guard let docker else { throw BrowserStartError.unavailable("Rancher Desktop's docker (~/.rd/bin/docker) is needed to build the browser image.") }
+        // arm64 only (R29): refuse an amd64 engine before a long build that would fail or produce unusable binaries.
+        if let refusal = BrowserImageContext.architectureRefusal(engineArch: try await client.version().arch) {
+            throw BrowserStartError.unavailable(refusal)
+        }
         progress("Building the browser image (first use or a pinned version changed)")
         let result = try await BrowserImageBuilder(docker: docker, socketPath: socketPath, configDirectory: configDirectory)
             .build(context: context, keyPEM: pem, extraLabels: extraLabels, progress: progress)

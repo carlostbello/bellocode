@@ -98,6 +98,7 @@ public actor BrowserTabGate {
     private var lastUsed: [String: String] = [:]
     private var names: [String: String] = [:]             // session → thread title (display only)
     private var lastGranted: String?
+    private var idleWaiters: [(id: Int, tab: String, continuation: CheckedContinuation<Void, Never>)] = []
 
     public init(limits: Limits = .init(), now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.limits = limits
@@ -147,6 +148,38 @@ public actor BrowserTabGate {
         if running[ticket.tab] == ticket { running[ticket.tab] = nil }
         if let lease = leases[ticket.tab], lease.session == ticket.session { leases[ticket.tab]?.renewed = now() }
         admit()
+        resumeIdleWaiters()
+    }
+
+    /// Whether no call is running on `tab` ("*": on any tab).
+    public func isIdle(_ tab: String) -> Bool {
+        tab == "*" ? running.isEmpty : running[tab] == nil
+    }
+
+    /// Returns once no call runs on `tab` ("*": any tab), or when the caller is cancelled. Take Over uses it to hand
+    /// control over only after already-dispatched agent calls have settled (R22).
+    public func waitUntilIdle(_ tab: String) async {
+        if isIdle(tab) { return }
+        nextID += 1
+        let id = nextID
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if isIdle(tab) || Task.isCancelled { continuation.resume() } else { idleWaiters.append((id, tab, continuation)) }
+            }
+        } onCancel: {
+            Task { await self.cancelIdleWaiter(id) }
+        }
+    }
+
+    private func cancelIdleWaiter(_ id: Int) {
+        guard let index = idleWaiters.firstIndex(where: { $0.id == id }) else { return }
+        idleWaiters.remove(at: index).continuation.resume()
+    }
+
+    private func resumeIdleWaiters() {
+        let ready = idleWaiters.filter { isIdle($0.tab) }
+        idleWaiters.removeAll { waiter in ready.contains { $0.id == waiter.id } }
+        for waiter in ready { waiter.continuation.resume() }
     }
 
     /// Grants free tabs to waiters, round-robin across threads: the next grant goes to the first waiting call of a
@@ -166,7 +199,7 @@ public actor BrowserTabGate {
     }
 
     /// The person takes over `tab` ("*" = every tab): waiting calls on it fail with Busy; new calls are refused. The
-    /// running call (if any) is left to the caller to cancel; returns the sessions affected.
+    /// running call (if any) is left to the caller to cancel (then `waitUntilIdle`); returns the sessions affected.
     @discardableResult
     public func takeOver(_ tab: String) -> Set<String> {
         humanTabs.insert(tab)
@@ -210,6 +243,7 @@ public actor BrowserTabGate {
         for waiter in pending { waiter.continuation.resume(throwing: Busy.restarted) }
         running = [:]
         leases = [:]
+        resumeIdleWaiters()
         return generation
     }
 

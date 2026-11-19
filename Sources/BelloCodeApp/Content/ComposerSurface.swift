@@ -80,12 +80,12 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
         super.viewDidLoad()
         composer.configuration = configuration()
         if let thread = context.thread {
-            host = ThreadModelComposerHost(thread, fileStore: services.attachmentStore)
+            host = ThreadModelComposerHost(thread, fileStore: services.attachmentStore, archive: services.draftArchive)
             mountControls(thread: thread)
         } else {
             let source = DraftAgentSource(directory: context.projectDirectory, engine: context.engine)
             draftSource = source
-            host = DraftComposerHost(context: context, source: source, fileStore: services.attachmentStore)
+            host = DraftComposerHost(context: context, source: source, fileStore: services.attachmentStore, archive: services.draftArchive)
             mountDraftControls(source)
         }
         composer.host = host
@@ -374,15 +374,17 @@ final class DraftComposerHost: ComposerHost {
     let fileStore: AttachmentFileStore
     private(set) var created: ThreadModelComposerHost?
     private let cache = ComposerDraftCache.shared
+    private let archive: ComposerDraftArchive?
     /// Prepares the thread's directory before it is created (the workspace picker's new worktree); nil: the project.
     var prepareDirectory: (@MainActor (String) async throws -> String?)?
     /// Git parity: runs after the first send created the thread (generated worktree branch names).
     var afterFirstSend: (@MainActor (ThreadModel, String) -> Void)?
 
-    init(context: ThreadSurfaceContext, source: DraftAgentSource, fileStore: AttachmentFileStore) {
+    init(context: ThreadSurfaceContext, source: DraftAgentSource, fileStore: AttachmentFileStore, archive: ComposerDraftArchive? = nil) {
         self.context = context
         self.source = source
         self.fileStore = fileStore
+        self.archive = archive
     }
 
     var draftKey: String { created?.draftKey ?? "draft:" + context.projectDirectory }
@@ -391,13 +393,23 @@ final class DraftComposerHost: ComposerHost {
         if let created { return created.loadDraft() }
         let text = context.newThreadDraft
         if let cached = cache.draft(for: draftKey), cached.text == text { return cached }
+        // After a relaunch: the attachments and pills staged with the new-thread draft (R28).
+        if let restored = archive?.restore(draftKey, text: text) {
+            cache.store(restored, for: draftKey)
+            return restored
+        }
         return ComposerDraft(text: text)
     }
 
     func saveDraft(_ draft: ComposerDraft) {
         if let created { return created.saveDraft(draft) }
+        let previous = cache.draft(for: draftKey)
         cache.store(draft, for: draftKey)
         if context.newThreadDraft != draft.text { context.draft = draft.text }
+        if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
+            let key = draftKey
+            Task { await archive.save(draft, for: key) }
+        }
     }
 
     func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {
@@ -419,9 +431,13 @@ final class DraftComposerHost: ComposerHost {
         guard let model = await context.createThread(options) else {
             return .failed(context.visibleError ?? "The thread could not be created.")
         }
-        let host = ThreadModelComposerHost(model, fileStore: fileStore)
+        let host = ThreadModelComposerHost(model, fileStore: fileStore, archive: archive)
         created = host
         cache.store(.empty, for: "draft:" + context.projectDirectory)
+        if let archive {
+            let projectKey = "draft:" + context.projectDirectory
+            Task { await archive.save(.empty, for: projectKey) }
+        }
         let outcome = await host.send(submission)
         afterFirstSend?(model, submission.text)
         return outcome

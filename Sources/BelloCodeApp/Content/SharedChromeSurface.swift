@@ -567,11 +567,13 @@ struct SharedChromeOverlay: View {
 
     private var symbol: String {
         if controlled { return "hand.raised.fill" }
+        if !service.takingOver.isEmpty { return "hourglass" }
         if running != nil { return "cursorarrow.motionlines" }
         return "eye"
     }
 
     private var text: String {
+        if !service.takingOver.isEmpty, !controlled { return "Taking over · stopping agent calls first" }
         if controlled {
             return service.humanControl.contains("*") ? "You have control · agents paused" : "You control \(service.humanControl.sorted().joined(separator: ", ")) · its agent is paused"
         }

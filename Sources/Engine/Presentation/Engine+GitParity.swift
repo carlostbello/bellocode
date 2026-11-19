@@ -77,9 +77,14 @@ extension Engine {
             plan.filesUnavailable = "No checkpoint was saved before this message, so files cannot be restored."
             return plan
         }
-        plan.files = try await GitCheckpoints.planRestore(
-            directory: directory, checkpoint: checkpoint, undoRef: GitCheckpoints.ref(session: id, message: MessageID(rawValue: "undo-" + messageID.rawValue)),
-            runner: runner)
+        do {
+            plan.files = try await GitCheckpoints.planRestore(
+                directory: directory, checkpoint: checkpoint, undoRef: GitCheckpoints.ref(session: id, message: MessageID(rawValue: "undo-" + messageID.rawValue)),
+                runner: runner)
+        } catch let error as GitCheckpoints.RestoreError {
+            // Never a partial plan: files are not restored and the sheet says why before anything is rewound (R26).
+            plan.filesUnavailable = error.userMessage
+        }
         return plan
     }
 

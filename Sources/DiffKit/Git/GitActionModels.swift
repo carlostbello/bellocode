@@ -404,6 +404,8 @@ public final class RewindModel {
             plan = try await makePlan(revertFiles)
             error = nil
         } catch {
+            // A plan for the other choice must not stay actionable (it would rewind without the files asked for).
+            plan = nil
             self.error = (error as? GitError)?.userMessage ?? "The rewind could not be planned."
         }
     }

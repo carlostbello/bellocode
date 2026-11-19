@@ -295,11 +295,14 @@ final class CallLog: Sendable {
 
 final class FakeBrowseTransport: BrowseMCPTransport {
     let calls: CallLog
+    /// Tools whose replies never come (a call still running in the browser).
+    let held: Set<String>
     private let stream: AsyncThrowingStream<Data, any Error>
     private let continuation: AsyncThrowingStream<Data, any Error>.Continuation
 
-    init(calls: CallLog = CallLog()) {
+    init(calls: CallLog = CallLog(), held: Set<String> = []) {
         self.calls = calls
+        self.held = held
         (stream, continuation) = AsyncThrowingStream.makeStream(of: Data.self, throwing: (any Error).self)
     }
 
@@ -318,6 +321,7 @@ final class FakeBrowseTransport: BrowseMCPTransport {
             let tool = message["params"]?["name"]?.stringValue ?? ""
             let args = message["params"]?["arguments"] ?? .null
             calls.append((tool, args))
+            if held.contains(tool) { return }
             let tab = args["tab"]?.stringValue ?? args["id"]?.stringValue ?? ""
             result = .object(["content": .array([
                 .object(["type": .string("text"), "text": .string("{\"tab\":\(abs(tab.hashValue % 100000)),\"id\":\"\(tab)\",\"ok\":true}")]),
@@ -340,6 +344,9 @@ actor FakeSharedBrowserHost: SharedBrowserHost {
     var begins = 0
     var gen = 0
     nonisolated let calls = CallLog()
+    var held: Set<String> = []
+
+    func hold(_ tool: String) { held.insert(tool) }
 
     func approve(_ directory: String) { approved.insert(directory) }
     func setGeneration(_ value: Int) { gen = value }
@@ -365,7 +372,7 @@ actor FakeSharedBrowserHost: SharedBrowserHost {
     }
     func beginCall() async throws { begins += 1 }
     func endCall() async {}
-    func makeTransport() async throws -> any BrowseMCPTransport { FakeBrowseTransport(calls: calls) }
+    func makeTransport() async throws -> any BrowseMCPTransport { FakeBrowseTransport(calls: calls, held: held) }
     func generation() async -> Int { gen }
     func threadTitle(session: String) async -> String { "thread \(session)" }
 }
@@ -445,6 +452,31 @@ struct SharedBrowserBrokerTests {
         // The default tab is created again in the new browser.
         let ensures = host.calls.all.filter { $0.tool == "tabs" && $0.args["action"]?.stringValue == "new" }.count
         #expect(ensures == 2)
+    }
+
+    /// R22: a call already sent to the browser is cancelled, and Take Over returns (so the person gets control) only
+    /// once it has settled; the agent is told its call was cut short.
+    @Test func takeOverCancelsAndWaitsOutDispatchedCalls() async throws {
+        let host = FakeSharedBrowserHost()
+        await host.approve("/p/atlas")
+        await host.hold("click")
+        let broker = SharedBrowserBroker(host: host)
+        let tab = "\(BrowserNaming.group(sessionID: "ses_a"))-main"
+        _ = await call(broker, "navigate", ["url": .string("https://x")], session: "ses_a")
+        let inFlight = Task { await self.call(broker, "click", ["ref": .string("e1")], session: "ses_a") }
+        var dispatched = false
+        for _ in 0..<20_000 {
+            if host.calls.all.contains(where: { $0.tool == "click" }) { dispatched = true; break }
+            await Task.yield()
+        }
+        try #require(dispatched, "the click reached the browser")
+        #expect(await broker.gate.isIdle(tab) == false)
+        let settled = await broker.takeOver("*")
+        #expect(settled)
+        #expect(await broker.gate.isIdle("*"), "control is handed over only after the dispatched call settled")
+        let result = await inFlight.value
+        #expect(result.isError && result.text.contains("took over"), "\(result.text)")
+        await broker.gate.giveBack("*")
     }
 
     @Test func takeOverMakesAgentCallsBusy() async {

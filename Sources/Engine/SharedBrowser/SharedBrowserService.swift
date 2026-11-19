@@ -18,6 +18,13 @@ public struct SharedBrowserConfiguration: Sendable {
     public var extraLabels: [String: String]
     public var containerName: String
     public var volume: String
+    /// The Keychain account of the packing key. Debug builds use their own disposable key, so a development context
+    /// never receives the installation's production key (R18).
+    public var keyAccount: String = SharedBrowserConfiguration.defaultKeyAccount
+
+    public static var defaultKeyAccount: String {
+        BrowserImageContext.allowsDevelopmentSources ? SharedBrowserService.developmentKeyAccount : SharedBrowserService.keyAccount
+    }
 
     public init(contextDirectory: URL?, dockerConfigDirectory: URL,
                 keyVault: any SecretVault = KeychainSecretVault(service: SharedBrowserService.keyService),
@@ -52,7 +59,8 @@ public struct BrowserNotice: Sendable, Equatable, Identifiable {
 @Observable
 public final class SharedBrowserService {
     nonisolated public static let keyService = "app.bellocode.browser-extension-key"
-    nonisolated static let keyAccount = "extension-packing-key"
+    nonisolated public static let keyAccount = "extension-packing-key"
+    nonisolated public static let developmentKeyAccount = "extension-packing-key-development"
     nonisolated public static let instructionKey = "bellocode.chrome"
 
     public private(set) var phase: BrowserPhase = .stopped
@@ -65,14 +73,20 @@ public final class SharedBrowserService {
     public private(set) var bindings: [String: BrowserBinding] = [:]
     public private(set) var shares: [BrowserShare] = []
     public private(set) var labels: [String: String] = [:]
-    /// Projects whose agents may use the shared Chrome ("Always"), and threads allowed once.
+    /// Projects whose agents may use the shared Chrome ("Always"), and threads allowed once (session → the directory it
+    /// was allowed in; a call must match both).
     public private(set) var approvedProjects: Set<String> = []
-    public private(set) var approvedSessions: Set<String> = []
+    public private(set) var approvedSessions: [String: String] = [:]
+    /// Revocations whose stored grant could not be deleted yet: the tools stay hidden (admission is closed), the
+    /// pending removal is kept outside SQLite and retried, and Settings shows it until the delete succeeds (R21).
+    public private(set) var pendingRevocations: Set<String> = []
     /// The live view's endpoint on the Mac (`http://127.0.0.1:<port>/bellocode.html`), while a viewer is visible.
     public private(set) var viewerURL: URL?
     public private(set) var viewerSubscribers = 0
     /// "*" while the person controls the whole browser, or the tab IDs they took over.
     public private(set) var humanControl: Set<String> = []
+    /// Take Over requested, waiting for already-dispatched agent calls to settle (input not yet accepted).
+    public private(set) var takingOver: Set<String> = []
     public private(set) var downloads: [BrowserDownload] = []
     public private(set) var imageTag: String?
     public private(set) var lastError: String?
@@ -88,7 +102,6 @@ public final class SharedBrowserService {
     @ObservationIgnored public private(set) var broker: SharedBrowserBroker!
     @ObservationIgnored private var runtime: DockerBrowserRuntime?
     @ObservationIgnored private var hosts: [String: ClientMCPHost] = [:]
-    @ObservationIgnored private var pendingApprovals: [String: (session: String, directory: String)] = [:]
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var forwards: [String: (forwarder: PortForwarder, task: Task<Void, Never>, project: String, used: ContinuousClock.Instant)] = [:]
     @ObservationIgnored private var viewerForward: (forwarder: PortForwarder, task: Task<Void, Never>)?
@@ -98,10 +111,15 @@ public final class SharedBrowserService {
     @ObservationIgnored let log = Logger(subsystem: "app.bellocode", category: "shared-browser")
     nonisolated static let maxForwards = 32
     nonisolated static let toolsCacheKey = "browser.shared.tools"
+    nonisolated static let pendingRevocationsKey = "browser.shared.pendingRevocations"
+    /// Approval cards for the browser that may wait at once; beyond that the agent is told to wait (R20).
+    nonisolated static let maxPendingApprovals = 16
+    @ObservationIgnored let defaults: UserDefaults
 
-    init(store: ProjectionStore, configuration: SharedBrowserConfiguration?) {
+    init(store: ProjectionStore, configuration: SharedBrowserConfiguration?, defaults: UserDefaults = .standard) {
         self.store = store
         self.configuration = configuration
+        self.defaults = defaults
         settings = SharedBrowserSettings.load()
         let cached = Self.loadCachedTools()
         broker = SharedBrowserBroker(host: ServiceHost(service: self), cachedTools: cached, toolsCache: { tools in
@@ -146,7 +164,7 @@ public final class SharedBrowserService {
         let runtime = DockerBrowserRuntime(
             socketPath: environments.activeRuntime.socketPath ?? (NSHomeDirectory() + "/.rd/docker.sock"),
             docker: configuration.docker, contextDirectory: configuration.contextDirectory, configDirectory: configuration.dockerConfigDirectory,
-            key: { [vault = configuration.keyVault] in try await Self.packingKey(vault) },
+            key: { [vault = configuration.keyVault, account = configuration.keyAccount] in try await Self.packingKey(vault, account: account) },
             network: { [weak self] image in
                 guard let self else { throw BrowserStartError.unavailable("BelloCode is shutting down.") }
                 return try await self.placeNetwork(image: image)
@@ -170,12 +188,13 @@ public final class SharedBrowserService {
     }
 
     /// The packing key from the Keychain, made once (RSA-2048, PKCS#8). Never logged, never in argv or a file.
-    nonisolated static func packingKey(_ vault: any SecretVault) async throws -> String {
-        if let stored = try? vault.read(account: keyAccount), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
+    nonisolated static func packingKey(_ vault: any SecretVault, account: String = keyAccount) async throws -> String {
+        if let stored = try? vault.read(account: account), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
             return text
         }
         let pem = try BrowserExtensionKey.generatePEM()
-        try vault.store(account: keyAccount, label: "BelloCode shared browser extension packing key", value: SecretValue(pem))
+        let label = account == keyAccount ? "BelloCode shared browser extension packing key" : "BelloCode shared browser extension packing key (development)"
+        try vault.store(account: account, label: label, value: SecretValue(pem))
         return pem
     }
 
@@ -185,7 +204,10 @@ public final class SharedBrowserService {
         bindings = Dictionary(((try? await store.browserBindings()) ?? []).map { ($0.sessionID, $0) }, uniquingKeysWith: { a, _ in a })
         shares = (try? await store.browserShares()) ?? []
         labels = (try? await store.browserLabels()) ?? [:]
-        approvedProjects = (try? await store.grants(.browserMCP)) ?? []
+        // A revocation that never reached SQLite still applies: never reload a grant the person revoked (R21).
+        pendingRevocations = Set(defaults.stringArray(forKey: Self.pendingRevocationsKey) ?? [])
+        approvedProjects = ((try? await store.grants(.browserMCP)) ?? []).subtracting(pendingRevocations)
+        for directory in pendingRevocations { _ = await finishRevocation(directory) }
     }
 
     private func apply(phase: BrowserPhase, generation: Int, status: BrowserRuntimeStatus?) {
@@ -253,10 +275,30 @@ public final class SharedBrowserService {
         await startBrowser()
     }
 
-    public func revokeProject(_ directory: String) async {
+    /// Revokes a project's "Always". Admission closes at once (tools hidden, calls refused) and stays closed across
+    /// relaunches: the pending removal is recorded outside SQLite before the stored grant is deleted. Returns false
+    /// (and Settings shows it, with Retry) when the delete failed (R21).
+    @discardableResult
+    public func revokeProject(_ directory: String) async -> Bool {
         approvedProjects.remove(directory)
-        try? await store.setGrant(.browserMCP, scope: directory, granted: false)
+        approvedSessions = approvedSessions.filter { $0.value != directory }
+        pendingRevocations.insert(directory)
+        defaults.set(pendingRevocations.sorted(), forKey: Self.pendingRevocationsKey)
         await hosts[directory]?.toolsChanged()
+        return await finishRevocation(directory)
+    }
+
+    /// Deletes the stored grant of a pending revocation; on success the pending record goes too.
+    private func finishRevocation(_ directory: String) async -> Bool {
+        do {
+            try await store.setGrant(.browserMCP, scope: directory, granted: false)
+        } catch {
+            lastError = "Could not save the revocation for \(URL(filePath: directory).lastPathComponent). Agents there still cannot use the shared Chrome; retry from Settings ▸ Browser."
+            return false
+        }
+        pendingRevocations.remove(directory)
+        defaults.set(pendingRevocations.sorted(), forKey: Self.pendingRevocationsKey)
+        return true
     }
 
     public func expectedImageTag() async -> String? { try? await runtime?.expectedTag() }
@@ -310,19 +352,44 @@ public final class SharedBrowserService {
         guard isAvailable else { return .unavailable("The shared Chrome needs container execution (Rancher Desktop).") }
         guard settings.enabled else { return .unavailable("The shared Chrome is turned off in Settings ▸ Browser.") }
         if case .sandboxUnavailable = phase { return .unavailable(BrowserStartError.sandboxUnavailable.description) }
-        if approvedProjects.contains(directory) || approvedSessions.contains(session) { return .allowed }
+        if pendingRevocations.contains(directory) { return .needsApproval }
+        if approvedProjects.contains(directory) || approvedSessions[session] == directory { return .allowed }
         return .needsApproval
+    }
+
+    /// What the directory-level tools listing advertises: the chrome_* tools when the project is allowed, or when a
+    /// thread in it was allowed once (each call is still checked against its exact session and directory, R19).
+    func toolAccess(directory: String) -> BrowserToolAccess {
+        switch access(session: "", directory: directory) {
+        case .unavailable(let reason): return .unavailable(reason)
+        case .allowed: return .allowed
+        case .needsApproval:
+            if !pendingRevocations.contains(directory), approvedSessions.values.contains(directory) { return .someSessions }
+            return .needsApproval
+        }
+    }
+
+    /// Browser approval cards still waiting (durable app requests, so they survive relaunch).
+    private func pendingBrowserApprovals() async -> [(session: String, approval: AppApproval)] {
+        guard let engine else { return [] }
+        return await engine.core.appRequests().compactMap { request in
+            if case .approval(let approval) = request.kind, approval.action == .browserMCP { return (request.sessionID.rawValue, approval) }
+            return nil
+        }
     }
 
     /// The approval card for the browse MCP server (MCP servers always need a person, even in Auto or Full access).
     public func requestAccess(session: String, directory: String) async -> ClientMCPResult {
         guard let engine else { return .error("BelloCode is not ready.") }
-        if pendingApprovals.values.contains(where: { $0.session == session && $0.directory == directory }) {
+        let pending = await pendingBrowserApprovals()
+        if pending.contains(where: { $0.session == session && $0.approval.scope == directory }) {
             return ClientMCPResult(text: "The request is already waiting for the person (a card shows it). End your turn now.")
         }
+        // Never evict a waiting card: the agent is told plainly instead (R20).
+        if pending.count >= Self.maxPendingApprovals {
+            return .error("\(pending.count) shared Chrome requests are already waiting for the person. Do not ask again now; end your turn and explain what you need the browser for.")
+        }
         let subject = AppRequest.makeID("chrome")
-        if pendingApprovals.count >= 16, let oldest = pendingApprovals.keys.sorted().first { pendingApprovals[oldest] = nil }
-        pendingApprovals[subject] = (session, directory)
         let tag = await expectedImageTag() ?? "bellocode-browser (built on first use)"
         let detail = """
             Server: browse \(BrowserVersions.browse) (MCP) in BelloCode's browser container, never on this Mac · Chromium \(BrowserVersions.chromium) (\(tag))
@@ -337,16 +404,24 @@ public final class SharedBrowserService {
         return ClientMCPResult(text: "Asked the person to allow the shared Chrome for this project (a card shows it). If they allow it you are woken and the chrome_* tools appear. End your turn now.")
     }
 
-    /// The person answered the card.
-    func answerApproval(_ approval: AppApproval, approved: Bool, always: Bool) async {
-        guard let pending = pendingApprovals.removeValue(forKey: approval.subjectID),
-              approval.digest == SHA256Hex.of("browserMCP\n" + pending.directory) else { return }
+    /// The person answered the card. The session and directory come from the durable request (its session and the
+    /// approval's scope, bound by the digest), so a card restored after relaunch is answered like a fresh one. Throws
+    /// before anything is applied when the card is not a valid browser approval, and when an "Always" grant could not
+    /// be stored: the caller keeps the card (R20).
+    func answerApproval(_ approval: AppApproval, session sessionID: SessionID, approved: Bool, always: Bool) async throws {
+        guard approval.action == .browserMCP, approval.digest == SHA256Hex.of("browserMCP\n" + approval.scope) else {
+            throw BrowserStartError.unavailable("This browser approval card is not valid any more.")
+        }
+        let pending = (session: sessionID.rawValue, directory: approval.scope)
         if approved {
             if always {
+                try await store.setGrant(.browserMCP, scope: pending.directory, granted: true)
                 approvedProjects.insert(pending.directory)
-                try? await store.setGrant(.browserMCP, scope: pending.directory, granted: true)
+                if pendingRevocations.remove(pending.directory) != nil {
+                    defaults.set(pendingRevocations.sorted(), forKey: Self.pendingRevocationsKey)
+                }
             } else {
-                approvedSessions.insert(pending.session)
+                approvedSessions[pending.session] = pending.directory
             }
             await hosts[pending.directory]?.toolsChanged()
             await writeGuidance(session: pending.session, directory: pending.directory)
@@ -478,13 +553,20 @@ public final class SharedBrowserService {
         viewerURL = nil
     }
 
-    /// Take Over: the person controls `tab` ("*" = the whole browser). Agent calls waiting on it fail with Busy and new
-    /// ones are refused until Give Back; the browser counts as active meanwhile.
+    /// Take Over: the person controls `tab` ("*" = the whole browser). Agent calls waiting on it fail with Busy, new
+    /// ones are refused until Give Back, and calls already sent are cancelled. Control (the live view accepting input)
+    /// is acknowledged only once those calls have settled; meanwhile `takingOver` shows it (R22). The browser counts as
+    /// active meanwhile.
     public func takeOver(_ tab: String = "*") async {
-        guard !humanControl.contains(tab) else { return }
-        humanControl.insert(tab)
-        await broker.gate.takeOver(tab)
+        guard !humanControl.contains(tab), !takingOver.contains(tab) else { return }
+        takingOver.insert(tab)
         try? await supervisor?.begin(.human)
+        let settled = await broker.takeOver(tab)
+        takingOver.remove(tab)
+        if !settled {
+            lastError = "An agent's browser call did not stop in time. Agents are paused; check the page before you continue."
+        }
+        humanControl.insert(tab)
         tabActivity = await broker.tabActivity()
     }
 
@@ -655,6 +737,9 @@ struct ServiceHost: SharedBrowserHost {
 
     func access(session: String, directory: String) async -> BrowserAccess {
         await MainActor.run { service?.access(session: session, directory: directory) ?? .unavailable("BelloCode is shutting down.") }
+    }
+    func toolAccess(directory: String) async -> BrowserToolAccess {
+        await MainActor.run { service?.toolAccess(directory: directory) ?? .unavailable("BelloCode is shutting down.") }
     }
     public func requestAccess(session: String, directory: String) async -> ClientMCPResult {
         guard let service else { return .error("BelloCode is shutting down.") }

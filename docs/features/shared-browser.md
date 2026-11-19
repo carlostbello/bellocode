@@ -1,6 +1,7 @@
 # Shared browser (one Chromium for every thread)
 
-Status: built 2026-11-18 on opencode 2.3.2, browse 0.1.5, Debian Chromium 156.0.8078.79 (arm64), Rancher Desktop
+Status: built 2026-11-18 on opencode 2.3.2, browse 0.1.5, Debian Chromium 156.0.8078.79 (arm64; the 1.0 release is arm64
+only and an amd64 engine is refused before the image build), Rancher Desktop
 (dockerd 29.9.2). Inputs: [G7 spike](../spikes/G7-chrome-browse-container.md), [review](../reviews/browser-integration-review.md),
 [secrets routing](secrets.md#routing-for-the-shared-browser-package). The built-in WebKit browser ([browser.md](browser.md))
 stays for previews.

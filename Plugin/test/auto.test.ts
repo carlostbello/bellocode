@@ -23,6 +23,13 @@ describe("auto mode helpers", () => {
     expect(A.autoEffect("full", "allow").changed).toBe(false)
   })
 
+  test("an unknown mode escalates an allow and preserves deny and ask (R11)", () => {
+    expect(A.autoEffect("unknown", "allow")).toEqual({ effect: "ask", changed: true })
+    expect(A.autoEffect("unknown", "deny")).toEqual({ effect: "deny", changed: false })
+    expect(A.autoEffect("unknown", "ask")).toEqual({ effect: "ask", changed: false })
+    expect(A.autoEffect("other", "allow").changed).toBe(false)
+  })
+
   test("the trace is bounded and carries no resources", () => {
     const trace = new A.Trace(3)
     for (let i = 0; i < 5; i++) trace.add({ hook: "evaluate", action: "read", resources: 2 })
@@ -63,6 +70,21 @@ describe("auto mode helpers", () => {
 })
 
 describe("hooks", () => {
+  test("evaluate: a failed session lookup is unknown, so a saved-grant allow is escalated (R11)", async () => {
+    const plugin = await makePlugin()
+    // No such session: the lookup throws, as it does when the server cannot read it.
+    const saved = await plugin.fire("permission.evaluate", {
+      sessionID: "ses_unreadable", action: "shell", resources: ["git push"], effect: "allow", source: { id: "call_u" },
+    })
+    expect(saved.effect).toBe("ask")
+    expect(saved.message).toBe(A.UNKNOWN_MODE_MESSAGE)
+    const denied = await plugin.fire("permission.evaluate", {
+      sessionID: "ses_unreadable", action: "shell", resources: ["rm -rf /"], effect: "deny", source: { id: "call_d" },
+    })
+    expect(denied.effect).toBe("deny")
+    await plugin.dispose()
+  })
+
   test("evaluate: Auto turns a saved-grant allow into ask; Full access is recorded and stamped on the result", async () => {
     const plugin = await makePlugin()
     plugin.add({ id: "ses_auto", permissions: AUTO })
@@ -96,12 +118,6 @@ describe("hooks", () => {
     await plugin.dispose()
   })
 
-  test("an unknown session is never treated as Auto or Full", async () => {
-    const plugin = await makePlugin()
-    const event = await plugin.fire("permission.evaluate", { sessionID: "missing", action: "read", resources: [], effect: "allow" })
-    expect(event.effect).toBe("allow")
-    await plugin.dispose()
-  })
 })
 
 describe("thread_interrupt", () => {

@@ -8,7 +8,7 @@ export SWIFTTERM_BUILD_COMMIT ?= 282c3c3a932b55c129628876b70f37d993af1615
 export SWIFTTERM_BUILD_BRANCH ?= HEAD
 export SWIFTTERM_BUILD_DIRTY ?= false
 
-.PHONY: build test fetch app run smoke e2e-containers e2e-exec plugin-test opencode-upgrade opencode-verify browser-verify clean
+.PHONY: build test fetch app release run smoke e2e-containers e2e-exec plugin-test opencode-upgrade opencode-verify browser-verify clean
 
 build:
 	swift build
@@ -21,6 +21,11 @@ fetch:
 
 app: fetch
 	Scripts/make-app.sh $(CONFIG)
+
+# The owner handoff (docs/RELEASE.md): release build, build/BelloCode.app ad-hoc signed, zipped as
+# build/BelloCode-<VERSION file>.zip, then a copy unzipped from the zip is verified (codesign, spctl, version, arch).
+release: fetch
+	Scripts/make-release.sh
 
 run: app
 	open build/BelloCode.app

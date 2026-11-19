@@ -225,6 +225,57 @@ struct GitCheckpointTests {
         #expect(await GitCheckpoints.resolve(ref, directory: repo.path, runner: repo.runner) == nil)
     }
 
+    /// R26: a deleted executable and a deleted symlink come back with their mode and type, a mode-only change is
+    /// reverted, and Undo returns the later state exactly.
+    @Test func restoreKeepsTheExecutableBitAndSymlinks() async throws {
+        let repo = try await TempRepo.make(files: ["run.sh": "#!/bin/sh\necho hi\n", "target.txt": "t\n", "mode.sh": "x\n"])
+        defer { repo.remove() }
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.path + "/run.sh")
+        try fm.createSymbolicLink(atPath: repo.path + "/link", withDestinationPath: "target.txt")
+        _ = try await repo.git("add", "-A")
+        _ = try await repo.git("commit", "-q", "-m", "modes")
+        let session = SessionID(rawValue: "ses_m")
+        let ref = GitCheckpoints.ref(session: session, message: MessageID(rawValue: "msg_1"))
+        let checkpoint = try #require(try await GitCheckpoints.capture(directory: repo.path, ref: ref, runner: repo.runner))
+        // The agent's turn: deletes the executable and the link, makes mode.sh executable.
+        try fm.removeItem(atPath: repo.path + "/run.sh")
+        try fm.removeItem(atPath: repo.path + "/link")
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.path + "/mode.sh")
+        let undoRef = GitCheckpoints.ref(session: session, message: MessageID(rawValue: "undo-msg_1"))
+        let plan = try await GitCheckpoints.planRestore(directory: repo.path, checkpoint: checkpoint, undoRef: undoRef, runner: repo.runner)
+        #expect(Set(plan.paths) == ["run.sh", "link", "mode.sh"])
+        let written = try await GitCheckpoints.apply(plan)
+        let runMode = try #require(try fm.attributesOfItem(atPath: repo.path + "/run.sh")[.posixPermissions] as? Int)
+        #expect(runMode & 0o111 != 0, "the executable bit is restored")
+        #expect(try fm.attributesOfItem(atPath: repo.path + "/link")[.type] as? FileAttributeType == .typeSymbolicLink)
+        #expect(try fm.destinationOfSymbolicLink(atPath: repo.path + "/link") == "target.txt")
+        let modeMode = try #require(try fm.attributesOfItem(atPath: repo.path + "/mode.sh")[.posixPermissions] as? Int)
+        #expect(modeMode & 0o111 == 0, "a mode-only change is reverted")
+        #expect(try await repo.git("status", "--porcelain").isEmpty, "the tree matches the checkpoint exactly")
+        try await GitCheckpoints.undo(written, directory: repo.path)
+        #expect(!fm.fileExists(atPath: repo.path + "/run.sh"))
+        #expect((try? fm.attributesOfItem(atPath: repo.path + "/link")) == nil)
+        #expect((try fm.attributesOfItem(atPath: repo.path + "/mode.sh")[.posixPermissions] as? Int ?? 0) & 0o100 != 0)
+    }
+
+    /// R26: more differing paths than the limit is refused outright (never a silent cut), and nothing is written.
+    @Test func restoreRefusesAPlanBeyondTheLimit() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "a\n"])
+        defer { repo.remove() }
+        let session = SessionID(rawValue: "ses_l")
+        let ref = GitCheckpoints.ref(session: session, message: MessageID(rawValue: "msg_1"))
+        let checkpoint = try #require(try await GitCheckpoints.capture(directory: repo.path, ref: ref, runner: repo.runner))
+        for index in 0..<4 { try repo.write("new\(index).txt", "\(index)\n") }
+        let undoRef = GitCheckpoints.ref(session: session, message: MessageID(rawValue: "undo-msg_1"))
+        await #expect(throws: GitCheckpoints.RestoreError.tooManyFiles(count: 4, limit: 3)) {
+            _ = try await GitCheckpoints.planRestore(directory: repo.path, checkpoint: checkpoint, undoRef: undoRef, runner: repo.runner, limit: 3)
+        }
+        #expect(FileManager.default.fileExists(atPath: repo.path + "/new3.txt"))
+        let plan = try await GitCheckpoints.planRestore(directory: repo.path, checkpoint: checkpoint, undoRef: undoRef, runner: repo.runner, limit: 4)
+        #expect(plan.changes.count == 4)
+    }
+
     @Test func restoreRewindsFilesWithUndoAndNeverOverwritesAConcurrentEdit() async throws {
         let repo = try await TempRepo.make(files: ["a.txt": "one\n", "b.txt": "b\n"])
         defer { repo.remove() }

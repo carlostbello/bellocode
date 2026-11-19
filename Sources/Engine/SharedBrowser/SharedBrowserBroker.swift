@@ -7,6 +7,8 @@ import os
 public protocol SharedBrowserHost: Sendable {
     /// Whether agents in this location may use the shared Chrome: nil = yes; otherwise why not.
     func access(session: String, directory: String) async -> BrowserAccess
+    /// What a location's tools listing advertises (no session: listings are per directory).
+    func toolAccess(directory: String) async -> BrowserToolAccess
     /// Raises the approval card (the server needs a person, even in Auto or Full access).
     func requestAccess(session: String, directory: String) async -> ClientMCPResult
     /// The thread's binding (created and stored on first use).
@@ -27,6 +29,25 @@ public enum BrowserAccess: Sendable, Equatable {
     case allowed
     case needsApproval
     case unavailable(String)
+}
+
+/// A directory's tools listing: allowed for the project, allowed for some of its threads only (Allow Once), or not.
+public enum BrowserToolAccess: Sendable, Equatable {
+    case allowed
+    case someSessions
+    case needsApproval
+    case unavailable(String)
+}
+
+extension SharedBrowserHost {
+    /// Hosts without per-session approvals: the project-level answer.
+    public func toolAccess(directory: String) async -> BrowserToolAccess {
+        switch await access(session: "", directory: directory) {
+        case .allowed: .allowed
+        case .needsApproval: .needsApproval
+        case .unavailable(let reason): .unavailable(reason)
+        }
+    }
 }
 
 /// The client-MCP provider behind the agents' `chrome_*` tools (docs/features/shared-browser.md "Multi-agent model").
@@ -50,6 +71,8 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
     private var notices: [String: [String]] = [:]  // session → notices for its next result
     private var activeSessions: Set<String> = []   // sessions that used the browser this generation
     private var cachedTools: [ClientMCPTool]
+    /// Dispatched downstream calls by ticket, so Take Over can cancel them (R22).
+    private var operations: [Int: (tab: String, task: Task<(outcome: Outcome, value: ClientMCPResult), Never>)] = [:]
     private let toolsCache: (@Sendable ([ClientMCPTool]) -> Void)?
     private static let log = Logger(subsystem: "app.bellocode", category: "shared-browser")
 
@@ -63,14 +86,22 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
 
     // MARK: Tools
 
+    /// The listing is per directory. With Allow Once for one of its threads the chrome_* tools are listed (with
+    /// request_access for the other threads); every call is still checked against its exact session and directory.
     public func tools(directory: String) async -> [ClientMCPTool] {
-        switch await host.access(session: "", directory: directory) {
+        switch await host.toolAccess(directory: directory) {
         case .unavailable: return []
         case .needsApproval: return [Self.requestAccessDefinition]
         case .allowed:
-            if cachedTools.isEmpty, let started = try? await currentClient() { cachedTools = await started.tools }
-            return Self.agentTools(from: cachedTools)
+            return await agentToolList()
+        case .someSessions:
+            return await agentToolList() + [Self.requestAccessDefinition]
         }
+    }
+
+    private func agentToolList() async -> [ClientMCPTool] {
+        if cachedTools.isEmpty, let started = try? await currentClient() { cachedTools = await started.tools }
+        return Self.agentTools(from: cachedTools)
     }
 
     static let requestAccessDefinition = ClientMCPTool(
@@ -158,9 +189,33 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
             return (.failure, .error("The call was cancelled."))
         }
         activeSessions.insert(session)
-        let value = await run(tool: tool, arguments: arguments, tab: tab, ensure: ensure, binding: binding, ticket: ticket)
+        let work = Task { await self.run(tool: tool, arguments: arguments, tab: tab, ensure: ensure, binding: binding, ticket: ticket) }
+        operations[ticket.id] = (tab, work)
+        let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        operations[ticket.id] = nil
         await gate.release(ticket)
         return value
+    }
+
+    /// Take Over (R22): closes admission for `tab` ("*": the whole browser), cancels the agent calls already sent to
+    /// it, and returns once they have settled (true) or `deadline` passed with one still running (false). Only then
+    /// does the service hand control to the person.
+    public func takeOver(_ tab: String, deadline: Duration = .seconds(10)) async -> Bool {
+        await gate.takeOver(tab)
+        for operation in operations.values where tab == "*" || operation.tab == tab { operation.task.cancel() }
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask { [gate] in
+                await gate.waitUntilIdle(tab)
+                return !Task.isCancelled
+            }
+            group.addTask {
+                try? await Task.sleep(for: deadline)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     private func run(tool: String, arguments: JSONValue, tab: String, ensure: Bool, binding: BrowserBinding,
@@ -183,9 +238,17 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
                 result = try await client.call(tool, arguments: arguments)
             }
             guard await gate.isCurrent(ticket) else { return (.failure, .error(BrowserTabGate.Busy.restarted.description)) }
+            // Taken over while it ran: the person has the tab now, so the agent must not act on this result as if
+            // nothing happened.
+            if await gate.isHumanControlled(tab) {
+                return (.failure, .error(BrowserTabGate.Busy.humanControl(tab: tab).description + " Your last call may or may not have taken effect."))
+            }
             learn(result.text)
             return (result.isError ? .failure : .success, ClientMCPResult(text: result.text, isError: result.isError, images: result.images))
         } catch is CancellationError {
+            if await gate.isHumanControlled(tab) {
+                return (.failure, .error("The person took over the shared Chrome, so this call was cancelled; it may or may not have taken effect."))
+            }
             return (.failure, .error("The call was cancelled."))
         } catch let failure as BrowseMCPClient.Failure {
             if failure == .closed { client = nil }

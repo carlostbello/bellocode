@@ -43,38 +43,71 @@ extension WorktreeService {
         return .keep("it has commits that are not pushed or merged")
     }
 
+    /// Test seams for handoff failures (run after the stash, and after the worktree is created).
+    struct HandoffHooks: Sendable {
+        var afterStash: (@Sendable () async -> Void)?
+        var afterCreate: (@Sendable (String) async -> Void)?
+        init(afterStash: (@Sendable () async -> Void)? = nil, afterCreate: (@Sendable (String) async -> Void)? = nil) {
+            self.afterStash = afterStash
+            self.afterCreate = afterCreate
+        }
+    }
+
     /// Worktree handoff (T3 Code `t3_worktree_handoff`): moves the uncommitted work of `projectDirectory`'s checkout
     /// into a new worktree on a new branch from the current HEAD. The changes are stashed (untracked included, by
     /// hash) so the source is clean, the worktree is created, and the stash is applied there (stashes are shared by
-    /// a repository's worktrees). On any failure the stash goes back to the source and the worktree is removed;
-    /// nothing is lost. Returns the new worktree.
+    /// a repository's worktrees). An operation-specific ref keeps the stash commit reachable throughout.
+    ///
+    /// On failure the stash goes back to the source. The stash entry, the ref and the new worktree are removed only
+    /// once that restore verifiably succeeded; otherwise everything is kept and `StashRecoveryError` says how to
+    /// recover (R04). Returns the new worktree.
     public func handoff(from directory: String, branch: String, parent: String) async throws -> CreatedWorktree {
+        try await handoff(from: directory, branch: branch, parent: parent, hooks: HandoffHooks())
+    }
+
+    func handoff(from directory: String, branch: String, parent: String, hooks: HandoffHooks) async throws -> CreatedWorktree {
         let source = GitRepository(directory: directory, runner: runner, writableRoots: [parent])
         guard let head = try await source.revParse("HEAD") else { throw WorktreeError.baseNotFound("HEAD") }
-        let stash = try await source.stash(message: "bellocode: handoff to \(branch)")
-        func giveBack() async {
-            if let stash {
-                _ = try? await source.applyStash(stash)
-                _ = try? await source.dropStash(stash)
+        guard let stash = try await source.stash(message: "bellocode: handoff to \(branch)") else {
+            return try await create(WorktreeCreation(
+                projectDirectory: directory, branch: branch, base: head, startFromOrigin: false, parentDirectory: parent, copyOnWrite: false))
+        }
+        let ref: String
+        do {
+            ref = try await source.keepRecoveryRef(stash)
+        } catch {
+            // Nothing else has happened yet: put the work back (the entry stays if that fails).
+            if await source.restore(stash) == nil { try? await source.dropStash(stash) }
+            throw error
+        }
+        await hooks.afterStash?()
+        /// Puts the work back in the source. Cleans up (drop, ref, the new worktree) only after a verified restore.
+        func giveBack(createdAt destination: String?, original: any Error) async -> any Error {
+            if let failure = await source.restore(stash) {
+                return StashRecoveryError(
+                    stash: stash, ref: ref, directory: directory, keptWorktree: destination, unresolved: failure.unresolved, reason: failure.message)
             }
+            if let destination {
+                _ = try? await remove(directory: destination, projectDirectory: directory, deleteBranch: true, force: true)
+            }
+            try? await source.dropStash(stash)
+            await source.deleteRecoveryRef(ref)
+            return original
         }
         let created: CreatedWorktree
         do {
             created = try await create(WorktreeCreation(
                 projectDirectory: directory, branch: branch, base: head, startFromOrigin: false, parentDirectory: parent, copyOnWrite: false))
         } catch {
-            await giveBack()
-            throw error
+            throw await giveBack(createdAt: nil, original: error)
         }
-        guard let stash else { return created }
-        do {
-            try await GitRepository(directory: created.directory, runner: runner).applyStash(stash)
-            try await source.dropStash(stash)
-        } catch {
-            _ = try? await remove(directory: created.directory, projectDirectory: directory, deleteBranch: true, force: true)
-            await giveBack()
-            throw error
+        await hooks.afterCreate?(created.directory)
+        let destination = GitRepository(directory: created.directory, runner: runner)
+        if let failure = await destination.restore(stash) {
+            throw await giveBack(createdAt: created.directory, original: GitError.failed(command: "stash", status: 1, message: failure.message))
         }
+        try? await source.dropStash(stash)
+        await source.deleteRecoveryRef(ref)
         return created
     }
 }

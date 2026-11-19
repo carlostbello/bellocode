@@ -134,7 +134,15 @@ extension GitRepositoryModel {
         do {
             try await switchBranch(name, create: create)
         } catch {
-            if let hash { try? await repository.applyStash(hash); try? await repository.dropStash(hash) }
+            // Drop only after a verified restore; otherwise keep the entry and say how to recover (R04).
+            if let hash {
+                if let failure = await repository.restore(hash) {
+                    let ref = (try? await repository.keepRecoveryRef(hash)) ?? "refs/stash"
+                    refresh()
+                    throw StashRecoveryError(stash: hash, ref: ref, directory: repository.directory, unresolved: failure.unresolved, reason: failure.message)
+                }
+                try? await repository.dropStash(hash)
+            }
             refresh()
             throw error
         }

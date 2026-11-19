@@ -73,11 +73,38 @@ public struct BrowserImageContext: Sendable, Equatable {
         return String(decoding: compact, as: UTF8.self)
     }
 
-    /// The context folder: `BELLOCODE_BROWSER_CONTEXT`, the app bundle's `Resources/browser-image`, or (development) the
-    /// nearest `Containers/browser` above the executable or the current directory.
-    public static func locate(bundle: Bundle = .main, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+    /// The image pins arm64 binaries (browse, Chromium packages by hash): BelloCode 1.0 builds it only on an arm64
+    /// engine. Returns why not, before the long build starts, or nil when the engine's architecture is supported (R29).
+    public static func architectureRefusal(engineArch: String) -> String? {
+        switch engineArch.lowercased() {
+        case "arm64", "aarch64": nil
+        default:
+            "The shared Chrome image is built for arm64 only, and Rancher Desktop's engine is \(engineArch). BelloCode 1.0 supports Apple silicon Macs only; the built-in browser preview still works."
+        }
+    }
+
+    /// Whether this build may take the browser context from outside its own bundle (debug builds only, R18).
+    public static var allowsDevelopmentSources: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    /// The context folder. A release build uses only the signed bundle's `Resources/browser-image` (nil when it is
+    /// missing, which the browser reports visibly): no environment override and no search of the working directory, so
+    /// a leftover development setting can never hand another Dockerfile the installation's packing key (R18). A debug
+    /// build (`allowDevelopmentSources`) also honours `BELLOCODE_BROWSER_CONTEXT` and, failing the bundle, the nearest
+    /// `Containers/browser` above the executable or the current directory.
+    public static func locate(bundle: Bundle = .main, environment: [String: String] = ProcessInfo.processInfo.environment,
+                              allowDevelopmentSources: Bool = allowsDevelopmentSources) -> URL? {
         let manager = FileManager.default
         func valid(_ url: URL) -> Bool { manager.fileExists(atPath: url.appending(path: "Dockerfile").path) }
+        guard allowDevelopmentSources else {
+            guard let resources = bundle.resourceURL?.appending(path: "browser-image").standardizedFileURL, valid(resources) else { return nil }
+            return resources
+        }
         if let path = environment["BELLOCODE_BROWSER_CONTEXT"], valid(URL(filePath: path)) { return URL(filePath: path) }
         if let resources = bundle.resourceURL?.appending(path: "browser-image"), valid(resources) { return resources }
         var starts = [URL(filePath: manager.currentDirectoryPath)]

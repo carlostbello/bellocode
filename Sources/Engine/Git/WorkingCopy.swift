@@ -1,21 +1,62 @@
 import Foundation
 
+/// What sits at a path: a regular file, or a symbolic link (whose `data` is its target path, never followed).
+public enum FileEntryKind: Sendable, Hashable {
+    case regular
+    case symlink
+}
+
 /// A file's bytes at one moment (nil: the file did not exist), for version checks and Undo.
 public struct FileSnapshot: Sendable, Hashable {
     /// Repository-relative path.
     public var path: String
     public var data: Data?
     public var permissions: Int?
+    public var kind: FileEntryKind = .regular
+
+    public init(path: String, data: Data?, permissions: Int?, kind: FileEntryKind = .regular) {
+        self.path = path
+        self.data = data
+        self.permissions = permissions
+        self.kind = kind
+    }
 
     public var exists: Bool { data != nil }
     public var text: String? { data.flatMap { String(data: $0, encoding: .utf8) } }
 }
 
 /// One planned file change: from `before` (verified again just before writing) to `after` (nil deletes the file).
+/// `afterKind` and `afterPermissions` carry a Git entry's type and mode (a symlink, the executable bit); nil
+/// permissions keep the current file's (R26).
 public struct FileChangePlan: Sendable, Hashable {
     public var before: FileSnapshot
     public var after: Data?
+    public var afterKind: FileEntryKind = .regular
+    public var afterPermissions: Int?
     public var path: String { before.path }
+
+    public init(before: FileSnapshot, after: Data?, afterKind: FileEntryKind = .regular, afterPermissions: Int? = nil) {
+        self.before = before
+        self.after = after
+        self.afterKind = afterKind
+        self.afterPermissions = afterPermissions
+    }
+
+    /// Whether writing this plan changes anything (bytes, entry type, or mode).
+    public var changesSomething: Bool {
+        guard let after else { return before.data != nil }
+        guard let old = before.data else { return true }
+        if old != after || before.kind != afterKind { return true }
+        if afterKind == .regular, let afterPermissions, let current = before.permissions { return (afterPermissions & 0o7777) != (current & 0o7777) }
+        return false
+    }
+
+    /// The plan that puts `before` back where this plan's result now is.
+    var inverse: FileChangePlan {
+        FileChangePlan(
+            before: FileSnapshot(path: path, data: after, permissions: afterPermissions ?? before.permissions, kind: afterKind),
+            after: before.data, afterKind: before.kind, afterPermissions: before.permissions)
+    }
 }
 
 public enum WorkingCopyError: Error, Sendable, Equatable, CustomStringConvertible {
@@ -62,11 +103,27 @@ public struct WorkingCopy: Sendable {
 
     func url(_ path: String) -> URL { URL(filePath: root, directoryHint: .isDirectory).appending(path: path) }
 
+    /// The entry at `path`, never following a symbolic link (a link's data is its target path).
     public func snapshot(_ path: String) -> FileSnapshot {
-        let url = url(path)
-        let data = try? Data(contentsOf: url)
-        let permissions = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions] as? Int
-        return FileSnapshot(path: path, data: data, permissions: permissions)
+        let entry = Self.entry(at: url(path))
+        return FileSnapshot(path: path, data: entry?.data, permissions: entry?.permissions, kind: entry?.kind ?? .regular)
+    }
+
+    static func entry(at url: URL) -> (kind: FileEntryKind, data: Data, permissions: Int?)? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        let permissions = attributes[.posixPermissions] as? Int
+        if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { return nil }
+            return (.symlink, Data(destination.utf8), nil)
+        }
+        guard attributes[.type] as? FileAttributeType == .typeRegular, let data = try? Data(contentsOf: url) else { return nil }
+        return (.regular, data, permissions)
+    }
+
+    /// Whether `url` holds exactly `data` as an entry of `kind` (a link is compared by its target, not followed).
+    private static func holds(_ url: URL, _ data: Data, kind: FileEntryKind) -> Bool {
+        guard let entry = entry(at: url) else { return false }
+        return entry.kind == kind && entry.data == data
     }
 
     /// The file's text and its snapshot; throws for non-UTF-8 or oversized files.
@@ -100,18 +157,19 @@ public struct WorkingCopy: Sendable {
     /// Returns the plans that changed something (their `before` is the Undo state).
     @discardableResult
     public func apply(_ plans: [FileChangePlan]) throws -> [FileChangePlan] {
-        for plan in plans where snapshot(plan.path).data != plan.before.data { throw WorkingCopyError.changedOnDisk(plan.path) }
+        for plan in plans {
+            let now = snapshot(plan.path)
+            if now.data != plan.before.data || (now.data != nil && now.kind != plan.before.kind) { throw WorkingCopyError.changedOnDisk(plan.path) }
+        }
         var written: [FileChangePlan] = []
         do {
-            for plan in plans where plan.before.data != plan.after {
+            for plan in plans where plan.changesSomething {
                 beforeReplace?(plan.path)
                 try replace(plan)
                 written.append(plan)
             }
         } catch {
-            for plan in written.reversed() {
-                try? replace(FileChangePlan(before: FileSnapshot(path: plan.path, data: plan.after, permissions: plan.before.permissions), after: plan.before.data))
-            }
+            for plan in written.reversed() { try? replace(plan.inverse) }
             throw error
         }
         return written
@@ -120,10 +178,7 @@ public struct WorkingCopy: Sendable {
     /// Undo of `apply`: restores each file's exact `before` bytes and permissions, but only where the file still holds
     /// what was written; otherwise it refuses and changes nothing.
     public func undo(_ applied: [FileChangePlan]) throws {
-        let inverse = applied.map { plan in
-            FileChangePlan(before: FileSnapshot(path: plan.path, data: plan.after, permissions: plan.before.permissions), after: plan.before.data)
-        }
-        try apply(inverse)
+        try apply(applied.map(\.inverse))
     }
 
     /// Replaces one file only if it still holds `plan.before`, as a compare-and-swap built on `renamex_np`:
@@ -145,24 +200,24 @@ public struct WorkingCopy: Sendable {
             do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) } catch {
                 throw WorkingCopyError.writeFailed(plan.path)
             }
-            try writeTemporary(new, to: aside, permissions: plan.before.permissions, path: plan.path)
+            try writeTemporary(new, kind: plan.afterKind, to: aside, permissions: plan.afterPermissions ?? plan.before.permissions, path: plan.path)
             if rename(aside, target, flags: UInt32(RENAME_EXCL)) != 0 {
                 let code = errno
                 try? FileManager.default.removeItem(at: aside)
                 throw code == EEXIST ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
             }
         case (let old?, let new?):
-            try writeTemporary(new, to: aside, permissions: plan.before.permissions, path: plan.path)
+            try writeTemporary(new, kind: plan.afterKind, to: aside, permissions: plan.afterPermissions ?? plan.before.permissions, path: plan.path)
             if rename(aside, target, flags: UInt32(RENAME_SWAP)) != 0 {
                 let code = errno
                 try? FileManager.default.removeItem(at: aside)
                 throw code == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
             }
             // `aside` now holds what was at the path an instant ago.
-            if (try? Data(contentsOf: aside)) != old {
+            if !Self.holds(aside, old, kind: plan.before.kind) {
                 _ = rename(aside, target, flags: UInt32(RENAME_SWAP))
                 // Drop our bytes only if `aside` really holds them again; otherwise keep it for recovery.
-                if (try? Data(contentsOf: aside)) == new { try? FileManager.default.removeItem(at: aside) }
+                if Self.holds(aside, new, kind: plan.afterKind) { try? FileManager.default.removeItem(at: aside) }
                 throw WorkingCopyError.changedOnDisk(plan.path)
             }
             try? FileManager.default.removeItem(at: aside)
@@ -170,7 +225,7 @@ public struct WorkingCopy: Sendable {
             if rename(target, aside, flags: UInt32(RENAME_EXCL)) != 0 {
                 throw errno == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
             }
-            if (try? Data(contentsOf: aside)) != old {
+            if !Self.holds(aside, old, kind: plan.before.kind) {
                 // Put it back; if something new appeared at the path meanwhile, both are kept (`aside` stays).
                 _ = rename(aside, target, flags: UInt32(RENAME_EXCL))
                 throw WorkingCopyError.changedOnDisk(plan.path)
@@ -188,8 +243,15 @@ public struct WorkingCopy: Sendable {
         }
     }
 
-    private func writeTemporary(_ data: Data, to url: URL, permissions: Int?, path: String) throws {
+    private func writeTemporary(_ data: Data, kind: FileEntryKind, to url: URL, permissions: Int?, path: String) throws {
         do {
+            if kind == .symlink {
+                guard let destination = String(data: data, encoding: .utf8), !destination.isEmpty, !destination.contains("\0") else {
+                    throw WorkingCopyError.writeFailed(path)
+                }
+                try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: destination)
+                return
+            }
             try data.write(to: url, options: .withoutOverwriting)
             if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path) }
         } catch {

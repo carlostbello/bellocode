@@ -106,6 +106,78 @@ struct GitProjectTests {
         #expect(try await repo.git("stash", "list").isEmpty)
     }
 
+    /// R04: the worktree cannot be created and, meanwhile, an editor recreates an untracked file in the source, so the
+    /// stash cannot go back. The stash entry and a recovery ref must survive, and the error must say how to recover.
+    @Test func failedHandoffKeepsTheStashWhenTheSourceRestoreFails() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        _ = try await repo.git("branch", "bellocode/taken")
+        try repo.write("a.txt", "work in progress\n")
+        try repo.write("new.txt", "precious untracked\n")
+        let parent = repo.base.appending(path: "worktrees").path
+        let service = WorktreeService(runner: repo.runner)
+        let path = repo.path
+        let hooks = WorktreeService.HandoffHooks(afterStash: {
+            try? Data("recreated by an editor\n".utf8).write(to: URL(filePath: path + "/new.txt"))
+        })
+        do {
+            _ = try await service.handoff(from: repo.path, branch: "bellocode/taken", parent: parent, hooks: hooks)
+            Issue.record("the handoff must fail")
+        } catch let recovery as StashRecoveryError {
+            #expect(recovery.unresolved.contains("new.txt"))
+            #expect(recovery.instructions.contains("git stash apply \(recovery.stash)"))
+            #expect(recovery.keptWorktree == nil)
+            #expect(try await repo.git("stash", "list", "--format=%H").contains(recovery.stash))
+            #expect(try await repo.git("rev-parse", recovery.ref).trimmingCharacters(in: .whitespacesAndNewlines) == recovery.stash)
+            // Nothing was half-applied, and following the instructions recovers everything.
+            #expect(try repo.read("a.txt") == "one\n")
+            try FileManager.default.removeItem(atPath: repo.path + "/new.txt")
+            _ = try await repo.git("stash", "apply", recovery.stash)
+            #expect(try repo.read("new.txt") == "precious untracked\n")
+            #expect(try repo.read("a.txt") == "work in progress\n")
+        }
+    }
+
+    /// R04: applying in the new worktree fails and so does the restore to the source. The new worktree (which may
+    /// hold part of the work) and the stash must both be kept.
+    @Test func failedHandoffKeepsTheDestinationUntilTheRestoreIsVerified() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        try repo.write("a.txt", "work in progress\n")
+        try repo.write("new.txt", "precious untracked\n")
+        let parent = repo.base.appending(path: "worktrees").path
+        let service = WorktreeService(runner: repo.runner)
+        let path = repo.path
+        let hooks = WorktreeService.HandoffHooks(afterCreate: { destination in
+            try? Data("in the way\n".utf8).write(to: URL(filePath: destination + "/new.txt"))
+            try? Data("also in the way\n".utf8).write(to: URL(filePath: path + "/new.txt"))
+        })
+        do {
+            _ = try await service.handoff(from: repo.path, branch: "bellocode/h", parent: parent, hooks: hooks)
+            Issue.record("the handoff must fail")
+        } catch let recovery as StashRecoveryError {
+            let kept = try #require(recovery.keptWorktree)
+            #expect(FileManager.default.fileExists(atPath: kept))
+            #expect(try await repo.git("stash", "list", "--format=%H").contains(recovery.stash))
+            #expect(try await repo.git("rev-parse", recovery.ref).trimmingCharacters(in: .whitespacesAndNewlines) == recovery.stash)
+        }
+    }
+
+    /// R04: a failed handoff whose restore succeeds cleans up after itself (no stash entry, no recovery ref).
+    @Test func failedHandoffWithAVerifiedRestoreLeavesNoRecoveryRefs() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        _ = try await repo.git("branch", "bellocode/taken")
+        try repo.write("a.txt", "work in progress\n")
+        let service = WorktreeService(runner: repo.runner)
+        await #expect(throws: WorktreeError.self) {
+            _ = try await service.handoff(from: repo.path, branch: "bellocode/taken", parent: repo.base.appending(path: "worktrees").path)
+        }
+        #expect(try repo.read("a.txt") == "work in progress\n")
+        #expect(try await repo.git("stash", "list").isEmpty)
+        #expect(try await repo.git("for-each-ref", "refs/bellocode/recovery").isEmpty)
+    }
+
     @Test func cleanupRemovesOnlyCleanPushedOrMergedWorktrees() async throws {
         let repo = try await TempRepo.make()
         defer { repo.remove() }
