@@ -14,8 +14,11 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
   hook may set `effect`/`message`. **Promise hooks are awaited** (probe slept 400 ms; create returned after 403 ms).
 - **Saved "always" grants vs the hook:** in an Ask session a saved grant turns the next request into `allow`; in an Auto
   session the same request is `ask` because the hook turned the grant's `allow` back (test passes on both versions).
-- Tool order (live, Full access): `execute.before` → `permission.evaluate` → (shell: `shell.create.before`, where
-  BelloCode's container helper is substituted) → `execute.after`. `execute.after` may add to `result.metadata`
+- Tool order (live, Full access): `execute.before` → `permission.evaluate` → `execute.after`. The shell tool differs
+  since 2.3.2: `execute.before` → `shell.create.before` (BelloCode's container helper is substituted) →
+  `permission.evaluate` (asserted in the tool's `prepare` callback, which `Shell.create` calls after the hook; a refusal
+  throws before anything is spawned) → `execute.after`. The hook has no effect beyond the substitution, so the order
+  is harmless. `execute.after` may add to `result.metadata`
   (verified: `bellocode_permissions` reaches the app's tool part).
 - Coverage (binary source + live): built-in read, edit/write/patch, glob, grep, shell (one resource per parsed
   command), external_directory, webfetch, websearch, question, skill, subagent, todowrite, code-mode `execute`, browser
