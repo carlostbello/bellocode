@@ -58,7 +58,7 @@ public struct ProviderConnectView: View {
         .toggleStyle(DSToggleStyle(.checkbox))
         .noImplicitAnimation()
         .task {
-            if auth.listState == .idle { await auth.refresh() }
+            if auth.listState == .idle || !auth.accountDetailsLoaded { await auth.refreshAccounts() }
         }
     }
 
@@ -87,7 +87,7 @@ public struct ProviderConnectView: View {
             case .failed(let message) where auth.integrations.isEmpty:
                 VStack(spacing: style.spacing * 2) {
                     Text(message).font(style.smallFont).foregroundStyle(style.secondaryText).multilineTextAlignment(.center)
-                    Button("Try Again") { Task { await auth.refresh() } }
+                    Button("Try Again") { Task { await auth.refreshAccounts() } }
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

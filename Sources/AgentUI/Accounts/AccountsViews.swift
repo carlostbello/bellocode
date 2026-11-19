@@ -314,7 +314,8 @@ public struct AccountsSettingsView: View {
                 }
             }
         }
-        .task { if auth.listState == .idle { await auth.refresh() } }
+        // Opening Accounts is an explicit account action: the only time account details are read (R35).
+        .task { if auth.listState == .idle || !auth.accountDetailsLoaded { await auth.refreshAccounts() } }
         .alert(
             "Remove “\(confirmRemoval.value?.label ?? "")”?",
             isPresented: Binding(get: { confirmRemoval.value != nil }, set: { if !$0 { confirmRemoval.value = nil } }),
@@ -369,7 +370,7 @@ public struct AccountsSettingsView: View {
                 }
                 Spacer()
                 Button {
-                    Task { await auth.refresh() }
+                    Task { await auth.refreshAccounts() }
                 } label: { Image(systemName: "arrow.clockwise") }
                     .help("Refresh")
                     .accessibilityLabel("Refresh accounts")
@@ -393,7 +394,7 @@ public struct AccountsSettingsView: View {
             case .failed(let message) where auth.integrations.isEmpty:
                 VStack(alignment: .leading, spacing: style.spacing * 2) {
                     Text(message).font(style.smallFont)
-                    Button("Try Again") { Task { await auth.refresh() } }
+                    Button("Try Again") { Task { await auth.refreshAccounts() } }
                 }
                 .padding(style.spacing * 4)
             default:
