@@ -85,6 +85,8 @@ public final class SharedBrowserService {
     public private(set) var viewerSubscribers = 0
     /// "*" while the person controls the whole browser, or the tab IDs they took over.
     public private(set) var humanControl: Set<String> = []
+    /// Take Over requested, waiting for already-dispatched agent calls to settle (input not yet accepted).
+    public private(set) var takingOver: Set<String> = []
     public private(set) var downloads: [BrowserDownload] = []
     public private(set) var imageTag: String?
     public private(set) var lastError: String?
@@ -551,13 +553,20 @@ public final class SharedBrowserService {
         viewerURL = nil
     }
 
-    /// Take Over: the person controls `tab` ("*" = the whole browser). Agent calls waiting on it fail with Busy and new
-    /// ones are refused until Give Back; the browser counts as active meanwhile.
+    /// Take Over: the person controls `tab` ("*" = the whole browser). Agent calls waiting on it fail with Busy, new
+    /// ones are refused until Give Back, and calls already sent are cancelled. Control (the live view accepting input)
+    /// is acknowledged only once those calls have settled; meanwhile `takingOver` shows it (R22). The browser counts as
+    /// active meanwhile.
     public func takeOver(_ tab: String = "*") async {
-        guard !humanControl.contains(tab) else { return }
-        humanControl.insert(tab)
-        await broker.gate.takeOver(tab)
+        guard !humanControl.contains(tab), !takingOver.contains(tab) else { return }
+        takingOver.insert(tab)
         try? await supervisor?.begin(.human)
+        let settled = await broker.takeOver(tab)
+        takingOver.remove(tab)
+        if !settled {
+            lastError = "An agent's browser call did not stop in time. Agents are paused; check the page before you continue."
+        }
+        humanControl.insert(tab)
         tabActivity = await broker.tabActivity()
     }
 
