@@ -60,17 +60,43 @@ extension EnvironmentService {
         for (id, problem) in missing where globalMCPStates[id]?.problem != problem { globalMCPStates[id]?.problem = problem }
         // An image server's helper reads its definition from the helper configuration: it must be on disk first.
         if globals.contains(where: { $0.kind == .image }) { await writeConfigNow() }
-        guard let client = try? await context.client() else { return }
-        let statuses = (try? await client.mcpServers(directory: directory)) ?? []
+        guard let client = try? await context.client() else {
+            if !model.mcpPendingRemoval.isEmpty { scheduleMCPRemovalRetry(model) }
+            return
+        }
+        let listed = try? await client.mcpServers(directory: directory)
+        let statuses = listed ?? []
         let registered = registeredMCP[directory] ?? [:]
         var endedConnection = false
-        // What BelloCode registered here that opencode still lists and that is no longer wanted.
+        // What BelloCode registered here that opencode still lists, or that is still awaiting a confirmed removal, and
+        // that is no longer wanted (R30: a failed or unconfirmed removal is never forgotten).
         let ours = (mcpEverRegistered[directory] ?? []).intersection(statuses.map(\.name))
-        for name in Set(registered.keys).union(ours) where desired[name] == nil {
+        var removing: Set<String> = []
+        for name in Set(registered.keys).union(ours).union(model.mcpPendingRemoval) where desired[name] == nil {
+            removing.insert(name)
             try? await client.removeMCPServer(name, directory: directory)
-            registeredMCP[directory]?[name] = nil
             // Any removal may end an image server's connection: its container is checked for afterwards (cheap).
             endedConnection = true
+        }
+        // A server wanted again is no longer being removed.
+        model.mcpPendingRemoval.subtract(desired.keys)
+        if !removing.isEmpty {
+            // Done only when opencode's own list no longer has it; until then it stays registered here and pending.
+            let after = try? await client.mcpServers(directory: directory)
+            for name in removing {
+                if let after, !after.contains(where: { $0.name == name }) {
+                    registeredMCP[directory]?[name] = nil
+                    model.mcpPendingRemoval.remove(name)
+                } else {
+                    model.mcpPendingRemoval.insert(name)
+                }
+            }
+        }
+        if model.mcpPendingRemoval.isEmpty {
+            mcpRemovalAttempts[directory] = nil
+        } else {
+            Self.log.error("an MCP server removal is not confirmed yet; retrying")
+            scheduleMCPRemovalRetry(model)
         }
         for (name, config) in desired.sorted(by: { $0.key < $1.key }) {
             let status = statuses.first { $0.name == name }?.status
@@ -86,6 +112,19 @@ extension EnvironmentService {
         model.mcpStatus = (try? await client.mcpServers(directory: directory)) ?? statuses
         refreshGlobalStates()
         if endedConnection { scheduleMCPLeftoverCleanup() }
+    }
+
+    /// Syncs the location again after a backoff while a removal is unconfirmed (R30).
+    func scheduleMCPRemovalRetry(_ model: ProjectEnvironment) {
+        let directory = model.directory
+        let attempt = (mcpRemovalAttempts[directory] ?? 0) + 1
+        mcpRemovalAttempts[directory] = attempt
+        let delay = mcpRemovalRetryDelay(attempt)
+        tasks.set("mcp-removal-retry-\(model.projectKey)", Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            self.syncMCPServers(model)
+        })
     }
 
     /// opencode ends a removed server's helper, which removes its container; a helper killed outright cannot, so the

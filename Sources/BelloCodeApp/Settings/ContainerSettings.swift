@@ -1217,13 +1217,21 @@ struct MCPServersListView: View {
             }
             ForEach(Array(environment.settings.mcpServers.enumerated()), id: \.element.id) { index, server in
                 let status = environment.mcpStatus.first { $0.name == server.name }
-                SettingsRow(server.name, detail: "\(server.commandLine) · in container" + (status?.error.map { " · \($0)" } ?? ""), divided: index > 0) {
+                let removing = environment.mcpPendingRemoval.contains(server.name)
+                SettingsRow(server.name, detail: "\(server.commandLine) · in container" + (status?.error.map { " · \($0)" } ?? "")
+                    + (removing ? " · opencode has not confirmed it is off yet; retrying" : ""), divided: index > 0) {
                     HStack(spacing: DS.Space.s4) {
-                        MCPStatusPill(enabled: server.enabled, status: status?.status)
+                        MCPStatusPill(enabled: server.enabled, status: status?.status, removing: removing)
                         Toggle("", isOn: Binding(get: { server.enabled }, set: { value in Task { await model.setMCPServer(server, enabled: value) } }))
                             .toggleStyle(DSToggleStyle(.switch)).labelsHidden().accessibilityLabel("Enable \(server.name)")
                         Button("Remove") { Task { await model.removeMCPServer(server) } }.buttonStyle(DSButtonStyle(.ghost, size: .small, isMuted: true))
                     }
+                }
+            }
+            // Removed from the setting but still listed by opencode: its tools may still be offered until it confirms.
+            ForEach(environment.mcpPendingRemoval.filter { name in !environment.settings.mcpServers.contains { $0.name == name } }.sorted(), id: \.self) { name in
+                SettingsRow(name, detail: "Removed here; opencode has not confirmed it is gone yet, so its tools may still be offered. Retrying.", divided: true) {
+                    MCPStatusPill(enabled: true, status: nil, removing: true)
                 }
             }
             if let removed = model.removedMCP {
@@ -1248,9 +1256,12 @@ struct MCPServersListView: View {
 struct MCPStatusPill: View {
     let enabled: Bool
     let status: String?
+    /// Turned off or removed here, not yet confirmed gone by opencode (R30).
+    var removing = false
 
     var body: some View {
         let (word, tone, symbol): (String, DS.Tone, String) = switch (enabled, status) {
+        case _ where removing: ("Removing…", .warning, "hourglass")
         case (false, _): ("Off", .neutral, "pause.circle")
         case (true, "connected"): ("Connected", .success, "checkmark.circle")
         case (true, "pending"): ("Starting", .info, "arrow.triangle.2.circlepath")

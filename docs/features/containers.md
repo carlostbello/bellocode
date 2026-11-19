@@ -68,7 +68,8 @@ registered per location (`PUT /api/experimental/mcp/{name}?location[directory]=�
 at once) as `bellocode-exec --stdio --project <dir> -- <command>`: a non-TTY exec whose wrapper gives it the real stdin,
 records its process group, passes TERM/INT/HUP on; bytes unchanged, one 64 KiB chunk in flight, EOF and exit code kept.
 One sync per location at a time (requests coalesce; each registration is recorded as made, so removals are never
-lost): when the container is ready, after a reconnect, on every change. Relayed execs do not keep a container awake.
+lost; a removal counts only once opencode's list no longer has the server: until then the row shows Removing…, it stays
+recorded and the sync is retried with backoff): when the container is ready, after a reconnect, on every change. Relayed execs do not keep a container awake.
 
 ## Global MCP servers (Settings ▸ MCP Servers, Window ▸ MCP Servers…)
 

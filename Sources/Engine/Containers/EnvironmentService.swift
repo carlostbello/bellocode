@@ -88,6 +88,9 @@ public final class ProjectEnvironment {
     public internal(set) var bridgeStats: FileEventBridge.Stats?
     /// The project's MCP servers as opencode reports them for its location (Environment pane).
     public internal(set) var mcpStatus: [MCPServerStatus] = []
+    /// Servers turned off or removed here that opencode has not yet confirmed gone (R30): shown as "Removing…" and
+    /// retried until its list no longer has them.
+    public internal(set) var mcpPendingRemoval: Set<String> = []
     /// The project's services (compose file or the pane) and where each stands.
     public internal(set) var services: [ServiceState] = []
     public internal(set) var servicesSource: ServicesSource = .none
@@ -151,6 +154,10 @@ public final class EnvironmentService {
     @ObservationIgnored var mcpEverRegistered: [String: Set<String>] = [:]
     @ObservationIgnored var mcpSyncRunning: Set<String> = []
     @ObservationIgnored var mcpSyncPending: Set<String> = []
+    /// Consecutive syncs per location that left a removal unconfirmed (retry backoff).
+    @ObservationIgnored var mcpRemovalAttempts: [String: Int] = [:]
+    /// Delay before retrying an unconfirmed removal after `attempt` failures (tests shorten it).
+    @ObservationIgnored var mcpRemovalRetryDelay: @Sendable (Int) -> Duration = { attempt in .seconds(min(60, 1 << min(attempt, 6))) }
     @ObservationIgnored var serviceForwarders: [String: [String: PortForwarder]] = [:]
     /// The compose file last read per project (stat stamp and text) and the last parse per definition text.
     @ObservationIgnored var servicesDefinitionCache: [String: (stamp: String, text: String)] = [:]
