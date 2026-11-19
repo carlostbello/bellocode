@@ -67,8 +67,8 @@ let targets: [Target] =
     library("BelloCore")
     + library("OpenCodeKit", dependencies: ["BelloCore"], testDependencies: ["MockOpenCode"])
     + library(
-        "Engine", dependencies: ["BelloCore", "OpenCodeKit", "ContainerKit", .product(name: "GRDB", package: "GRDB.swift")],
-        testDependencies: ["MockOpenCode"]
+        "Engine", dependencies: ["BelloCore", "OpenCodeKit", "ContainerKit", "SecretKit", .product(name: "GRDB", package: "GRDB.swift")],
+        testDependencies: ["MockOpenCode", "SecretKit", "ContainerKit"]
     )
     + library("DesignSystem", dependencies: ["BelloCore"])
     + library(
@@ -92,11 +92,13 @@ let targets: [Target] =
         testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "BelloCore"])
     + library("MockOpenCode", dependencies: ["BelloCore", "OpenCodeKit"])
     // M1-D: approvals, questions, permission modes, model picker, onboarding and accounts (docs/features/agent-ui.md).
-    + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine", "DesignSystem"], testDependencies: ["MockOpenCode"])
+    + library("AgentUI", dependencies: ["BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "SecretKit"], testDependencies: ["MockOpenCode"])
     // M3-A: Agents panel, lineage rows, header strip text (docs/features/orchestration.md). Engine owns the task graph.
-    + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode"])
+    + library("OrchestrationUI", dependencies: uiKitDependencies + ["Engine", "SecretKit"], testDependencies: ["Engine", "OpenCodeKit", "MockOpenCode", "SecretKit"])
     // M6-A: Docker Engine API client over Rancher Desktop's socket, workspace containers (docs/features/containers.md).
     + library("ContainerKit")
+    // Secret manager (docs/features/secrets.md): binding rules, value scanner, the placeholder egress proxy and its CA.
+    + library("SecretKit", dependencies: ["BelloCore", "ContainerKit"], testDependencies: ["ContainerKit"])
     + [
         // M6-A: the shell opencode is configured with; forwards every command into the workspace container. Bundled in
         // Contents/Helpers.
@@ -115,7 +117,7 @@ let targets: [Target] =
             name: "BelloCodeApp",
             dependencies: [
                 "BelloCore", "OpenCodeKit", "Engine", "DesignSystem", "TranscriptKit", "ComposerKit", "DiffKit",
-                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI", "ContainerKit",
+                "TerminalKit", "BrowserKit", "MockOpenCode", "AgentUI", "OrchestrationUI", "ContainerKit", "SecretKit",
             ],
             // S1 (docs/reviews/deep-review-1.md): attaching to another server (`BELLOCODE_SERVER_URL`) and the mock and
             // snapshot modes exist only in development (debug) builds; a release build runs only the bundled,

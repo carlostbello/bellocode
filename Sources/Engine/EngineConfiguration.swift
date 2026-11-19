@@ -76,6 +76,11 @@ public struct EngineConfiguration: Sendable {
     /// Containerised execution (docs/features/containers.md). The app sets it for the bundled server; nil in mock
     /// mode and tests (the Environment UI then says container execution is off).
     public var containers: ContainerConfiguration?
+    /// Secret manager (docs/features/secrets.md): the egress proxy's CA and settings. Nil: no enforced egress (tests,
+    /// mock mode); brokered and visible secrets still work.
+    public var secretManager: SecretManagerConfiguration?
+    /// The brokered HTTP tool's extra trusted roots (tests' loopback servers only).
+    public var brokerAnchors: [Data] = []
 
     public init(server: ServerSource, store: ProjectionStore.Location) {
         self.server = server

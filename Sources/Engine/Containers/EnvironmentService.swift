@@ -140,6 +140,8 @@ public final class EnvironmentService {
     @ObservationIgnored let configuration: ContainerConfiguration?
     @ObservationIgnored let store: ProjectionStore
     @ObservationIgnored var models: [String: ProjectEnvironment] = [:]
+    /// Enforced egress (secret manager, docs/features/secrets.md): set by the engine when BelloCode's egress proxy runs.
+    @ObservationIgnored public var egress: EgressHooks?
     @ObservationIgnored let tasks = TaskBox()
     /// Project MCP servers registered with opencode, per location (`MCPServers.swift`).
     @ObservationIgnored var registeredMCP: [String: [String: JSONValue]] = [:]
@@ -633,6 +635,7 @@ public final class EnvironmentService {
         // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed.
         let pullFirst = imagePolicy.pullPolicy == .always && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
         let auth = pullFirst ? registryAuth(for: spec.image) : nil
+        let egressPreflight = egress?.preflight
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
             let interval = Self.signposter.beginInterval("ensureRunning")
             defer { Self.signposter.endInterval("ensureRunning", interval) }
@@ -641,6 +644,8 @@ public final class EnvironmentService {
                 let previousID = model.record.containerID
                 let wasStopped = model.phase == .starting
                 let id = try await runtimeRef.ensureRunning(spec)
+                // Enforced egress: the container starts on its internal network (no way out) and the gateway joins it.
+                if let egressPreflight { try await egressPreflight(spec) }
                 // The shared workspace mounts code roots outside the folders Rancher Desktop is known to share: check
                 // each is really visible in the container (a marker written on the Mac), once per container.
                 if spec.isShared {
@@ -1086,6 +1091,7 @@ public final class EnvironmentService {
         if let blocked = model.phase.blocked { throw EnvironmentBlockedError(message: blocked.message) }
         guard let spec = workspaceSpec(model) else { throw EnvironmentBlockedError(message: EnvironmentPhase.noImage.blocked?.message ?? "No image is set.") }
         let id = try await activeRuntime.ensureRunning(spec)
+        if let egressPreflight = egress?.preflight { try await egressPreflight(spec) }
         model.record.containerID = id
         if model.phase != .ready { refreshImageAndPhase(model) }
         return (id, spec, shell(model))
@@ -1145,6 +1151,10 @@ public final class EnvironmentService {
         }
         let caches = model.settings.cacheMounts(imageDeclared: model.record.imageCaches ?? [:])
         spec.cacheMounts = caches.isEmpty ? nil : caches
+        if let egress, let (attachment, corporate) = egress.attachment(model.projectKey, model.services.map(\.name).sorted()) {
+            spec.egress = attachment
+            spec.corporateNetwork = corporate
+        }
         return spec
     }
 
@@ -1401,3 +1411,26 @@ final class PullAggregator: Sendable {
 }
 
 import Synchronization
+
+/// How the secret manager's enforced egress plugs into workspace containers (docs/features/secrets.md "Egress"):
+/// which attachment and certificate bundle a project's container gets, what must run before it starts (the gateway),
+/// and what to do once its services run (join them to the internal network).
+@MainActor
+public struct EgressHooks {
+    /// Scope key (the container's project key, or the shared workspace's) and service names on the internal network.
+    public var attachment: @MainActor (String, [String]) -> (EgressAttachment, CorporateNetwork?)?
+    public var preflight: @Sendable (WorkspaceSpec) async throws -> Void
+    public var servicesStarted: @MainActor (ProjectEnvironment) -> Void
+    /// The filtered Docker endpoint started after gateways were made: they are refreshed to relay it.
+    public var dockerEndpointStarted: @MainActor () -> Void
+
+    public init(attachment: @escaping @MainActor (String, [String]) -> (EgressAttachment, CorporateNetwork?)?,
+                preflight: @escaping @Sendable (WorkspaceSpec) async throws -> Void,
+                servicesStarted: @escaping @MainActor (ProjectEnvironment) -> Void,
+                dockerEndpointStarted: @escaping @MainActor () -> Void = {}) {
+        self.attachment = attachment
+        self.preflight = preflight
+        self.servicesStarted = servicesStarted
+        self.dockerEndpointStarted = dockerEndpointStarted
+    }
+}

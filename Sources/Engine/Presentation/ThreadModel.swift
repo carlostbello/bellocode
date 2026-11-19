@@ -329,6 +329,9 @@ public final class ThreadModel: Identifiable {
     /// Whether a secret is saved under `label` (the card's "Use Saved Value").
     public func savedSecretExists(label: String) -> Bool { engine?.extras.secrets.hasSaved(label: label) ?? false }
 
+    /// Placeholder secrets need the egress proxy (secret manager).
+    public var placeholderSecretsAvailable: Bool { engine?.secretManager?.placeholdersAvailable ?? false }
+
     public func setModel(_ model: ModelSelection) async { await run { try await $0.setModel(self.sessionID, model: model) } }
     public func setAgent(_ agent: String) async { await run { try await $0.setAgent(self.sessionID, agent: agent) } }
     public func setPermissionMode(_ mode: PermissionMode) async {

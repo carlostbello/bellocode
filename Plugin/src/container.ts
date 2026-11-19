@@ -14,6 +14,8 @@ export type Workspace = {
   readonly blocked?: { readonly message: string; readonly fix?: string }
   readonly mode?: Mode
   readonly docker?: { readonly host: string; readonly binary?: string }
+  /** The workspace's creation settings; `egress` is set when BelloCode's egress proxy is enforced (secret manager). */
+  readonly spec?: { readonly egress?: { readonly network?: string } }
 }
 export type ExecConfig = {
   readonly workspaces: readonly Workspace[]
@@ -103,6 +105,11 @@ export function containerGuidance(config: ExecConfig | undefined, directory: str
     "- Git: BelloCode's git actions (stage, commit, push, merge requests) run on the Mac with repository hooks disabled. The container's git has no credentials: use BelloCode's git and push tools for anything that needs the remote, and run checks such as linters or tests explicitly in the container (hooks do not run for you).",
     "- The network may intercept TLS with the company's certificate authority: keep certificate verification on (never use --insecure, NODE_TLS_REJECT_UNAUTHORIZED=0 or similar); if a download fails on certificates, report it.",
     "- Never fall back to running anything on the Mac (no Homebrew, host python, node, bun or npm). If a mount, port, tool, permission or certificate is missing, report the precise blocker instead of guessing.",
+    ...(workspace?.spec?.egress
+      ? [
+          "- Network: HTTP and HTTPS go only through BelloCode's proxy (HTTPS_PROXY is set; its CA is trusted). Direct connections, raw TCP, UDP, IPv6 and DNS for outside names do not work; use tools that honour HTTPS_PROXY (curl, npm, pip, git). A 403 or 502 whose body starts with \"BelloCode\" comes from the proxy and names the rule.",
+        ]
+      : []),
     '- A command that fails with "BelloCode: … The command was not run." did not run: tell the user the fix it names instead of retrying.',
   )
   const blocked = config?.runtimeBlocked ?? workspace?.blocked

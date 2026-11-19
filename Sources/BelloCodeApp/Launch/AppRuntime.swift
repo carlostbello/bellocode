@@ -2,6 +2,7 @@ import AppKit
 import BelloCore
 import ContainerKit
 import Engine
+import SecretKit
 import Foundation
 import MockOpenCode
 import OpenCodeKit
@@ -83,6 +84,7 @@ final class AppRuntime {
         try requireBundledRuntime(server)
         var configuration = EngineConfiguration(server: .supervised(ServerSupervisor(configuration: server)), store: .file(try storeURL()))
         configuration.containers = containerConfiguration(for: server)
+        configuration.secretManager = secretManagerConfiguration(dataRoot: server.dataRoot)
         return AppRuntime(
             engine: try await Engine.make(configuration: configuration), source: .bundled(executable: server.executableURL),
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
@@ -163,6 +165,16 @@ final class AppRuntime {
         configuration.opencodeConfigDirectory = server.configDirectory
         configuration.certificateDirectory = certificateDirectory(dataRoot: server.dataRoot)
         configuration.stackDirectory = server.dataRoot.appending(path: "mcp-stacks", directoryHint: .isDirectory)
+        return configuration
+    }
+
+    /// The secret manager's egress proxy (docs/features/secrets.md): CA and container bundles under the data folder, the
+    /// CA key in the Keychain. Enforced unless the person turned it off in Settings ▸ Secrets; an administrator's
+    /// `EgressEnforced` (configuration profile, domain `com.bellocode.app`) forces it either way.
+    nonisolated static func secretManagerConfiguration(dataRoot: URL, authorityVault: (any SecretVault)? = nil) -> SecretManagerConfiguration {
+        var configuration = SecretManagerConfiguration(directory: dataRoot.appending(path: "egress", directoryHint: .isDirectory))
+        if let authorityVault { configuration.authorityVault = authorityVault }
+        configuration.enforceEgress = SecretManagerConfiguration.egressEnforced(userDefaults: .standard)
         return configuration
     }
 

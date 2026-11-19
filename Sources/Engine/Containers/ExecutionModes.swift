@@ -184,6 +184,11 @@ extension EnvironmentService {
         spec.sharedKeySeed = sharedKeySeed
         // The company CA and proxy apply to the shared workspace as to every project container.
         if !network.corporate.isEmpty { spec.corporateNetwork = network.corporate }
+        // Enforced egress (secret manager): the shared workspace sits behind its own gateway, scoped to the code roots.
+        if let egress, let (attachment, corporate) = egress.attachment(spec.projectKey, []) {
+            spec.egress = attachment
+            spec.corporateNetwork = corporate
+        }
         return spec
     }
 
@@ -234,9 +239,22 @@ extension EnvironmentService {
 
     /// `DOCKER_HOST` for commands in a container of `scope`, when the filtered endpoint runs.
     func containerDockerAccess(scope: String, spec: WorkspaceSpec?) -> ExecHelperConfig.DockerAccess? {
-        guard let spec, let endpoint = dockerEndpoint, let token = endpoint.token(scope: scope, roots: spec.workspaceRoots + spec.userMounts.filter { !$0.readOnly }.map(\.path)) else { return nil }
+        // Enforced egress: the scope's own containers and networks get the same boundary as the workspace.
+        let egress = spec?.egress.map {
+            DockerEgress(network: $0.network, environment: $0.environment, certificateDirectory: spec?.corporateNetwork?.certificateDirectory)
+        }
+        guard let spec, let endpoint = dockerEndpoint,
+              let token = endpoint.token(scope: scope, roots: spec.workspaceRoots + spec.userMounts.filter { !$0.readOnly }.map(\.path), egress: egress)
+        else { return nil }
+        // Enforced egress (secret manager): the container has no route to the Mac; its gateway relays the endpoint.
+        if spec.egress != nil {
+            return ExecHelperConfig.DockerAccess(host: "tcp://\(EgressAttachment.proxyAlias):\(EgressAttachment.dockerPort)/\(token)")
+        }
         return ExecHelperConfig.DockerAccess(host: "tcp://host.docker.internal:\(endpoint.port)/\(token)")
     }
+
+    /// The filtered endpoint's port on the Mac, for the egress gateway's Docker relay.
+    public var dockerEndpointPort: Int? { dockerEndpoint.map { Int($0.port) } }
 
     /// Host docker-only mode: Rancher Desktop's docker by absolute path, BelloCode's own docker configuration, the
     /// endpoint on the Mac's loopback.

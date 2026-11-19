@@ -344,6 +344,7 @@ enum MainMenu {
         menu.add(.showContainers)
         menu.add(.showEnvironment)
         menu.add(.showMCPServers)
+        menu.add(.showSecrets)
         menu.add(.verifyIsolation)
         menu.add(.pruneContainerResources)
         menu.addItem(.separator())

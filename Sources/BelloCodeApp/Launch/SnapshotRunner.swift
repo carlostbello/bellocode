@@ -34,6 +34,7 @@ struct SnapshotRunner {
         if name == "orch" { return await runOrchestration() }
         if name == "auto" { return await runAuto() }
         if name == "extras" { return await runExtras() }
+        if name == "secrets" { return await runSecrets() }
         if name == "gitlab" { return await runGitLab() }
         if name == "gitlab2" { return await runGitLab2() }
         if name == "git" { return await runGit() }

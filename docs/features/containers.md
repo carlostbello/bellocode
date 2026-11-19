@@ -50,7 +50,8 @@ approvals); **Project container** (as above); **Host shell, docker only** (one p
 | Repository plugins/agents/commands, `"shell"` | ignored (`OPENCODE_DISABLE_PROJECT_CONFIG`) | spike e2e |
 | BelloCode's and opencode's host git | host, sandboxed (`HostGit`, shim) | hostile-repository matrix + "Host git" check |
 | Shared workspace (any folder in the code roots); `docker` inside; host docker-only | shared container; filtered endpoint; Mac, one `docker` argv | unit, live, `make e2e-exec`; hostile matrix; `HostDockerCommandTests` |
-| Commands receiving a secret (`secret_exec`) | one-shot sibling container, no network | fake-runtime e2e + live test |
+| Commands receiving a secret (`secret_exec`; "the command can reveal this value") | one-shot sibling container, no network | fake-runtime e2e + live test |
+| Workspace network with enforced egress ([secrets.md](secrets.md)) | internal network; HTTP(S) only via BelloCode's proxy | smoke "egress" line; `LiveEgress` |
 | File tools, ripgrep | host (no project code runs) | n/a |
 
 The self-check runs at launch (quick: host git, configuration, shell job, PTY, scratch stdio and image MCP servers) and on

@@ -1,6 +1,7 @@
 import BelloCore
 import Darwin
 import Engine
+import SecretKit
 import Foundation
 import OpenCodeKit
 import Synchronization
@@ -43,6 +44,12 @@ enum SmokeTest {
             return false
         }
         let supervisor = ServerSupervisor(configuration: server)
+        // Secrets end to end (BELLOCODE_SMOKE_SECRETS=1): a loopback test API the proxy resolves, started first.
+        var secretsAPI: SecretsEndToEnd.TestAPI?
+        if ProcessInfo.processInfo.environment["BELLOCODE_SMOKE_SECRETS"] == "1" {
+            secretsAPI = try? await SecretsEndToEnd.TestAPI(canary: "sk_live_CANARY_" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
+        }
+        defer { secretsAPI?.stop() }
         // Containerised execution: checked when Rancher Desktop is ready and the test image is present (never pulled
         // here); otherwise said plainly and the host-only checks run.
         let container = await containerPlan()
@@ -53,6 +60,13 @@ enum SmokeTest {
                 configuration.containers = AppRuntime.containerConfiguration(for: server)
                 // Global MCP secrets of the run stay in memory (never the Keychain).
                 configuration.containers?.mcpVault = InMemorySecretVault()
+                // Enforced egress through the secret manager's proxy (its CA key in memory for the run).
+                configuration.secretManager = AppRuntime.secretManagerConfiguration(
+                    dataRoot: FileManager.default.temporaryDirectory.appending(path: "bellocode-smoke-egress-\(getpid())"),
+                    authorityVault: InMemorySecretVault())
+                configuration.secretManager?.enforceEgress = true
+                if let secretsAPI { configuration.secretManager?.proxy = secretsAPI.proxyConfiguration }
+                configuration.secretVault = InMemorySecretVault()
             }
             engine = try Engine(configuration: configuration)
         } catch {
@@ -91,6 +105,17 @@ enum SmokeTest {
             containerProject = project
             guard await containerCheck(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: project, image: image) else {
                 if keep { log("kept \(root.path)") } else { await purgeScratch(engine, project) }
+                await engine.stop()
+                return false
+            }
+        }
+
+        if let containerProject, let secretsAPI {
+            let passed = await SecretsEndToEnd.run(engine: engine, client: OpenCodeClient(endpoint: endpoint), project: containerProject,
+                                                   api: secretsAPI, opencodeData: server.dataRoot, log: log)
+            log(passed ? "secrets end-to-end passed" : "FAIL secrets end-to-end")
+            guard passed else {
+                if !keep { await purgeScratch(engine, containerProject) }
                 await engine.stop()
                 return false
             }
@@ -267,6 +292,12 @@ enum SmokeTest {
             return false
         }
         log("project container ready in \(milliseconds(ContinuousClock.now - started)) ms (\(image))")
+        // Secret manager: the workspace sits behind the egress boundary (internal network, proxy forced, no DNS out).
+        if let problem = await engine.secretManager.verifyEgress(projectDirectory: project) {
+            log("FAIL egress: \(problem)")
+            return false
+        }
+        log("egress: internal network only, HTTPS_PROXY is BelloCode's proxy, external names do not resolve")
         guard let report = await engine.environments.verifyIsolation(directory: project, full: true) else {
             log("FAIL isolation check did not run")
             return false

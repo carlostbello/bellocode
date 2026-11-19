@@ -15,13 +15,34 @@ public struct DockerScope: Sendable, Equatable {
     public var limits: ResourceLimits
     /// Containers this scope may have at once.
     public var maxContainers: Int
+    /// Enforced egress (secret manager): what the scope's own workspace has, applied to every container and network it
+    /// creates. Nil: containers get ordinary networking.
+    public var egress: DockerEgress?
 
     public init(key: String, roots: [String], limits: ResourceLimits = ResourceLimits(cpus: 2, memoryBytes: 4 << 30, pidsLimit: 2048),
-                maxContainers: Int = 32) {
+                maxContainers: Int = 32, egress: DockerEgress? = nil) {
         self.key = key
         self.roots = roots
         self.limits = limits
         self.maxContainers = maxContainers
+        self.egress = egress
+    }
+}
+
+/// The egress boundary of a scope (docs/features/secrets.md "Agent-created containers"): containers join the scope's
+/// internal egress network (alone, or beside the agent's own networks, which are created internal), get the proxy
+/// variables and the CA bundle, and IPv6 off. The only way out is `bellocode-proxy`, which also relays `docker` to
+/// this endpoint.
+public struct DockerEgress: Sendable, Equatable {
+    public var network: String
+    public var environment: [String: String]
+    /// Host folder of the container trust bundles (mounted read-only like the workspace's).
+    public var certificateDirectory: String?
+
+    public init(network: String, environment: [String: String], certificateDirectory: String?) {
+        self.network = network
+        self.environment = environment
+        self.certificateDirectory = certificateDirectory
     }
 }
 
@@ -316,12 +337,53 @@ public struct DockerFilterPolicy: Sendable {
                 if let message = await networkUseCheck(name, scope: scope) { return Self.refuse(message) }
             }
         }
+        if let egress = scope.egress { applyEgress(egress, to: &config) }
         guard await lookup.containerCount(scope: scope.key) < scope.maxContainers else {
             return Self.refuse("this workspace already has \(scope.maxContainers) containers. Remove some (docker rm, docker compose down) first.")
         }
         var rewritten = request
         rewritten.body = try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
         return .forward(rewritten, streamBody: false, hijack: false, after: nil)
+    }
+
+    /// Enforced egress for an agent container (after every check: these additions are BelloCode's, not the request's).
+    func applyEgress(_ egress: DockerEgress, to config: inout [String: Any]) {
+        var host = (config["HostConfig"] as? [String: Any]) ?? [:]
+        let mode = (host["NetworkMode"] as? String) ?? ""
+        var networking = (config["NetworkingConfig"] as? [String: Any]) ?? [:]
+        var endpoints = (networking["EndpointsConfig"] as? [String: Any]) ?? [:]
+        for builtIn in ["bridge", "default"] { endpoints.removeValue(forKey: builtIn) }
+        if ["", "default", "bridge"].contains(mode) {
+            host["NetworkMode"] = egress.network
+        }
+        if mode != "none", !mode.hasPrefix("container:") {
+            // Beside the agent's own (internal) networks: the egress network is how the proxy is reached.
+            if endpoints[egress.network] == nil { endpoints[egress.network] = [String: Any]() }
+            networking["EndpointsConfig"] = endpoints
+            config["NetworkingConfig"] = networking
+        }
+        var env = (config["Env"] as? [String]) ?? []
+        let present = Set(env.compactMap { $0.split(separator: "=", maxSplits: 1).first.map(String.init) })
+        for (name, value) in egress.environment.sorted(by: { $0.key < $1.key }) where !present.contains(name) {
+            env.append("\(name)=\(value)")
+        }
+        config["Env"] = env
+        if let directory = egress.certificateDirectory {
+            let corporate = CorporateNetwork(certificateDirectory: directory)
+            for (name, value) in corporate.environment(noProxyExtra: []).sorted(by: { $0.key < $1.key }) where !present.contains(name) {
+                config["Env"] = ((config["Env"] as? [String]) ?? []) + ["\(name)=\(value)"]
+            }
+            var mounts = (host["Mounts"] as? [[String: Any]]) ?? []
+            let targets = Set(mounts.compactMap { $0["Target"] as? String })
+            for mount in corporate.mounts where !targets.contains(mount.target) {
+                mounts.append(["Type": "bind", "Source": mount.source, "Target": mount.target, "ReadOnly": true])
+            }
+            host["Mounts"] = mounts
+        }
+        var sysctls = (host["Sysctls"] as? [String: Any]) ?? [:]
+        sysctls["net.ipv6.conf.all.disable_ipv6"] = "1"
+        host["Sysctls"] = sysctls
+        config["HostConfig"] = host
     }
 
     /// Top-level container settings that are allowed (each security-relevant one is checked).
@@ -687,6 +749,11 @@ public struct DockerFilterPolicy: Sendable {
             case .failure(let refusal): return Self.refuse(refusal.message)
             case .success(let labels): object["Labels"] = labels
             }
+            if scope.egress != nil {
+                // No way out except the scope's egress network (which its containers also join).
+                object["Internal"] = true
+                object["EnableIPv6"] = false
+            }
             var rewritten = request
             rewritten.body = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
             return .forward(rewritten, streamBody: false, hijack: false, after: nil)
@@ -706,6 +773,9 @@ public struct DockerFilterPolicy: Sendable {
                   let reference = object["Container"] as? String else { return Self.refuse("no container was named.", status: 400) }
             guard let container = await lookup.container(reference), container.owned(by: scope.key) else {
                 return Self.refuse("only containers this workspace created can be connected to its networks.")
+            }
+            if let egress = scope.egress, network.name == egress.network {
+                return Self.refuse("containers stay on BelloCode's egress network.")
             }
             return .forward(pinned, streamBody: false, hijack: false, after: nil)
         }

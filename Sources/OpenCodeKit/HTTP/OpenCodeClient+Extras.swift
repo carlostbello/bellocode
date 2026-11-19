@@ -38,6 +38,34 @@ extension OpenCodeClient {
     }
 }
 
+struct SessionEnvironmentBody: Encodable, Sendable {
+    var variables: [String: String]
+}
+
+extension OpenCodeClient {
+    /// `PUT /api/session/{id}/environment` (session.environment): replaces the process environment opencode gives this
+    /// session's shell commands (in memory; lost when the server restarts, so the app sets it again after a reconnect).
+    /// The secret manager uses it for per-thread placeholders (docs/features/secrets.md); it never carries a hidden value.
+    public func setSessionEnvironment(sessionID: String, variables: [String: String]) async throws {
+        let request = try makeRequest(.put, ["api", "session", sessionID, "environment"], body: SessionEnvironmentBody(variables: variables))
+        try await sendIgnoringBody("session.environment", request)
+    }
+}
+
+struct SessionShellBody: Encodable, Sendable {
+    var command: String
+}
+
+extension OpenCodeClient {
+    /// `POST /api/session/{id}/shell` (session.shell): runs one command in the session's directory with the session's
+    /// environment, recorded in its transcript as a shell message (the person's `!` command). The secret manager's end
+    /// to end run uses it to prove placeholder delivery without a model.
+    public func runSessionShell(sessionID: String, command: String) async throws {
+        let request = try makeRequest(.post, ["api", "session", sessionID, "shell"], body: SessionShellBody(command: command))
+        try await sendIgnoringBody("session.shell", request)
+    }
+}
+
 struct GenerateTextBody: Encodable, Sendable {
     var prompt: String
     var model: ModelRef?

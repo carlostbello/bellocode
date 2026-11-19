@@ -20,6 +20,8 @@ public protocol PendingRequestSource: AnyObject {
     func respond(to request: AppRequest, _ response: AppRequestResponse) async
     /// Whether a secret is already saved under this label ("Use Saved Value"). Default: false.
     func savedSecretExists(label: String) -> Bool
+    /// Whether placeholder secrets can be used now (BelloCode's egress proxy runs). Default: false.
+    var placeholderSecretsAvailable: Bool { get }
 }
 
 extension ThreadModel: PendingRequestSource {}
@@ -191,5 +193,21 @@ public final class PendingRequestStackModel {
 @Observable
 public final class SecretDraft {
     public var text = ""
+    /// How the value will be used (secret manager); seeded once from the agent's suggestion.
+    public var choice = SecretChoice(mode: .placeholder)
+    public var seeded = false
     public init() {}
+
+    func seed(from prompt: SecretPrompt, placeholdersAvailable: Bool) {
+        guard !seeded else { return }
+        seeded = true
+        var suggestion = prompt.suggestion ?? SecretChoice(mode: .command)
+        if suggestion.mode == .placeholder && !placeholdersAvailable { suggestion.mode = .brokered }
+        if suggestion.headerName.isEmpty && suggestion.queryName.isEmpty && !suggestion.destination.isEmpty {
+            suggestion.headerName = "Authorization"
+            suggestion.headerPrefix = "Bearer "
+        }
+        suggestion.confirmVisible = false
+        choice = suggestion
+    }
 }

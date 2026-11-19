@@ -20,13 +20,17 @@ public enum ExtrasTools {
     public static let secretFile = "secret_file"
     /// Containerised projects: runs one command in the project's container with the secret in its environment.
     public static let secretExec = "secret_exec"
+    /// Secret manager (docs/features/secrets.md): a brokered HTTP request with `{{secret:NAME}}` handles.
+    public static let httpRequest = "http_request"
+    /// Secret manager: names, modes and bindings of the secrets this project may use (never values).
+    public static let listSecrets = "list_secrets"
     public static let htmlPreview = "html_preview"
     public static let htmlRender = "html_render"
 
     public static let all = [
         scheduleTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, runScheduledTaskNow, linkMergeRequests,
         unlinkMergeRequests, listThreadMergeRequests, watchMergeRequest, unwatchMergeRequest, requestSecret, secretFile,
-        secretExec, htmlPreview, htmlRender,
+        secretExec, httpRequest, listSecrets, htmlPreview, htmlRender,
     ] + GitLabTools.all + GitPushTool.all
 
     static func string(_ description: String) -> JSONValue { .object(["type": .string("string"), "description": .string(description)]) }
@@ -93,13 +97,35 @@ public enum ExtrasTools {
         ClientMCPTool(
             name: requestSecret,
             description:
-                "Ask the user for a secret (token, password) in a private card. The value is not put in this conversation: when they save it you are woken with a one-use secretRef. In a containerised project, pass it to secret_exec with the one command that needs it; the user approves that exact command before it receives the value. End your turn after calling this.",
+                "Ask the user for a secret (API key, token, password) in a private card; never ask in chat. Propose how it is used: mode placeholder (your programs get a bcsec_… placeholder in $NAME; BelloCode's proxy swaps the real value in only for the destination and header you name), brokered (BelloCode makes the HTTP request for you via bellocode_app_http_request with {{secret:NAME}}), or command (only a command the user approves verbatim receives it, and that command can reveal it). The user chooses on the card. You are woken with a handle or placeholder, never the value (unless they choose to show it to you). You cannot see placeholder or brokered values and must not try to recover them. End your turn after calling this.",
             inputSchema: object(
                 [
-                    "label": string("What it is, e.g. \"npm publish token\"."), "reason": string("Why you need it, one sentence."),
+                    "label": string("What it is, e.g. \"OpenAI API key\"."), "reason": string("Why you need it, one sentence."),
                     "url": string("Optional sign-in or setup page (https) shown as a button."),
-                    "delivery": string("reference (default: a one-use secretRef for secret_file) or file (a one-read path at once)."),
+                    "delivery": string("Command mode only: reference (default) or file."),
+                    "mode": string("Proposed use: placeholder (default for API keys), brokered, or command."),
+                    "name": string("Variable or handle name, e.g. OPENAI_API_KEY."),
+                    "destination": string("The API's origin the value is for, e.g. https://api.openai.com."),
+                    "header": string("Header that carries it, e.g. Authorization (or X-Api-Key)."),
+                    "prefix": string("Text before the value in that header, e.g. \"Bearer \"."),
+                    "query": string("Or: the query parameter that carries it."),
+                    "path": string("Optional path prefix the value is limited to, e.g. /v1."),
                 ], required: ["label", "reason"])),
+        ClientMCPTool(
+            name: httpRequest,
+            description:
+                "Make an HTTPS request with a brokered or placeholder secret, performed by BelloCode on the user's Mac. Write {{secret:NAME}} where the value goes (for example the Authorization header). Only the secret's bound destinations, paths and header or parameter are allowed; redirects elsewhere are refused. Returns status, a few headers and up to 64 KB of the body, unless the response contains the value (then nothing is returned). You never see the value.",
+            inputSchema: object(
+                [
+                    "method": string("GET (default), POST, PUT, PATCH or DELETE."),
+                    "url": string("https URL."),
+                    "headers": .object(["type": .string("object"), "description": .string("Header name → value; use {{secret:NAME}} where the value belongs.")]),
+                    "body": string("Request body (text, e.g. JSON)."),
+                ], required: ["url"])),
+        ClientMCPTool(
+            name: listSecrets,
+            description: "List the secrets this project may use: name, mode, where each may be sent, and this thread's placeholders. Never values.",
+            inputSchema: object([:])),
         ClientMCPTool(
             name: secretFile,
             description:
@@ -108,7 +134,7 @@ public enum ExtrasTools {
         ClientMCPTool(
             name: secretExec,
             description:
-                "Ask to run one command with a secret in an environment variable. The user sees this exact command and approves it (or not) before it runs; then you are woken with its output. It runs in a throwaway container with no network and a read-only project unless you ask for network or writesProject (shown to the user). Exchange a container secretRef (bcsecretc_…) here. Never print, encode or store the value. End your turn after calling this.",
+                "Ask to run one command with a secret in an environment variable (command mode: that command can see and reveal the value). The user sees this exact command and approves it (or not) before it runs; then you are woken with its output. It runs in a throwaway container with no network and a read-only project unless you ask for network or writesProject (shown to the user). Exchange a container secretRef (bcsecretc_…) here. Never print, encode or store the value. End your turn after calling this.",
             inputSchema: object(
                 [
                     "secretRef": string("From the request_secret wake message."),

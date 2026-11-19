@@ -566,7 +566,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             mergeRequests?.perform(command)
         case .showScheduledTasks:
             (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil)
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers:
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets:
             NSApp.sendAction(command.selector, to: nil, from: nil)
         case .pruneContainerResources:
             NSApp.sendAction(command.selector, to: nil, from: nil)

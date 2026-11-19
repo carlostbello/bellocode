@@ -22,9 +22,9 @@ public final class DockerEndpoint {
     }
 
     /// The token commands of `scope` use; registering again updates the scope's folders and keeps the token.
-    func token(scope: String, roots: [String]) -> String? {
+    func token(scope: String, roots: [String], egress: DockerEgress? = nil) -> String? {
         guard !roots.isEmpty else { return nil }
-        return registerScope(DockerScope(key: scope, roots: roots))
+        return registerScope(DockerScope(key: scope, roots: roots, egress: egress))
     }
 }
 
@@ -56,6 +56,8 @@ extension EnvironmentService {
                 port: proxy.port, hostDockerBinary: Self.rancherDocker(), hostDockerConfig: Self.prepareHostDockerConfig(next: configuration.execConfigURL),
                 register: { proxy.register($0) })
             tasks.set("docker-endpoint", Task { await proxy.run() })
+            // Enforced egress: running gateways start relaying the endpoint (containers reach it through them).
+            egress?.dockerEndpointStarted()
         } catch {
             Self.log.error("could not start the filtered Docker endpoint")
         }

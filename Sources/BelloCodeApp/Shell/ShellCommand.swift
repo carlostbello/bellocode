@@ -109,6 +109,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showIssues, startThreadFromIssue, linkIssueToThread, showTodos, openTodo, markTodoDone
     /// Containers 3: Settings ▸ MCP Servers (docs/features/containers.md).
     case showMCPServers
+    /// Settings ▸ Secrets (secret manager, docs/features/secrets.md).
+    case showSecrets
     // Containers 2: housekeeping (Settings ▸ Containers).
     case pruneContainerResources
     // Auto mode, risk notices and interrupts (docs/features/auto-mode.md, MainWindowController+Auto.swift).
@@ -237,6 +239,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: #selector(AppDelegate.showContainers(_:))
         case .showEnvironment: #selector(AppDelegate.showEnvironment(_:))
         case .showMCPServers: #selector(AppDelegate.showMCPServers(_:))
+        case .showSecrets: #selector(AppDelegate.showSecrets(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .gitQuickAction: #selector(MainWindowController.gitQuickAction(_:))
         case .showGitActions: #selector(MainWindowController.showGitActions(_:))
@@ -377,6 +380,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showContainers: "Containers…"
         case .showEnvironment: "Project Environment…"
         case .showMCPServers: "MCP Servers…"
+        case .showSecrets: "Secrets…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
         case .modeAsk: "Ask Every Time"
@@ -539,7 +543,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .openParentThread: ("u", [.command, .control])
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: ("", [])
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: ("", [])
         case .pruneContainerResources: ("", [])
         case .modeAsk: ("1", [.command, .control, .option])
         case .modeAutoEdit: ("2", [.command, .control, .option])
@@ -757,7 +761,7 @@ struct CommandContext: Equatable, Sendable {
         case .openParentThread: return agents.hasParent
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers: return true
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: return true
         case .pruneContainerResources: return true
         case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess: return composerVisible
         case .showAutoAudit: return target?.threadID != nil

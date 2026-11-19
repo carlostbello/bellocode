@@ -148,6 +148,8 @@ public struct HostConfig: Codable, Sendable, Equatable {
     public var networkMode: String?
     public var autoRemove: Bool?
     public var shmSize: Int64?
+    /// Namespaced kernel parameters (the egress attachment turns IPv6 off in the container).
+    public var sysctls: [String: String]?
 
     public init() {}
 
@@ -155,7 +157,7 @@ public struct HostConfig: Codable, Sendable, Equatable {
         case mounts = "Mounts", portBindings = "PortBindings", init_ = "Init", privileged = "Privileged"
         case readonlyRootfs = "ReadonlyRootfs", capDrop = "CapDrop", capAdd = "CapAdd", securityOpt = "SecurityOpt"
         case nanoCPUs = "NanoCpus", memory = "Memory", pidsLimit = "PidsLimit", networkMode = "NetworkMode"
-        case autoRemove = "AutoRemove", shmSize = "ShmSize"
+        case autoRemove = "AutoRemove", shmSize = "ShmSize", sysctls = "Sysctls"
     }
 }
 

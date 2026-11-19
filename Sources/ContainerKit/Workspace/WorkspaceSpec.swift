@@ -82,6 +82,9 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     public var corporateNetwork: CorporateNetwork?
     /// The project's service names (added to `NO_PROXY`).
     public var serviceNames: [String]?
+    /// Enforced egress (docs/features/secrets.md): the container joins only BelloCode's internal egress network, whose
+    /// one way out is the gateway to BelloCode's proxy. Replaces `network` and `serviceNetwork` when set.
+    public var egress: EgressAttachment?
 
     public init(projectRoot: String, extraMounts: [String] = [], userMounts: [UserMount] = [], image: String,
                 user: String = "\(getuid()):\(getgid())", network: Network = .bridge, publishedPorts: [Int] = [],
@@ -211,6 +214,8 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
             })
         }
         body.hostConfig = host
+        // First, so its proxy variables win over the corporate ones (the company proxy is BelloCode's proxy's upstream).
+        egress?.apply(to: &body)
         corporateNetwork?.apply(to: &body, noProxyExtra: serviceNames ?? [])
         return body
     }
