@@ -7,6 +7,8 @@ import os
 public protocol SharedBrowserHost: Sendable {
     /// Whether agents in this location may use the shared Chrome: nil = yes; otherwise why not.
     func access(session: String, directory: String) async -> BrowserAccess
+    /// What a location's tools listing advertises (no session: listings are per directory).
+    func toolAccess(directory: String) async -> BrowserToolAccess
     /// Raises the approval card (the server needs a person, even in Auto or Full access).
     func requestAccess(session: String, directory: String) async -> ClientMCPResult
     /// The thread's binding (created and stored on first use).
@@ -27,6 +29,25 @@ public enum BrowserAccess: Sendable, Equatable {
     case allowed
     case needsApproval
     case unavailable(String)
+}
+
+/// A directory's tools listing: allowed for the project, allowed for some of its threads only (Allow Once), or not.
+public enum BrowserToolAccess: Sendable, Equatable {
+    case allowed
+    case someSessions
+    case needsApproval
+    case unavailable(String)
+}
+
+extension SharedBrowserHost {
+    /// Hosts without per-session approvals: the project-level answer.
+    public func toolAccess(directory: String) async -> BrowserToolAccess {
+        switch await access(session: "", directory: directory) {
+        case .allowed: .allowed
+        case .needsApproval: .needsApproval
+        case .unavailable(let reason): .unavailable(reason)
+        }
+    }
 }
 
 /// The client-MCP provider behind the agents' `chrome_*` tools (docs/features/shared-browser.md "Multi-agent model").
@@ -63,14 +84,22 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
 
     // MARK: Tools
 
+    /// The listing is per directory. With Allow Once for one of its threads the chrome_* tools are listed (with
+    /// request_access for the other threads); every call is still checked against its exact session and directory.
     public func tools(directory: String) async -> [ClientMCPTool] {
-        switch await host.access(session: "", directory: directory) {
+        switch await host.toolAccess(directory: directory) {
         case .unavailable: return []
         case .needsApproval: return [Self.requestAccessDefinition]
         case .allowed:
-            if cachedTools.isEmpty, let started = try? await currentClient() { cachedTools = await started.tools }
-            return Self.agentTools(from: cachedTools)
+            return await agentToolList()
+        case .someSessions:
+            return await agentToolList() + [Self.requestAccessDefinition]
         }
+    }
+
+    private func agentToolList() async -> [ClientMCPTool] {
+        if cachedTools.isEmpty, let started = try? await currentClient() { cachedTools = await started.tools }
+        return Self.agentTools(from: cachedTools)
     }
 
     static let requestAccessDefinition = ClientMCPTool(

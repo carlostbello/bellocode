@@ -47,12 +47,20 @@ struct SharedChromeSettingsGroup: View {
                 SettingsToggleRow("Close a thread's tabs when it is done", detail: "Shared or lent tabs stay open.", isOn: binding(\.closeTabsWhenDone))
             }
             SettingsGroup("Projects allowed to use it", footer: "Allowed with “Always” on the approval card. Revoking removes the tools from that project's threads.") {
-                if service.approvedProjects.isEmpty {
+                if service.approvedProjects.isEmpty, service.pendingRevocations.isEmpty {
                     SettingsRow("None yet", detail: "An agent asks when it first needs the shared Chrome.", divided: false) { EmptyView() }
                 }
                 ForEach(Array(service.approvedProjects.sorted().enumerated()), id: \.element) { index, project in
                     SettingsRow(URL(filePath: project).lastPathComponent, detail: (project as NSString).abbreviatingWithTildeInPath, divided: index > 0) {
                         Button("Revoke") { Task { await service.revokeProject(project) } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    }
+                }
+                // Revoked, but the stored grant could not be deleted yet: the tools stay hidden; the person can retry.
+                ForEach(Array(service.pendingRevocations.sorted().enumerated()), id: \.element) { index, project in
+                    SettingsRow(URL(filePath: project).lastPathComponent,
+                                detail: "Revoked (tools hidden), but the change could not be saved yet · \((project as NSString).abbreviatingWithTildeInPath)",
+                                divided: index > 0 || !service.approvedProjects.isEmpty) {
+                        Button("Retry") { Task { await service.revokeProject(project) } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                     }
                 }
             }
