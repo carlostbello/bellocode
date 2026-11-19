@@ -23,7 +23,8 @@ struct DevContainerBuildTests {
     }
 
     init() throws {
-        base = NSTemporaryDirectory() + "bc-devbuild-\(UUID().uuidString.prefix(8))"
+        // The canonical spelling (/private/var/…): parsing once dropped the /private and refused the context (R16).
+        base = (CodeRootPaths.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-devbuild-\(UUID().uuidString.prefix(8))"
         project = base + "/project"
         try FileManager.default.createDirectory(atPath: project + "/.devcontainer", withIntermediateDirectories: true)
         try FileManager.default.createDirectory(atPath: project + "/src", withIntermediateDirectories: true)
@@ -89,5 +90,35 @@ struct DevContainerBuildTests {
         #expect(await waitFor { if case .imageRefused = model.phase { true } else { false } }, "\(model.phase)")
         if case .imageRefused(let message) = model.phase { #expect(message.contains("evil.example.com/miner:1")) }
         #expect(builds.count == 1, "nothing is built from a refused base image")
+    }
+
+    // MARK: R16
+
+    /// The build gets the verified canonical context and the Dockerfile's bytes on standard input; a context replaced
+    /// by a link to a folder outside the project after the file was read is caught right before the build.
+    @Test func theBuildGetsVerifiedInputsAndALinkedContextIsCaughtBeforeIt() async throws {
+        let service = try await makeService()
+        defer { service.stop() }
+        let model = service.environment(for: project)
+        #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
+        let first = try #require(builds.list.withLock { $0.first })
+        #expect(first.arguments.last == CodeRootPaths.canonical(project))
+        #expect(first.arguments.firstIndex(of: "-f").map { first.arguments[$0 + 1] } == "-")
+        #expect(first.dockerfile == Data("FROM registry.acme.internal/base:1\nCOPY src /src\n".utf8))
+
+        // Point the file at a context folder, let it be read, then swap the folder for a link outside the project.
+        let outside = base + "/outside"
+        try FileManager.default.createDirectory(atPath: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: project + "/ctx", withIntermediateDirectories: true)
+        try #"{"build": {"dockerfile": "Dockerfile", "context": "../ctx"}}"#.write(toFile: project + "/.devcontainer/devcontainer.json", atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: project + "/.devcontainer/devcontainer.json")
+        #expect(service.devContainerFile(project)?.isUsable == true)
+        try FileManager.default.removeItem(atPath: project + "/ctx")
+        try FileManager.default.createSymbolicLink(atPath: project + "/ctx", withDestinationPath: outside)
+        try write("FROM registry.acme.internal/base:2\n", "/.devcontainer/Dockerfile")
+        await service.retry(project)
+        #expect(await waitFor { if case .failed = model.phase { true } else { false } }, "\(model.phase)")
+        if case .failed(let message) = model.phase { #expect(message.contains("inside the project")) }
+        #expect(builds.count == 1, "nothing outside the project reaches the builder")
     }
 }

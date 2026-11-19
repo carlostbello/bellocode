@@ -66,8 +66,9 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 ## Dev containers (Project container only)
 
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
-Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project) built by BelloCode with
-Rancher's `docker buildx build --load`; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
+Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
+Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
+without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
 `forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;

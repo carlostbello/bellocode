@@ -47,7 +47,7 @@ extension EnvironmentService {
     /// the Dockerfile's steps run in the builder, never on the Mac), then re-evaluates the project.
     func buildDevImage(_ model: ProjectEnvironment, plan: DevContainerPlan, tag: String) {
         let builder = configuration?.devImageBuilder
-        guard let docker = Self.rancherDocker() ?? (builder != nil ? "docker" : nil), let arguments = plan.buildArguments(tag: tag) else {
+        guard let docker = Self.rancherDocker() ?? (builder != nil ? "docker" : nil), let build = plan.build else {
             model.phase = .failed("Building the dev container needs Rancher Desktop's docker (~/.rd/bin/docker), which was not found.")
             scheduleConfigWrite()
             return
@@ -56,18 +56,29 @@ extension EnvironmentService {
         scheduleConfigWrite()
         let socket = activeRuntime.socketPath
         let config = configuration.map { Self.prepareHostDockerConfig(next: $0.execConfigURL) } ?? nil
-        let dockerfile = plan.build?.dockerfile ?? ""
-        let buildArgs = plan.build?.args ?? [:]
+        let projectRoot = model.directory
         tasks.set("devbuild-\(model.projectKey)", Task { [weak self] in
-            // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
-            let bases = await Self.dockerfileBases(dockerfile, buildArgs: buildArgs)
+            // Right before the CLI runs (R16): links resolved, the context and Dockerfile proven inside the project, the
+            // Dockerfile's bytes read once. The CLI gets the canonical context and those bytes on standard input.
+            let verified = await Self.verifyBuildInputs(build, projectRoot: projectRoot)
             guard let self, !Task.isCancelled else { return }
+            let inputs: DevContainerBuildInputs
+            switch verified {
+            case .failure(let problem):
+                model.phase = .failed(problem.description)
+                self.scheduleConfigWrite()
+                return
+            case .success(let value): inputs = value
+            }
+            // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
+            let bases = DockerfileBases.images(in: String(decoding: inputs.dockerfile, as: UTF8.self), buildArgs: build.args)
             if let refusal = self.baseImageRefusal(bases) {
                 model.phase = .imageRefused(refusal)
                 self.scheduleConfigWrite()
                 return
             }
-            let request = DevImageBuildRequest(docker: docker, arguments: arguments, dockerfile: nil, socket: socket, config: config)
+            guard let arguments = plan.buildArguments(tag: tag, context: inputs.context) else { return }
+            let request = DevImageBuildRequest(docker: docker, arguments: arguments, dockerfile: inputs.dockerfile, socket: socket, config: config)
             let result = if let builder { await builder(request) } else { await Self.runDocker(request) }
             guard !Task.isCancelled else { return }
             if result.status == 0 {
@@ -80,6 +91,12 @@ extension EnvironmentService {
         })
     }
 
+    @concurrent
+    nonisolated static func verifyBuildInputs(_ build: DevContainerPlan.Build, projectRoot: String) async
+        -> Result<DevContainerBuildInputs, DevContainerBuildInputs.Problem> {
+        DevContainerBuildInputs.verify(build, projectRoot: projectRoot)
+    }
+
     /// Why the Dockerfile's base images may not be used, or nil (each one under the image policy).
     func baseImageRefusal(_ bases: Result<[String], DockerfileBases.Refusal>) -> String? {
         switch bases {
@@ -90,15 +107,6 @@ extension EnvironmentService {
             }
             return nil
         }
-    }
-
-    /// Reads the Dockerfile (bounded) off the main actor and lists the images it pulls.
-    @concurrent
-    nonisolated static func dockerfileBases(_ path: String, buildArgs: [String: String]) async -> Result<[String], DockerfileBases.Refusal> {
-        guard let data = FileManager.default.contents(atPath: path), data.count <= 1 << 20 else {
-            return .failure(.init("the Dockerfile could not be read (or is larger than 1 MiB)"))
-        }
-        return DockerfileBases.images(in: String(decoding: data, as: UTF8.self), buildArgs: buildArgs)
     }
 
     /// Runs Rancher Desktop's docker with argv (no shell), a minimal environment and the raw socket (BelloCode itself,
@@ -114,7 +122,11 @@ extension EnvironmentService {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
+        // The verified Dockerfile goes on standard input (`-f -`); otherwise nothing.
+        let input = request.dockerfile.map { _ in Pipe() }
+        // A docker that already exited must not SIGPIPE the app.
+        if let input { _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) }
+        process.standardInput = input ?? FileHandle.nullDevice
         // Drained as it arrives (bounded tail); the exit is awaited without holding a thread.
         let tail = Mutex(Data())
         pipe.fileHandleForReading.readabilityHandler = { handle in
@@ -126,7 +138,14 @@ extension EnvironmentService {
         }
         let status: Int32 = await withCheckedContinuation { continuation in
             process.terminationHandler = { finished in continuation.resume(returning: finished.terminationStatus) }
-            do { try process.run() } catch {
+            do {
+                try process.run()
+                if let input, let dockerfile = request.dockerfile {
+                    // Bounded (≤ 1 MiB) and read by the CLI at once; a closed pipe (docker exited) is not an error here.
+                    try? input.fileHandleForWriting.write(contentsOf: dockerfile)
+                    try? input.fileHandleForWriting.close()
+                }
+            } catch {
                 process.terminationHandler = nil
                 continuation.resume(returning: 127)
             }
