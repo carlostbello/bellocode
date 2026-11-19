@@ -163,7 +163,10 @@ else
   warn "could not render assets/icon.svg with qlmanage; bundling without an icon"
 fi
 
-BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2> /dev/null || echo 1)"
+# Build number: BELLOCODE_BUILD_NUMBER (make release passes it), else the commit count of this checkout.
+BUILD_NUMBER="${BELLOCODE_BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD 2> /dev/null || echo 1)}"
+[[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || die "build number '$BUILD_NUMBER' is not a positive integer"
+[[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION '$APP_VERSION' is not MAJOR.MINOR.PATCH"
 cat > "$CONTENTS/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
