@@ -54,7 +54,7 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
   `DOCKER_HOST` points there when egress is enforced.
 - The gateway (`EgressGateway`): BelloCode's own image `bellocode-egress-gateway:<inputs hash>` (`EgressGatewayImage`),
   built locally from source compiled into the app (a Dockerfile with no `RUN` step and the Python relay) on
-  `python:3.13-alpine` pinned by digest; never the project's image, so no project-controlled code holds the token or
+  `node:22-bookworm-slim` pinned by digest (the shared browser's base, so no extra pull); never the project's image, so no project-controlled code holds the token or
   joins the bridge (release review R08), in every execution mode with a workspace. Read-only root, user 65534, no
   capabilities; created per launch with a fresh token (only in its environment; the proxy refuses connections without a
   registered token), removed at quit. The first build needs the pinned base from Docker Hub once.

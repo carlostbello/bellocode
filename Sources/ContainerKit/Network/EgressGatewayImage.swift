@@ -9,15 +9,16 @@ import Foundation
 public enum EgressGatewayImage {
     public static let repository = "bellocode-egress-gateway"
     public static let labelInputs = "app.bellocode.egress-gateway-inputs"
-    /// python 3.13 on Alpine, the multi-architecture index (arm64 and amd64), pinned by digest.
-    public static let base = "python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e"
+    /// The shared browser's base (`Containers/browser/versions.env` BASE_IMAGE), pinned by digest: one Docker Hub image
+    /// serves both, so a Mac that built shared Chrome needs no further pull, and the layers are shared.
+    public static let base = "node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee"
 
     static var dockerfile: String {
         """
         FROM \(base)
-        COPY relay.py /opt/bellocode/relay.py
+        COPY relay.js /opt/bellocode/relay.js
         USER 65534:65534
-        ENTRYPOINT ["python3", "-I", "-S", "-u", "/opt/bellocode/relay.py"]
+        ENTRYPOINT ["node", "/opt/bellocode/relay.js"]
 
         """
     }
@@ -25,7 +26,7 @@ public enum EgressGatewayImage {
     /// SHA-256 over the Dockerfile and the relay program.
     public static var inputHash: String {
         var hasher = SHA256()
-        for part in [dockerfile, EgressGateway.pythonRelay] {
+        for part in [dockerfile, EgressGateway.nodeRelay] {
             hasher.update(data: Data(part.utf8))
             hasher.update(data: Data([0]))
         }
@@ -38,7 +39,7 @@ public enum EgressGatewayImage {
     public static func context() -> Data {
         TarArchive([
             TarArchive.Entry(path: "Dockerfile", contents: Data(dockerfile.utf8)),
-            TarArchive.Entry(path: "relay.py", contents: Data(EgressGateway.pythonRelay.utf8)),
+            TarArchive.Entry(path: "relay.js", contents: Data(EgressGateway.nodeRelay.utf8)),
         ]).data()
     }
 
