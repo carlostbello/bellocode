@@ -200,12 +200,17 @@ public struct EgressGateway: Sendable {
     /// from a shared browser): a `PortForwarder` on the gateway with `containerHost` set to a name on that network then
     /// reaches it. Idempotent.
     public func attach(scopeKey: String, network: String, aliases: [String]? = nil) async throws {
-        try await client.connectNetwork(network, container: "bellocode-egress-gw-\(scopeKey)", aliases: aliases)
+        // Only the scope's own gateway (R07): a same-name container of someone else never joins a project's network.
+        guard let owned = try await client.ownedContainer(Self.containerName(scopeKey), required: Self.ownership(scopeKey)) else {
+            throw ContainerError.notFound(Self.containerName(scopeKey))
+        }
+        try await client.connectNetwork(network, container: owned.id, aliases: aliases)
     }
 
     /// Leaves a network joined with `attach` (absent: nothing to do).
     public func detach(scopeKey: String, network: String) async {
-        try? await client.disconnectNetwork(network, container: "bellocode-egress-gw-\(scopeKey)")
+        guard let owned = try? await client.ownedContainer(Self.containerName(scopeKey), required: Self.ownership(scopeKey)) else { return }
+        try? await client.disconnectNetwork(network, container: owned.id)
     }
 
     /// The gateway's container name for a scope (the container a `PortForwarder` relays through).

@@ -46,7 +46,9 @@ struct ResourceOwnershipTests {
             try await gateway.ensure(EgressGatewaySpec(scopeKey: key, image: "img", proxyPort: 1, token: "t"))
         }
         await gateway.remove(scopeKey: key, network: false)
-        #expect(Self.mutations(server).isEmpty, "nothing stopped, removed or created: \(Self.mutations(server))")
+        await #expect(throws: ForeignResourceError.self) { try await gateway.attach(scopeKey: key, network: "bellocode-net-x") }
+        await gateway.detach(scopeKey: key, network: "bellocode-net-x")
+        #expect(Self.mutations(server).isEmpty, "nothing stopped, removed, created or connected: \(Self.mutations(server))")
     }
 
     @Test func theEgressNetworkOfSomeoneElseIsNeitherAdoptedNorRemoved() async throws {
