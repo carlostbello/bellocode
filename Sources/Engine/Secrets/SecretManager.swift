@@ -90,6 +90,10 @@ public final class SecretManager {
     public private(set) var authorityFingerprint: String?
     /// The audit had to drop events (the consumer fell behind): shown as a gap.
     public private(set) var auditGap = 0
+    /// Secret settings that could not be read (R09): shown in Settings ▸ Secrets. Nil when all were read.
+    public private(set) var metadataProblem: String?
+    /// Accounts whose metadata row exists but cannot be read: quarantined (no use of any kind) until deleted.
+    public private(set) var quarantinedAccounts: Set<String> = []
 
     nonisolated public static let authorityService = "app.bellocode.egress-ca"
     nonisolated static let authorityAccount = "authority-key"
@@ -184,14 +188,42 @@ public final class SecretManager {
 
     /// Loads secrets, placeholders and the recent audit; secrets saved before modes become visible-mode secrets that
     /// work only through approved commands until the person chooses a mode.
+    ///
+    /// Fails closed (R09): if the metadata cannot be queried, nothing is adopted or rewritten and no secret is usable
+    /// (the error is shown); a row that cannot be decoded quarantines its account (kept, never replaced, unusable)
+    /// instead of letting a surviving legacy label re-adopt it as a commands-only secret without its revocation,
+    /// scope or bindings. Only accounts with no metadata row at all are adopted, by an insert that never replaces.
     public func reload() async {
-        var loaded = (try? await store.managedSecrets()) ?? []
-        let known = Set(loaded.map(\.account))
+        let rows: ProjectionStore.ManagedSecretRows
+        do {
+            rows = try await store.managedSecretRows()
+        } catch {
+            secrets = []
+            metadataProblem = "BelloCode could not read its secret settings, so no secret can be used until they can be read. Nothing was changed. Restart BelloCode; if this continues, the local database may be damaged."
+            log.error("secret metadata unreadable; all managed secrets unavailable")
+            await refreshProxySnapshot()
+            return
+        }
+        var loaded = rows.secrets
+        var quarantined = Set(rows.unreadable)
+        let known = Set(loaded.map(\.account)).union(quarantined)
         for label in legacy.labels where !known.contains(label.account) {
             let adopted = ManagedSecret(account: label.account, name: uniqueHandle(ManagedSecret.handle(from: label.label), in: loaded),
                                         label: label.label, mode: .visible, created: label.created)
-            loaded.append(adopted)
-            try? await store.saveManagedSecret(adopted)
+            do {
+                if try await store.adoptLegacySecret(adopted) { loaded.append(adopted) } else { quarantined.insert(label.account) }
+            } catch {
+                // Not recorded: not usable either (adopted on a later reload).
+                quarantined.insert(label.account)
+            }
+        }
+        quarantinedAccounts = quarantined
+        if quarantined.isEmpty {
+            metadataProblem = nil
+        } else {
+            let names = legacy.labels.filter { quarantined.contains($0.account) }.map { "“\($0.label)”" }
+            let what = names.isEmpty ? "\(quarantined.count) secret\(quarantined.count == 1 ? "" : "s")" : names.sorted().joined(separator: ", ")
+            metadataProblem = "The settings of \(what) could not be read, so \(quarantined.count == 1 ? "it is" : "they are") unavailable to agents and commands. Delete \(quarantined.count == 1 ? "it" : "them") and save again."
         }
         secrets = loaded.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         grants = Dictionary(((try? await store.placeholderGrants()) ?? []).map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
@@ -228,6 +260,9 @@ public final class SecretManager {
                      scope, String(secret.rotated?.timeIntervalSince1970 ?? 0), String(secret.created.timeIntervalSince1970)]
         return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
     }
+    /// The label a quarantined account was saved under (Settings shows it; never the value).
+    public func legacyLabel(account: String) -> String? { legacy.labels.first { $0.account == account }?.label }
+
     public func secret(named name: String) -> ManagedSecret? { secrets.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } }
 
     /// Placeholder mode needs the proxy: unavailable (never silently downgraded) when egress is not enforced.
@@ -250,6 +285,10 @@ public final class SecretManager {
         guard ManagedSecret.isValidHandle(handle) else { throw ExtrasError("“\(handle)” cannot be a name (letters, digits and _; not PATH, HOME or a proxy variable).") }
         if let other = secret(named: handle), other.label.caseInsensitiveCompare(trimmed) != .orderedSame {
             throw ExtrasError("Another secret is already named \(handle).")
+        }
+        // A quarantined secret's settings (perhaps a revocation) are never overwritten by a new save (R09).
+        if let existing = legacy.account(forLabel: trimmed), quarantinedAccounts.contains(existing) {
+            throw ExtrasError("“\(trimmed)” has settings BelloCode cannot read. Delete it in Settings ▸ Secrets first.")
         }
         let account = try await legacy.save(label: trimmed, value: value)
         let replaced = self.secret(account) != nil
@@ -324,6 +363,7 @@ public final class SecretManager {
         }
         try? await store.deleteManagedSecret(account: account)
         secrets.removeAll { $0.account == account }
+        if quarantinedAccounts.remove(account) != nil, quarantinedAccounts.isEmpty { metadataProblem = nil }
         await refreshProxySnapshot()
     }
 

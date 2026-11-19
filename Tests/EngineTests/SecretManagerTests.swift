@@ -132,6 +132,48 @@ struct SecretManagerTests {
         #expect(try await f.manager.useSaved(label: "npm token", sessionID: SessionID("ses_1"), projectDirectory: "/p") == nil)
     }
 
+    /// R09: a metadata row that cannot be decoded must not let the surviving legacy label re-adopt the secret as a
+    /// commands-only secret (losing revocation, scope and bindings); the row is kept and the problem shown.
+    @Test func unreadableMetadataQuarantinesInsteadOfReadopting() async throws {
+        let f = try await fixture()
+        let secret = try await f.manager.create(label: "Deploy key", value: Self.value, mode: .placeholder, scope: .project("/p"), bindings: [Self.binding])
+        try await f.manager.revoke(account: secret.account)
+        try await f.store.writer.write { db in
+            try db.execute(sql: "UPDATE app_managed_secret SET json = ? WHERE account = ?", arguments: [Data("{not json".utf8), secret.account])
+        }
+        // Relaunch.
+        let relaunched = SecretManager(store: f.store, vault: f.vault, legacy: f.legacy, clock: SystemWallClock(), configuration: nil)
+        await relaunched.reload()
+        #expect(relaunched.secret(secret.account) == nil, "never reclassified (as a legacy commands-only secret or otherwise)")
+        #expect(relaunched.quarantinedAccounts == [secret.account])
+        #expect(relaunched.metadataProblem?.contains("Deploy key") == true, "\(relaunched.metadataProblem ?? "no problem shown")")
+        #expect(relaunched.commandRevision(account: secret.account, projectDirectory: "/p") == nil, "not eligible for approved commands")
+        #expect(try await relaunched.useSaved(label: "Deploy key", sessionID: SessionID("ses_1"), projectDirectory: "/p") == nil)
+        let raw = try await f.store.writer.read { db in try Data.fetchOne(db, sql: "SELECT json FROM app_managed_secret WHERE account = ?", arguments: [secret.account]) }
+        #expect(raw == Data("{not json".utf8), "the original row is kept, not replaced")
+        await #expect(throws: (any Error).self) { try await relaunched.create(label: "Deploy key", value: Self.value, mode: .visible, confirmVisible: true) }
+        // Delete clears it.
+        await relaunched.delete(account: secret.account)
+        #expect(relaunched.quarantinedAccounts.isEmpty && relaunched.metadataProblem == nil)
+    }
+
+    /// R09: a failed metadata query is not "no metadata": nothing is adopted and no secret is usable.
+    @Test func failedMetadataQueryFailsClosed() async throws {
+        let f = try await fixture()
+        let secret = try await f.manager.create(label: "Ops token", value: Self.value, mode: .brokered, bindings: [Self.binding])
+        try await f.manager.revoke(account: secret.account)
+        try await f.store.writer.write { db in try db.execute(sql: "ALTER TABLE app_managed_secret RENAME TO app_managed_secret_hidden") }
+        let relaunched = SecretManager(store: f.store, vault: f.vault, legacy: f.legacy, clock: SystemWallClock(), configuration: nil)
+        await relaunched.reload()
+        #expect(relaunched.secrets.isEmpty, "the legacy label was not adopted as a commands-only secret")
+        #expect(relaunched.commandRevision(account: secret.account, projectDirectory: nil) == nil)
+        #expect(relaunched.metadataProblem != nil, "the failure is shown")
+        try await f.store.writer.write { db in try db.execute(sql: "ALTER TABLE app_managed_secret_hidden RENAME TO app_managed_secret") }
+        await relaunched.reload()
+        #expect(relaunched.secret(secret.account)?.revoked == true && relaunched.secret(secret.account)?.mode == .brokered, "policy intact")
+        #expect(relaunched.metadataProblem == nil)
+    }
+
     @Test func agentListingNeverShowsValues() async throws {
         let f = try await fixture()
         _ = try await f.manager.create(label: "Key", value: Self.value, mode: .brokered, bindings: [Self.binding])
