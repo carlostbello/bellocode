@@ -211,7 +211,7 @@ struct ExtrasRealBinaryTests {
             """
             Call these tools once each, in order, then end your turn with: DONE
             1. bellocode_app_schedule_task with name "probe schedule", prompt "Reply with exactly: SCHEDULED-OK", everyMinutes 60.
-            2. bellocode_app_link_pull_requests with urls ["\(ref.url)"].
+            2. bellocode_app_link_merge_requests with refs ["\(ref.url)"].
             3. bellocode_app_html_render with title "probe visual" and html "<h1>probe</h1>".
             """, to: thread.id)
         // The session's own run state (an approval card mid-turn is not the end of the turn).
