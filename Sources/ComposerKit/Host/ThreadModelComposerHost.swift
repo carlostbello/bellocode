@@ -102,15 +102,18 @@ public final class ThreadModelComposerHost: ComposerHost {
     public var defaultFollowUp: ComposerDelivery
     public let fileStore: AttachmentFileStore
     private let cache: ComposerDraftCache
+    /// Where the draft's attachments and tokens survive a relaunch (R28); nil keeps them in memory only (tests).
+    public let archive: ComposerDraftArchive?
 
     public init(
         _ source: any ComposerThreadSource, defaultFollowUp: ComposerDelivery = .queue, cache: ComposerDraftCache? = nil,
-        fileStore: AttachmentFileStore = .applicationDefault
+        fileStore: AttachmentFileStore = .applicationDefault, archive: ComposerDraftArchive? = nil
     ) {
         self.source = source
         self.defaultFollowUp = defaultFollowUp
         self.cache = cache ?? .shared
         self.fileStore = fileStore
+        self.archive = archive
     }
 
     public var draftKey: String { source.sessionID.rawValue }
@@ -118,12 +121,23 @@ public final class ThreadModelComposerHost: ComposerHost {
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
-        return cache.draft(for: draftKey, owner: ObjectIdentifier(source), matching: text) ?? ComposerDraft(text: text)
+        if let cached = cache.draft(for: draftKey, owner: ObjectIdentifier(source), matching: text) { return cached }
+        // After a relaunch: the staged attachments and pills recorded with the draft (R28).
+        if isDraftLoaded, let restored = archive?.restore(draftKey, text: text) {
+            cache.store(restored, for: draftKey, owner: ObjectIdentifier(source))
+            return restored
+        }
+        return ComposerDraft(text: text)
     }
 
     public func saveDraft(_ draft: ComposerDraft) {
+        let previous = cache.draft(for: draftKey)
         cache.store(draft, for: draftKey, owner: ObjectIdentifier(source))
         if source.draft != draft.text { source.draft = draft.text }
+        if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
+            let key = draftKey
+            Task { await archive.save(draft, for: key) }
+        }
     }
 
     public func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {

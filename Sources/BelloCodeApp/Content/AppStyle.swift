@@ -48,16 +48,20 @@ final class AppServices {
     /// nil when no server sign-in is available (tests without a server).
     let auth: AuthService?
     let attachmentStore: AttachmentFileStore
+    /// Keeps drafts' staged attachments and pills across relaunches (R28); nil in tests and snapshots.
+    let draftArchive: ComposerDraftArchive?
     /// Opens Settings ▸ Accounts (or the connect sheet) for an integration, or for any provider when nil.
     var connectProvider: @MainActor (String?) -> Void
 
     init(
         settings: AppSettings = AppSettings(defaults: nil), auth: AuthService? = nil,
-        attachmentStore: AttachmentFileStore = .applicationDefault, connectProvider: @escaping @MainActor (String?) -> Void = { _ in }
+        attachmentStore: AttachmentFileStore = .applicationDefault, draftArchive: ComposerDraftArchive? = nil,
+        connectProvider: @escaping @MainActor (String?) -> Void = { _ in }
     ) {
         self.settings = settings
         self.auth = auth
         self.attachmentStore = attachmentStore
+        self.draftArchive = draftArchive
         self.connectProvider = connectProvider
     }
 }

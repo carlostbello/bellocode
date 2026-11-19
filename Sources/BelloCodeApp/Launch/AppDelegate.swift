@@ -56,7 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await runtime.engine.start()
                 // After the cache (and the outbox) loaded: files of sends not settled yet are kept.
                 let engine = runtime.engine
-                Task { await AttachmentFileStore.applicationDefault.cleanUp(keeping: await engine.outboxAttachmentFiles()) }
+                // Files staged in unsent drafts (R28) are kept too, however old.
+                Task {
+                    let kept = await engine.outboxAttachmentFiles().union(ComposerDraftArchive.shared.referencedFiles())
+                    await AttachmentFileStore.applicationDefault.cleanUp(keeping: kept)
+                }
                 Task { await runtime.auth.refresh() }
                 if !settings.hasCompletedOnboarding { await showOnboardingWhenReady() }
             } catch let error as ProjectionStore.OpenError {
@@ -127,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.informativeText = "They are still there and will show again the next time BelloCode opens."
                 alert.runModal()
             }
+            await ComposerDraftArchive.shared.flush()
             await runtime.stop()
             self.visualRenderer.close()
             await PreviewFiles.current.removeAll()
@@ -136,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeServices(settings: AppSettings, auth: AuthService) -> AppServices {
-        AppServices(settings: settings, auth: auth) { [weak self] id in self?.openConnect(id) }
+        AppServices(settings: settings, auth: auth, draftArchive: .shared) { [weak self] id in self?.openConnect(id) }
     }
 
     private func showMainWindow() {
