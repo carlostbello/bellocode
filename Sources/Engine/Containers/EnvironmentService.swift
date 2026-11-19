@@ -48,6 +48,8 @@ public struct ContainerConfiguration: Sendable {
     public var composeExecutable: @Sendable () -> URL? = { ComposeCLI.rancherExecutable() }
     /// Where compose-stack files (written ones, BelloCode's overrides) and compose's own `DOCKER_CONFIG` live.
     public var stackDirectory: URL?
+    /// Runs one dev-container image build (nil: Rancher Desktop's `docker buildx`; tests replace it).
+    public var devImageBuilder: (@Sendable (DevImageBuildRequest) async -> DevImageBuildResult)?
 
     public init(helperURL: URL, execConfigURL: URL, opencodeDataDirectory: URL?, runtime: any WorkspaceRuntime,
                 registryVault: any SecretVault = KeychainSecretVault(service: "app.bellocode.registry")) {
@@ -515,7 +517,10 @@ public final class EnvironmentService {
             return
         }
         if case .outsideCodeRoots = model.phase { model.phase = .unknown }
-        if let image = model.image, let refusal = imageRefusal(image) {
+        // A dev container built here gets a local tag: the registry allowlist applies to its Dockerfile's base images
+        // (checked before each build), never to that tag (R14).
+        let builtLocally = mode == .projectContainer && devContainerPlan(model)?.build != nil
+        if let image = model.image, !builtLocally, let refusal = imageRefusal(image) {
             model.phase = .imageRefused(refusal)
             bridges.removeValue(forKey: model.directory)?.stop()
             scheduleConfigWrite()
@@ -636,10 +641,17 @@ public final class EnvironmentService {
         let pullFirst = imagePolicy.pullPolicy == .always && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
         let auth = pullFirst ? registryAuth(for: spec.image) : nil
         let egressPreflight = egress?.preflight
+        let devBuild = devContainerPlan(model)?.build != nil
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
             let interval = Self.signposter.beginInterval("ensureRunning")
             defer { Self.signposter.endInterval("ensureRunning", interval) }
             do {
+                // A dev container image built here that is missing (its inputs changed) is built, never pulled.
+                if devBuild, try await runtimeRef.image(spec.image) == nil {
+                    guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
+                    if let plan = self.devContainerPlan(model), plan.build != nil { self.buildDevImage(model, plan: plan, tag: spec.image) }
+                    return
+                }
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
                 let previousID = model.record.containerID
                 let wasStopped = model.phase == .starting

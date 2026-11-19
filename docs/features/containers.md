@@ -135,7 +135,8 @@ Data, refused/ignored keys, editor or Reload) and the Containers view. Agent too
 Images are unsigned and no internal registry distributes them (owner, 2026-11-18): most projects build from a
 Dockerfile on public base images. The policy covers what BelloCode pulls (base images, pulled workspace and service
 images): an allowlist (empty: any) of registries or repository prefixes (`docker.io/library/`; Docker normalisation,
-boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A refused image is never pulled or
+boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A dev container built here is checked by its
+Dockerfile's base images (`FROM`, `COPY --from`, `RUN --mount=from=`, before each build), never by the local tag it gets. A refused image is never pulled or
 run ("Image not allowed", with the reason in the banner, the helper and Services).
 **For administrators** (managed preferences win over Settings, shown read-only): keys forced by a configuration profile
 in domain `com.bellocode.app`, or a root-owned, non-writable `/Library/Preferences/app.bellocode.policy.plist`:

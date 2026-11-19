@@ -121,6 +121,16 @@ struct DockerFilterTests {
         return Answer(status: status, body: body)
     }
 
+    /// A classic build: a tar context (Content-Length framing) holding `dockerfile` at `name` plus one other file.
+    func sendBuild(_ path: String, dockerfile: String?, name: String = "Dockerfile", context: Data? = nil, token: String? = nil) async throws -> Answer {
+        var archive = TarArchive()
+        archive.add("app/main.js", "console.log(1)\n")
+        if let dockerfile { archive.add(name, dockerfile) }
+        let body = context ?? archive.data()
+        let head = "POST /\(token ?? self.token)/v1.47\(path) HTTP/1.1\r\nHost: docker\r\nUser-Agent: Docker-Client/test\r\nContent-Type: application/x-tar\r\nContent-Length: \(body.count)\r\n\r\n"
+        return try await send("", "", raw: Data(head.utf8) + body)
+    }
+
     /// Requests that reached the daemon from a client (not the proxy's own ownership lookups).
     var forwarded: [FakeEngineServer.Request] {
         daemon.requests.withLock { $0 }.filter { $0.headers["user-agent"] != "BelloCode-ContainerKit" }
@@ -318,13 +328,15 @@ struct DockerFilterTests {
             ("POST", "/networks/create", #"{"Name":"app_default","Driver":"bridge","Labels":{"com.docker.compose.network":"default"}}"#),
             ("POST", "/networks/ownnet/connect", #"{"Container":"own2"}"#), ("DELETE", "/networks/ownnet", nil),
             ("POST", "/volumes/create", #"{"Name":"app_data","Labels":{"com.docker.compose.volume":"data"}}"#), ("DELETE", "/volumes/ownvol", nil),
-            ("POST", "/build?t=mine:1&dockerfile=Dockerfile", ""), ("POST", "/containers/own1/kill?signal=TERM", nil),
+            ("POST", "/containers/own1/kill?signal=TERM", nil),
             ("PUT", "/containers/own1/archive?path=/tmp", ""), ("GET", "/containers/own1/archive?path=/tmp", nil),
         ]
         for (method, path, body) in allowed {
             let answer = try await send(method, path, json: body)
             #expect((200..<300).contains(answer.status), "\(method) \(path): \(answer.status) \(answer.body)")
         }
+        let built = try await sendBuild("/build?t=mine:1&dockerfile=Dockerfile", dockerfile: "FROM registry.acme.internal/base:1\nRUN true\n")
+        #expect((200..<300).contains(built.status), "build: \(built.status) \(built.body)")
         // Owned containers are addressed by full ID when forwarded (no name swap between check and use).
         #expect(forwarded.contains { $0.path == "/v1.47/containers/own1-full/start" })
         // Builds carry the scope's labels; network and volume creation too.
@@ -333,6 +345,49 @@ struct DockerFilterTests {
         #expect(build.headers["transfer-encoding"] == "chunked", "the build context streams through")
         let network = try #require(forwarded.first { $0.path == "/v1.47/networks/create" })
         #expect(String(decoding: network.body, as: UTF8.self).contains("app.bellocode.agent-scope"))
+    }
+
+    /// R14 (and the known gap of the filtered endpoint): a classic build's Dockerfile base images are under the image
+    /// policy. The proxy finds the Dockerfile as the context streams and cuts a refused build off before the context
+    /// is complete, so the daemon never builds it.
+    @Test func buildBaseImagesFollowTheImagePolicy() async throws {
+        defer { proxy.stop(); daemon.stop() }
+        let refusedCases: [(String, String, String?, String, Data?)] = [
+            ("refused base", "/build?t=x:1", "FROM evil.example.com/miner:1\n", "evil.example.com/miner:1", nil),
+            ("refused second stage", "/build?t=x:1", "FROM registry.acme.internal/base:1 AS b\nFROM evil.example.com/x\n", "evil.example.com/x", nil),
+            ("refused COPY --from", "/build?t=x:1", "FROM registry.acme.internal/base:1\nCOPY --from=evil.example.com/t:1 /a /a\n", "evil.example.com/t:1", nil),
+            ("refused through a build argument", "/build?t=x:1&buildargs=%7B%22B%22%3A%22evil.example.com%2Fy%22%7D", "ARG B=registry.acme.internal/base:1\nFROM $B\n",
+             "evil.example.com/y", nil),
+            ("unresolvable base", "/build?t=x:1", "ARG B\nFROM $B\n", "cannot check", nil),
+            ("Dockerfile elsewhere", "/build?t=x:1&dockerfile=ci/Dockerfile", "FROM registry.acme.internal/base:1\n", "no Dockerfile", nil),
+            ("compressed context", "/build?t=x:1", nil, "compressed", Data([0x1f, 0x8b, 8, 0, 0, 0, 0, 0] + [UInt8](repeating: 0, count: 600))),
+        ]
+        for (name, path, dockerfile, expected, context) in refusedCases {
+            let answer = try await sendBuild(path, dockerfile: dockerfile, context: context)
+            #expect(answer.status == 403, "\(name): \(answer.status) \(answer.body)")
+            let body = answer.body.replacingOccurrences(of: "\\/", with: "/")
+            #expect(body.contains("BelloCode refused this Docker request") && body.contains(expected), "\(name): \(body)")
+        }
+        #expect(proxy.recentRefusals.count >= refusedCases.count, "recorded for the pane")
+        // A nested Dockerfile named by the request is found; stage names and scratch are not images.
+        let nested = try await sendBuild("/build?t=x:2&dockerfile=./ci/Dockerfile", dockerfile: "FROM registry.acme.internal/base:1 AS b\nFROM b\nFROM scratch\n",
+                                         name: "ci/Dockerfile")
+        #expect(nested.status == 200, "\(nested.body)")
+    }
+
+    /// R14: with enforced egress, build steps get the scope's egress network and the proxy as build arguments.
+    @Test func buildsUnderEnforcedEgressUseTheEgressNetwork() async throws {
+        defer { proxy.stop(); daemon.stop() }
+        let egress = DockerEgress(network: "bellocode-egress-k9", environment: ["HTTPS_PROXY": "http://bellocode-proxy:3128", "SSL_CERT_FILE": "/x"],
+                                  certificateDirectory: nil)
+        let egressToken = proxy.register(DockerScope(key: "k9", roots: [root], limits: ResourceLimits(cpus: 2, memoryBytes: 1 << 30, pidsLimit: 64),
+                                                     egress: egress))
+        let answer = try await sendBuild("/build?t=e:1&networkmode=bridge", dockerfile: "FROM registry.acme.internal/base:1\n", token: egressToken)
+        #expect(answer.status == 200, "\(answer.body)")
+        let build = try #require(forwarded.last { $0.path == "/v1.47/build" })
+        let target = build.target.removingPercentEncoding ?? ""
+        #expect(target.contains("networkmode=bellocode-egress-k9") && !target.contains("networkmode=bridge"), "\(target)")
+        #expect(target.contains("HTTPS_PROXY") && !target.contains("SSL_CERT_FILE"), "only Docker's predefined proxy arguments: \(target)")
     }
 
     @Test func attachAndExecStartOnOwnContainersBecomeRawStreams() async throws {

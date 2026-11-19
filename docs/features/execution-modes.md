@@ -49,8 +49,12 @@ Containers view and Prune. The image needs the CLI and Compose plugin (`docs/fea
 `docker:29-cli`). **Hostile matrix:** 89 requests through the proxy to an in-process fake daemon (`DockerFilterTests`,
 every case named in its source) all refused, none reached the daemon; bad tokens, smuggling and CL/TE conflicts refused.
 Live: 24 hostile CLI commands from inside the shared workspace refused by the real daemon path; compose
-up/exec/run/logs/ps/build and classic build work. **Residual risk:** a symlink swapped inside a root between check and
-mount (TOCTOU) is followed in the Rancher VM; Dockerfile `FROM` images are not checked; the agent sees its token.
+up/exec/run/logs/ps/build and classic build work. **Build base images (R14):** the proxy finds the Dockerfile in the streamed
+classic `/build` context (`BuildContextScanner`; plain tar only) and checks its `FROM`, `COPY --from` and `RUN --mount=from=`
+images (`DockerfileBases`, global `ARG`s and `buildargs` expanded; unresolvable refused) against the image policy unless
+the scope built them; a refused build is cut off before the context completes. Under enforced egress, `RUN` steps get
+the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
+between check and mount (TOCTOU) is followed in the Rancher VM; the agent sees its token.
 
 ## Environment contract
 

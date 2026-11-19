@@ -721,7 +721,50 @@ public struct DockerFilterPolicy: Sendable {
         let memory = Int64(request.value("memory") ?? "") ?? 0
         rewritten.query.removeAll { $0.0 == "memory" }
         rewritten.query.append(("memory", String(memory > 0 ? min(memory, scope.limits.memoryBytes) : scope.limits.memoryBytes)))
+        // Enforced egress (R14): `RUN` steps get the scope's egress network (its only way out is BelloCode's proxy) and
+        // the proxy as Docker's predefined build arguments (kept out of the image history), never the bridge.
+        if let egress = scope.egress, network != "none" {
+            rewritten.query.removeAll { $0.0 == "networkmode" }
+            rewritten.query.append(("networkmode", egress.network))
+            var arguments = Self.buildArguments(request)
+            for (name, value) in egress.environment where Self.predefinedProxyArguments.contains(name) && arguments[name] == nil {
+                arguments[name] = value
+            }
+            if !arguments.isEmpty {
+                let data = (try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys])) ?? Data("{}".utf8)
+                rewritten.query.removeAll { $0.0 == "buildargs" }
+                rewritten.query.append(("buildargs", String(decoding: data, as: UTF8.self)))
+            }
+        }
         return .forward(rewritten, streamBody: true, hijack: false, after: nil)
+    }
+
+    /// Docker's predefined proxy build arguments (not recorded in the image history).
+    static let predefinedProxyArguments: Set<String> = [
+        "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "FTP_PROXY", "ftp_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy",
+    ]
+
+    /// The request's `buildargs` (a JSON object; null values dropped).
+    static func buildArguments(_ request: DockerAPIRequest) -> [String: String] {
+        guard let text = request.value("buildargs"), let data = text.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+        return object.compactMapValues { $0 as? String }
+    }
+
+    /// R14: the images a classic build's Dockerfile pulls (`FROM`, `COPY --from`, `RUN --mount=from=`) are under the
+    /// image policy like any pull, unless the scope built them itself. Called by the proxy once it found the Dockerfile
+    /// in the streamed context, before the context is completed (so nothing is built when it refuses).
+    public func buildBaseRefusal(dockerfile: Data, request: DockerAPIRequest, scope: DockerScope) async -> String? {
+        switch DockerfileBases.images(in: String(decoding: dockerfile, as: UTF8.self), buildArgs: Self.buildArguments(request)) {
+        case .failure(let refusal):
+            return Self.prefix + refusal.reason + "."
+        case .success(let images):
+            for image in images {
+                if let existing = await lookup.image(image), owns(existing, scope: scope) { continue }
+                if let refusal = imageRefusal(image) { return Self.prefix + "the Dockerfile's base image \(image) is not allowed: \(refusal)" }
+            }
+            return nil
+        }
     }
 
     // MARK: Networks and volumes

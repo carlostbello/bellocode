@@ -4,6 +4,26 @@ import Synchronization
 
 // Dev containers behind Project container mode (docs/features/containers.md, "Dev containers").
 
+/// One dev-container image build: Rancher Desktop's docker with these arguments (no shell), the Dockerfile's bytes on
+/// standard input when given (`-f -`), the raw socket and BelloCode's own `DOCKER_CONFIG`.
+public struct DevImageBuildRequest: Sendable, Equatable {
+    public var docker: String
+    public var arguments: [String]
+    public var dockerfile: Data?
+    public var socket: String
+    public var config: String?
+}
+
+public struct DevImageBuildResult: Sendable, Equatable {
+    public var status: Int32
+    /// The last lines of output (bounded).
+    public var tail: String
+    public init(status: Int32, tail: String) {
+        self.status = status
+        self.tail = tail
+    }
+}
+
 extension EnvironmentService {
     /// The project's dev container plan when it uses one (Project container mode, chosen in the pane, file usable).
     func devContainerPlan(_ model: ProjectEnvironment) -> DevContainerPlan? {
@@ -26,7 +46,8 @@ extension EnvironmentService {
     /// Builds the dev container image with Rancher Desktop's `docker buildx` (BelloCode's own use of the host CLI;
     /// the Dockerfile's steps run in the builder, never on the Mac), then re-evaluates the project.
     func buildDevImage(_ model: ProjectEnvironment, plan: DevContainerPlan, tag: String) {
-        guard let docker = Self.rancherDocker(), let arguments = plan.buildArguments(tag: tag) else {
+        let builder = configuration?.devImageBuilder
+        guard let docker = Self.rancherDocker() ?? (builder != nil ? "docker" : nil), let arguments = plan.buildArguments(tag: tag) else {
             model.phase = .failed("Building the dev container needs Rancher Desktop's docker (~/.rd/bin/docker), which was not found.")
             scheduleConfigWrite()
             return
@@ -35,9 +56,20 @@ extension EnvironmentService {
         scheduleConfigWrite()
         let socket = activeRuntime.socketPath
         let config = configuration.map { Self.prepareHostDockerConfig(next: $0.execConfigURL) } ?? nil
+        let dockerfile = plan.build?.dockerfile ?? ""
+        let buildArgs = plan.build?.args ?? [:]
         tasks.set("devbuild-\(model.projectKey)", Task { [weak self] in
-            let result = await Self.runDocker(docker, arguments: arguments, socket: socket, config: config)
+            // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
+            let bases = await Self.dockerfileBases(dockerfile, buildArgs: buildArgs)
             guard let self, !Task.isCancelled else { return }
+            if let refusal = self.baseImageRefusal(bases) {
+                model.phase = .imageRefused(refusal)
+                self.scheduleConfigWrite()
+                return
+            }
+            let request = DevImageBuildRequest(docker: docker, arguments: arguments, dockerfile: nil, socket: socket, config: config)
+            let result = if let builder { await builder(request) } else { await Self.runDocker(request) }
+            guard !Task.isCancelled else { return }
             if result.status == 0 {
                 model.phase = .unknown
                 self.refreshImageAndPhase(model)
@@ -48,15 +80,36 @@ extension EnvironmentService {
         })
     }
 
+    /// Why the Dockerfile's base images may not be used, or nil (each one under the image policy).
+    func baseImageRefusal(_ bases: Result<[String], DockerfileBases.Refusal>) -> String? {
+        switch bases {
+        case .failure(let refusal): return "The dev container's Dockerfile cannot be checked: \(refusal.reason)."
+        case .success(let images):
+            for image in images {
+                if let refusal = imageRefusal(image) { return "The dev container's Dockerfile uses the base image \(image): \(refusal)" }
+            }
+            return nil
+        }
+    }
+
+    /// Reads the Dockerfile (bounded) off the main actor and lists the images it pulls.
+    @concurrent
+    nonisolated static func dockerfileBases(_ path: String, buildArgs: [String: String]) async -> Result<[String], DockerfileBases.Refusal> {
+        guard let data = FileManager.default.contents(atPath: path), data.count <= 1 << 20 else {
+            return .failure(.init("the Dockerfile could not be read (or is larger than 1 MiB)"))
+        }
+        return DockerfileBases.images(in: String(decoding: data, as: UTF8.self), buildArgs: buildArgs)
+    }
+
     /// Runs Rancher Desktop's docker with argv (no shell), a minimal environment and the raw socket (BelloCode itself,
     /// never the agent). Returns the exit status and the last lines of output.
     @concurrent
-    nonisolated static func runDocker(_ docker: String, arguments: [String], socket: String, config: String?) async -> (status: Int32, tail: String) {
+    nonisolated static func runDocker(_ request: DevImageBuildRequest) async -> DevImageBuildResult {
         let process = Process()
-        process.executableURL = URL(filePath: docker)
-        process.arguments = arguments
-        var environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "DOCKER_HOST": "unix://" + socket]
-        if let config { environment["DOCKER_CONFIG"] = config }
+        process.executableURL = URL(filePath: request.docker)
+        process.arguments = request.arguments
+        var environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "DOCKER_HOST": "unix://" + request.socket]
+        if let config = request.config { environment["DOCKER_CONFIG"] = config }
         process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -81,7 +134,7 @@ extension EnvironmentService {
         pipe.fileHandleForReading.readabilityHandler = nil
         let text = String(decoding: tail.withLock { $0 }, as: UTF8.self)
         let lines = text.split(separator: "\n").suffix(4).joined(separator: " · ")
-        return (status, status == 127 && text.isEmpty ? "could not start docker" : String(lines.prefix(600)))
+        return DevImageBuildResult(status: status, tail: status == 127 && text.isEmpty ? "could not start docker" : String(lines.prefix(600)))
     }
 
     /// After the container runs: forward the file's ports and run its lifecycle commands once the person approved them
