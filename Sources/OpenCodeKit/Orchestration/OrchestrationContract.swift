@@ -148,9 +148,11 @@ extension OrchestrationContract {
 }
 
 extension OpenCodeClient {
-    /// Asks the plugin at `directory` to re-read the trust file and the repository's configuration.
-    public func reloadProjectConfig(directory: String) async throws(BrowserRPCError) -> OrchestrationContract.ProjectConfigStatus {
-        let output = try await pluginRPC(OrchestrationContract.rpcID, OrchestrationContract.ProjectConfigRPC.reload, input: .object([:]), directory: directory)
+    /// Asks the plugin at `directory` to re-read the trust file and the repository's configuration (`reload: false`
+    /// only reports what is loaded).
+    public func reloadProjectConfig(directory: String, reload: Bool = true) async throws(BrowserRPCError) -> OrchestrationContract.ProjectConfigStatus {
+        let output = try await pluginRPC(
+            OrchestrationContract.rpcID, OrchestrationContract.ProjectConfigRPC.reload, input: .object(["reload": .bool(reload)]), directory: directory)
         guard let data = try? output.encodedData(), let status = try? JSONDecoder().decode(OrchestrationContract.ProjectConfigStatus.self, from: data)
         else { throw .rejected(status: 200, tag: "DecodingError", message: "unexpected bellocode.projectConfig output") }
         return status

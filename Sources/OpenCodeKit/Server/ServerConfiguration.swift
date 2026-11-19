@@ -33,6 +33,11 @@ public struct ServerConfiguration: Sendable {
     /// project config is off and BelloCode's plugin loads each repository's `AGENTS.md` (and, for trusted projects,
     /// their agents, commands and skills). `.native`: opencode loads every repository's config and plugins itself.
     public var repositoryConfig: RepositoryConfigPolicy = .bellocode
+    /// Read at each launch instead of `repositoryConfig` when set (the app's setting can change while it runs; it
+    /// applies at the next server restart).
+    public var repositoryConfigProvider: (@Sendable () -> RepositoryConfigPolicy)?
+    /// The policy for the next launch.
+    public var effectiveRepositoryConfig: RepositoryConfigPolicy { repositoryConfigProvider?() ?? repositoryConfig }
     /// Write the running server's address and password for `bellocode-opencode` (`CLIConnectionFile`, 0600).
     public var publishesCLIConnection = true
 
@@ -91,6 +96,7 @@ public struct ServerConfiguration: Sendable {
 
     /// The child's complete environment for one launch.
     public func environment(credentials: ServerCredentials) -> [String: String] {
+        let repositoryConfig = effectiveRepositoryConfig
         let helpers = (helpersDirectory ?? executableURL.deletingLastPathComponent()).path
         var environment = directories.isolationEnvironment()
         environment.merge([

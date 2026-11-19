@@ -12,13 +12,15 @@ import GRDB
 /// review drafts, migration `v10-gitlab-review`), `app_auto_audit` (Auto decisions and Full-access notices, migration
 /// `v11-auto-audit`; no content or secrets), `app_managed_secret`, `app_secret_placeholder`, `app_secret_audit`
 /// (secret manager, migration `v12-secret-manager`), `app_browser_binding`, `app_browser_share`, `app_browser_label`
-/// (shared browser: per-thread tab groups, deliberate tab sharing, canonical project names; migration `v13-shared-browser`).
+/// (shared browser: per-thread tab groups, deliberate tab sharing, canonical project names; migration `v13-shared-browser`),
+/// `app_opencode_trust` (projects whose repository opencode configuration the person trusts; migration
+/// `v14-opencode-trust`).
 ///
 /// Rows store the domain value as JSON (`json`) plus the columns queries filter and sort on. Credentials are never
 /// stored: catalog entries are built from DTOs that do not decode secret-bearing fields.
 enum ProjectionSchema {
     /// Increase only together with a new migration. Recorded for diagnostics.
-    static let currentVersion = 13
+    static let currentVersion = 14
 
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
@@ -329,6 +331,18 @@ enum ProjectionSchema {
                 CREATE TABLE app_browser_label (
                     project TEXT PRIMARY KEY NOT NULL,
                     label TEXT NOT NULL UNIQUE
+                );
+                """)
+        }
+        // opencode configuration (docs/features/opencode-config.md): projects whose repository `.opencode/` agents,
+        // commands and skills BelloCode's plugin loads. A separate table, not an `app_project` column: the registry is
+        // written with INSERT OR REPLACE, which would reset a column it does not list. Absent row = not trusted (the
+        // default). Named distinctly for the same reason as v13.
+        migrator.registerMigration("v14-opencode-trust") { db in
+            try db.execute(sql: """
+                CREATE TABLE app_opencode_trust (
+                    directory TEXT PRIMARY KEY NOT NULL,
+                    trusted_at REAL NOT NULL
                 );
                 """)
         }

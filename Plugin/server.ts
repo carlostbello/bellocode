@@ -1007,8 +1007,19 @@ export default {
             .filter(L.isAppTool)
             .map((tool) => ({ id: tool.id ?? tool.name, codemode: tool.options?.codemode !== false })),
         }),
-        // Re-reads the trust file and this location's repository files, then replays the transforms. Names only.
-        projectConfig: async () => {
+        // Re-reads the trust file and this location's repository files, then replays the transforms. Names only;
+        // `{ reload: false }` only reports what is loaded.
+        projectConfig: async (input: any) => {
+          if (input?.reload === false) {
+            return {
+              mode: projectConfig?.mode ?? "off",
+              trusted: projectLoaded.trusted,
+              agents: projectLoaded.agents.map((agent) => agent.id),
+              commands: projectLoaded.commands.map((command) => command.name),
+              skills: projectLoaded.skills.map((skill) => skill.id),
+              skipped: projectLoaded.skipped,
+            }
+          }
           refreshProjectConfig()
           if (projectConfig?.mode === "bellocode") {
             await Promise.allSettled([ctx.skill?.reload?.(), ctx.agent?.reload?.(), ctx.command?.reload?.()])

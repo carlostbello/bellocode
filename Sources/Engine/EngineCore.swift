@@ -226,6 +226,14 @@ actor EngineCore {
         await hub.start()
     }
 
+    /// Restarts a supervised server (Settings ▸ opencode); the event stream reconnects and resyncs. False when the
+    /// server is not ours.
+    func restartServer() async -> Bool {
+        guard case .supervised(let supervisor) = configuration.server else { return false }
+        await supervisor.restart()
+        return true
+    }
+
     /// Stops the event stream, cancels every task this actor started, writes what is pending, and stops a supervised
     /// server.
     func stop() async {

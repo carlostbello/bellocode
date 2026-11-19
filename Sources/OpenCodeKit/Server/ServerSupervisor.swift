@@ -119,6 +119,13 @@ public actor ServerSupervisor {
         stopTask = nil
     }
 
+    /// Stops the child (stdin lease, then signals) and starts a fresh one with a new password and the configuration's
+    /// current launch values (`repositoryConfigProvider`, `launchEnvironment`). Clients reconnect and resync.
+    public func restart() async {
+        await stop()
+        start()
+    }
+
     /// State changes, starting with the current state. States are snapshots, so a consumer that falls more than 32
     /// changes behind sees the newest ones only.
     ///
