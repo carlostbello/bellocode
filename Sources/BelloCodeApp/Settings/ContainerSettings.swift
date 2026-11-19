@@ -94,7 +94,16 @@ enum EnvironmentFixes {
             }
         case .installRancher:
             if let url = URL(string: "https://rancherdesktop.io") { NSWorkspace.shared.open(url) }
-        case .chooseImage, .signIn, .openSettings:
+        case .chooseImage:
+            // The field that sets the image this project really uses (R32): in the shared workspace that is the default
+            // image, not the project's own (which has no effect there).
+            let target = engine.environments.imageSettingsTarget(for: directory)
+            openSettings(target.pane)
+            if target == .containersDefault {
+                ContainersSettingsModel.focusDefaultImagePending = true
+                NotificationCenter.default.post(name: ContainersSettingsModel.focusDefaultImage, object: nil)
+            }
+        case .signIn, .openSettings:
             openSettings(directory == nil ? "containers" : "environment")
         case .retry:
             if let directory { Task { await engine.environments.retry(directory) } } else { Task { await engine.environments.recheckRuntime() } }
@@ -124,6 +133,10 @@ final class ContainersSettingsModel: ObservableObject {
 
     /// The model of the open Settings ▸ Containers pane (the Window menu's Prune command uses it).
     static weak var last: ContainersSettingsModel?
+    /// Posted by "Choose an image" when the default image is the one that applies (R32): the pane focuses that field.
+    static let focusDefaultImage = Notification.Name("app.bellocode.focusDefaultImage")
+    /// Set until the pane has focused the field (it may open after the notification).
+    static var focusDefaultImagePending = false
     /// Corporate network and diagnostics (Containers 3).
     let network: NetworkSettingsModel
 
@@ -252,6 +265,7 @@ struct ContainersSettingsView: View {
     @ObservedObject var model: ContainersSettingsModel
     let service: EnvironmentService
     let confirmRemove: (ManagedContainer) -> Bool
+    @FocusState private var defaultImageFocused: Bool
 
     var body: some View {
         SettingsPaneBody {
@@ -298,6 +312,17 @@ struct ContainersSettingsView: View {
                     SettingsFieldRow(divided: false) {
                         TextField("", text: $model.defaultImage, prompt: Text("registry.example.com/dev/base:2026.11"))
                             .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Default container image")
+                            .focused($defaultImageFocused)
+                            .onAppear {
+                                if ContainersSettingsModel.focusDefaultImagePending {
+                                    ContainersSettingsModel.focusDefaultImagePending = false
+                                    defaultImageFocused = true
+                                }
+                            }
+                            .onReceive(NotificationCenter.default.publisher(for: ContainersSettingsModel.focusDefaultImage)) { _ in
+                                ContainersSettingsModel.focusDefaultImagePending = false
+                                defaultImageFocused = true
+                            }
                         Button("Save") { Task { await model.saveDefaultImage() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                     }
                 }
@@ -920,7 +945,12 @@ struct EnvironmentSettingsView: View {
         }
         if let notice = environment.notice {
             EnvironmentBannerView(notice: notice, progress: { if case .pulling(let p) = environment.phase { p.fraction } else { nil } }(),
-                                  fix: { fix in EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { _ in }) },
+                                  fix: { fix in
+                                      // Already in Project Environment: only another pane needs opening.
+                                      EnvironmentFixes.perform(fix, directory: environment.directory, engine: model.engine, openSettings: { pane in
+                                          if pane != "environment" { (NSApp.delegate as? AppDelegate)?.openSettings(pane: pane) }
+                                      })
+                                  },
                                   retry: { Task { await service.retry(environment.directory) } })
         }
         SettingsGroup("Where commands run", footer: "opencode and its file tools always edit files on this Mac. This decides where the agent's commands, terminals and MCP servers run.") {
@@ -943,6 +973,9 @@ struct EnvironmentSettingsView: View {
             SettingsFieldRow(divided: false) {
                 TextField("", text: $model.image, prompt: Text(service.defaults.defaultImage.map { "Default: \($0)" } ?? "registry.example.com/team/image:tag"))
                     .textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Container image")
+                    // No effect in the shared workspace (it uses the default image): not editable there (R32).
+                    .disabled(environment.mode == .sharedWorkspace)
+                    .help(environment.mode == .sharedWorkspace ? "The shared workspace uses the default image in Settings ▸ Containers." : "")
                 Button("Pull") { service.pull(environment) }.buttonStyle(DSButtonStyle(.outline, size: .small)).disabled(environment.image == nil)
                 Button("Rebuild") { service.rebuild(environment.directory) }.buttonStyle(DSButtonStyle(.outline, size: .small))
                     .help("Removes the container and creates it again from the image (the project folder is untouched)")

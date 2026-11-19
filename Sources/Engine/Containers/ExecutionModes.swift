@@ -116,6 +116,13 @@ extension EnvironmentService {
         await update(directory, settings: settings)
     }
 
+    /// Where the image that applies to a project is chosen (R32): the shared workspace (and anything without a project)
+    /// uses the default image of Settings ▸ Containers; a project container its own image in Project Environment.
+    public func imageSettingsTarget(for directory: String?) -> ImageSettingsTarget {
+        guard let directory else { return .containersDefault }
+        return mode(forDirectory: directory) == .sharedWorkspace ? .containersDefault : .projectEnvironment
+    }
+
     // MARK: Migration
 
     /// Once: projects that already have a workspace container with state keep running in it ("Project container");
@@ -280,4 +287,15 @@ extension EnvironmentService {
         return ExecHelperConfig.DockerAccess(host: "tcp://127.0.0.1:\(endpoint.port)/\(token)", binary: endpoint.hostDockerBinary,
                                              configDirectory: endpoint.hostDockerConfig)
     }
+}
+
+/// The settings field that sets the image a project actually uses.
+public enum ImageSettingsTarget: Sendable, Equatable {
+    /// Settings ▸ Containers ▸ Default image.
+    case containersDefault
+    /// Project Settings ▸ Environment ▸ Image.
+    case projectEnvironment
+
+    /// The settings pane that holds it.
+    public var pane: String { self == .containersDefault ? "containers" : "environment" }
 }

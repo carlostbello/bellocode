@@ -294,3 +294,29 @@ struct ExecutionModeTests {
         #expect(service.devContainerFile(outside)?.refused.first?.key == "initializeCommand")
     }
 }
+
+/// R32: "Choose an image" opens the field whose image the project really uses.
+@MainActor
+@Suite("Image recovery target")
+struct ImageSettingsTargetTests {
+    @Test func theSharedWorkspaceOpensTheDefaultImageAProjectContainerItsOwn() async throws {
+        let base = NSTemporaryDirectory() + "bc-imgtarget-\(UUID().uuidString.prefix(8))"
+        let project = base + "/p"
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        let configuration = ContainerConfiguration(
+            helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
+            execConfigURL: URL(filePath: base + "/exec.json"), opencodeDataDirectory: nil, runtime: FakeWorkspaceRuntime(), registryVault: InMemorySecretVault())
+        let service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
+        service.worktreeParent = { directory in base + "/worktrees/" + (directory as NSString).lastPathComponent }
+        await service.start()
+        defer { service.stop() }
+        #expect(service.mode(forDirectory: project) == .sharedWorkspace, "the default mode")
+        #expect(service.imageSettingsTarget(for: project) == .containersDefault)
+        #expect(service.imageSettingsTarget(for: project).pane == "containers")
+        #expect(service.imageSettingsTarget(for: nil) == .containersDefault)
+        await service.setMode(.projectContainer, for: project)
+        #expect(service.imageSettingsTarget(for: project) == .projectEnvironment)
+        #expect(service.imageSettingsTarget(for: project).pane == "environment")
+        #expect(EnvironmentPhase.noImage.blocked?.message.contains("Settings ▸ Containers") == true)
+    }
+}
