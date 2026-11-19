@@ -119,6 +119,15 @@ struct BrowserImageTests {
         #expect(found?.path == Self.repoContext.path)
     }
 
+    /// R29: the image is arm64 only; an amd64 engine is refused with a clear message before any build.
+    @Test func onlyArm64EnginesBuildTheImage() {
+        #expect(BrowserImageContext.architectureRefusal(engineArch: "aarch64") == nil)
+        #expect(BrowserImageContext.architectureRefusal(engineArch: "arm64") == nil)
+        let refusal = BrowserImageContext.architectureRefusal(engineArch: "x86_64")
+        #expect(refusal?.contains("arm64 only") == true)
+        #expect(BrowserImageContext.architectureRefusal(engineArch: "amd64") != nil)
+    }
+
     /// R18: a release build never takes the context from the environment or the working directory (the test runs
     /// inside the repository, whose `Containers/browser` a development search would find); only the bundle counts.
     @Test func releaseBuildsUseOnlyTheBundledContext() throws {

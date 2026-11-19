@@ -38,10 +38,13 @@ CONTENTS="$APP/Contents"
 # this repository (opencode, rg) or built from source by this run (bellocode-exec). Anything else is refused, and the
 # copies in the bundle are checked again just before signing.
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+# BelloCode 1.0 is Apple silicon (arm64) only: the shared browser image pins arm64 browse and Chromium binaries, and
+# the release was verified on arm64 (docs/RELEASE.md). An Intel Mac is refused here instead of producing an app whose
+# shared Chrome cannot be built.
 case "$(uname -m)" in
   arm64) OC_PLATFORM="darwin-arm64"; RG_TARGET="aarch64-apple-darwin" ;;
-  x86_64) OC_PLATFORM="darwin-x64-baseline"; RG_TARGET="x86_64-apple-darwin" ;;
-  *) die "unsupported architecture $(uname -m)" ;;
+  x86_64) die "BelloCode 1.0 supports Apple silicon (arm64) Macs only; this Mac is x86_64 (Intel). See docs/RELEASE.md." ;;
+  *) die "unsupported architecture $(uname -m); BelloCode 1.0 supports arm64 only" ;;
 esac
 OPENCODE_PIN="$(awk -v v="$OPENCODE_VERSION" -v p="$OC_PLATFORM" '!/^#/ && $1 == v && $2 == p { print $4 }' "$ROOT/Scripts/opencode-checksums")"
 RG_PIN="$(awk -v t="$RG_TARGET" '!/^#/ && $2 == t { print $4 }' "$ROOT/Scripts/ripgrep-checksums")"
@@ -69,6 +72,9 @@ swift build -c "$CONFIG" --product bellocode-exec
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 [[ -x "$BIN_DIR/BelloCode" ]] || die "swift build produced no executable at $BIN_DIR/BelloCode"
 [[ -x "$BIN_DIR/bellocode-exec" ]] || die "swift build produced no executable at $BIN_DIR/bellocode-exec"
+for built in "$BIN_DIR/BelloCode" "$BIN_DIR/bellocode-exec"; do
+  [[ "$(lipo -archs "$built")" == "arm64" ]] || die "$(basename "$built") is $(lipo -archs "$built"), not arm64 only"
+done
 # Built from this checkout by the swift build above: record what is bundled and check the copy before signing.
 EXEC_SHA="$(sha256 "$BIN_DIR/bellocode-exec")"
 

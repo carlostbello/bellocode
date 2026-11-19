@@ -73,6 +73,16 @@ public struct BrowserImageContext: Sendable, Equatable {
         return String(decoding: compact, as: UTF8.self)
     }
 
+    /// The image pins arm64 binaries (browse, Chromium packages by hash): BelloCode 1.0 builds it only on an arm64
+    /// engine. Returns why not, before the long build starts, or nil when the engine's architecture is supported (R29).
+    public static func architectureRefusal(engineArch: String) -> String? {
+        switch engineArch.lowercased() {
+        case "arm64", "aarch64": nil
+        default:
+            "The shared Chrome image is built for arm64 only, and Rancher Desktop's engine is \(engineArch). BelloCode 1.0 supports Apple silicon Macs only; the built-in browser preview still works."
+        }
+    }
+
     /// Whether this build may take the browser context from outside its own bundle (debug builds only, R18).
     public static var allowsDevelopmentSources: Bool {
         #if DEBUG
