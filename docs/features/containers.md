@@ -207,7 +207,9 @@ item, context line). Ports forward on demand to `127.0.0.1` through an exec rela
 ## Host git, secrets, host requirements
 
 Host git stays on the Mac for BelloCode and opencode (shim), confined at one choke point (`HostGit`): `sandbox-exec`
-(only the real git, no network except fetch/push, writes only in the repository), `GIT_CONFIG_COUNT` overrides (hooks,
+(only the real git, no network except fetch/push, writes only in the repository and its own metadata: a linked
+worktree's gitdir only as `<commondir>/worktrees/<name>` whose `gitdir` points back at this checkout, a submodule's only
+under an enclosing superproject's `.git/modules`, a `commondir` only for such a worktree; `HostGitWritableRootsTests`), `GIT_CONFIG_COUNT` overrides (hooks,
 fsmonitor, pagers, editors, signing, helpers, `protocol.allow`), an allowlisted environment; 28 configuration vectors
 and 15 hooks fire nothing (`HostGitIsolationTests`, also with BelloCode's credential helper present). HTTPS remotes on a
 configured GitLab instance authenticate through `bellocode-exec --git-credential`, the only program the network profile

@@ -209,7 +209,14 @@ public enum HostGit {
     }
 
     /// The gitdir and common dir for a working directory, read from `.git` (directory or `gitdir:` file) and
-    /// `commondir` without running git.
+    /// `commondir` without running git. Only metadata that provably belongs to this checkout is returned (R27): a
+    /// repository can write its own `.git` file or `commondir`, so a pointer copied from another checkout must not
+    /// extend the sandbox into that checkout's index and refs.
+    /// - a linked worktree's gitdir must be `<commondir>/worktrees/<name>`, and its `gitdir` back-reference must name
+    ///   this checkout's `.git`;
+    /// - a submodule's gitdir must be inside `<superproject>/.git/modules/` of a folder that contains this checkout;
+    /// - a `commondir` is honoured only for such a linked worktree.
+    /// Anything else returns nothing (git then cannot write there and fails, closed).
     static func gitDirectories(from directory: String?) -> [String] {
         guard var current = directory.map(canonical) else { return [] }
         let fileManager = FileManager.default
@@ -217,21 +224,41 @@ public enum HostGit {
             let dotGit = current + "/.git"
             var isDirectory: ObjCBool = false
             if fileManager.fileExists(atPath: dotGit, isDirectory: &isDirectory) {
-                var gitDirectory = dotGit
-                if !isDirectory.boolValue {
-                    guard let text = try? String(contentsOfFile: dotGit, encoding: .utf8), text.hasPrefix("gitdir:") else { return [] }
-                    let path = text.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
-                    gitDirectory = resolve(path, against: current)
+                guard !isDirectory.boolValue else {
+                    // An ordinary repository: its own `.git`. A `commondir` inside it would point git (and the sandbox)
+                    // at another repository's metadata: not followed.
+                    return [canonical(dotGit)]
                 }
-                var result = [canonical(gitDirectory)]
+                guard let text = try? String(contentsOfFile: dotGit, encoding: .utf8), text.hasPrefix("gitdir:") else { return [] }
+                let path = text.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
+                let gitDirectory = canonical(resolve(path, against: current))
                 if let common = try? String(contentsOfFile: gitDirectory + "/commondir", encoding: .utf8) {
-                    result.append(canonical(resolve(common.trimmingCharacters(in: .whitespacesAndNewlines), against: gitDirectory)))
+                    let commonDirectory = canonical(resolve(common.trimmingCharacters(in: .whitespacesAndNewlines), against: gitDirectory))
+                    guard isLinkedWorktree(gitDirectory, common: commonDirectory, checkout: dotGit) else { return [] }
+                    return [gitDirectory, commonDirectory]
                 }
-                return result
+                guard isSubmodule(gitDirectory, checkout: current) else { return [] }
+                return [gitDirectory]
             }
             if current == "/" || current.isEmpty { return [] }
             current = (current as NSString).deletingLastPathComponent
         }
+    }
+
+    /// `gitDirectory` is `<common>/worktrees/<name>` and its `gitdir` file points back at `checkout` (this `.git` file).
+    static func isLinkedWorktree(_ gitDirectory: String, common: String, checkout: String) -> Bool {
+        let parent = (gitDirectory as NSString).deletingLastPathComponent
+        guard (parent as NSString).lastPathComponent == "worktrees", (parent as NSString).deletingLastPathComponent == common else { return false }
+        guard let back = try? String(contentsOfFile: gitDirectory + "/gitdir", encoding: .utf8) else { return false }
+        let target = back.trimmingCharacters(in: .whitespacesAndNewlines)
+        return canonical(resolve(target, against: gitDirectory)) == canonical(checkout)
+    }
+
+    /// `gitDirectory` is inside `<superproject>/.git/modules/` and the superproject contains `checkout`.
+    static func isSubmodule(_ gitDirectory: String, checkout: String) -> Bool {
+        guard let range = gitDirectory.range(of: "/.git/modules/") else { return false }
+        let superproject = String(gitDirectory[..<range.lowerBound])
+        return checkout.hasPrefix(superproject + "/") && FileManager.default.fileExists(atPath: superproject + "/.git")
     }
 
     static func isDotGit(_ path: String) -> Bool {
