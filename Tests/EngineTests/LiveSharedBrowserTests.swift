@@ -245,6 +245,7 @@ struct LiveSharedBrowserTests {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
         return await withCheckedContinuation { continuation in
             process.terminationHandler = { _ in
                 continuation.resume(returning: String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
