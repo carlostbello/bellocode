@@ -233,26 +233,27 @@ struct BrowserRoutingTests {
     let projects = [
         BrowserRouteProject(directory: "/r/atlas", label: "atlas", projectKey: "k1", workspaceContainer: "bellocode-ws-shared", workspaceRunning: true,
                             services: ["api": [8080, 9090], "db": [5432]]),
-        BrowserRouteProject(directory: "/r/zen", label: "zen", projectKey: "k2", workspaceContainer: "bellocode-ws-k2", workspaceRunning: false),
+        BrowserRouteProject(directory: "/r/zen", label: "zen", projectKey: "k2", workspaceContainer: "bellocode-ws-k2", workspaceRunning: false,
+                            services: ["db": [5432]]),
     ]
-    let gateway = "bellocode-egress-gw-browser"
 
     @Test func projectNamesReachTheWorkspaceOnItsLoopback() {
-        let resolved = BrowserRouteTable.resolve(HostPort(host: "atlas.bc", port: 5173), projects: projects, gateway: gateway)
-        #expect(resolved == .target(BrowserRouteTarget(kind: .workspace, project: "/r/atlas", container: "bellocode-ws-shared", host: "127.0.0.1", port: 5173, network: nil)))
+        let resolved = BrowserRouteTable.resolve(HostPort(host: "atlas.bc", port: 5173), projects: projects)
+        #expect(resolved == .target(BrowserRouteTarget(kind: .workspace, project: "/r/atlas", container: "bellocode-ws-shared", host: "127.0.0.1", port: 5173)))
     }
 
-    @Test func serviceNamesReachTheServiceThroughTheGatewayOnTheProjectNetwork() {
-        let resolved = BrowserRouteTable.resolve(HostPort(host: "api.atlas.bc", port: 443), projects: projects, gateway: gateway)
-        #expect(resolved == .target(BrowserRouteTarget(kind: .service, project: "/r/atlas", container: gateway, host: "api", port: 8080, network: "bellocode-net-k1")))
-        if case .target(let explicit) = BrowserRouteTable.resolve(HostPort(host: "api.atlas.bc", port: 9090), projects: projects, gateway: gateway) {
+    @Test func serviceNamesReachTheServiceFromTheWorkspaceOnTheProjectNetwork() {
+        let resolved = BrowserRouteTable.resolve(HostPort(host: "api.atlas.bc", port: 443), projects: projects)
+        #expect(resolved == .target(BrowserRouteTarget(kind: .service, project: "/r/atlas", container: "bellocode-ws-shared", host: "api", port: 8080)),
+                "no project network is ever joined by the browser's gateway")
+        if case .target(let explicit) = BrowserRouteTable.resolve(HostPort(host: "api.atlas.bc", port: 9090), projects: projects) {
             #expect(explicit.port == 9090)
         } else { Issue.record("declared port refused") }
     }
 
     @Test func unknownOrUnavailableNamesAreRefused() {
-        for (host, port) in [("nope.bc", 80), ("zen.bc", 3000), ("web.atlas.bc", 443), ("api.atlas.bc", 1234), ("a.b.atlas.bc", 443), ("bc", 443)] {
-            guard case .refuse = BrowserRouteTable.resolve(HostPort(host: host, port: port), projects: projects, gateway: gateway) else {
+        for (host, port) in [("nope.bc", 80), ("zen.bc", 3000), ("db.zen.bc", 443), ("web.atlas.bc", 443), ("api.atlas.bc", 1234), ("a.b.atlas.bc", 443), ("bc", 443)] {
+            guard case .refuse = BrowserRouteTable.resolve(HostPort(host: host, port: port), projects: projects) else {
                 Issue.record("\(host):\(port) was routed")
                 continue
             }

@@ -47,15 +47,4 @@ extension SecretManager {
         guard let configuration else { return nil }
         return try? Data(contentsOf: configuration.directory.appending(path: "egress-ca.der"))
     }
-
-    /// The browser's gateway joins (or leaves) a project's network for service routes.
-    public func attachBrowserGateway(network: String) async throws {
-        guard let socket = environments?.activeRuntime.socketPath else { return }
-        try await EgressGateway(client: EngineClient(socketPath: socket)).attach(scopeKey: Self.browserScopeKey, network: network)
-    }
-
-    public func detachBrowserGateway(network: String) async {
-        guard let socket = environments?.activeRuntime.socketPath else { return }
-        await EgressGateway(client: EngineClient(socketPath: socket)).detach(scopeKey: Self.browserScopeKey, network: network)
-    }
 }

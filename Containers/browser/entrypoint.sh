@@ -58,7 +58,7 @@ until browse status >/dev/null 2>&1; do sleep 0.05; done
 log "relay ready +$(( $(date +%s%3N) - t0 ))ms"
 
 # 5. Pairing without a person: once policy installed the extension, if it is not connected as a paired browser within
-#    ~3 s, mint a one-time code and open the extension's own setup page with it (browse's install link; its ECDH
+#    ~1 s, mint a one-time code and open the extension's own setup page with it (browse's install link; its ECDH
 #    exchange is unchanged). Pairing state lives in /data, so later starts are already paired.
 START=${BELLOCODE_START_URL:-about:blank}
 (
@@ -66,7 +66,7 @@ START=${BELLOCODE_START_URL:-about:blank}
   i=0
   until browse status 2>/dev/null | grep -q '^Extension: connected'; do
     i=$((i + 1))
-    if [ "$i" = 30 ] || [ "$i" = 300 ]; then
+    if [ "$i" = 10 ] || [ "$i" = 100 ] || [ "$i" = 300 ]; then
       code=$(browse pair --wait-seconds 1 2>/dev/null | sed -n 's/^Pairing code: //p' | tr -d '-')
       chromium --user-data-dir=/data/profile "chrome-extension://$EXT_ID/welcome.html#code=$code" >/dev/null 2>&1 || true
       log "pairing requested"

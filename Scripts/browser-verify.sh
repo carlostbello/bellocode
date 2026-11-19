@@ -34,6 +34,8 @@ check() { if [[ "$2" == ok ]]; then pass=$((pass + 1)); echo "- PASS $1 ${3:-}" 
 # 1. Build with a throwaway key (the gate needs no stable ID).
 args=(); while IFS='=' read -r k v; do [[ -z "$k" || "$k" == \#* ]] && continue; args+=(--build-arg "$k=$v"); done <"$ctx/versions.env"
 umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$work/k.pem" 2>/dev/null
+ext_id=$(openssl pkey -in "$work/k.pem" -pubout -outform DER 2>/dev/null | shasum -a 256 | cut -c1-32 | tr 0-9a-f a-p)
+args+=(--build-arg "EXTENSION_ID=$ext_id")
 t=$(ms)
 if BELLOCODE_BROWSER_EXTENSION_KEY="$(cat "$work/k.pem")" "$docker" buildx build --load --progress=plain "${args[@]}" \
     --secret id=extkey,env=BELLOCODE_BROWSER_EXTENSION_KEY --label "$label" -t "$tag" "$ctx" >"$out/build.log" 2>&1; then

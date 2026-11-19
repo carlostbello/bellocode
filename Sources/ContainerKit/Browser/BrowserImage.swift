@@ -226,9 +226,10 @@ public struct BrowserImageBuilder: Sendable {
     public static let keyVariable = "BELLOCODE_BROWSER_EXTENSION_KEY"
 
     /// The argv for one build (pure; tested).
-    public static func arguments(context: BrowserImageContext, tag: String, inputHash: String, extraLabels: [String: String] = [:]) -> [String] {
+    public static func arguments(context: BrowserImageContext, tag: String, inputHash: String, extensionID: String, extraLabels: [String: String] = [:]) -> [String] {
         var arguments = ["buildx", "build", "--load", "--progress=plain", "--tag", tag, "--file", context.directory.appending(path: "Dockerfile").path]
         for (key, value) in context.versions { arguments += ["--build-arg", "\(key)=\(value)"] }
+        arguments += ["--build-arg", "EXTENSION_ID=\(extensionID)"]
         arguments += ["--secret", "id=extkey,env=\(keyVariable)"]
         let labels = [BrowserImageContext.labelBrowser: "1", BrowserImageContext.labelInputs: inputHash].merging(extraLabels) { a, _ in a }
         for (key, value) in labels.sorted(by: { $0.key < $1.key }) { arguments += ["--label", "\(key)=\(value)"] }
@@ -250,7 +251,7 @@ public struct BrowserImageBuilder: Sendable {
         try ComposeCLI.linkBuildx(beside: docker, into: configDirectory)
         let process = Process()
         process.executableURL = docker
-        process.arguments = Self.arguments(context: context, tag: tag, inputHash: hash, extraLabels: extraLabels)
+        process.arguments = Self.arguments(context: context, tag: tag, inputHash: hash, extensionID: extensionID, extraLabels: extraLabels)
         process.environment = [
             "PATH": docker.deletingLastPathComponent().path + ":/usr/bin:/bin", "HOME": NSHomeDirectory(),
             "DOCKER_HOST": "unix://" + socketPath, "DOCKER_CONFIG": configDirectory.path, "BUILDKIT_PROGRESS": "plain",

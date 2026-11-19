@@ -110,6 +110,9 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
         root.layer?.backgroundColor = DS.Color.canvas.cgColor
         toolbar = NSHostingController(rootView: SharedChromeToolbar(service: service, state: state, detached: detached, actions: actions))
         toolbar.sizingOptions = [.intrinsicContentSize]
+        // The panel's width wins: the toolbar truncates its text instead of widening (and clipping) the pane.
+        toolbar.view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        toolbar.view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         overlay = NSHostingController(rootView: SharedChromeOverlay(service: service, state: state))
         overlay.sizingOptions = [.intrinsicContentSize]
         placeholder = NSHostingController(rootView: SharedChromePlaceholder(service: service, state: state, actions: actions))
@@ -401,19 +404,54 @@ struct SharedChromeToolbar: View {
     private var controlled: Bool { !service.humanControl.isEmpty }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
+            ViewThatFits(in: .horizontal) {
+                controlsRow(showsTitle: true)
+                controlsRow(showsTitle: false)
+            }
             HStack(spacing: DS.Space.s6) {
-                Image(systemName: "globe").foregroundStyle(SwiftUI.Color.ds.icon)
-                Text("Shared Chrome").font(.ds(.bodyEmph)).foregroundStyle(SwiftUI.Color.ds.text)
-                SharedChromeStatusPill(phase: service.phase)
-                Spacer(minLength: DS.Space.s4)
                 groupPicker
+                Spacer(minLength: 0)
+            }
+            contextLine
+            if let notice = service.notices.first, Date.now.timeIntervalSince(notice.date) < 900 {
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s6) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.warningText)
+                    Text(notice.text).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text2).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let error = state.viewerError ?? service.lastError {
+                Text(error).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.dangerText).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, DS.Space.s12)
+        .padding(.vertical, DS.Space.s6)
+        .background(SwiftUI.Color.ds.canvas)
+        .overlay(alignment: .bottom) { SwiftUI.Color.ds.border.frame(height: 1) }
+        .transaction { $0.animation = nil }
+    }
+
+    /// Title, status and the controls; the title drops first when the panel is narrow.
+    private func controlsRow(showsTitle: Bool) -> some View {
+            HStack(spacing: DS.Space.s6) {
+                Image(systemName: "globe").foregroundStyle(SwiftUI.Color.ds.icon).accessibilityLabel("Shared Chrome")
+                if showsTitle {
+                    Text("Shared Chrome").font(.ds(.bodyEmph)).foregroundStyle(SwiftUI.Color.ds.text).lineLimit(1).fixedSize()
+                }
+                SharedChromeStatusPill(phase: service.phase).fixedSize()
+                Spacer(minLength: DS.Space.s4)
                 if controlled {
-                    Button("Paste") { actions.paste() }
+                    Button { actions.paste() } label: { Image(systemName: "doc.on.clipboard") }
                         .buttonStyle(DSButtonStyle(.ghost, size: .small))
-                        .help("Send the Mac clipboard's text to Chrome")
+                        .fixedSize()
+                        .help("Paste: send the Mac clipboard's text to Chrome")
+                        .accessibilityLabel("Paste into Chrome")
                     Button { actions.giveBack() } label: { Label("Give Back", systemImage: "arrow.uturn.backward") }
                         .buttonStyle(DSButtonStyle(.primary, size: .small))
+                        .fixedSize()
                         .help("Return control to the agents")
                 } else {
                     Menu {
@@ -434,46 +472,28 @@ struct SharedChromeToolbar: View {
                 if !detached {
                     Button { actions.openWindow() } label: { Image(systemName: "macwindow.on.rectangle") }
                         .buttonStyle(DSButtonStyle(.ghost, size: .small))
+                        .fixedSize()
                         .help("Open Shared Chrome in a Window")
                         .accessibilityLabel("Open in Window")
                 }
             }
-            contextLine
-            if let notice = service.notices.first, Date.now.timeIntervalSince(notice.date) < 900 {
-                HStack(spacing: DS.Space.s6) {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(SwiftUI.Color.ds.warningText)
-                    Text(notice.text).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text2).lineLimit(2)
-                }
-                .padding(.top, 2)
-                .accessibilityElement(children: .combine)
-            }
-            if let error = state.viewerError ?? service.lastError {
-                Text(error).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.dangerText).lineLimit(2).padding(.top, 2)
-            }
-        }
-        .padding(.horizontal, DS.Space.s12)
-        .padding(.vertical, DS.Space.s6)
-        .background(SwiftUI.Color.ds.canvas)
-        .overlay(alignment: .bottom) { SwiftUI.Color.ds.border.frame(height: 1) }
-        .transaction { $0.animation = nil }
     }
 
     private var selectedTab: String? { state.selectedSession.flatMap { service.bindings[$0]?.selectedTab } }
 
-    /// Project › thread, worktree folder and the canonical URL (UX rule 6).
+    /// Project › thread, worktree folder and the canonical URL (UX rule 6); truncates rather than clips.
     private var contextLine: some View {
         let context = state.context
         let thread = context?.thread?.session?.displayTitle ?? (context == nil ? "No thread shown" : "New thread")
         let folder = context.map { URL(filePath: $0.directory).lastPathComponent } ?? ""
         let label = context.flatMap { service.labels[$0.projectDirectory] }
-        return HStack(spacing: DS.Space.s6) {
-            Text("\(context?.projectName ?? "No project") › \(thread)").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text2).lineLimit(1)
-            if !folder.isEmpty { Text("· \(folder)").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1) }
-            if let label { Text("· https://\(label).bc:<port>/").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1) }
-            Spacer(minLength: 0)
-            Text("Sign-ins shared by every allowed thread").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text4).lineLimit(1)
-        }
-        .padding(.top, 2)
+        var parts = ["\(context?.projectName ?? "No project") › \(thread)"]
+        if !folder.isEmpty { parts.append(folder) }
+        if let label { parts.append("https://\(label).bc:<port>/") }
+        return Text(parts.joined(separator: " · "))
+            .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1).truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(parts.joined(separator: "\n"))
     }
 
     private var groupPicker: some View {

@@ -65,6 +65,14 @@ public actor BrowserTabGate {
         public var human: Bool
         public var queued: Int
         public var lastUsedBy: String?
+
+        public init(running: String? = nil, driver: String? = nil, human: Bool = false, queued: Int = 0, lastUsedBy: String? = nil) {
+            self.running = running
+            self.driver = driver
+            self.human = human
+            self.queued = queued
+            self.lastUsedBy = lastUsedBy
+        }
     }
 
     private struct Waiter {

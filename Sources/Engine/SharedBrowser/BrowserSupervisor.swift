@@ -315,6 +315,10 @@ public actor BrowserSupervisor {
         }
         note("orderly-stop")
         do { try await runtime.stop(timeout: timing.stopTimeoutSeconds) } catch { note("stop-error") }
+        // Tabs do not survive a browser stop (sign-ins do): handles from before are stale for every thread.
+        advanceGeneration(reason: reason == "idle"
+            ? "The shared Chrome was stopped after being idle; its tabs were closed (sign-ins are kept)."
+            : "The shared Chrome was stopped (\(reason)); its tabs were closed (sign-ins are kept).")
         note("stopped")
         admissionClosed = false
         set(.stopped)

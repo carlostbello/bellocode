@@ -66,10 +66,11 @@ struct BrowserImageTests {
 
     @Test func buildArgumentsCarryPinsAndASecretReferenceButNoKey() throws {
         let context = try BrowserImageContext(directory: Self.repoContext)
-        let args = BrowserImageBuilder.arguments(context: context, tag: "bellocode-browser:x", inputHash: "h")
+        let args = BrowserImageBuilder.arguments(context: context, tag: "bellocode-browser:x", inputHash: "h", extensionID: "abcdefghijklmnopabcdefghijklmnop")
         #expect(args.starts(with: ["buildx", "build", "--load"]))
         #expect(args.contains("id=extkey,env=\(BrowserImageBuilder.keyVariable)"))
         #expect(args.contains("BROWSE_VERSION=0.1.5"))
+        #expect(args.contains("EXTENSION_ID=abcdefghijklmnopabcdefghijklmnop"), "the cached pack step is tied to the key's public ID")
         #expect(args.contains("app.bellocode.browser-inputs=h"))
         #expect(!args.joined().contains("PRIVATE KEY"))
         #expect(args.last == context.directory.path)

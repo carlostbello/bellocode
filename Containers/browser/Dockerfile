@@ -66,6 +66,9 @@ COPY --from=fetch /out/ /
 # ---- pack: the CRX3 signed with the installation's key (BuildKit secret), its ID, the update manifest and policy -----
 FROM runtime AS pack
 COPY policy.json /tmp/policy.json
+# The key's public ID: BuildKit's cache ignores secret contents, so this argument ties the cached pack step to the key
+# (a different key can never reuse a CRX signed by another), and the step checks the ID it derives matches.
+ARG EXTENSION_ID
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=secret,id=extkey,required=true set -eu; \
     d=/opt/browse-crx; mkdir -p "$d/src"; cp -r /opt/browse-ext/. "$d/src/"; \
@@ -73,7 +76,7 @@ RUN --mount=type=secret,id=extkey,required=true set -eu; \
     chromium --no-sandbox --user-data-dir="$p" --pack-extension="$d/src" --pack-extension-key=/run/secrets/extkey >/dev/null 2>&1 || true; \
     test -s "$d/src.crx"; mv "$d/src.crx" "$d/browse.crx"; rm -rf "$d/src" "$p"; \
     id=$(openssl pkey -in /run/secrets/extkey -pubout -outform DER | sha256sum | cut -c1-32 | tr 0-9a-f a-p); \
-    test ${#id} = 32; echo "$id" > "$d/id"; \
+    test ${#id} = 32; test "$id" = "${EXTENSION_ID}"; echo "$id" > "$d/id"; \
     ver=$(python3 -I -c 'import json;print(json.load(open("/opt/browse-ext/manifest.json"))["version"])'); \
     printf '<?xml version="1.0"?><gupdate xmlns="http://www.google.com/update2/response" protocol="2.0"><app appid="%s"><updatecheck codebase="file://%s/browse.crx" version="%s"/></app></gupdate>\n' "$id" "$d" "$ver" > "$d/update.xml"; \
     python3 -I -c 'import json,sys;p=json.load(open("/tmp/policy.json"));p["ExtensionInstallBlocklist"]=["*"];p["ExtensionInstallForcelist"]=[sys.argv[1]];json.dump(p,open("/out-policy.json","w"),indent=1)' "$id;file://$d/update.xml"; \

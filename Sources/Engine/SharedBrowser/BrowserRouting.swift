@@ -7,13 +7,13 @@ public struct BrowserRouteTarget: Sendable, Equatable, Hashable {
     public enum Kind: String, Sendable { case workspace, service }
     public var kind: Kind
     public var project: String
-    /// The container the relay runs in: the workspace container (its loopback, so loopback-only dev servers work), or
-    /// the browser's egress gateway attached to the project's network (services, by alias).
+    /// The container the relay runs in: always the project's workspace container. Its loopback reaches loopback-only
+    /// dev servers; its project network resolves services by alias. Nothing joins a project network at runtime:
+    /// attaching the egress gateway to one changed the gateway's default route and silently broke the browser's open
+    /// proxy tunnels (seen live), so routes never touch the browser's own network path.
     public var container: String
     public var host: String
     public var port: Int
-    /// The project network the gateway must join first (services only).
-    public var network: String?
 }
 
 /// What the router knows about a project when it resolves a name (a snapshot taken on the main actor).
@@ -41,15 +41,15 @@ public struct BrowserRouteProject: Sendable, Equatable {
 
 /// The routing table of canonical project names (docs/features/shared-browser.md "Networking and canonical URLs"):
 /// `https://<label>.bc:<port>/` → the project's workspace container on that port (its own loopback);
-/// `https://<service>.<label>.bc[:port]/` → the service by alias on the project network (443 → its first declared
-/// port). Anything else under `.bc` is refused, never looked up on the internet.
+/// `https://<service>.<label>.bc[:port]/` → the service by alias, from the workspace container on the project network
+/// (443 → its first declared port). Anything else under `.bc` is refused, never looked up on the internet.
 public enum BrowserRouteTable {
     public enum Resolution: Sendable, Equatable {
         case target(BrowserRouteTarget)
         case refuse(String)
     }
 
-    public static func resolve(_ destination: HostPort, projects: [BrowserRouteProject], gateway: String) -> Resolution {
+    public static func resolve(_ destination: HostPort, projects: [BrowserRouteProject]) -> Resolution {
         let parts = destination.host.lowercased().split(separator: ".").map(String.init)
         guard parts.last == BrowserNaming.suffix, parts.count == 2 || parts.count == 3 else {
             return .refuse("\(destination.host) is not a BelloCode project name (use https://<project>.bc:<port>/ or https://<service>.<project>.bc/).")
@@ -63,9 +63,12 @@ public enum BrowserRouteTable {
                 return .refuse("The workspace of \(label).bc is not running; start the dev server in a thread of that project first.")
             }
             return .target(BrowserRouteTarget(kind: .workspace, project: project.directory, container: project.workspaceContainer,
-                                              host: "127.0.0.1", port: destination.port, network: nil))
+                                              host: "127.0.0.1", port: destination.port))
         }
         let service = parts[0]
+        guard project.workspaceRunning else {
+            return .refuse("The workspace of \(label).bc is not running, and its services are reached through it; open a thread of that project first.")
+        }
         guard let ports = project.services[service] else {
             return .refuse("\(label).bc has no running service named \(service).")
         }
@@ -79,8 +82,7 @@ public enum BrowserRouteTable {
             }
             port = destination.port
         }
-        return .target(BrowserRouteTarget(kind: .service, project: project.directory, container: gateway, host: service, port: port,
-                                          network: ServiceLabels.networkName(projectKey: project.projectKey, offline: project.offline)))
+        return .target(BrowserRouteTarget(kind: .service, project: project.directory, container: project.workspaceContainer, host: service, port: port))
     }
 }
 

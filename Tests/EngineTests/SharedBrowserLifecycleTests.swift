@@ -154,8 +154,8 @@ struct SharedBrowserLifecycleTests {
         for _ in 0..<20_000 where await supervisor.phase != .stopped { await Task.yield() }
         #expect(await supervisor.phase == .stopped)
         let journal = await supervisor.journal
-        let tail = Array(journal.suffix(4))
-        #expect(tail == ["idle", "close-admission", "orderly-stop", "stopped"], "\(journal)")
+        let tail = Array(journal.suffix(5))
+        #expect(tail == ["idle", "close-admission", "orderly-stop", "generation 1", "stopped"], "\(journal)")
         #expect(runtime.entries.last == "stop(30)", "orderly stop with time for Chromium to commit cookies")
         #expect(!runtime.entries.contains("remove"), "an idle stop keeps the container and profile")
     }
@@ -267,6 +267,6 @@ struct SharedBrowserLifecycleTests {
         let stop = entries.firstIndex(of: "stop(30)")!
         #expect(stop < entries.firstIndex(of: "remove")!)
         #expect(entries.firstIndex(of: "remove")! < entries.firstIndex(of: "removeProfile")!)
-        #expect(await supervisor.generation == 1, "threads are told their sign-ins are gone")
+        #expect(await supervisor.generation == 2, "the stop closed the tabs; clearing also tells threads their sign-ins are gone")
     }
 }

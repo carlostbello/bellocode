@@ -40,6 +40,7 @@ struct SnapshotRunner {
         if name == "git" { return await runGit() }
         if name == "containers" { return await runContainers() }
         if name == "containers3" { return await runContainers3() }
+        if name == "chrome" { return await runSharedChrome() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

@@ -91,7 +91,6 @@ public final class SharedBrowserService {
     @ObservationIgnored private var pendingApprovals: [String: (session: String, directory: String)] = [:]
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var forwards: [String: (forwarder: PortForwarder, task: Task<Void, Never>, project: String, used: ContinuousClock.Instant)] = [:]
-    @ObservationIgnored private var attachedNetworks: Set<String> = []
     @ObservationIgnored private var viewerForward: (forwarder: PortForwarder, task: Task<Void, Never>)?
     @ObservationIgnored private var previewFront: PreviewProxyFront?
     @ObservationIgnored private var loaded = false
@@ -110,7 +109,27 @@ public final class SharedBrowserService {
         })
     }
 
-    public var isAvailable: Bool { configuration != nil && environments?.isEnabled == true }
+    public var isAvailable: Bool { forceAvailableForSnapshots || (configuration != nil && environments?.isEnabled == true) }
+    @ObservationIgnored var forceAvailableForSnapshots = false
+
+    /// Snapshot harness only: shows a state without a container (mock mode has no container runtime).
+    public func showForSnapshots(phase: BrowserPhase, status: BrowserRuntimeStatus?, bindings: [BrowserBinding],
+                                 activity: [String: BrowserTabGate.TabActivity], humanControl: Set<String>, approved: Set<String>,
+                                 notice: String? = nil, imageTag: String? = nil, viewers: Int = 0) {
+        forceAvailableForSnapshots = true
+        self.phase = phase
+        self.status = status
+        self.bindings = Dictionary(bindings.map { ($0.sessionID, $0) }, uniquingKeysWith: { a, _ in a })
+        tabActivity = activity
+        self.humanControl = humanControl
+        approvedProjects = approved
+        self.imageTag = imageTag
+        viewerSubscribers = viewers
+        if let notice { notices = [BrowserNotice(id: 1, date: .now, text: notice)] }
+        for binding in bindings where labels[binding.project] == nil {
+            labels[binding.project] = BrowserNaming.projectLabel(directory: binding.project, taken: Set(labels.values))
+        }
+    }
 
     // MARK: Setup
 
@@ -296,7 +315,7 @@ public final class SharedBrowserService {
     }
 
     /// The approval card for the browse MCP server (MCP servers always need a person, even in Auto or Full access).
-    func requestAccess(session: String, directory: String) async -> ClientMCPResult {
+    public func requestAccess(session: String, directory: String) async -> ClientMCPResult {
         guard let engine else { return .error("BelloCode is not ready.") }
         if pendingApprovals.values.contains(where: { $0.session == session && $0.directory == directory }) {
             return ClientMCPResult(text: "The request is already waiting for the person (a card shows it). End your turn now.")
@@ -306,10 +325,7 @@ public final class SharedBrowserService {
         pendingApprovals[subject] = (session, directory)
         let tag = await expectedImageTag() ?? "bellocode-browser (built on first use)"
         let detail = """
-            Server: browse \(BrowserVersions.browse) (MCP), run inside BelloCode's browser container, never on this Mac
-            Browser: Chromium \(BrowserVersions.chromium) in one shared container (\(tag))
-            Project: \(directory)
-            Sign-ins: shared. Every thread allowed to use the shared Chrome can use every site you are signed in to there, as you.
+            Server: browse \(BrowserVersions.browse) (MCP) in BelloCode's browser container, never on this Mac · Chromium \(BrowserVersions.chromium) (\(tag))
             Each thread works in its own tab group; tabs are shared only when you share them.
             """
         let request = AppRequest(
@@ -520,17 +536,9 @@ public final class SharedBrowserService {
     /// a dial to a loopback forwarder (the proxy has terminated TLS for the exact host; the private hop is plain HTTP).
     func route(_ destination: HostPort) async -> EgressRoute? {
         let projects = await routeProjects()
-        switch BrowserRouteTable.resolve(destination, projects: projects, gateway: EgressGateway.containerName(SecretManager.browserScopeKey)) {
+        switch BrowserRouteTable.resolve(destination, projects: projects) {
         case .refuse(let reason): return .refuse(reason)
         case .target(let target):
-            if let network = target.network, !attachedNetworks.contains(network) {
-                do {
-                    try await secrets?.attachBrowserGateway(network: network)
-                    attachedNetworks.insert(network)
-                } catch {
-                    return .refuse("Could not reach the project's network for \(destination.host).")
-                }
-            }
             guard let port = forwarder(for: target) else { return .refuse("No route to \(destination) right now.") }
             return .dial(EgressDial(endpoint: HostPort(host: "127.0.0.1", port: port), terminatesTLS: true))
         }
@@ -561,26 +569,15 @@ public final class SharedBrowserService {
             entry.task.cancel()
         }
         forwards = [:]
-        let networks = attachedNetworks
-        attachedNetworks = []
-        let secrets = self.secrets
-        tasks.set("detach", Task {
-            for network in networks { await secrets?.detachBrowserGateway(network: network) }
-        })
     }
 
-    /// A project went idle: its routes and network attachment go.
+    /// A project went idle: its routes go.
     public func projectInactive(_ directory: String) {
         for (key, entry) in forwards where entry.project == directory {
             entry.forwarder.stop()
             entry.task.cancel()
             forwards[key] = nil
         }
-        guard let model = environments?.environments.first(where: { $0.directory == directory }) else { return }
-        let network = ServiceLabels.networkName(projectKey: model.projectKey, offline: (model.settings.network == .none))
-        guard attachedNetworks.remove(network) != nil else { return }
-        let secrets = self.secrets
-        tasks.set("detach-\(model.projectKey)", Task { await secrets?.detachBrowserGateway(network: network) })
     }
 
     /// The egress scope for the browser: the network, proxy and certificates; the scope admits the projects the browser
@@ -659,7 +656,7 @@ struct ServiceHost: SharedBrowserHost {
     func access(session: String, directory: String) async -> BrowserAccess {
         await MainActor.run { service?.access(session: session, directory: directory) ?? .unavailable("BelloCode is shutting down.") }
     }
-    func requestAccess(session: String, directory: String) async -> ClientMCPResult {
+    public func requestAccess(session: String, directory: String) async -> ClientMCPResult {
         guard let service else { return .error("BelloCode is shutting down.") }
         return await service.requestAccess(session: session, directory: directory)
     }

@@ -174,7 +174,14 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
                 ]), timeout: .seconds(60))
                 ensured.insert("\(generation)|\(tab)")
             }
-            let result = try await client.call(tool, arguments: arguments)
+            var result = try await client.call(tool, arguments: arguments)
+            if ensure, result.isError, result.text.contains("No tab has the id") {
+                // The tab vanished (closed by the person, or the browser restarted): open it again once, then retry.
+                _ = try await client.call("tabs", arguments: .object([
+                    "action": .string("new"), "id": .string(tab), "group": .string(binding.group),
+                ]), timeout: .seconds(60))
+                result = try await client.call(tool, arguments: arguments)
+            }
             guard await gate.isCurrent(ticket) else { return (.failure, .error(BrowserTabGate.Busy.restarted.description)) }
             learn(result.text)
             return (result.isError ? .failure : .success, ClientMCPResult(text: result.text, isError: result.isError, images: result.images))
@@ -210,6 +217,8 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
         defer { starting = nil }
         let fresh = try await task.value
         await client?.close()
+        // A new browse process may face a new browser: named tabs must be opened again.
+        ensured = []
         client = fresh
         clientGeneration = generation
         let tools = await fresh.tools
