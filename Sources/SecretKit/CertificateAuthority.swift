@@ -78,6 +78,40 @@ enum DER {
     static func extensionField(_ oidString: String, critical: Bool, _ value: [UInt8]) -> [UInt8] {
         sequence([oid(oidString)] + (critical ? [boolean(true)] : []) + [octetString(value)])
     }
+
+    /// One TLV at `offset`: its tag, the content's range and the end of the whole element. Nil when malformed.
+    static func element(_ bytes: [UInt8], at offset: Int) -> (tag: UInt8, content: Range<Int>, end: Int)? {
+        guard offset + 2 <= bytes.count else { return nil }
+        let tag = bytes[offset]
+        var index = offset + 1
+        var length = Int(bytes[index])
+        index += 1
+        if length & 0x80 != 0 {
+            let count = length & 0x7F
+            guard (1...4).contains(count), index + count <= bytes.count else { return nil }
+            length = 0
+            for byte in bytes[index..<index + count] { length = length << 8 | Int(byte) }
+            index += count
+        }
+        guard length >= 0, index + length <= bytes.count else { return nil }
+        return (tag, index..<index + length, index + length)
+    }
+
+    /// The certificate's TBS subject Name and subject public key info, as encoded (whole TLVs).
+    static func subjectAndKey(certificate der: [UInt8]) -> (subject: [UInt8], spki: [UInt8])? {
+        guard let certificate = element(der, at: 0), certificate.tag == 0x30,
+              let tbs = element(der, at: certificate.content.lowerBound), tbs.tag == 0x30 else { return nil }
+        var fields: [(tag: UInt8, range: Range<Int>)] = []
+        var offset = tbs.content.lowerBound
+        while offset < tbs.content.upperBound, fields.count < 7, let field = element(der, at: offset) {
+            fields.append((field.tag, offset..<field.end))
+            offset = field.end
+        }
+        // [0] version (optional), serial, signature algorithm, issuer, validity, subject, subject public key info.
+        if fields.first?.tag == 0xA0 { fields.removeFirst() }
+        guard fields.count >= 6, fields[4].tag == 0x30, fields[5].tag == 0x30 else { return nil }
+        return (Array(der[fields[4].range]), Array(der[fields[5].range]))
+    }
 }
 
 public struct CertificateError: Error, CustomStringConvertible, Sendable {
@@ -104,13 +138,17 @@ public final class CertificateAuthority: Sendable {
 
     private let keys: Mutex<Keys>
     private let subjectKeyID: [UInt8]
-    private let commonName: String
+    /// The root's subject Name exactly as encoded in its certificate: every leaf's issuer (R05). A restored authority
+    /// takes it from the persisted certificate, never from a default name, so leaves chain to the root clients trust.
+    private let issuerName: [UInt8]
     private let leafSPKI: [UInt8]
 
     public var certificate: SecCertificate { SecCertificateCreateWithData(nil, certificateDER as CFData)! }
     public static let maxCachedLeaves = 256
 
-    /// A new authority (`privateKeyData`: nil) or one restored from its key (X9.63) and certificate.
+    /// A new authority (`privateKeyData`: nil) or one restored from its key (X9.63) and certificate. A restore takes the
+    /// subject from the certificate (`commonName` is then unused) and throws if the certificate is unreadable or holds
+    /// another key.
     public init(privateKeyData: Data? = nil, certificateDER: Data? = nil, commonName: String = "BelloCode Egress CA") throws {
         let key: SecKey
         if let privateKeyData {
@@ -124,9 +162,14 @@ public final class CertificateAuthority: Sendable {
         }
         let spki = try Self.spki(of: key)
         subjectKeyID = Array(Insecure.SHA1.hash(data: Data(Self.publicKeyBits(of: key))))
-        self.commonName = commonName
-        if let certificateDER, SecCertificateCreateWithData(nil, certificateDER as CFData) != nil {
+        if let certificateDER {
+            // Restore: the certificate must parse and hold this key's public half; its subject is the issuer.
+            guard SecCertificateCreateWithData(nil, certificateDER as CFData) != nil,
+                  let (subject, certificateSPKI) = DER.subjectAndKey(certificate: Array(certificateDER))
+            else { throw CertificateError("The CA certificate could not be read.") }
+            guard certificateSPKI == spki else { throw CertificateError("The CA certificate does not match its key.") }
             self.certificateDER = certificateDER
+            issuerName = subject
         } else {
             let der = try Self.sign(
                 tbs: Self.tbs(serial: Self.serial(), issuer: DER.name(commonName: commonName, organization: "BelloCode"),
@@ -140,6 +183,7 @@ public final class CertificateAuthority: Sendable {
                 key: key)
             guard SecCertificateCreateWithData(nil, Data(der) as CFData) != nil else { throw CertificateError("The CA certificate is invalid.") }
             self.certificateDER = Data(der)
+            issuerName = DER.name(commonName: commonName, organization: "BelloCode")
         }
         let leafKey = try Self.makeKey()
         leafSPKI = try Self.spki(of: leafKey)
@@ -184,7 +228,7 @@ public final class CertificateAuthority: Sendable {
         }
         let leafKeyID = Array(Insecure.SHA1.hash(data: Data(leafSPKI)))
         let der = try Self.sign(
-            tbs: Self.tbs(serial: Self.serial(), issuer: DER.name(commonName: commonName, organization: "BelloCode"),
+            tbs: Self.tbs(serial: Self.serial(), issuer: issuerName,
                           subject: DER.name(commonName: String(key.prefix(64)), organization: "BelloCode egress proxy"),
                           notBefore: Date().addingTimeInterval(-3_600), notAfter: Date().addingTimeInterval(30 * 86_400),
                           spki: leafSPKI, extensions: [

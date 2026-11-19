@@ -1,4 +1,5 @@
 import Compression
+import Security
 import Foundation
 import Testing
 
@@ -135,5 +136,42 @@ struct ScannerTests {
         #expect(restored.fingerprint == ca.fingerprint)
         #expect(ca.pem.hasPrefix("-----BEGIN CERTIFICATE-----"))
         _ = try ca.identity(for: "127.0.0.1")
+    }
+}
+
+/// R05 (docs/reviews/release-1.0-review.md): after a relaunch the restored authority must issue leaves that chain to
+/// the root clients already trust (the one created on first run, whose subject names the Mac).
+@Suite("Egress CA restore")
+struct AuthorityRestoreTests {
+    static func evaluates(_ leaf: SecIdentity, host: String, anchor: SecCertificate) -> (Bool, String) {
+        var certificate: SecCertificate?
+        SecIdentityCopyCertificate(leaf, &certificate)
+        var trust: SecTrust?
+        SecTrustCreateWithCertificates([certificate!] as CFArray, SecPolicyCreateSSL(true, host as CFString), &trust)
+        guard let trust else { return (false, "no trust") }
+        SecTrustSetAnchorCertificates(trust, [anchor] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+        var error: CFError?
+        let ok = SecTrustEvaluateWithError(trust, &error)
+        return (ok, String(describing: error))
+    }
+
+    @Test func restoredAuthorityChainsToTheOriginalRoot() throws {
+        let original = try CertificateAuthority(commonName: "BelloCode Egress CA (Owner’s MacBook Pro)")
+        let trusted = original.certificate
+        // Relaunch: key from the Keychain, certificate from disk; the caller's default name differs from the original.
+        let restored = try CertificateAuthority(privateKeyData: try original.privateKeyData(), certificateDER: original.certificateDER)
+        #expect(restored.fingerprint == original.fingerprint)
+        for host in ["registry.npmjs.org", "10.0.0.7"] {
+            let (ok, error) = Self.evaluates(try restored.identity(for: host), host: host, anchor: trusted)
+            #expect(ok, "a leaf from the restored CA does not chain to the trusted root (\(host)): \(error)")
+        }
+    }
+
+    @Test func restoreRefusesACertificateForAnotherKey() throws {
+        let a = try CertificateAuthority(commonName: "A")
+        let b = try CertificateAuthority(commonName: "B")
+        #expect(throws: CertificateError.self) { try CertificateAuthority(privateKeyData: try a.privateKeyData(), certificateDER: b.certificateDER) }
+        #expect(throws: CertificateError.self) { try CertificateAuthority(privateKeyData: try a.privateKeyData(), certificateDER: Data([0x30, 0x03, 0x02, 0x01, 0x00])) }
     }
 }

@@ -1,6 +1,7 @@
 import BelloCore
 import Foundation
 import GRDB
+import Security
 import SecretKit
 import Testing
 
@@ -32,6 +33,26 @@ struct SecretManagerTests {
     }
 
     static let binding = SecretBinding(host: "api.example.com", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")])
+
+    /// R05: quit and reopen. The second launch restores the CA from the Keychain key and the certificate on disk; a leaf
+    /// it issues must pass Security framework chain validation against the root the containers trusted on first run.
+    @Test func authoritySurvivesARelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "bc-egress-ca-\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = SecretManagerConfiguration(directory: directory, authorityVault: InMemorySecretVault())
+        let first = try await fixture().manager.loadAuthority(configuration)
+        let relaunched = try await fixture().manager.loadAuthority(configuration)
+        #expect(relaunched.fingerprint == first.fingerprint, "restored, not recreated")
+        var certificate: SecCertificate?
+        SecIdentityCopyCertificate(try relaunched.identity(for: "registry.npmjs.org"), &certificate)
+        var trust: SecTrust?
+        SecTrustCreateWithCertificates([try #require(certificate)] as CFArray, SecPolicyCreateSSL(true, "registry.npmjs.org" as CFString), &trust)
+        let evaluation = try #require(trust)
+        SecTrustSetAnchorCertificates(evaluation, [SecCertificateCreateWithData(nil, first.certificateDER as CFData)!] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(evaluation, true)
+        var error: CFError?
+        #expect(SecTrustEvaluateWithError(evaluation, &error), "\(String(describing: error))")
+    }
 
     @Test func migrationCreatesTablesAndRoundTrips() async throws {
         let f = try await fixture()
