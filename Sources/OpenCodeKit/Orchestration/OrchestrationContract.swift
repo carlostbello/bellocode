@@ -81,7 +81,7 @@ public enum OrchestrationContract {
     /// plugin its container guard options. `mcpServers` replaces those local MCP servers' entries (container execution:
     /// servers configured for all projects are refused, `MCPRouting`).
     public static func serverConfig(pluginDirectory: URL?, limits: Limits = .standard, container: ContainerExecution? = nil,
-                                    mcpServers: [String: JSONValue] = [:]) -> String {
+                                    mcpServers: [String: JSONValue] = [:], projectConfig: ProjectConfigOptions? = nil) -> String {
         var options: [String: JSONValue] = [
             "limits": .object([
                 "maxDepth": .number(Double(limits.maxDepth)),
@@ -93,6 +93,7 @@ public enum OrchestrationContract {
             ])
         ]
         if let container { options["container"] = container.pluginOptions }
+        if let projectConfig { options["projectConfig"] = projectConfig.pluginOptions }
         var config: [String: JSONValue] = [
             "experimental": .object(["subagent_depth": .number(Double(limits.maxDepth))])
         ]
@@ -103,6 +104,97 @@ public enum OrchestrationContract {
         if !mcpServers.isEmpty { config["mcp"] = .object(["servers": .object(mcpServers)]) }
         let data = (try? JSONEncoder().encode(JSONValue.object(config))) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+extension OrchestrationContract {
+    /// How the plugin handles repository opencode configuration (docs/features/opencode-config.md): in `.bellocode`
+    /// mode it writes each session's repository `AGENTS.md` text as an instruction entry and, for projects listed in
+    /// the trust file, adds their `.opencode/` agents, commands and skills to that location; in `.native` mode opencode
+    /// does all of it and the plugin does nothing.
+    public struct ProjectConfigOptions: Sendable, Hashable {
+        public var policy: RepositoryConfigPolicy
+        public var trustFile: URL
+
+        public init(policy: RepositoryConfigPolicy, trustFile: URL) {
+            self.policy = policy
+            self.trustFile = trustFile
+        }
+
+        var pluginOptions: JSONValue {
+            .object(["mode": .string(policy.rawValue), "trustFile": .string(trustFile.path)])
+        }
+    }
+
+    /// The instruction entry carrying a session's repository `AGENTS.md` text in `.bellocode` mode.
+    public static let projectInstructionsKey = "bellocode.project-instructions"
+    /// RPC methods of the project-config loader.
+    public enum ProjectConfigRPC {
+        /// Re-reads the trust file and the repository files for the location, then reloads its agents, commands and
+        /// skills. Output: `ProjectConfigStatus`.
+        public static let reload = "projectConfig"
+    }
+
+    /// `bellocode.projectConfig` output for one location.
+    public struct ProjectConfigStatus: Sendable, Equatable, Decodable {
+        public var mode: String
+        public var trusted: Bool
+        public var agents: [String]
+        public var commands: [String]
+        public var skills: [String]
+        /// Files skipped, with the reason (unsupported or malformed frontmatter, too large).
+        public var skipped: [String]
+    }
+}
+
+extension OpenCodeClient {
+    /// Asks the plugin at `directory` to re-read the trust file and the repository's configuration.
+    public func reloadProjectConfig(directory: String) async throws(BrowserRPCError) -> OrchestrationContract.ProjectConfigStatus {
+        let output = try await pluginRPC(OrchestrationContract.rpcID, OrchestrationContract.ProjectConfigRPC.reload, input: .object([:]), directory: directory)
+        guard let data = try? output.encodedData(), let status = try? JSONDecoder().decode(OrchestrationContract.ProjectConfigStatus.self, from: data)
+        else { throw .rejected(status: 200, tag: "DecodingError", message: "unexpected bellocode.projectConfig output") }
+        return status
+    }
+
+    /// `POST /api/location/reload` (location.reload): rebuilds every loaded location from its configuration. Pending
+    /// permissions and forms are cancelled; running sessions continue with fresh services at the next step boundary.
+    public func reloadLocations() async throws {
+        let request = try makeRequest(.post, ["api", "location", "reload"], timeout: .seconds(60))
+        try await sendIgnoringBody("location.reload", request)
+    }
+
+    /// `GET /api/plugin` (plugin.list) for a location.
+    public func plugins(directory: String) async throws -> [PluginInfo] {
+        let request = try makeRequest(.get, ["api", "plugin"], directory: directory)
+        return try await send("plugin.list", request, as: LocatedList<PluginInfo>.self).data
+    }
+}
+
+/// `GET /api/plugin` entry: id, source type (`builtin`, `local`, `package`) and state (`active`, `failed`, `blocked`, …).
+public struct PluginInfo: Decodable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var source: String
+    public var status: String
+    public var error: String?
+
+    public init(id: String, source: String, status: String, error: String? = nil) {
+        self.id = id
+        self.source = source
+        self.status = status
+        self.error = error
+    }
+
+    enum CodingKeys: String, CodingKey { case id, source, state }
+    struct Source: Decodable { var type: String }
+    struct State: Decodable { var status: String; var message: String?; var error: String? }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        source = (try? c.decode(Source.self, forKey: .source).type) ?? "unknown"
+        let state = try? c.decode(State.self, forKey: .state)
+        status = state?.status ?? "unknown"
+        error = state?.message ?? state?.error
     }
 }
 

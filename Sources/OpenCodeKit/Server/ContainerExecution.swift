@@ -3,8 +3,8 @@ import Foundation
 /// How the supervised server runs commands in containers (docs/features/containers.md). With this set, opencode's
 /// shell (agent shell tool, `/api/shell`, `!`cmd`` in command templates, schedule conditions, legacy PTYs) is
 /// `bellocode-exec`, which forwards every command into the project's workspace container and never runs anything on
-/// the Mac; the bundled plugin's guard hook forces the shell back to it; repository config (plugins, agents, a
-/// `"shell"`) is ignored; formatters and LSP are off (they would run project tooling on the host); host git runs
+/// the Mac; the bundled plugin's guard hook forces the shell back to it; repository config is governed by
+/// `ServerConfiguration.repositoryConfig` (off by default); formatters and LSP are off (they would run project tooling on the host); host git runs
 /// without hooks.
 public struct ContainerExecution: Sendable, Hashable {
     /// `Contents/Helpers/bellocode-exec`.
@@ -49,8 +49,6 @@ public struct ContainerExecution: Sendable, Hashable {
             "SHELL": helperURL.path,
             "BELLOCODE_EXEC_CONFIG": execConfigURL.path,
             "BELLOCODE_EXEC_PATH": helperURL.path,
-            // Repository opencode.json, .opencode/ plugins, agents and commands would run inside opencode on the host.
-            "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
             // Host git (snapshots, diffs, worktrees) never runs repository hooks (husky and friends would execute
             // project code on the Mac). bellocode-exec strips GIT_CONFIG_* so the container's git keeps them.
             "GIT_CONFIG_COUNT": "1",

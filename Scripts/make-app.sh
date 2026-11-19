@@ -35,7 +35,7 @@ CONTENTS="$APP/Contents"
 [[ -x "$OPENCODE_BIN" ]] || die "missing $OPENCODE_BIN; run Scripts/fetch-opencode.sh first"
 
 # Provenance (D2 in docs/reviews/deep-review-1.md): every helper binary in the bundle is either pinned by SHA-256 in
-# this repository (opencode, rg) or built from source by this run (bellocode-exec). Anything else is refused, and the
+# this repository (opencode, rg) or built from source by this run (bellocode-exec, bellocode-opencode). Anything else is refused, and the
 # copies in the bundle are checked again just before signing.
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 case "$(uname -m)" in
@@ -66,11 +66,14 @@ export SWIFTTERM_BUILD_DIRTY="${SWIFTTERM_BUILD_DIRTY:-false}"
 say "swift build -c $CONFIG"
 swift build -c "$CONFIG" --product BelloCode
 swift build -c "$CONFIG" --product bellocode-exec
+swift build -c "$CONFIG" --product bellocode-opencode
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 [[ -x "$BIN_DIR/BelloCode" ]] || die "swift build produced no executable at $BIN_DIR/BelloCode"
 [[ -x "$BIN_DIR/bellocode-exec" ]] || die "swift build produced no executable at $BIN_DIR/bellocode-exec"
+[[ -x "$BIN_DIR/bellocode-opencode" ]] || die "swift build produced no executable at $BIN_DIR/bellocode-opencode"
 # Built from this checkout by the swift build above: record what is bundled and check the copy before signing.
 EXEC_SHA="$(sha256 "$BIN_DIR/bellocode-exec")"
+CLI_SHA="$(sha256 "$BIN_DIR/bellocode-opencode")"
 
 say "assembling ${APP#"$ROOT"/}"
 rm -rf "$APP"
@@ -80,6 +83,8 @@ cp "$BIN_DIR/BelloCode" "$CONTENTS/MacOS/BelloCode"
 cp "$OPENCODE_BIN" "$CONTENTS/Helpers/opencode"
 # Containerised execution (docs/features/containers.md): opencode's shell and PTY command. Required.
 cp "$BIN_DIR/bellocode-exec" "$CONTENTS/Helpers/bellocode-exec"
+# The opencode CLI on BelloCode's isolated data (docs/features/opencode-config.md); runs Helpers/opencode beside it.
+cp "$BIN_DIR/bellocode-opencode" "$CONTENTS/Helpers/bellocode-opencode"
 # The "bellocode" opencode server plugin (TypeScript, loaded by local path; no build step, no dependencies). Only the
 # runtime sources are copied: tests and the package manifest stay in the repository.
 [[ -f "$ROOT/Plugin/server.ts" ]] || die "missing Plugin/server.ts"
@@ -208,8 +213,9 @@ printf 'APPL????' > "$CONTENTS/PkgInfo"
 verify_pinned "$CONTENTS/Helpers/opencode" "$OPENCODE_PIN" "bundled opencode"
 verify_pinned "$CONTENTS/Helpers/rg" "$RG_PIN" "bundled rg"
 [[ "$(sha256 "$CONTENTS/Helpers/bellocode-exec")" == "$EXEC_SHA" ]] || die "bundled bellocode-exec is not the one built by this run"
+[[ "$(sha256 "$CONTENTS/Helpers/bellocode-opencode")" == "$CLI_SHA" ]] || die "bundled bellocode-opencode is not the one built by this run"
 for helper in "$CONTENTS/Helpers/"*; do
-  case "$(basename "$helper")" in opencode | rg | bellocode-exec) ;; *) die "unexpected helper $(basename "$helper") in the bundle" ;; esac
+  case "$(basename "$helper")" in opencode | rg | bellocode-exec | bellocode-opencode) ;; *) die "unexpected helper $(basename "$helper") in the bundle" ;; esac
 done
 
 say "signing (identity: $IDENTITY)"
@@ -218,6 +224,7 @@ TIMESTAMP="--timestamp"
 sign() { codesign --force "$TIMESTAMP" --options runtime --sign "$IDENTITY" "$@"; }
 sign --identifier "$BUNDLE_ID.opencode" --entitlements "$ENTITLEMENTS/opencode.entitlements" "$CONTENTS/Helpers/opencode"
 sign --identifier "$BUNDLE_ID.exec" "$CONTENTS/Helpers/bellocode-exec"
+sign --identifier "$BUNDLE_ID.opencode-cli" "$CONTENTS/Helpers/bellocode-opencode"
 sign --identifier "$BUNDLE_ID.rg" "$CONTENTS/Helpers/rg"
 sign --entitlements "$ENTITLEMENTS/BelloCode.entitlements" "$APP"
 

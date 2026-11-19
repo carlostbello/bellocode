@@ -29,6 +29,12 @@ public struct ServerConfiguration: Sendable {
     /// Run every command in workspace containers (docs/features/containers.md). The app always sets it; nil only in
     /// tests and mock mode.
     public var containerExecution: ContainerExecution?
+    /// Repository opencode configuration (docs/features/opencode-config.md). `.bellocode` (default): opencode's own
+    /// project config is off and BelloCode's plugin loads each repository's `AGENTS.md` (and, for trusted projects,
+    /// their agents, commands and skills). `.native`: opencode loads every repository's config and plugins itself.
+    public var repositoryConfig: RepositoryConfigPolicy = .bellocode
+    /// Write the running server's address and password for `bellocode-opencode` (`CLIConnectionFile`, 0600).
+    public var publishesCLIConnection = true
 
     /// Limit for the ready line plus a verified `GET /api/info`.
     public var startTimeout: Duration
@@ -72,14 +78,13 @@ public struct ServerConfiguration: Sendable {
         self.healthyAfter = healthyAfter
     }
 
-    /// Isolated directories under `dataRoot`.
-    public var configDirectory: URL { dataRoot.appending(path: "config", directoryHint: .isDirectory) }
-    public var dataDirectory: URL { dataRoot.appending(path: "data", directoryHint: .isDirectory) }
-    public var stateDirectory: URL { dataRoot.appending(path: "state", directoryHint: .isDirectory) }
-    public var cacheDirectory: URL { dataRoot.appending(path: "cache", directoryHint: .isDirectory) }
-    public var resolvedHomeDirectory: URL {
-        homeDirectory ?? dataRoot.appending(path: "home", directoryHint: .isDirectory)
-    }
+    /// The isolated directories under `dataRoot` (shared with the CLI wrapper and Settings ▸ opencode).
+    public var directories: OpenCodeDirectories { OpenCodeDirectories(dataRoot: dataRoot, home: homeDirectory) }
+    public var configDirectory: URL { directories.config }
+    public var dataDirectory: URL { directories.data }
+    public var stateDirectory: URL { directories.state }
+    public var cacheDirectory: URL { directories.cache }
+    public var resolvedHomeDirectory: URL { directories.home }
 
     /// The command line: `opencode serve --stdio --port 0`.
     public var arguments: [String] { ["serve", "--stdio", "--port", "0"] }
@@ -87,27 +92,21 @@ public struct ServerConfiguration: Sendable {
     /// The child's complete environment for one launch.
     public func environment(credentials: ServerCredentials) -> [String: String] {
         let helpers = (helpersDirectory ?? executableURL.deletingLastPathComponent()).path
-        var environment = [
-            "HOME": resolvedHomeDirectory.path,
-            "XDG_CONFIG_HOME": configDirectory.path,
-            "XDG_DATA_HOME": dataDirectory.path,
-            "XDG_STATE_HOME": stateDirectory.path,
-            "XDG_CACHE_HOME": cacheDirectory.path,
+        var environment = directories.isolationEnvironment()
+        environment.merge([
             "TMPDIR": FileManager.default.temporaryDirectory.path,
             "PATH": basePath.isEmpty ? helpers : "\(helpers):\(basePath)",
             "OPENCODE_PASSWORD": credentials.password,
             "OPENCODE_CLIENT": clientName,
-            "OPENCODE_DISABLE_AUTOUPDATE": "1",
-            "OPENCODE_DISABLE_MODELS_FETCH": "1",
-            "OPENCODE_DISABLE_CLAUDE_CODE": "1",
-        ]
+        ]) { _, new in new }
         // Local MCP servers in the isolated configuration files are configured for all projects: refused (MCPRouting).
         let mcpOverrides = containerExecution.map {
             MCPRouting.globalOverrides(configDirectory: configDirectory, helper: $0.helperURL.path).servers
         } ?? [:]
+        let projectConfig = OrchestrationContract.ProjectConfigOptions(policy: repositoryConfig, trustFile: directories.trustFile)
         if let pluginDirectory {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
-                pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides)
+                pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides, projectConfig: projectConfig)
         } else if let containerExecution {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
                 pluginDirectory: nil, container: containerExecution, mcpServers: mcpOverrides)
@@ -119,6 +118,12 @@ public struct ServerConfiguration: Sendable {
         if let launchEnvironment { environment.merge(launchEnvironment()) { _, launch in launch } }
         environment.merge(extraEnvironment) { _, extra in extra }
         environment["OPENCODE_PASSWORD"] = credentials.password
+        // Repository opencode.json and .opencode/ plugins would run inside opencode on the host: off unless the person
+        // chose `.native` (docs/features/opencode-config.md). The app's decision, whatever another variable says.
+        if repositoryConfig == .bellocode { environment["OPENCODE_DISABLE_PROJECT_CONFIG"] = "1" } else {
+            environment["OPENCODE_DISABLE_PROJECT_CONFIG"] = nil
+            environment["OPENCODE_CONFIG_PROJECT_DISABLE"] = nil
+        }
         for key in environment.keys where Self.forbiddenEnvironmentPrefixes.contains(where: { key.hasPrefix($0) }) {
             environment[key] = nil
         }

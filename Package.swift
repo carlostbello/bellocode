@@ -103,6 +103,8 @@ let targets: [Target] =
         // M6-A: the shell opencode is configured with; forwards every command into the workspace container. Bundled in
         // Contents/Helpers.
         .executableTarget(name: "bellocode-exec", dependencies: ["ContainerKit"], swiftSettings: swiftSettings),
+        // The opencode CLI on BelloCode's isolated data (docs/features/opencode-config.md). Bundled in Contents/Helpers.
+        .executableTarget(name: "bellocode-opencode", dependencies: ["OpenCodeKit"], swiftSettings: swiftSettings),
         // M6-A harness: runtime status, production-path measurements, cleanup of test resources.
         .executableTarget(name: "ContainerDemo", dependencies: ["ContainerKit"], swiftSettings: swiftSettings),
         // M2-A terminal harness: drawer snapshots and throughput/latency scenarios (docs/features/terminal.md).
