@@ -195,16 +195,20 @@ struct AutoHookRealBinaryTests {
             #expect(before != nil && evaluate != nil && after != nil, "\(tool): before, evaluate and after all ran")
             if let before, let evaluate, let after { #expect(before < evaluate && evaluate < after) }
         }
-        // The shell job's create hook runs after the shell tool's permission (BelloCode's container helper is set there).
+        // The shell job's create hook (where BelloCode's container helper is substituted) runs inside the shell tool, before
+        // its permission: since 2.3.2 `Shell.create` triggers `create.before` and then calls the tool's `prepare`
+        // callback, which asserts the `shell` permission; a refusal throws there, before anything is spawned.
         let all = try await sandbox.trace()
         print("AUTO contract full trace: \(all.map(label))")
+        let start = all.firstIndex { $0["hook"]?.stringValue == "execute.before" && $0["tool"]?.stringValue == "shell" }
         let evaluate = all.firstIndex { $0["action"]?.stringValue == "shell" && $0["sessionID"]?.stringValue == thread.id.rawValue }
         let after = all.firstIndex { $0["hook"]?.stringValue == "execute.after" && $0["tool"]?.stringValue == "shell" }
-        if let evaluate, let after {
-            #expect(all[evaluate..<after].contains { $0["hook"]?.stringValue == "shell.create.before" },
-                    "the shell job is created (helper substituted) between the permission and the result")
+        if let start, let evaluate, let after, start < evaluate {
+            #expect(all[start..<evaluate].contains { $0["hook"]?.stringValue == "shell.create.before" },
+                    "the shell job's create hook runs after the tool starts and before its permission is evaluated")
+            #expect(evaluate < after)
         } else {
-            Issue.record("no shell evaluation/result in the trace")
+            Issue.record("no ordered shell start/evaluation/result in the trace")
         }
         // The read's evaluations reach the app through the tool result's metadata.
         let messages = try await sandbox.client().messages(sessionID: thread.id.rawValue, MessageListQuery(limit: 50)).data
@@ -217,6 +221,25 @@ struct AutoHookRealBinaryTests {
             }
         }
         #expect(stamped, "execute.after's result metadata is kept")
+    }
+
+    /// No prompts: a child session (as `delegate_task` makes it: parent only, no rules of its own) inherits the parent's
+    /// Auto rules on the server, and the plugin's session lookup reads it as Auto (R11: never "unknown" for a real child).
+    @Test func childSessionsAreEvaluatedInAutoWithoutAModel() async throws {
+        let sandbox = try await Sandbox.start("child")
+        defer { Task { await sandbox.stop() } }
+        let client = try await sandbox.client()
+        _ = try await sandbox.trace()
+        let parent = try await session(sandbox, "parent", rules: Self.autoRules)
+        let child = try await client.createSession(SessionCreateRequest(directory: sandbox.project.path, parentID: parent, title: "child")).id
+        #expect(PermissionModeRules.mode(from: try await client.session(child).permissions ?? []) == .auto, "the server copied Auto's rules")
+        let read = try await client.evaluatePermission(
+            sessionID: child, PermissionCreateRequest(action: "read", resources: [sandbox.project.appending(path: "README.md").path]))
+        #expect(read.effect == .ask)
+        try? await client.replyPermission(sessionID: child, requestID: read.id, decision: .reject)
+        let trace = try await sandbox.trace(child)
+        print("AUTO contract child trace: \(trace.map { "\(label($0)):\($0["mode"]?.stringValue ?? "-")" })")
+        #expect(trace.contains { $0["hook"]?.stringValue == "evaluate" && $0["mode"]?.stringValue == "auto" }, "the child is read as Auto")
     }
 
     /// One prompt in Auto (the test replies as the app would): MCP (client-hosted app tool) and child-session coverage.
@@ -232,7 +255,8 @@ struct AutoHookRealBinaryTests {
             sessionID: parent,
             PromptRequest(
                 text: "Call the bellocode_app_queue tool once with action list. Then call delegate_task once with description "
-                    + "'probe' and task 'Reply with exactly: CHILD-OK'. Then end your turn."))
+                    + "'probe' and task 'Read the file README.md with your read tool, then reply with exactly: CHILD-OK'. "
+                    + "Then end your turn."))
         var seen: [(session: String, action: String)] = []
         let clock = ContinuousClock()
         let deadline = clock.now + .seconds(180)
@@ -256,6 +280,13 @@ struct AutoHookRealBinaryTests {
             try await Task.sleep(for: .milliseconds(150))
         }
         print("AUTO contract coverage: \(seen.map { "\($0.session == parent ? "parent" : "child"):\($0.action)" })")
+        // A provider failure (such as the free model's usage limit) is reported as what it is, not as missing coverage.
+        for id in [parent] + (childID.map { [$0] } ?? []) {
+            let messages = (try? await client.messages(sessionID: id, MessageListQuery(limit: 20)).data) ?? []
+            for case .assistant(let assistant) in messages {
+                if let error = assistant.error { Issue.record("\(id == parent ? "parent" : "child") turn failed: \(error.type) \(error.message)") }
+            }
+        }
         #expect(seen.contains { $0.session == parent && $0.action.hasPrefix("bellocode_app") }, "a client MCP tool asserts its own action")
         #expect(seen.contains { $0.session == parent && $0.action == "subagent" } || childID != nil)
         let child = try #require(childID)

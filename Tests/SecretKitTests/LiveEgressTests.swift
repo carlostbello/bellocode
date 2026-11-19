@@ -83,12 +83,18 @@ struct LiveEgressTests {
             }
             spec.egress = EgressAttachment(network: EgressGateway.networkName(scopeKey), caFingerprint: proxyCA.fingerprint)
             spec.corporateNetwork = CorporateNetwork(certificateDirectory: certs, certificateFingerprint: proxyCA.fingerprint)
+            try await SecretsTestImage.ensure(Self.image, client: client)
             let manager = WorkspaceManager(client: client)
             let container = try await manager.ensureRunning(spec, pull: false)
             let workspaceSpec = spec
             cleanup.insert({
                 if let storage = try? await manager.storage(projectKey: workspaceSpec.projectKey) { try? await manager.purge(storage) }
             }, at: 0)
+            // Every probe's client must exist, or an "unreachable" check would pass on "command not found".
+            let tools = try await ExecSession.run(
+                client: client, container: container, argv: ["/bin/bash", "-c", SecretsTestImage.toolCheck], workingDir: root,
+                environment: [:], user: spec.user, timeout: .seconds(30))
+            try #require(tools.exitCode == 0, "\(Self.image) lacks a probe tool: \(String(decoding: tools.stdout + tools.stderr, as: UTF8.self))")
 
             var attempts: [Attempt] = []
             func run(_ area: String, _ name: String, expect: String, _ script: String, behaved: (String, Int) -> Bool) async throws {

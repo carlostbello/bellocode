@@ -139,7 +139,9 @@ Dockerfile on public base images. The policy covers what BelloCode pulls (base i
 images): an allowlist (empty: any) of registries or repository prefixes (`docker.io/library/`; Docker normalisation,
 boundary matching), optional digest pins, pull policy (`missing`, `always`, `never`). A dev container built here is checked by its
 Dockerfile's base images (`FROM`, `COPY --from`, `RUN --mount=from=`, before each build), never by the local tag it gets. A refused image is never pulled or
-run ("Image not allowed", with the reason in the banner, the helper and Services).
+run ("Image not allowed", with the reason in the banner, the helper and Services). Builds an agent starts through the
+filtered Docker endpoint are checked the same way: the Dockerfile is read from the context as it streams, plain tar or
+gzip (Compose's classic builder and `docker build --compress` send gzip; bzip2/xz contexts are refused).
 **For administrators** (managed preferences win over Settings, shown read-only): keys forced by a configuration profile
 in domain `com.bellocode.app`, or a root-owned, non-writable `/Library/Preferences/app.bellocode.policy.plist`:
 `ContainerImageAllowlist` (array), `ContainerImageRequireDigest` (bool), `ContainerImagePullPolicy` (string),

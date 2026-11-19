@@ -105,9 +105,13 @@ struct AgentRealBinaryTests {
             let expected: [String: [String: PermissionEffect]] = [
                 "ask/build": ["read": .allow, "env": .ask, "edit": .ask, "shell": .ask, "outside": .ask],
                 "autoEdit/build": ["read": .allow, "env": .ask, "edit": .allow, "shell": .ask, "outside": .ask],
+                // Auto: every request asks so BelloCode's policy answers it once (docs/features/auto-mode.md).
+                "auto/build": ["read": .ask, "env": .ask, "edit": .ask, "shell": .ask, "outside": .ask],
                 "fullAccess/build": ["read": .allow, "env": .allow, "edit": .allow, "shell": .allow, "outside": .allow],
                 "ask/plan": ["read": .allow, "env": .ask, "edit": .deny, "shell": .ask, "outside": .ask],
                 "autoEdit/plan": ["read": .allow, "env": .ask, "edit": .deny, "shell": .ask, "outside": .ask],
+                // Plan's own edit deny is re-applied after Auto's rules, so plan stays read-only.
+                "auto/plan": ["read": .ask, "env": .ask, "edit": .deny, "shell": .ask, "outside": .ask],
                 "fullAccess/plan": ["read": .allow, "env": .allow, "edit": .deny, "shell": .allow, "outside": .allow],
             ]
             for agent in ["build", "plan"] {
