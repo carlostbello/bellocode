@@ -83,6 +83,43 @@ struct HostDockerCommandTests {
         #expect(refusal("docker plugin install x") == .subcommand("plugin"))
     }
 
+    /// R01: a harmless leading global option used to end validation, so everything after it reached the host CLI.
+    /// Every line here must be refused, through both the `-c` line and the relayed `--stdio` argv path.
+    @Test func leadingGlobalOptionsDoNotEndValidation() throws {
+        let hostile = [
+            "docker -D context use evil", "docker --debug cp web:/etc/passwd ./x", "docker -D -H tcp://1.2.3.4 ps",
+            "docker --debug --host=tcp://1.2.3.4 ps", "docker -D save -o img.tar alpine", "docker -D login registry",
+            "docker -D build -o type=local,dest=/Users/me .", "docker --debug run --cidfile /tmp/c alpine",
+            "docker -D --context x ps", "docker -D -D plugin install x", "docker --version cp web:/x .",
+            "docker -v context use x", "docker --help login", "docker -h save alpine", "docker --log-level debug ps",
+            "docker -l debug ps", "docker --debug=true cp a b", "docker --tlsverify ps", "docker -c ctx ps",
+            // Group options used to hide the nested subcommand.
+            "docker compose -p demo cp web:/x .", "docker compose -f compose.yaml publish x", "docker compose --dry-run watch",
+            "docker compose --project-directory . cp web:/x .", "docker compose --env-file .env cp web:/x .",
+            "docker compose --unknown cp web:/x .", "docker image --debug save alpine", "docker container -D cp web:/x .",
+            "docker buildx --builder remote build .", "docker buildx dial-stdio", "docker buildx bake",
+            "docker buildx build --builder remote .", "docker compose --context x up",
+            // Attached or clustered short options.
+            "docker build -o/tmp/out .", "docker build -qo /tmp/out .", "docker buildx build -oout .", "docker build --output=out .",
+            "docker compose -Hunix:///x up",
+        ]
+        for line in hostile {
+            if refusal(line) == nil { Issue.record("allowed: \(line)") }
+            let argv = try HostDockerCommand.words(line)
+            do {
+                try HostDockerCommand.check(arguments: Array(argv.dropFirst()))
+                Issue.record("stdio path allowed: \(line)")
+            } catch {}
+        }
+        // Still allowed.
+        #expect(allowed("docker -D ps") == [docker, "-D", "ps"])
+        #expect(allowed("docker --version") == [docker, "--version"])
+        #expect(allowed("docker compose -f compose.yaml -p demo up -d") != nil)
+        #expect(allowed("docker compose --profile dev run --rm app npm test") != nil)
+        #expect(allowed("docker buildx build -t app .") != nil)
+        #expect(allowed("docker image ls") != nil)
+    }
+
     @Test func refusalsSayWhatToDoInstead() {
         let message = refusal("make test")?.description ?? ""
         #expect(message.contains("docker compose run"))
