@@ -50,6 +50,7 @@ public enum ContainerError: Error, Sendable, Equatable, CustomStringConvertible 
     /// Maps transport errors to `.unreachable`/`.cancelled`; passes `ContainerError` through.
     public static func from(_ error: any Error) -> ContainerError {
         if let error = error as? ContainerError { return error }
+        if let error = error as? ForeignResourceError { return .conflict(error.description) }
         if error is CancellationError { return .cancelled }
         if let error = error as? SocketError { return .unreachable(error.description) }
         if let error = error as? HTTPParseError { return .unreachable("connection closed early (\(error))") }

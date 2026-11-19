@@ -81,36 +81,54 @@ public struct DockerBrowserRuntime: BrowserRuntime {
         return try await network(image)
     }
 
+    /// The labels that prove the container and the profile volume are BelloCode's (R07: a same-name container or
+    /// volume of a manual setup or another tool is never stopped, removed or adopted; the start fails with
+    /// `ForeignResourceError`, which names it).
+    static let containerOwnership = [BrowserImageContext.labelBrowser: "1", BrowserContainerSpec.labelRole: "browser"]
+    static let volumeOwnership = [BrowserImageContext.labelBrowser: "1"]
+
+    func ownedContainer() async throws -> ContainerInspect? {
+        try await client.ownedContainer(containerName, required: Self.containerOwnership)
+    }
+
     public func inspect() async throws -> BrowserContainerState? {
-        guard let inspect = try await client.inspectContainer(containerName) else { return nil }
+        guard let inspect = try await ownedContainer() else { return nil }
         return BrowserContainerState(running: inspect.state.running, configHash: inspect.config.labels?["app.bellocode.config"], exitCode: inspect.state.exitCode)
     }
 
     public func createAndStart(_ spec: BrowserContainerSpec) async throws {
-        if let existing = try await client.inspectContainer(containerName) {
+        // Both checks before anything changes: a foreign volume must not cost the person their own container either.
+        let existing = try await ownedContainer()
+        let profile = try await client.ownedVolume(volume, required: Self.volumeOwnership)
+        if let existing {
             if existing.state.running { try? await client.stopContainer(existing.id, timeout: 30) }
             try await client.removeContainer(existing.id, force: true)
         }
-        if try await client.listVolumes(labels: []).contains(volume) == false {
-            try await client.createVolume(name: volume, labels: [BrowserImageContext.labelBrowser: "1", WorkspaceSpec.labelWorkspace: "1"].merging(extraLabels) { a, _ in a })
+        if profile == nil {
+            try await client.ensureOwnedVolume(
+                name: volume, labels: [BrowserImageContext.labelBrowser: "1", WorkspaceSpec.labelWorkspace: "1"].merging(extraLabels) { a, _ in a },
+                required: Self.volumeOwnership)
         }
         let id = try await client.createContainer(name: containerName, spec.create())
         try await client.startContainer(id)
     }
 
-    public func start() async throws { try await client.startContainer(containerName) }
+    public func start() async throws {
+        guard let existing = try await ownedContainer() else { throw ContainerError.notFound(containerName) }
+        try await client.startContainer(existing.id)
+    }
 
     public func stop(timeout: Int) async throws {
-        guard let existing = try await client.inspectContainer(containerName), existing.state.running else { return }
+        guard let existing = try await ownedContainer(), existing.state.running else { return }
         try await client.stopContainer(existing.id, timeout: timeout)
     }
 
     public func remove() async throws {
-        if let existing = try await client.inspectContainer(containerName) { try await client.removeContainer(existing.id, force: true) }
+        if let existing = try await ownedContainer() { try await client.removeContainer(existing.id, force: true) }
     }
 
     public func removeProfile() async throws {
-        if try await client.listVolumes(labels: []).contains(volume) { try await client.removeVolume(volume, force: false) }
+        if try await client.ownedVolume(volume, required: Self.volumeOwnership) != nil { try await client.removeVolume(volume, force: false) }
     }
 
     public func status() async throws -> BrowserRuntimeStatus? {
@@ -121,7 +139,9 @@ public struct DockerBrowserRuntime: BrowserRuntime {
 
     /// The per-launch VNC password goes over the exec's stdin (never argv, environment or a log).
     public func setViewerPassword(_ password: String) async throws {
-        let session = try await ExecSession.start(client: client, container: containerName, argv: ["/usr/local/bin/bellocode-browser-ctl", "vnc-password"],
+        // Only into the container proven BelloCode's, addressed by its ID.
+        guard let owned = try await ownedContainer() else { throw ContainerError.notFound(containerName) }
+        let session = try await ExecSession.start(client: client, container: owned.id, argv: ["/usr/local/bin/bellocode-browser-ctl", "vnc-password"],
                                                   workingDir: nil, environment: [:], user: nil, tty: false)
         defer { session.close() }
         try await session.write(Data((password + "\n").utf8))

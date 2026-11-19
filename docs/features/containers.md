@@ -190,6 +190,10 @@ Settings ▸ Containers ▸ Caches lists sizes and empties one after confirming 
 BelloCode volumes of projects (and stacks) BelloCode no longer has (never a known project's home or data, never a shared
 cache), unattached BelloCode networks, unused images BelloCode pulled. One confirmation; items that changed since are kept
 and named. Anything without BelloCode's labels is never listed.
+**Ownership:** a container, volume or network with one of BelloCode's names but without the labels of its role (shared
+browser and profile, egress gateway and network, workspace home and caches, service volumes and networks, image MCP
+containers, compose-stack projects) is never stopped, removed, recreated or adopted: the operation fails with "…was not
+created by BelloCode…", naming it (`ForeignResourceError`, `ResourceOwnershipTests`, `BrowserOwnershipTests`).
 
 ## Workspace, failures, ports, file watching
 

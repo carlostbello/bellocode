@@ -1372,6 +1372,7 @@ public final class EnvironmentService {
     nonisolated static func describe(_ error: any Error) -> String {
         if let error = error as? WorkspaceError { return error.description }
         if let error = error as? EnvironmentBlockedError { return error.message }
+        if let error = error as? ForeignResourceError { return error.description }
         return ContainerError.from(error).description
     }
 }

@@ -132,6 +132,9 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
         return ComposeCLI.Result(status: 0, stdout: Data(), stderr: Data())
     }
     var composeCommands: [String] { composeCalls.withLock { $0.map { $0.command.first ?? "" } } }
+    /// Containers the fake daemon lists for a compose project (R07).
+    let projectContainers = Mutex<[ContainerSummary]>([])
+    func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] { projectContainers.withLock { $0 } }
     func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
         try PortForwarder(client: EngineClient(socketPath: "/nonexistent-bellocode-test.sock"), container: container, containerPort: port,
                           hostPort: hostPort, prepare: prepare)

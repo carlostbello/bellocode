@@ -107,11 +107,15 @@ public struct EgressGateway: Sendable {
 
     public static func networkName(_ scopeKey: String) -> String { "bellocode-egress-\(scopeKey)" }
 
+    /// The labels proving a gateway container or network is BelloCode's for this scope (R07: a same-name object of
+    /// someone else is never removed, recreated or adopted; `ForeignResourceError` names it instead).
+    public static func ownership(_ scopeKey: String) -> [String: String] { [labelEgress: "1", labelScope: scopeKey] }
+
     /// The internal network (created if missing): no route out, no IPv6, no masquerading. Returns its name.
     @discardableResult
     public func ensureNetwork(scopeKey: String, extraLabels: [String: String] = [:]) async throws -> String {
         let name = Self.networkName(scopeKey)
-        if let existing = try await client.inspectNetwork(name) {
+        if let existing = try await client.ownedNetwork(name, required: Self.ownership(scopeKey)) {
             guard existing.isInternal else {
                 throw EgressGatewayError("The network \(name) exists but is not internal; remove it (Prune BelloCode Resources) so BelloCode can recreate it.")
             }
@@ -121,7 +125,10 @@ public struct EgressGateway: Sendable {
             _ = try await client.createInternalNetwork(
                 name: name, labels: [Self.labelEgress: "1", Self.labelScope: scopeKey, WorkspaceSpec.labelWorkspace: "1"].merging(extraLabels) { a, _ in a })
         } catch ContainerError.conflict {
-            // Created concurrently (the helper and the app): fine.
+            // Created concurrently (the helper and the app): fine if it is ours.
+            guard try await client.ownedNetwork(name, required: Self.ownership(scopeKey)) != nil else {
+                throw ForeignResourceError(kind: .network, name: name)
+            }
         }
         return name
     }
@@ -131,7 +138,7 @@ public struct EgressGateway: Sendable {
     /// bridge (its only way out, to the Mac).
     public func ensure(_ spec: EgressGatewaySpec) async throws {
         try await ensureNetwork(scopeKey: spec.scopeKey, extraLabels: spec.extraLabels)
-        if let existing = try await client.inspectContainer(spec.containerName) {
+        if let existing = try await client.ownedContainer(spec.containerName, required: Self.ownership(spec.scopeKey)) {
             if existing.config.labels?[Self.labelConfig] == spec.configHash, existing.state.running { return }
             try? await client.removeContainer(existing.id, force: true)
         }
@@ -206,10 +213,13 @@ public struct EgressGateway: Sendable {
 
     /// Removes the gateway (and the network when `network` is true and nothing else uses it).
     public func remove(scopeKey: String, network: Bool) async {
-        if let existing = try? await client.inspectContainer("bellocode-egress-gw-\(scopeKey)") {
+        // Only what carries this scope's labels; a foreign same-name container or network stays.
+        if let existing = try? await client.ownedContainer(Self.containerName(scopeKey), required: Self.ownership(scopeKey)) {
             try? await client.removeContainer(existing.id, force: true)
         }
-        if network { try? await client.removeNetwork(Self.networkName(scopeKey)) }
+        if network, let owned = try? await client.ownedNetwork(Self.networkName(scopeKey), required: Self.ownership(scopeKey)) {
+            try? await client.removeNetwork(owned.id)
+        }
     }
 
     // MARK: Relay programs
