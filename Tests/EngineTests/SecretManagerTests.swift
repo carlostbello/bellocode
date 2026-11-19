@@ -1,6 +1,8 @@
 import BelloCore
+import ContainerKit
 import Foundation
 import GRDB
+import Security
 import SecretKit
 import Testing
 
@@ -32,6 +34,26 @@ struct SecretManagerTests {
     }
 
     static let binding = SecretBinding(host: "api.example.com", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")])
+
+    /// R05: quit and reopen. The second launch restores the CA from the Keychain key and the certificate on disk; a leaf
+    /// it issues must pass Security framework chain validation against the root the containers trusted on first run.
+    @Test func authoritySurvivesARelaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "bc-egress-ca-\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = SecretManagerConfiguration(directory: directory, authorityVault: InMemorySecretVault())
+        let first = try await fixture().manager.loadAuthority(configuration)
+        let relaunched = try await fixture().manager.loadAuthority(configuration)
+        #expect(relaunched.fingerprint == first.fingerprint, "restored, not recreated")
+        var certificate: SecCertificate?
+        SecIdentityCopyCertificate(try relaunched.identity(for: "registry.npmjs.org"), &certificate)
+        var trust: SecTrust?
+        SecTrustCreateWithCertificates([try #require(certificate)] as CFArray, SecPolicyCreateSSL(true, "registry.npmjs.org" as CFString), &trust)
+        let evaluation = try #require(trust)
+        SecTrustSetAnchorCertificates(evaluation, [SecCertificateCreateWithData(nil, first.certificateDER as CFData)!] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(evaluation, true)
+        var error: CFError?
+        #expect(SecTrustEvaluateWithError(evaluation, &error), "\(String(describing: error))")
+    }
 
     @Test func migrationCreatesTablesAndRoundTrips() async throws {
         let f = try await fixture()
@@ -109,6 +131,99 @@ struct SecretManagerTests {
         #expect(adopted.mode == .visible && !adopted.visibleConfirmed && adopted.name == "NPM_TOKEN")
         // Not handed out by "Use Saved Value" as a visible value: the command path applies.
         #expect(try await f.manager.useSaved(label: "npm token", sessionID: SessionID("ses_1"), projectDirectory: "/p") == nil)
+    }
+
+    /// R09: a metadata row that cannot be decoded must not let the surviving legacy label re-adopt the secret as a
+    /// commands-only secret (losing revocation, scope and bindings); the row is kept and the problem shown.
+    @Test func unreadableMetadataQuarantinesInsteadOfReadopting() async throws {
+        let f = try await fixture()
+        let secret = try await f.manager.create(label: "Deploy key", value: Self.value, mode: .placeholder, scope: .project("/p"), bindings: [Self.binding])
+        try await f.manager.revoke(account: secret.account)
+        try await f.store.writer.write { db in
+            try db.execute(sql: "UPDATE app_managed_secret SET json = ? WHERE account = ?", arguments: [Data("{not json".utf8), secret.account])
+        }
+        // Relaunch.
+        let relaunched = SecretManager(store: f.store, vault: f.vault, legacy: f.legacy, clock: SystemWallClock(), configuration: nil)
+        await relaunched.reload()
+        #expect(relaunched.secret(secret.account) == nil, "never reclassified (as a legacy commands-only secret or otherwise)")
+        #expect(relaunched.quarantinedAccounts == [secret.account])
+        #expect(relaunched.metadataProblem?.contains("Deploy key") == true, "\(relaunched.metadataProblem ?? "no problem shown")")
+        #expect(relaunched.commandRevision(account: secret.account, projectDirectory: "/p") == nil, "not eligible for approved commands")
+        #expect(try await relaunched.useSaved(label: "Deploy key", sessionID: SessionID("ses_1"), projectDirectory: "/p") == nil)
+        let raw = try await f.store.writer.read { db in try Data.fetchOne(db, sql: "SELECT json FROM app_managed_secret WHERE account = ?", arguments: [secret.account]) }
+        #expect(raw == Data("{not json".utf8), "the original row is kept, not replaced")
+        await #expect(throws: (any Error).self) { try await relaunched.create(label: "Deploy key", value: Self.value, mode: .visible, confirmVisible: true) }
+        // Delete clears it.
+        await relaunched.delete(account: secret.account)
+        #expect(relaunched.quarantinedAccounts.isEmpty && relaunched.metadataProblem == nil)
+    }
+
+    /// R09: a failed metadata query is not "no metadata": nothing is adopted and no secret is usable.
+    @Test func failedMetadataQueryFailsClosed() async throws {
+        let f = try await fixture()
+        let secret = try await f.manager.create(label: "Ops token", value: Self.value, mode: .brokered, bindings: [Self.binding])
+        try await f.manager.revoke(account: secret.account)
+        try await f.store.writer.write { db in try db.execute(sql: "ALTER TABLE app_managed_secret RENAME TO app_managed_secret_hidden") }
+        let relaunched = SecretManager(store: f.store, vault: f.vault, legacy: f.legacy, clock: SystemWallClock(), configuration: nil)
+        await relaunched.reload()
+        #expect(relaunched.secrets.isEmpty, "the legacy label was not adopted as a commands-only secret")
+        #expect(relaunched.commandRevision(account: secret.account, projectDirectory: nil) == nil)
+        #expect(relaunched.metadataProblem != nil, "the failure is shown")
+        try await f.store.writer.write { db in try db.execute(sql: "ALTER TABLE app_managed_secret_hidden RENAME TO app_managed_secret") }
+        await relaunched.reload()
+        #expect(relaunched.secret(secret.account)?.revoked == true && relaunched.secret(secret.account)?.mode == .brokered, "policy intact")
+        #expect(relaunched.metadataProblem == nil)
+    }
+
+    /// R13: narrowing a secret's scope revokes grants of threads in projects it no longer admits (placeholder and
+    /// visible), and the visible-environment builder checks the current scope at every delivery.
+    @Test func narrowingScopeRevokesOutOfScopeGrants() async throws {
+        let f = try await fixture()
+        let visible = try await f.manager.create(label: "Visible key", value: Self.value, mode: .visible, confirmVisible: true)
+        let hidden = try await f.manager.create(label: "Hidden key", value: SecretValue("sk_test_hidden_0123456789"), mode: .placeholder, bindings: [Self.binding])
+        for secret in [visible, hidden] {
+            try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_a"), projectDirectory: "/a")
+            try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_b"), projectDirectory: "/b")
+        }
+        #expect(await f.manager.secretVariables(for: "ses_b")["VISIBLE_KEY"] != nil)
+        for secret in [visible, hidden] {
+            var narrowed = try #require(f.manager.secret(secret.account))
+            narrowed.scope = .project("/a")
+            try await f.manager.update(narrowed)
+        }
+        let b = await f.manager.secretVariables(for: "ses_b")
+        #expect(b["VISIBLE_KEY"] == nil && b["HIDDEN_KEY"] == nil, "the excluded project keeps nothing")
+        #expect(f.manager.placeholder(account: hidden.account, sessionID: SessionID("ses_b")) == nil)
+        let a = await f.manager.secretVariables(for: "ses_a")
+        #expect(a["VISIBLE_KEY"] != nil && a["HIDDEN_KEY"] != nil, "the project still in scope keeps its grants")
+        #expect(try await f.store.placeholderGrants().allSatisfy { $0.sessionID == "ses_a" }, "dropped durably")
+        // A rotated visible value never reaches the excluded thread.
+        try await f.manager.rotate(account: visible.account, value: SecretValue("sk_test_rotated_after_narrowing"))
+        #expect(await f.manager.secretVariables(for: "ses_b").isEmpty)
+    }
+
+    @Test func environmentBuilderChecksTheCurrentScope() async throws {
+        let f = try await fixture()
+        f.manager.codeRoots = { ["/repos"] }
+        let secret = try await f.manager.create(label: "Roots key", value: Self.value, mode: .visible, scope: .codeRoots, confirmVisible: true)
+        try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_r"), projectDirectory: "/repos/app")
+        #expect(await f.manager.secretVariables(for: "ses_r")["ROOTS_KEY"] != nil)
+        // The code root is removed: the grant no longer admits delivery.
+        f.manager.codeRoots = { [] }
+        #expect(await f.manager.secretVariables(for: "ses_r")["ROOTS_KEY"] == nil)
+    }
+
+    /// R08: whatever image a workspace runs (in a project container or the shared workspace), its gateway is
+    /// BelloCode's own image, so the scope token and the outbound bridge never reach project-controlled code.
+    @Test func workspaceGatewayUsesBelloCodesImage() {
+        let project = WorkspaceSpec(projectRoot: "/repos/app", image: "registry.example/app-dev:latest")
+        let shared = WorkspaceSpec.shared(roots: ["/repos"], image: "ghcr.io/someone/workspace:1")
+        for var spec in [project, shared] {
+            spec.egress = EgressAttachment(network: EgressGateway.networkName(spec.projectKey), caFingerprint: "f")
+            let gateway = SecretManager.gatewaySpec(for: spec, proxyPort: 40_000, token: "t")
+            #expect(gateway.image == nil && gateway.resolvedImage == EgressGatewayImage.tag, "\(spec.image)")
+            #expect(gateway.scopeKey == spec.egress?.scopeKey)
+        }
     }
 
     @Test func agentListingNeverShowsValues() async throws {

@@ -158,6 +158,30 @@ struct AuthServiceTests {
         await harness.stop()
     }
 
+    /// R35 (deep-review-1 S8): the routine refresh (launch, catalog changes) never asks for `GET /api/credential`, whose
+    /// body carries every secret value; account rows come from the integration list. Only an explicit account action
+    /// reads which account is in use.
+    @Test func routineRefreshNeverRequestsSecretBearingCredentials() async throws {
+        let harness = try await MockHarness.start()
+        let service = makeService(harness)
+        await service.connectKey(integrationID: "anthropic", key: "k1")
+        await service.connectKey(integrationID: "anthropic", key: "k2", label: "Work")
+        let before = await harness.server.recordedRequests().filter { $0 == "GET /api/credential" }.count
+        // A relaunch: a fresh service, the routine refresh only.
+        let relaunched = makeService(harness)
+        await relaunched.refresh()
+        let after = await harness.server.recordedRequests().filter { $0 == "GET /api/credential" }.count
+        #expect(after == before, "the routine refresh requested the secret-bearing credential list")
+        #expect(Set(relaunched.credentials(for: "anthropic").map(\.label)) == ["Anthropic", "Work"], "account rows from the integration list")
+        #expect(!relaunched.accountDetailsLoaded)
+        // Opening Accounts (explicit): details, including which account is in use.
+        await relaunched.refreshAccounts()
+        #expect(await harness.server.recordedRequests().filter { $0 == "GET /api/credential" }.count == after + 1)
+        #expect(relaunched.accountDetailsLoaded)
+        #expect(relaunched.credentials(for: "anthropic").contains { $0.isActive })
+        await harness.stop()
+    }
+
     @Test func importOutputParsing() {
         #expect(CredentialImporter.parse("Imported 2 credentials\n") == CredentialImportResult(imported: 2, skipped: 0))
         #expect(CredentialImporter.parse("Imported 0 credentials, skipped 2 already present") == CredentialImportResult(imported: 0, skipped: 2))

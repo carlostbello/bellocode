@@ -76,7 +76,7 @@ struct LiveEgressTests {
                 secrets: [secret.account: secret], values: [secret.account: SecretValue(Self.canary)]))
 
             // Gateway and workspace (the production spec path).
-            try await gateway.ensure(EgressGatewaySpec(scopeKey: scopeKey, image: Self.image, proxyPort: Int(proxyPort), token: token, extraLabels: Self.labels))
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: scopeKey, proxyPort: Int(proxyPort), token: token, extraLabels: Self.labels))
             cleanup.append { await gateway.remove(scopeKey: scopeKey, network: true) }
             for name in [CorporateNetwork.bundleName, CorporateNetwork.enterpriseName] {
                 try Data(proxyCA.pem.utf8).write(to: URL(fileURLWithPath: certs + "/" + name))
@@ -336,7 +336,7 @@ struct LiveEgressRoutingTests {
             web.networkingConfig = NetworkingConfig(endpointsConfig: [network: .init(aliases: ["web"])])
             let webID = try await client.createContainer(name: "bellocode-test-web-\(key)", web)
             try await client.startContainer(webID)
-            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, image: Self.image, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
             try await gateway.attach(scopeKey: key, network: network)
             let relay = try PortForwarder(client: client, container: EgressGateway.containerName(key), containerPort: 8080, containerHost: "web")
             forwarder.withLock { $0 = relay }
@@ -440,7 +440,7 @@ struct LiveEgressAgentContainerTests {
         let manager = WorkspaceManager(client: client)
         var first = "", second = "", refused = ""
         do {
-            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, image: Self.workspaceImage, proxyPort: Int(proxyPort), token: token,
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: key, proxyPort: Int(proxyPort), token: token,
                                                        extraLabels: LiveEgressTests.labels))
             let container = try await manager.ensureRunning(spec, pull: false)
             func run(_ script: String) async throws -> String {

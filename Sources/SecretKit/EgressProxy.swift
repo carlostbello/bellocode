@@ -53,16 +53,23 @@ public struct EgressSnapshot: Sendable {
     public var grants: [String: PlaceholderGrant]
     public var secrets: [String: ManagedSecret]
     public var values: [String: SecretValue]
+    /// The developer's code roots (a `.codeRoots` scope admits projects inside them).
+    public var codeRoots: [String]
 
-    public init(grants: [String: PlaceholderGrant] = [:], secrets: [String: ManagedSecret] = [:], values: [String: SecretValue] = [:]) {
+    public init(grants: [String: PlaceholderGrant] = [:], secrets: [String: ManagedSecret] = [:], values: [String: SecretValue] = [:],
+                codeRoots: [String] = []) {
         self.grants = grants
         self.secrets = secrets
         self.values = values
+        self.codeRoots = codeRoots
     }
 
     func resolve(_ placeholder: String) -> ResolvedPlaceholder? {
         guard let grant = grants[placeholder], let secret = secrets[grant.account], let value = values[grant.account] else { return nil }
-        return ResolvedPlaceholder(grant: grant, secret: secret, value: value)
+        var resolved = ResolvedPlaceholder(grant: grant, secret: secret, value: value)
+        // The secret's current scope must admit the grant's project at every substitution (R13).
+        resolved.scopeAdmits = secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: codeRoots)
+        return resolved
     }
 
     /// Hidden secrets with a binding at this origin: their values are looked for in its responses.
@@ -148,10 +155,13 @@ public final class EgressProxy: Sendable {
         var dropped = 0
         var stopped = false
         var dockerEndpointPort: UInt16?
+        var useRecorder: (@Sendable ([SubstitutionUse]) async -> Bool)?
     }
 
     public let authority: CertificateAuthority
     public let configuration: EgressProxyConfiguration
+    /// Per-binding use counts, shared with the brokered tool (R12).
+    public let ledger: SecretUseLedger
     private let state = Mutex(State())
     private let queue = DispatchQueue(label: "app.bellocode.egress-proxy", qos: .userInitiated, attributes: .concurrent)
     private let eventContinuation: AsyncStream<EgressEvent>.Continuation
@@ -161,9 +171,10 @@ public final class EgressProxy: Sendable {
     private let signposts = OSSignposter(subsystem: "app.bellocode", category: "egress-proxy")
     static let maxTLSListeners = 64
 
-    public init(authority: CertificateAuthority, configuration: EgressProxyConfiguration = .init()) {
+    public init(authority: CertificateAuthority, configuration: EgressProxyConfiguration = .init(), ledger: SecretUseLedger = SecretUseLedger()) {
         self.authority = authority
         self.configuration = configuration
+        self.ledger = ledger
         (events, eventContinuation) = AsyncStream.makeStream(of: EgressEvent.self, bufferingPolicy: .bufferingNewest(1_024))
     }
 
@@ -211,6 +222,9 @@ public final class EgressProxy: Sendable {
     }
 
     public func update(_ snapshot: EgressSnapshot) { state.withLock { $0.snapshot = snapshot } }
+
+    /// Persists reserved uses of limited bindings before the request is dispatched (R12); false refuses the request.
+    public func setUseRecorder(_ recorder: (@Sendable ([SubstitutionUse]) async -> Bool)?) { state.withLock { $0.useRecorder = recorder } }
 
     /// BelloCode's filtered Docker endpoint on the Mac's loopback (execution modes). Gateways relay workspace `docker`
     /// connections here (preamble `BCEGRESS <token> docker`), byte for byte: that endpoint authenticates and filters
@@ -576,7 +590,9 @@ public final class EgressProxy: Sendable {
                                       target: originTarget, headers: fields, body: body)
         let snapshot = state.withLock { $0.snapshot }
         let bound = snapshot.secretsBound(to: scheme, host: destination.host, port: destination.port)
-        let decision = RequestRewriter(admitsProject: scope.admitsProject).rewrite(request) { snapshot.resolve($0) }
+        let ledger = self.ledger
+        let decision = RequestRewriter(admitsProject: scope.admitsProject, useCount: { ledger.count(account: $0, bindingID: $1) })
+            .rewrite(request) { snapshot.resolve($0) }
         var uses: [SubstitutionUse] = []
         switch decision {
         case .refused(let reason, let account, let session):
@@ -585,15 +601,12 @@ public final class EgressProxy: Sendable {
             return !clientCloses
         case .unchanged: break
         case .substituted(let rewritten, let made):
-            // Count uses atomically against the limits (another connection may have used the last one).
-            let allowed = state.withLock { state -> Bool in
-                for use in made {
-                    guard var secret = state.snapshot.secrets[use.account] else { return false }
-                    if let limit = secret.bindings.first(where: { $0.id == use.bindingID })?.maxUses, (secret.uses[use.bindingID] ?? 0) >= limit { return false }
-                    secret.uses[use.bindingID, default: 0] += 1
-                    state.snapshot.secrets[use.account] = secret
-                }
-                return true
+            // Reserve uses atomically against the limits in the ledger the brokered tool shares (another connection, or
+            // a brokered call, may have used the last one); limited bindings are recorded durably before dispatch.
+            let limit = { (use: SubstitutionUse) -> Int? in snapshot.secrets[use.account]?.bindings.first { $0.id == use.bindingID }?.maxUses }
+            var allowed = made.allSatisfy { snapshot.secrets[$0.account] != nil } && ledger.reserve(made, limit: limit)
+            if allowed, made.contains(where: { limit($0) != nil }) {
+                if let recorder = state.withLock({ $0.useRecorder }) { allowed = await recorder(made) }
             }
             guard allowed else {
                 let label = snapshot.secrets[made.first?.account ?? ""]?.label ?? "the secret"
@@ -644,11 +657,33 @@ public final class EgressProxy: Sendable {
                 if attempt == 1 || !["GET", "HEAD", "OPTIONS"].contains(method) || !uses.isEmpty { break }
             }
         }
-        guard let (responseHead, wire) = response else {
+        guard let (firstHead, wire) = response else {
             try await client.send(Self.plainResponse(502, "Bad Gateway", "\(destination) closed the connection."))
             return false
         }
-        let status = Int(responseHead.startLine[1]) ?? 0
+        // Interim responses (100 Continue, 103 Early Hints) are not passed on: the proxy answered Expect itself, and an
+        // interim head is metadata the inspection below would otherwise have to cover separately. Bounded.
+        var responseHead = firstHead
+        var interim = 0
+        while let code = Self.statusCode(responseHead), (100..<200).contains(code), code != 101 {
+            interim += 1
+            guard interim <= 8, let data = try? await wire.readHead(limit: 128 * 1024), let parsed = HTTPHead(data) else {
+                wire.cancel()
+                upstream = nil
+                try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination sent an invalid interim response."))
+                return false
+            }
+            responseHead = parsed
+        }
+        // The status line the client sees is built here: the code is checked, the reason phrase is BelloCode's own (a
+        // destination could reflect a submitted value into it).
+        guard let status = Self.statusCode(responseHead), responseHead.version.hasPrefix("HTTP/1.") else {
+            wire.cancel()
+            upstream = nil
+            try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination's status line is invalid."))
+            return false
+        }
+        let statusLine = ["HTTP/1.1", String(status), Self.reasonPhrase(status)]
         for use in uses { emit(.substituted(use, destination: request.auditDestination, method: method, status: status)) }
         guard let responseFraming = responseHead.responseFraming(requestMethod: method) else {
             try await client.send(Self.plainResponse(502, "Bad Gateway", "The destination's response framing is invalid."))
@@ -657,8 +692,17 @@ public final class EgressProxy: Sendable {
         let upstreamCloses = (responseHead.fields.first("Connection") ?? "").lowercased().contains("close") || responseHead.version == "HTTP/1.0"
 
         if status == 101 {
-            // Upgrade accepted by a destination that never receives secrets: from now on raw bytes both ways.
-            try await client.send(responseHead.serialized)
+            // Only an upgrade the client asked for, to a destination that never receives secrets, becomes a raw tunnel.
+            // An unsolicited 101 (or one from a secret-bound destination) would leave the inspected path entirely.
+            guard wantsUpgrade, bound.isEmpty, uses.isEmpty else {
+                wire.cancel()
+                upstream = nil
+                emit(.responseBlocked(accounts: bound.map(\.account), destination: request.auditDestination, method: method,
+                                      reason: "The destination switched protocols without a negotiated upgrade.", sessionID: session))
+                try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination switched protocols without a negotiated upgrade."))
+                return false
+            }
+            try await client.send(HTTPHead(startLine: statusLine, fields: responseHead.fields).serialized)
             await splice(client, wire)
             upstream = nil
             return false
@@ -672,7 +716,7 @@ public final class EgressProxy: Sendable {
             if responseFraming == .untilClose && !(100..<200).contains(status) {
                 fields.append(HTTPField("Connection", "close"))
             }
-            try await client.send(HTTPHead(startLine: responseHead.startLine, fields: fields).serialized)
+            try await client.send(HTTPHead(startLine: statusLine, fields: fields).serialized)
             try await wire.relayBody(responseFraming, to: client)
             if upstreamCloses || responseFraming == .untilClose { wire.cancel(); upstream = nil }
             return !clientCloses && responseFraming != .untilClose
@@ -714,8 +758,10 @@ public final class EgressProxy: Sendable {
             }
             fields.remove("Connection")
             fields.remove("Keep-Alive")
+            // The body goes out with a length: trailers were read and dropped, so none are announced.
+            fields.remove("Trailer")
             if method == "HEAD" { fields.remove("Content-Length") }
-            try await client.send(HTTPHead(startLine: responseHead.startLine, fields: fields).serialized + (method == "HEAD" ? Data() : body))
+            try await client.send(HTTPHead(startLine: statusLine, fields: fields).serialized + (method == "HEAD" ? Data() : body))
             return !clientCloses
         }
     }
@@ -832,6 +878,60 @@ public final class EgressProxy: Sendable {
     }
 
     // MARK: Messages
+
+    /// The response's status code when it is exactly three digits (100–599); nil otherwise.
+    static func statusCode(_ head: HTTPHead) -> Int? {
+        guard head.startLine.count > 1 else { return nil }
+        let text = head.startLine[1]
+        guard text.utf8.count == 3, text.utf8.allSatisfy({ (0x30...0x39).contains($0) }), let code = Int(text), (100...599).contains(code) else { return nil }
+        return code
+    }
+
+    /// BelloCode's own reason phrase for a status code (never the destination's).
+    static func reasonPhrase(_ status: Int) -> String {
+        switch status {
+        case 100: "Continue"
+        case 101: "Switching Protocols"
+        case 200: "OK"
+        case 201: "Created"
+        case 202: "Accepted"
+        case 203: "Non-Authoritative Information"
+        case 204: "No Content"
+        case 205: "Reset Content"
+        case 206: "Partial Content"
+        case 300: "Multiple Choices"
+        case 301: "Moved Permanently"
+        case 302: "Found"
+        case 303: "See Other"
+        case 304: "Not Modified"
+        case 307: "Temporary Redirect"
+        case 308: "Permanent Redirect"
+        case 400: "Bad Request"
+        case 401: "Unauthorized"
+        case 403: "Forbidden"
+        case 404: "Not Found"
+        case 405: "Method Not Allowed"
+        case 406: "Not Acceptable"
+        case 408: "Request Timeout"
+        case 409: "Conflict"
+        case 410: "Gone"
+        case 411: "Length Required"
+        case 412: "Precondition Failed"
+        case 413: "Content Too Large"
+        case 415: "Unsupported Media Type"
+        case 416: "Range Not Satisfiable"
+        case 421: "Misdirected Request"
+        case 422: "Unprocessable Content"
+        case 428: "Precondition Required"
+        case 429: "Too Many Requests"
+        case 500: "Internal Server Error"
+        case 501: "Not Implemented"
+        case 502: "Bad Gateway"
+        case 503: "Service Unavailable"
+        case 504: "Gateway Timeout"
+        default: "Status"
+        }
+    }
 
     static func hostOnly(_ hostHeader: String) -> String {
         if hostHeader.hasPrefix("["), let close = hostHeader.firstIndex(of: "]") {

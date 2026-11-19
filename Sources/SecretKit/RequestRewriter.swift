@@ -145,6 +145,8 @@ public struct ResolvedPlaceholder: Sendable {
     public var grant: PlaceholderGrant
     public var secret: ManagedSecret
     public var value: SecretValue
+    /// Whether the secret's current scope admits the grant's project (R13). The brokered tool checks scope itself.
+    public var scopeAdmits = true
 
     public init(grant: PlaceholderGrant, secret: ManagedSecret, value: SecretValue) {
         self.grant = grant
@@ -159,6 +161,13 @@ public struct SubstitutionUse: Sendable, Hashable {
     public var bindingID: String
     public var sessionID: String
     public var placeholder: String
+
+    public init(account: String, bindingID: String, sessionID: String, placeholder: String) {
+        self.account = account
+        self.bindingID = bindingID
+        self.sessionID = sessionID
+        self.placeholder = placeholder
+    }
 }
 
 public enum RewriteDecision: Sendable {
@@ -174,10 +183,13 @@ public struct RequestRewriter: Sendable {
     /// Projects the request's gateway serves; nil: any (the brokered tool, which checks the caller itself).
     public var admitsProject: (@Sendable (String) -> Bool)?
     public var now: Date
+    /// Uses so far of (account, binding id), from the shared ledger (R12); nil: the secret's own `uses`.
+    public var useCount: (@Sendable (String, String) -> Int)?
 
-    public init(admitsProject: (@Sendable (String) -> Bool)? = nil, now: Date = Date()) {
+    public init(admitsProject: (@Sendable (String) -> Bool)? = nil, now: Date = Date(), useCount: (@Sendable (String, String) -> Int)? = nil) {
         self.admitsProject = admitsProject
         self.now = now
+        self.useCount = useCount
     }
 
     public func rewrite(_ request: OutboundRequest, resolve: (String) -> ResolvedPlaceholder?) -> RewriteDecision {
@@ -219,6 +231,7 @@ public struct RequestRewriter: Sendable {
             let refuse = { (reason: SecretRefusal) -> RewriteDecision in .refused(reason, account: secret.account, sessionID: entry.grant.sessionID) }
             if secret.revoked { return refuse(.revoked(label: secret.label)) }
             guard secret.mode == .placeholder else { return refuse(.notPlaceholderMode(label: secret.label)) }
+            if !entry.scopeAdmits { return refuse(.wrongProject(label: secret.label)) }
             if let admitsProject, !admitsProject(entry.grant.projectDirectory) { return refuse(.wrongProject(label: secret.label)) }
             let origins = secret.bindings.filter { $0.matchesOrigin(scheme: request.scheme, host: request.host, port: request.port) }
             guard !origins.isEmpty else { return refuse(.unboundDestination(label: secret.label, origin: request.origin)) }
@@ -230,7 +243,9 @@ public struct RequestRewriter: Sendable {
             guard !pathOK.isEmpty else { return refuse(.pathNotAllowed(label: secret.label)) }
             let live = pathOK.filter { $0.expires.map { $0 > now } ?? true }
             guard !live.isEmpty else { return refuse(.expired(label: secret.label)) }
-            let available = live.filter { binding in binding.maxUses.map { (secret.uses[binding.id] ?? 0) < $0 } ?? true }
+            let available = live.filter { binding in
+                binding.maxUses.map { (useCount?(secret.account, binding.id) ?? secret.uses[binding.id] ?? 0) < $0 } ?? true
+            }
             guard let binding = available.first else { return refuse(.useLimit(label: secret.label)) }
             switch Self.substitute(placeholder, value: entry.value, in: output, allowed: binding.locations) {
             case .failure(let location): return refuse(location.text == "body type"

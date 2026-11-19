@@ -23,9 +23,43 @@ extension ProjectionStore {
     public static let auditLimitPerSecret = 200
     public static let auditLimitTotal = 2_000
 
+    /// Every secret's metadata row: the readable ones decoded, the rest by account (never dropped, R09: an unreadable
+    /// row may hold a revocation, scope or bindings, so its secret is quarantined rather than treated as missing).
+    public struct ManagedSecretRows: Sendable {
+        public var secrets: [ManagedSecret]
+        public var unreadable: [String]
+    }
+
+    /// Throws when the table cannot be read (the caller fails closed; an empty list would read as "no metadata").
+    public func managedSecretRows() async throws -> ManagedSecretRows {
+        let rows = try await writer.read { db in
+            try Row.fetchAll(db, sql: "SELECT account, json FROM app_managed_secret").map { row -> (String, Data?) in (row["account"], row["json"]) }
+        }
+        var out = ManagedSecretRows(secrets: [], unreadable: [])
+        for (account, data) in rows {
+            if let data, let secret = try? Self.secretsDecoder.decode(ManagedSecret.self, from: data), secret.account == account {
+                out.secrets.append(secret)
+            } else {
+                out.unreadable.append(account)
+            }
+        }
+        return out
+    }
+
     public func managedSecrets() async throws -> [ManagedSecret] {
-        let rows = try await writer.read { db in try Data.fetchAll(db, sql: "SELECT json FROM app_managed_secret") }
-        return rows.compactMap { try? Self.secretsDecoder.decode(ManagedSecret.self, from: $0) }
+        try await managedSecretRows().secrets
+    }
+
+    /// Records a legacy (pre-modes) secret's metadata only when its account has no row at all: never replaces a row,
+    /// readable or not. False when a row already existed.
+    public func adoptLegacySecret(_ secret: ManagedSecret) async throws -> Bool {
+        let data = try Self.secretsEncoder.encode(secret)
+        return try await writer.write { db in
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO app_managed_secret (account, updated, json) VALUES (?, ?, ?)",
+                arguments: [secret.account, Date().timeIntervalSince1970, data])
+            return db.changesCount > 0
+        }
     }
 
     public func saveManagedSecret(_ secret: ManagedSecret) async throws {
@@ -65,6 +99,13 @@ extension ProjectionStore {
 
     public func deletePlaceholderGrants(account: String) async throws {
         try await writer.write { db in try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE account = ?", arguments: [account]) }
+    }
+
+    public func deletePlaceholderGrants(placeholders: [String]) async throws {
+        guard !placeholders.isEmpty else { return }
+        try await writer.write { db in
+            for placeholder in placeholders { try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE placeholder = ?", arguments: [placeholder]) }
+        }
     }
 
     public func deletePlaceholderGrants(sessionIDs: [String]) async throws {

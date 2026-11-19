@@ -246,9 +246,25 @@ public final class AuthService {
 
     // MARK: Lists
 
-    /// Reloads integrations and credentials. A cold location can answer an empty integration list for a few seconds;
-    /// that is retried (`emptyListRetries`, one `pollInterval` apart) before showing it as empty.
-    public func refresh() async {
+    /// Routine reload (launch, catalog changes): integrations only. Account rows come from each integration's
+    /// `connections` (credential id, label and method: no secret). `GET /api/credential` returns every secret value,
+    /// so it is never part of a routine refresh (R35); which account is in use is known from the last explicit account
+    /// load (`refreshAccounts`), otherwise shown as not known (no account marked in use).
+    public func refresh() async { await reload(accountDetails: false) }
+
+    /// Explicit account management (opening Accounts or a provider, Refresh, Try Again, and after the person connects,
+    /// activates, renames, removes or imports an account): also reads `GET /api/credential`, the only source of which
+    /// account is active. Its body carries secret values: decoded once into summaries and dropped, never logged or kept.
+    public func refreshAccounts() async { await reload(accountDetails: true) }
+
+    /// Whether account details (which account is in use) were loaded by an explicit account action.
+    public private(set) var accountDetailsLoaded = false
+    /// Active flags from the last explicit account load, by credential id.
+    @ObservationIgnored private var knownActive: [String: Bool] = [:]
+
+    /// A cold location can answer an empty integration list for a few seconds; that is retried (`emptyListRetries`,
+    /// one `pollInterval` apart) before showing it as empty.
+    private func reload(accountDetails: Bool) async {
         if integrations.isEmpty { listState = .loading }
         let directory = directory()
         do {
@@ -260,12 +276,19 @@ public final class AuthService {
                 try await Task.sleep(for: pollInterval)
                 list = try await client.integrations(directory: directory)
             }
-            let summaries = try await client.credentials()
-            try Task.checkCancellation()
-            integrations = list.map(Self.item).sorted(by: Self.order)
-            credentials = summaries.map {
-                CredentialItem(id: $0.id, integrationID: $0.integrationID, label: $0.label, isActive: $0.active, kind: $0.kind)
+            if accountDetails {
+                let summaries = try await client.credentials()
+                try Task.checkCancellation()
+                credentials = summaries.map {
+                    CredentialItem(id: $0.id, integrationID: $0.integrationID, label: $0.label, isActive: $0.active, kind: $0.kind)
+                }
+                knownActive = Dictionary(summaries.map { ($0.id, $0.active) }, uniquingKeysWith: { a, _ in a })
+                accountDetailsLoaded = true
+            } else {
+                try Task.checkCancellation()
+                credentials = Self.credentials(from: list, knownActive: knownActive)
             }
+            integrations = list.map(Self.item).sorted(by: Self.order)
             listState = .loaded
         } catch is CancellationError {
             return
@@ -277,6 +300,17 @@ public final class AuthService {
     }
 
     public func integration(_ id: String) -> IntegrationItem? { integrations.first { $0.id == id } }
+
+    /// Account rows from the integration list's credential connections (no secret values).
+    static func credentials(from list: [IntegrationInfo], knownActive: [String: Bool]) -> [CredentialItem] {
+        list.flatMap { integration in
+            integration.connections.compactMap { connection -> CredentialItem? in
+                guard connection.type == "credential", let id = connection.id else { return nil }
+                return CredentialItem(id: id, integrationID: integration.id, label: connection.label ?? id,
+                                      isActive: knownActive[id] ?? false, kind: connection.method ?? "key")
+            }
+        }
+    }
 
     public func credentials(for integrationID: String) -> [CredentialItem] {
         credentials.filter { $0.integrationID == integrationID }
@@ -358,7 +392,7 @@ public final class AuthService {
             try await client().connectKey(
                 integrationID: integrationID, key: trimmed, answer: Self.formAnswer(answers), label: Self.label(label),
                 directory: directory)
-            await refresh()
+            await refreshAccounts()
             setPhase(.succeeded, generation)
         } catch {
             setPhase(.failed(message: Self.message(error)), generation)
@@ -372,7 +406,7 @@ public final class AuthService {
             try await client().connectExternal(
                 integrationID: integrationID, methodID: methodID, answer: Self.formAnswer(answers), label: Self.label(label),
                 directory: directory())
-            await refresh()
+            await refreshAccounts()
             setPhase(.succeeded, generation)
         } catch {
             setPhase(.failed(message: Self.message(error)), generation)
@@ -440,7 +474,7 @@ public final class AuthService {
             }
             stopPolling()
             self.attempt = nil
-            await refresh()
+            await refreshAccounts()
             setPhase(.succeeded, generation)
         } catch {
             guard generation == flowGeneration else { return }
@@ -541,7 +575,7 @@ public final class AuthService {
         switch status.status {
         case .complete:
             self.attempt = nil
-            await refresh()
+            await refreshAccounts()
             setPhase(.succeeded, generation)
             return false
         case .failed:
@@ -608,7 +642,7 @@ public final class AuthService {
         do {
             try await body(try await client())
             lastError = nil
-            await refresh()
+            await refreshAccounts()
         } catch {
             credentials = previous
             lastError = EngineError.from(error)
@@ -637,7 +671,7 @@ public final class AuthService {
         do {
             let connection = try await client().connection
             let result = try await importer.run(source, into: connection)
-            await refresh()
+            await refreshAccounts()
             return result
         } catch {
             throw EngineError.from(error)

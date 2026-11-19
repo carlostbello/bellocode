@@ -39,7 +39,7 @@ struct LiveEgressPerfTests {
         let manager = WorkspaceManager(client: client)
         var rows: [(String, Double, String)] = []
         do {
-            try await gateway.ensure(EgressGatewaySpec(scopeKey: scopeKey, image: image, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
+            try await gateway.ensure(EgressGatewaySpec(scopeKey: scopeKey, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
             let anchors = KeychainSystemAnchors.pem()
             try Data((anchors + proxyCA.pem).utf8).write(to: URL(fileURLWithPath: certs + "/" + CorporateNetwork.bundleName))
             try Data(proxyCA.pem.utf8).write(to: URL(fileURLWithPath: certs + "/" + CorporateNetwork.enterpriseName))

@@ -131,6 +131,29 @@ final class EchoServer: Sendable {
             try await wire.send(HTTPHead(startLine: ["HTTP/1.1", "200", "OK"], fields: fields + [HTTPField("Content-Length", String(payload.count))]).serialized + payload)
             return true
         }
+        // Metadata reflection (R02): the submitted Authorization value comes back outside headers and body.
+        let auth = head.fields.first("Authorization") ?? ""
+        if path.hasSuffix("/reflect-reason") {
+            try await wire.send(Data("HTTP/1.1 200 \(auth)\r\nContent-Length: 2\r\n\r\nok".utf8))
+            return true
+        }
+        if path.hasSuffix("/reflect-interim") {
+            try await wire.send(Data("HTTP/1.1 103 \(auth)\r\nX-Hint: \(auth)\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".utf8))
+            return true
+        }
+        if path.hasSuffix("/reflect-encoding") {
+            try await wire.send(Data("HTTP/1.1 200 OK\r\nContent-Encoding: x-\(auth.split(separator: " ").last ?? "")\r\nContent-Length: 2\r\n\r\nok".utf8))
+            return true
+        }
+        if path.hasSuffix("/reflect-trailer") {
+            try await wire.send(Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: X-Echo\r\n\r\n2\r\nok\r\n0\r\nX-Echo: \(auth)\r\n\r\n".utf8))
+            return true
+        }
+        if path.hasSuffix("/unsolicited-upgrade") {
+            // Switches protocols although nobody asked, then writes the value raw.
+            try await wire.send(Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: raw\r\nConnection: Upgrade\r\n\r\n\(auth)\n".utf8))
+            return false
+        }
         if path.hasSuffix("/redirect"), let to = query["to"] {
             try await wire.send(HTTPHead(startLine: ["HTTP/1.1", "302", "Found"], fields: [HTTPField("Location", to), HTTPField("Content-Length", "0")]).serialized)
             return true
@@ -262,5 +285,24 @@ final class ProxyClient: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest) async -> URLRequest? {
         followRedirects ? request : nil
+    }
+}
+
+/// A raw HTTP/1.1 client through the test gateway (absolute-form, plain http): returns every byte the proxy sent until it
+/// closed, so the status line, interim heads and trailers are visible (URLSession hides them).
+enum RawProxyClient {
+    static func exchange(gatewayPort: UInt16, request: String, timeout: Duration = .seconds(20)) async throws -> Data {
+        let queue = DispatchQueue(label: "raw-proxy-client")
+        let wire = WireConnection(NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: gatewayPort)!, using: .tcp), queue: queue)
+        try await wire.start()
+        try await wire.send(Data(request.utf8))
+        let watchdog = Task {
+            try? await Task.sleep(for: timeout)
+            wire.cancel()
+        }
+        defer { watchdog.cancel(); wire.cancel() }
+        var received = Data()
+        while let piece = try? await wire.readSome() { received.append(piece) }
+        return received
     }
 }

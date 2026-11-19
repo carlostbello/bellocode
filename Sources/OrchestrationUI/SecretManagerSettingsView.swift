@@ -31,6 +31,7 @@ public struct SecretManagerSettingsView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s10) {
             header
+            if let problem = manager.metadataProblem { metadataProblem(problem) }
             if state.adding { SecretEditorForm(manager: manager, state: state) }
             if manager.secrets.isEmpty && !state.adding {
                 Text("No secrets yet. Agents ask for one with a card, or add one here.")
@@ -58,6 +59,26 @@ public struct SecretManagerSettingsView: View {
         .frame(width: 620, alignment: .topLeading)
         .task {
             if let selected = state.selected, state.audit.isEmpty { state.audit = await manager.audit(account: selected, limit: 20) }
+        }
+    }
+
+    /// Unreadable settings (R09): stated with glyph and words; each quarantined secret can be deleted (confirmed).
+    private func metadataProblem(_ problem: String) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.s6) {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.warningText).fixedSize(horizontal: false, vertical: true)
+            ForEach(manager.quarantinedAccounts.sorted(), id: \.self) { account in
+                HStack {
+                    Text(manager.legacyLabel(account: account) ?? "Unnamed secret").font(.ds(.label))
+                    Text("Unavailable: settings unreadable").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3)
+                    Spacer()
+                    Button("Delete…") {
+                        if confirm("Delete this secret?", "Its value is removed from your Keychain and its unreadable settings are discarded. This cannot be undone.", "Delete") {
+                            Task { await manager.delete(account: account) }
+                        }
+                    }
+                }
+            }
         }
     }
 

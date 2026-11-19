@@ -50,8 +50,10 @@ extension SecretManager {
             mode = .visible
         }
         let name = choice.name.isEmpty ? ManagedSecret.handle(from: prompt.label) : choice.name
+        // "Approved command" is its own delivery (R25): saved without any visibility grant, given only to commands the
+        // person approves.
         let secret = try await create(label: prompt.label, name: name, value: value, mode: mode, scope: scope, bindings: bindings,
-                                      confirmVisible: choice.mode == .visible && choice.confirmVisible)
+                                      confirmVisible: choice.mode == .visible && choice.confirmVisible, commandsOnly: choice.mode == .command)
         if choice.mode == .command { return "" }
         return try await grantAndDescribe(secret, sessionID: sessionID, projectDirectory: project)
     }
@@ -111,10 +113,13 @@ extension SecretManager {
             }
             resolved[name] = (secret, value)
         }
-        let broker = SecretBroker(extraAnchors: engine?.configuration.brokerAnchors ?? [])
+        // Uses count against the binding in the ledger the proxy shares, reserved before each hop is sent (R12).
+        let broker = SecretBroker(extraAnchors: engine?.configuration.brokerAnchors ?? [], ledger: useLedger) { [weak self] uses in
+            await self?.recordUses(uses) ?? false
+        }
         let outcome = await broker.perform(request, secrets: resolved, sessionID: caller.sessionID.rawValue, projectDirectory: caller.projectDirectory)
         for entry in outcome.audit { await record(entry) }
-        for account in Set(outcome.used) { await noteUse(account: account, bindingID: nil) }
+        _ = await recordUses(outcome.reserved)
         return ClientMCPResult(text: outcome.text, isError: outcome.text.hasPrefix("BelloCode refused"))
     }
 

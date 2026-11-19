@@ -93,6 +93,8 @@ public final class SecretService {
         var label: String
         var sessionID: SessionID
         var expires: Date
+        /// The secret's command-policy revision at issue (R03).
+        var revision: String
     }
 
     nonisolated public static let referencePrefix = "bcsecret_"
@@ -183,25 +185,30 @@ public final class SecretService {
     }
 
     /// A fresh one-use reference to `account` for `sessionID`.
-    func issueReference(account: String, label: String, for sessionID: SessionID) -> String {
+    func issueReference(account: String, label: String, for sessionID: SessionID, revision: String = "") -> String {
         let now = clock.now()
         references = references.filter { $0.value.expires > now }
         if references.count >= Self.maxReferences, let oldest = references.min(by: { $0.value.expires < $1.value.expires })?.key {
             references[oldest] = nil
         }
         let reference = Self.referencePrefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        references[reference] = Reference(account: account, label: label, sessionID: sessionID, expires: now.addingTimeInterval(Self.referenceLifetime))
+        references[reference] = Reference(account: account, label: label, sessionID: sessionID, expires: now.addingTimeInterval(Self.referenceLifetime), revision: revision)
         return reference
     }
 
-    /// Exchanges a reference (once) for a one-read pipe path. Only the session it was issued to may use it.
-    func redeem(_ reference: String, by sessionID: SessionID) throws -> (path: String, label: String) {
+    /// Exchanges a reference (once) for a one-read pipe path. Only the session it was issued to may use it, and only
+    /// while `currentRevision` (the secret's command policy now; nil: not usable by commands) still equals the
+    /// revision it was issued under (R03).
+    func redeem(_ reference: String, by sessionID: SessionID, currentRevision: ((String) -> String?)? = nil) throws -> (path: String, label: String) {
         guard let entry = references[reference], entry.expires > clock.now() else {
             references[reference] = nil
             throw ExtrasError("That secretRef is unknown, used or expired. Ask again with request_secret.")
         }
         guard entry.sessionID == sessionID else { throw ExtrasError("That secretRef belongs to another thread.") }
         references[reference] = nil
+        if let currentRevision, currentRevision(entry.account) != entry.revision {
+            throw ExtrasError("“\(entry.label)” changed since this secretRef was issued (its protection, scope or value). Nothing was delivered; ask again with request_secret.")
+        }
         return (try deliverFile(account: entry.account), entry.label)
     }
 

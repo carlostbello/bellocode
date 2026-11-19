@@ -90,6 +90,10 @@ public final class SecretManager {
     public private(set) var authorityFingerprint: String?
     /// The audit had to drop events (the consumer fell behind): shown as a gap.
     public private(set) var auditGap = 0
+    /// Secret settings that could not be read (R09): shown in Settings ▸ Secrets. Nil when all were read.
+    public private(set) var metadataProblem: String?
+    /// Accounts whose metadata row exists but cannot be read: quarantined (no use of any kind) until deleted.
+    public private(set) var quarantinedAccounts: Set<String> = []
 
     nonisolated public static let authorityService = "app.bellocode.egress-ca"
     nonisolated static let authorityAccount = "authority-key"
@@ -110,6 +114,8 @@ public final class SecretManager {
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
     @ObservationIgnored private var started = false
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
+    /// Per-binding use counts shared by the proxy and the brokered tool (R12).
+    @ObservationIgnored let useLedger = SecretUseLedger()
     /// The shared browser's routing (docs/features/shared-browser.md): wraps the configured router before the proxy
     /// starts, so `*.bc` names reach project containers. Nil: the configured router alone.
     @ObservationIgnored public var routerOverride: (@Sendable (any EgressRouter) -> any EgressRouter)?
@@ -184,22 +190,82 @@ public final class SecretManager {
 
     /// Loads secrets, placeholders and the recent audit; secrets saved before modes become visible-mode secrets that
     /// work only through approved commands until the person chooses a mode.
+    ///
+    /// Fails closed (R09): if the metadata cannot be queried, nothing is adopted or rewritten and no secret is usable
+    /// (the error is shown); a row that cannot be decoded quarantines its account (kept, never replaced, unusable)
+    /// instead of letting a surviving legacy label re-adopt it as a commands-only secret without its revocation,
+    /// scope or bindings. Only accounts with no metadata row at all are adopted, by an insert that never replaces.
     public func reload() async {
-        var loaded = (try? await store.managedSecrets()) ?? []
-        let known = Set(loaded.map(\.account))
+        let rows: ProjectionStore.ManagedSecretRows
+        do {
+            rows = try await store.managedSecretRows()
+        } catch {
+            secrets = []
+            metadataProblem = "BelloCode could not read its secret settings, so no secret can be used until they can be read. Nothing was changed. Restart BelloCode; if this continues, the local database may be damaged."
+            log.error("secret metadata unreadable; all managed secrets unavailable")
+            await refreshProxySnapshot()
+            return
+        }
+        var loaded = rows.secrets
+        var quarantined = Set(rows.unreadable)
+        let known = Set(loaded.map(\.account)).union(quarantined)
         for label in legacy.labels where !known.contains(label.account) {
             let adopted = ManagedSecret(account: label.account, name: uniqueHandle(ManagedSecret.handle(from: label.label), in: loaded),
                                         label: label.label, mode: .visible, created: label.created)
-            loaded.append(adopted)
-            try? await store.saveManagedSecret(adopted)
+            do {
+                if try await store.adoptLegacySecret(adopted) { loaded.append(adopted) } else { quarantined.insert(label.account) }
+            } catch {
+                // Not recorded: not usable either (adopted on a later reload).
+                quarantined.insert(label.account)
+            }
+        }
+        quarantinedAccounts = quarantined
+        if quarantined.isEmpty {
+            metadataProblem = nil
+        } else {
+            let names = legacy.labels.filter { quarantined.contains($0.account) }.map { "“\($0.label)”" }
+            let what = names.isEmpty ? "\(quarantined.count) secret\(quarantined.count == 1 ? "" : "s")" : names.sorted().joined(separator: ", ")
+            metadataProblem = "The settings of \(what) could not be read, so \(quarantined.count == 1 ? "it is" : "they are") unavailable to agents and commands. Delete \(quarantined.count == 1 ? "it" : "them") and save again."
         }
         secrets = loaded.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        useLedger.seed(secrets)
         grants = Dictionary(((try? await store.placeholderGrants()) ?? []).map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
         recentAudit = (try? await store.auditEntries(limit: 100)) ?? []
         await refreshProxySnapshot()
     }
 
     public func secret(_ account: String) -> ManagedSecret? { secrets.first { $0.account == account } }
+
+    /// The approved-command path's authorization (R03): the secret's current policy revision when commands may receive
+    /// it now (a commands-only or visible secret, not revoked, in scope for `projectDirectory`), else nil. References
+    /// and approvals carry the revision they were issued under; any change of mode, scope, confirmation, revocation or
+    /// value changes it, so they stop working.
+    public func commandRevision(account: String, projectDirectory: String?) -> String? {
+        guard let secret = secret(account), secret.mode == .visible, !secret.revoked else { return nil }
+        if let projectDirectory, !projectDirectory.isEmpty,
+           !secret.scope.admits(projectDirectory: projectDirectory, codeRoots: codeRoots()) { return nil }
+        return Self.policyRevision(secret)
+    }
+
+    /// Strictly later than the previous rotation, so every rotation changes the policy revision (even within one clock tick).
+    nonisolated static func nextRotation(after previous: Date?, now: Date) -> Date {
+        guard let previous, previous >= now else { return now }
+        return previous.addingTimeInterval(0.001)
+    }
+
+    nonisolated static func policyRevision(_ secret: ManagedSecret) -> String {
+        let scope: String = switch secret.scope {
+        case .global: "global"
+        case .codeRoots: "code-roots"
+        case .project(let root): "project:" + root
+        }
+        let parts = [secret.account, secret.mode.rawValue, secret.revoked ? "revoked" : "live", secret.visibleConfirmed ? "confirmed" : "commands",
+                     scope, String(secret.rotated?.timeIntervalSince1970 ?? 0), String(secret.created.timeIntervalSince1970)]
+        return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
+    }
+    /// The label a quarantined account was saved under (Settings shows it; never the value).
+    public func legacyLabel(account: String) -> String? { legacy.labels.first { $0.account == account }?.label }
+
     public func secret(named name: String) -> ManagedSecret? { secrets.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } }
 
     /// Placeholder mode needs the proxy: unavailable (never silently downgraded) when egress is not enforced.
@@ -210,21 +276,31 @@ public final class SecretManager {
 
     // MARK: Create, change, rotate, revoke, delete
 
-    /// Saves a new secret (value to the Keychain, the rest to the store). Visible mode requires `confirmVisible`.
+    /// Saves a new secret (value to the Keychain, the rest to the store). Visible mode requires `confirmVisible`, unless
+    /// `commandsOnly`: the "Approved command" choice (R25), stored as an unconfirmed visible secret that only commands
+    /// the person approves receive (never the thread's environment).
     @discardableResult
     public func create(label: String, name: String? = nil, value: SecretValue, mode: SecretUseMode, scope: SecretScope = .global,
-                       bindings: [SecretBinding] = [], confirmVisible: Bool = false) async throws -> ManagedSecret {
+                       bindings: [SecretBinding] = [], confirmVisible: Bool = false, commandsOnly: Bool = false) async throws -> ManagedSecret {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ExtrasError("Give the secret a label.") }
         guard secrets.count < Self.maxSecrets else { throw ExtrasError("BelloCode keeps at most \(Self.maxSecrets) secrets.") }
-        try validate(mode: mode, bindings: bindings, value: value, confirmVisible: confirmVisible)
+        guard !commandsOnly || (mode == .visible && !confirmVisible) else { throw ExtrasError("A commands-only secret is never visible to the agent.") }
+        try validate(mode: mode, bindings: bindings, value: value, confirmVisible: confirmVisible || commandsOnly)
         let handle = name.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 } ?? ManagedSecret.handle(from: trimmed)
         guard ManagedSecret.isValidHandle(handle) else { throw ExtrasError("“\(handle)” cannot be a name (letters, digits and _; not PATH, HOME or a proxy variable).") }
         if let other = secret(named: handle), other.label.caseInsensitiveCompare(trimmed) != .orderedSame {
             throw ExtrasError("Another secret is already named \(handle).")
         }
+        // A quarantined secret's settings (perhaps a revocation) are never overwritten by a new save (R09).
+        if let existing = legacy.account(forLabel: trimmed), quarantinedAccounts.contains(existing) {
+            throw ExtrasError("“\(trimmed)” has settings BelloCode cannot read. Delete it in Settings ▸ Secrets first.")
+        }
         let account = try await legacy.save(label: trimmed, value: value)
+        let replaced = self.secret(account) != nil
         var secret = self.secret(account) ?? ManagedSecret(account: account, name: handle, label: trimmed, mode: mode, created: clock.now())
+        // A new value under an existing label is a rotation: outstanding command references and approvals end (R03).
+        if replaced { secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now()) }
         secret.name = handle
         secret.mode = mode
         secret.scope = scope
@@ -250,6 +326,10 @@ public final class SecretManager {
         try await persist(next)
         if current.mode != next.mode || current.name != next.name {
             await dropGrants(account: next.account)
+        } else if current.scope != next.scope {
+            // Narrowed scope (R13): threads of projects it no longer admits lose their placeholder or visible value now.
+            let roots = codeRoots()
+            await dropGrants(account: next.account) { !next.scope.admits(projectDirectory: $0.projectDirectory, codeRoots: roots) }
         }
         await refreshProxySnapshot()
     }
@@ -259,7 +339,7 @@ public final class SecretManager {
         guard var secret = secret(account) else { throw ExtrasError("That secret no longer exists.") }
         try validate(mode: secret.mode, bindings: secret.bindings, value: value, confirmVisible: true)
         _ = try await legacy.save(label: secret.label, value: value)
-        secret.rotated = clock.now()
+        secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now())
         try await persist(secret)
         await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .rotated, detail: "New value; placeholders unchanged"))
         await refreshProxySnapshot()
@@ -293,6 +373,7 @@ public final class SecretManager {
         }
         try? await store.deleteManagedSecret(account: account)
         secrets.removeAll { $0.account == account }
+        if quarantinedAccounts.remove(account) != nil, quarantinedAccounts.isEmpty { metadataProblem = nil }
         await refreshProxySnapshot()
     }
 
@@ -360,6 +441,15 @@ public final class SecretManager {
         for session in sessions { await applyEnvironment(session) }
     }
 
+    /// Drops the secret's grants matching `predicate` and replaces the affected threads' environments.
+    private func dropGrants(account: String, where predicate: (PlaceholderGrant) -> Bool) async {
+        let dropped = grants.values.filter { $0.account == account && predicate($0) }
+        guard !dropped.isEmpty else { return }
+        for grant in dropped { grants[grant.placeholder] = nil }
+        try? await store.deletePlaceholderGrants(placeholders: dropped.map(\.placeholder))
+        for session in Set(dropped.map(\.sessionID)) { await applyEnvironment(session) }
+    }
+
     /// Threads deleted: their placeholders go.
     func removed(sessions: [SessionID]) async {
         let ids = Set(sessions.map(\.rawValue))
@@ -380,8 +470,18 @@ public final class SecretManager {
             "SHELL": containers.helperURL.path, "BELLOCODE_EXEC_PATH": containers.helperURL.path,
             "BELLOCODE_EXEC_CONFIG": containers.execConfigURL.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         ]
+        variables.merge(await secretVariables(for: session)) { _, secret in secret }
+        return variables
+    }
+
+    /// The thread's secret variables: each grant's secret only while it is live, in its current mode and its current
+    /// scope admits the grant's project (R13: checked at every delivery, not only when granted).
+    func secretVariables(for session: String) async -> [String: String] {
+        var variables: [String: String] = [:]
+        let roots = codeRoots()
         for grant in grants.values where grant.sessionID == session {
-            guard let secret = secret(grant.account), !secret.revoked else { continue }
+            guard let secret = secret(grant.account), !secret.revoked,
+                  secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: roots) else { continue }
             switch secret.mode {
             case .placeholder: variables[secret.name] = grant.placeholder
             case .visible where secret.visibleConfirmed:
@@ -444,10 +544,23 @@ public final class SecretManager {
         try? await store.appendAudit(batch)
     }
 
-    func noteUse(account: String, bindingID: String?) async {
-        guard var secret = secret(account) else { return }
-        if let bindingID { secret.uses[bindingID, default: 0] += 1 } else { secret.uses["brokered", default: 0] += 1 }
-        try? await persist(secret)
+    /// A proxy substitution happened: its count (already reserved in the ledger) is persisted.
+    func noteUse(account: String, bindingID: String) async {
+        _ = await recordUses([SubstitutionUse(account: account, bindingID: bindingID, sessionID: "", placeholder: "")])
+    }
+
+    /// Persists the ledger's counts for these uses (idempotent: counts only rise to the ledger's). False when a count
+    /// could not be stored, which refuses a request on a limited binding (R12).
+    func recordUses(_ uses: [SubstitutionUse]) async -> Bool {
+        var stored = true
+        for account in Set(uses.map(\.account)) {
+            guard let index = secrets.firstIndex(where: { $0.account == account }) else { stored = false; continue }
+            for use in uses where use.account == account {
+                secrets[index].uses[use.bindingID] = max(secrets[index].uses[use.bindingID] ?? 0, useLedger.count(account: account, bindingID: use.bindingID))
+            }
+            do { try await store.saveManagedSecret(secrets[index]) } catch { stored = false }
+        }
+        return stored
     }
 
     public var lastUse: [String: SecretAuditEntry] {
@@ -467,7 +580,8 @@ extension SecretManager {
             authorityFingerprint = authority.fingerprint
             var proxyConfiguration = configuration.proxy
             if let routerOverride { proxyConfiguration.router = routerOverride(proxyConfiguration.router) }
-            let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration)
+            let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration, ledger: useLedger)
+            proxy.setUseRecorder { [weak self] uses in await self?.recordUses(uses) ?? false }
             let port = try await proxy.start()
             self.proxy = proxy
             try await writeCertificates(configuration, authority: authority)
@@ -576,12 +690,18 @@ extension SecretManager {
         guard let (port, token, socket) = prepareScope(spec) else {
             throw EgressGatewayError("BelloCode's egress proxy is not running, so this project's container has no network. Open Settings ▸ Secrets.")
         }
-        let gatewaySpec = EgressGatewaySpec(scopeKey: egress.scopeKey, image: spec.image, proxyPort: Int(port), token: token,
-                                            extraLabels: spec.extraLabels)
+        let gatewaySpec = Self.gatewaySpec(for: spec, proxyPort: port, token: token)
         let setup = Task { try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(gatewaySpec) }
         gatewaySetups[egress.scopeKey] = setup
         defer { gatewaySetups[egress.scopeKey] = nil }
         try await setup.value
+    }
+
+    /// A workspace's gateway: BelloCode's own image whatever the workspace runs (R08: the token and the outbound bridge
+    /// never reach project-controlled code), in every execution mode that has a workspace.
+    nonisolated static func gatewaySpec(for spec: WorkspaceSpec, proxyPort: UInt16, token: String) -> EgressGatewaySpec {
+        EgressGatewaySpec(scopeKey: spec.egress?.scopeKey ?? spec.projectKey, image: nil, proxyPort: Int(proxyPort), token: token,
+                          extraLabels: spec.extraLabels)
     }
 
     /// The filtered Docker endpoint (execution modes) started: gateways relay workspace `docker` through the proxy to it.
@@ -650,7 +770,8 @@ extension SecretManager {
         let hidden = secrets.filter { $0.mode == .placeholder && !$0.revoked }
         let values = await Self.readAll(vault, accounts: hidden.map(\.account))
         let placeholderGrants = grants.filter { Placeholder.isPlaceholder($0.key) }
-        proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }), values: values))
+        proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }),
+                                    values: values, codeRoots: codeRoots()))
     }
 
     /// One proxy event → the audit (and use counts).

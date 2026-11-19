@@ -20,12 +20,21 @@ extension PendingRequestStackModel {
         await source.respond(to: request, response)
         requestsChanged()
     }
+
+    /// The secret card's Save. The typed value is cleared once the save succeeded (the request is resolved); a failed
+    /// save keeps it so the person can correct the choice and retry instead of losing what they typed (R25). Decline
+    /// clears it too.
+    public func saveSecret(_ request: AppRequest, draft: SecretDraft) async {
+        guard !draft.text.isEmpty else { return }
+        await respond(request, .saveManagedSecret(SecretValue(draft.text), draft.choice))
+        if !requests.contains(where: { $0.id == request.id }) { draft.text = "" }
+    }
 }
 
 /// The secret card: label, why, an optional setup link, a secure field, and how the value will be used (secret
 /// manager, docs/features/secrets.md): Placeholder, Brokered, Approved command or Visible, with the destination it is
 /// bound to and what BelloCode claims about it. The typed value goes straight to the Keychain through `respond`; the
-/// field is cleared at once and the value is never shown again.
+/// field is cleared once the save succeeds and the value is never shown again.
 struct SecretRequestCard: View {
     let model: PendingRequestStackModel
     let request: AppRequest
@@ -177,10 +186,7 @@ struct SecretRequestCard: View {
 
     private func save() {
         guard canSave else { return }
-        let secret = SecretValue(draft.text)
-        draft.text = ""
-        let choice = draft.choice
-        Task { await model.respond(request, .saveManagedSecret(secret, choice)) }
+        Task { await model.saveSecret(request, draft: draft) }
     }
 }
 

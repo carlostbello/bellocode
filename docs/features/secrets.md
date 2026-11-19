@@ -38,7 +38,7 @@ listed read-only under "Used only by BelloCode" with the same claim; they stay m
 
 ```
 workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ──▶ host.docker.internal:<port> ──▶ EgressProxy (Mac)
-  no route, no external DNS,           relay (node/python3) bound to the       "BCEGRESS <token>" first     ──▶ destination (system trust;
+  no route, no external DNS,           BelloCode relay image bound to the      "BCEGRESS <token>" first     ──▶ destination (system trust;
   IPv6 off, HTTP(S)_PROXY set          internal address only; joined to        on every connection              company proxy via CONNECT)
                                        the bridge after it listens
 ```
@@ -52,9 +52,12 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
 - The gateway also answers `bellocode-proxy:2375` for the workspace's `docker` (execution modes): those bytes go through
   the proxy front (`BCEGRESS <token> docker`) to the filtered Docker endpoint, which authenticates and filters them;
   `DOCKER_HOST` points there when egress is enforced.
-- The gateway (`EgressGateway`): the workspace image's `node` (else `python3`; else refused with the reason), read-only
-  root, user 65534, no capabilities; created per launch with a fresh token (only in its environment; the proxy refuses
-  connections without a registered token), removed at quit.
+- The gateway (`EgressGateway`): BelloCode's own image `bellocode-egress-gateway:<inputs hash>` (`EgressGatewayImage`),
+  built locally from source compiled into the app (a Dockerfile with no `RUN` step and the Python relay) on
+  `python:3.13-alpine` pinned by digest; never the project's image, so no project-controlled code holds the token or
+  joins the bridge (release review R08), in every execution mode with a workspace. Read-only root, user 65534, no
+  capabilities; created per launch with a fresh token (only in its environment; the proxy refuses connections without a
+  registered token), removed at quit. The first build needs the pinned base from Docker Hub once.
 - The proxy (`SecretKit.EgressProxy`, Network.framework, Mac loopback): answers every `CONNECT` itself and terminates
   TLS with a per-host leaf from BelloCode's CA (P-256; key in the Keychain `app.bellocode.egress-ca`, certificate in
   `<data>/egress/`); ALPN `http/1.1` only. The CA reaches containers through the Containers 3 bundle (`ca-bundle.pem`,
@@ -166,7 +169,7 @@ agent's *own* substitution is unproven; the fixed harness's rerun was refused by
 `NetworkTrust…` apply upstream as in Containers 3.
 
 **Needs the company network:** transparent-proxy chaining (its root in the Mac's admin trust); authenticating or
-PAC-only proxies (unsupported); CONNECT to internal hosts; gateway images without node/python3; pinning clients.
+PAC-only proxies (unsupported); CONNECT to internal hosts; pinning clients; the gateway base image from Docker Hub (first build only).
 
 **UX checklist (§E).** Cards and rows name label, handle, mode, destination, project; claims are glyph + words with a
 popover; every state (proxy off/failed, unavailable, revoked, refusals naming the rule, audit gap) is shown. Keyboard:

@@ -1,5 +1,6 @@
 import BelloCore
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SecretKit
@@ -151,6 +152,37 @@ struct ProxyTests {
         guard case .substituted(let use, _, _, let code)? = await events.next() else { Issue.record("no substitution event"); return }
         #expect(use.account == "bcs_canary" && code == 200)
         guard case .refused(.useLimit, _, _, _, _)? = await events.next() else { Issue.record("no refusal event"); return }
+    }
+
+    /// R13: the secret's current scope must admit the grant's project at substitution, even if a stale grant survives.
+    @Test func grantOutsideTheCurrentScopeIsRefused() async throws {
+        let f = try await Self.makeFixture()
+        defer { f.stop() }
+        var narrowed = f.secret
+        narrowed.scope = .project("/elsewhere")
+        f.proxy.update(EgressSnapshot(
+            grants: [f.placeholder: PlaceholderGrant(placeholder: f.placeholder, account: f.secret.account, sessionID: "ses_test", projectDirectory: "/project")],
+            secrets: [f.secret.account: narrowed], values: [f.secret.account: SecretValue(Self.canary)]))
+        let (status, headers, body) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
+        #expect(status == 403 && headers["X-BelloCode-Refused"] == SecretRefusal.wrongProject(label: "").code, "\(status) \(headers)")
+        f.expectClean(status, headers, body)
+        #expect(!ByteSearch.contains(f.bound.receivedBytes, Data(Self.canary.utf8)))
+    }
+
+    /// R12: a limited binding's use is recorded durably before the request leaves; if it cannot be, nothing is sent.
+    @Test func limitedUseThatCannotBeRecordedIsRefused() async throws {
+        let f = try await Self.makeFixture(binding: SecretBinding(host: "bound.test", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")], maxUses: 5))
+        defer { f.stop() }
+        let recorded = Mutex<[SubstitutionUse]>([])
+        f.proxy.setUseRecorder { uses in recorded.withLock { $0 += uses }; return false }
+        let (status, _, _) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
+        #expect(status == 403)
+        #expect(recorded.withLock { $0.map(\.bindingID) } == [f.secret.bindings[0].id])
+        #expect(!ByteSearch.contains(f.bound.receivedBytes, Data(Self.canary.utf8)), "nothing was sent")
+        f.proxy.setUseRecorder { _ in true }
+        let (ok, _, _) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
+        #expect(ok == 200)
+        #expect(f.proxy.ledger.count(account: f.secret.account, bindingID: f.secret.bindings[0].id) == 2, "both reservations count")
     }
 }
 
