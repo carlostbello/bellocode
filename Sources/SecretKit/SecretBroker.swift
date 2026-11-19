@@ -15,6 +15,9 @@ import Synchronization
 public struct SecretBroker: Sendable {
     public static let handlePattern = #"\{\{secret:([A-Za-z_][A-Za-z0-9_]{0,63})\}\}"#
     public static let bodyLimit = 64 * 1024
+    /// The most of a response body (decoded) BelloCode reads to inspect (R24): the transfer is cancelled beyond it and
+    /// nothing of the response is returned, because an unread remainder cannot be scanned.
+    public static let defaultResponseLimit = 4 << 20
     public static let responseHeaderAllowlist = [
         "Content-Type", "Content-Length", "Date", "ETag", "Last-Modified", "Location", "Retry-After", "Link",
         "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-Request-Id", "X-Total", "X-Total-Pages", "X-Next-Page",
@@ -50,11 +53,13 @@ public struct SecretBroker: Sendable {
     public var ledger: SecretUseLedger
     /// Persists reserved uses of limited bindings before the request is sent; false refuses it.
     public var recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)?
+    public var responseLimit: Int
 
     public init(extraAnchors: [Data] = [], timeout: Duration = .seconds(30), ledger: SecretUseLedger = SecretUseLedger(),
-                recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)? = nil) {
+                responseLimit: Int = SecretBroker.defaultResponseLimit, recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)? = nil) {
         self.extraAnchors = extraAnchors
         self.timeout = timeout
+        self.responseLimit = responseLimit
         self.ledger = ledger
         self.recordUses = recordUses
     }
@@ -152,6 +157,13 @@ public struct SecretBroker: Sendable {
             let response: (HTTPURLResponse, Data)
             do {
                 response = try await send(rewritten)
+            } catch let tooLarge as BrokerResponseTooLarge {
+                for use in uses {
+                    audit.append(SecretAuditEntry(account: use.account, destination: outbound.auditDestination, method: method, sessionID: sessionID,
+                                                  outcome: .responseBlocked, detail: "Response larger than the inspection limit", status: tooLarge.status))
+                }
+                return Outcome(text: "BelloCode withheld the response from \(outbound.origin) (status \(tooLarge.status)): it is larger than \(responseLimit >> 20) MB, the most BelloCode inspects, so nothing of it is returned.",
+                               audit: audit, used: uses.map(\.account), reserved: reserved)
             } catch {
                 return refuse("\(outbound.origin) could not be reached (\(error.localizedDescription)).", account, destination: outbound.auditDestination)
             }
@@ -211,23 +223,106 @@ public struct SecretBroker: Sendable {
         urlRequest.httpMethod = request.method
         for field in request.headers { urlRequest.addValue(field.value, forHTTPHeaderField: field.name) }
         if !request.body.isEmpty { urlRequest.httpBody = request.body }
-        let delegate = BrokerSessionDelegate(anchors: extraAnchors)
+        let delegate = BrokerSessionDelegate(anchors: extraAnchors, limit: responseLimit)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
         configuration.httpShouldSetCookies = false
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: urlRequest)
-        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return (http, data.prefix(4 << 20))
+        defer { session.invalidateAndCancel() }
+        // Streamed into a capped buffer (R24): the transfer is cancelled as soon as the body passes the limit.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                delegate.start(session.dataTask(with: urlRequest), continuation: continuation)
+            }
+        } onCancel: {
+            delegate.cancel()
+        }
     }
 }
 
-/// Never follows redirects itself (the broker decides), and trusts extra roots when given (tests).
-final class BrokerSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+/// The response's body passed the inspection limit (the transfer was cancelled).
+struct BrokerResponseTooLarge: Error {
+    var status: Int
+}
+
+/// Never follows redirects itself (the broker decides), trusts extra roots when given (tests), and collects one
+/// response body up to `limit` bytes, cancelling the transfer beyond it.
+final class BrokerSessionDelegate: NSObject, URLSessionDataDelegate, Sendable {
+    private struct State {
+        var task: URLSessionDataTask?
+        var continuation: CheckedContinuation<(HTTPURLResponse, Data), any Error>?
+        var response: HTTPURLResponse?
+        var body = Data()
+        var tooLarge = false
+        var cancelled = false
+    }
+
     let anchors: [Data]
-    init(anchors: [Data]) { self.anchors = anchors }
+    let limit: Int
+    private let state = Mutex(State())
+
+    init(anchors: [Data], limit: Int = SecretBroker.defaultResponseLimit) {
+        self.anchors = anchors
+        self.limit = limit
+    }
+
+    func start(_ task: URLSessionDataTask, continuation: CheckedContinuation<(HTTPURLResponse, Data), any Error>) {
+        let cancelled = state.withLock { state -> Bool in
+            state.task = task
+            state.continuation = continuation
+            return state.cancelled
+        }
+        if cancelled { finish(.failure(CancellationError())); task.cancel() } else { task.resume() }
+    }
+
+    func cancel() {
+        let task = state.withLock { state -> URLSessionDataTask? in
+            state.cancelled = true
+            return state.task
+        }
+        task?.cancel()
+    }
+
+    private func finish(_ result: Result<(HTTPURLResponse, Data), any Error>) {
+        let continuation = state.withLock { state -> CheckedContinuation<(HTTPURLResponse, Data), any Error>? in
+            defer { state.continuation = nil; state.body = Data() }
+            return state.continuation
+        }
+        continuation?.resume(with: result)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
+        state.withLock { $0.response = response as? HTTPURLResponse }
+        return .allow
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let over = state.withLock { state -> Bool in
+            guard !state.tooLarge else { return false }
+            if state.body.count + data.count > limit {
+                state.tooLarge = true
+                state.body = Data()
+                return true
+            }
+            state.body.append(data)
+            return false
+        }
+        if over { dataTask.cancel() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        let (response, body, tooLarge) = state.withLock { ($0.response, $0.body, $0.tooLarge) }
+        if tooLarge {
+            finish(.failure(BrokerResponseTooLarge(status: response?.statusCode ?? 0)))
+        } else if let error {
+            finish(.failure(error))
+        } else if let response {
+            finish(.success((response, body)))
+        } else {
+            finish(.failure(URLError(.badServerResponse)))
+        }
+    }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest) async -> URLRequest? { nil }

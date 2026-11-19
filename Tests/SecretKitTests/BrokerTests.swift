@@ -133,4 +133,19 @@ struct BrokerTests {
         #expect(refused.text.contains("use limit"))
         #expect(h.server.requestCount == 0)
     }
+
+    /// R24: a large response is streamed into a capped buffer; past the cap the transfer stops and nothing is returned.
+    @Test func largeResponsesAreCappedNotBuffered() async throws {
+        let f = try await Self.fixture()
+        defer { f.stop() }
+        let broker = SecretBroker(extraAnchors: [f.ca.certificateDER], responseLimit: 1 << 20)
+        let big = await broker.perform(.init(url: f.origin + "/v1/big?mb=8", headers: ["Authorization": "Bearer {{secret:API_KEY}}"]),
+                                       secrets: f.secrets, sessionID: "ses", projectDirectory: "/p")
+        #expect(big.text.contains("withheld") && big.text.contains("larger than 1 MB"), "\(big.text.prefix(160))")
+        #expect(big.audit.contains { $0.outcome == .responseBlocked })
+        // Under the cap: returned as before.
+        let small = await broker.perform(.init(url: f.origin + "/v1/ok", headers: ["Authorization": "Bearer {{secret:API_KEY}}"]),
+                                         secrets: f.secrets, sessionID: "ses", projectDirectory: "/p")
+        #expect(small.text.hasPrefix("Status: 200"))
+    }
 }
