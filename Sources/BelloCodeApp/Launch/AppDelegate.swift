@@ -286,18 +286,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the app; finishing, skipping or closing it marks onboarding done.
     private func showOnboardingWhenReady() async {
         guard let engine = runtime?.engine else { return }
-        _ = await waitUntil(timeout: .seconds(8)) { engine.root.catalog.current != nil }
-        showOnboarding()
+        let arrived = await waitUntil(timeout: .seconds(8)) { engine.root.catalog.current != nil }
+        showOnboarding(catalogTimedOut: !arrived)
     }
 
-    private func showOnboarding() {
+    private func showOnboarding(catalogTimedOut: Bool = true) {
         guard let runtime, let services else { return }
         if let onboardingWindow {
             onboardingWindow.showWindow(nil)
             return
         }
         let content = AgentUIFactories.onboarding(
-            auth: runtime.auth, engine: runtime.engine, style: AppStyle.agentUI
+            auth: runtime.auth, engine: runtime.engine, style: AppStyle.agentUI, catalogTimedOut: catalogTimedOut
         ) { [weak self] _ in
             services.settings.hasCompletedOnboarding = true
             self?.onboardingWindow?.close()

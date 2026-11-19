@@ -135,12 +135,59 @@ public enum OnboardingOutcome: Hashable, Sendable {
     case connected, imported, skipped
 }
 
-/// First-run flow. Never blocks the app: it explains that BelloCode works at once with opencode's free built-in models
-/// and offers "Connect a provider", "Import from opencode" or "Skip".
+/// What the model catalog offers without an account, as onboarding tells it (R33): free models are promised only when
+/// the catalog actually lists some.
+public enum OnboardingCatalog: Hashable, Sendable {
+    /// The catalog has not arrived yet.
+    case loading
+    /// It did not arrive in time (or failed): nothing is known about free models.
+    case unavailable
+    /// It arrived and lists no free model.
+    case noFreeModels
+    case free([String])
+
+    public static func from(catalogLoaded: Bool, freeModels: [String], timedOut: Bool) -> OnboardingCatalog {
+        if !catalogLoaded { return timedOut ? .unavailable : .loading }
+        return freeModels.isEmpty ? .noFreeModels : .free(freeModels)
+    }
+
+    public var hasFreeModels: Bool { if case .free = self { true } else { false } }
+
+    /// The welcome paragraph.
+    var introduction: String {
+        let settings = "You can change this any time in Settings ▸ Accounts."
+        switch self {
+        case .free:
+            return "You can start right away: opencode’s free built-in models work without an account. "
+                + "Connect a provider when you want your own models, plans or higher limits. " + settings
+        case .loading:
+            return "Checking which models are available without an account… Connect a provider to use your own models, plans or higher limits. " + settings
+        case .unavailable:
+            return "The model list could not be loaded yet, so BelloCode cannot tell whether free models are available. "
+                + "Connect a provider to start now, or skip and connect one later. " + settings
+        case .noFreeModels:
+            return "No free models are available right now. Connect a provider (or import your opencode accounts) to start. " + settings
+        }
+    }
+
+    /// The Skip choice's detail line: never promises free models the catalog does not list.
+    var skipDetail: String {
+        switch self {
+        case .free: "Use the free models. Nothing is sent anywhere until you start a thread."
+        case .loading: "Continue without a provider. If free models turn out to be available you can use them; otherwise connect one from the model picker."
+        case .unavailable, .noFreeModels:
+            "Continue without a provider. Threads need a model: connect one later from the model picker or Settings ▸ Accounts."
+        }
+    }
+}
+
+/// First-run flow. Never blocks the app: it says whether opencode's free built-in models are available now (only when
+/// the catalog lists them) and offers "Connect a provider", "Import from opencode" or "Skip".
 public struct OnboardingView: View {
     @Environment(\.agentUIStyle) private var style
     @Bindable var auth: AuthService
-    let freeModels: [String]
+    /// Read in `body`, so an observable catalog arriving late updates the screen.
+    let catalog: @MainActor () -> OnboardingCatalog
     let importSource: CredentialImportSource?
     let onFinish: (OnboardingOutcome) -> Void
 
@@ -152,8 +199,16 @@ public struct OnboardingView: View {
         auth: AuthService, freeModels: [String], importSource: CredentialImportSource?,
         onFinish: @escaping (OnboardingOutcome) -> Void
     ) {
+        let state: OnboardingCatalog = freeModels.isEmpty ? .noFreeModels : .free(freeModels)
+        self.init(auth: auth, catalog: { state }, importSource: importSource, onFinish: onFinish)
+    }
+
+    public init(
+        auth: AuthService, catalog: @escaping @MainActor () -> OnboardingCatalog, importSource: CredentialImportSource?,
+        onFinish: @escaping (OnboardingOutcome) -> Void
+    ) {
         self.auth = auth
-        self.freeModels = freeModels
+        self.catalog = catalog
         self.importSource = importSource
         self.onFinish = onFinish
     }
@@ -202,16 +257,23 @@ public struct OnboardingView: View {
     }
 
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: style.spacing * 5) {
+        let catalog = catalog()
+        return VStack(alignment: .leading, spacing: style.spacing * 5) {
             VStack(alignment: .leading, spacing: style.spacing * 2) {
                 Text("Welcome to BelloCode").font(.ds(.proseH1)).foregroundStyle(SwiftUI.Color.ds.text)
-                Text("You can start right away: opencode’s free built-in models work without an account. "
-                    + "Connect a provider when you want your own models, plans or higher limits. You can change this any time in Settings ▸ Accounts.")
+                Text(catalog.introduction)
                     .font(style.bodyFont).foregroundStyle(style.secondaryText).fixedSize(horizontal: false, vertical: true)
-                if !freeModels.isEmpty {
+                switch catalog {
+                case .free(let freeModels):
                     Label("Free now: " + freeModels.prefix(4).joined(separator: ", ") + (freeModels.count > 4 ? " and \(freeModels.count - 4) more" : ""),
                           systemImage: "checkmark.seal")
                         .font(style.smallFont).foregroundStyle(style.success)
+                case .loading:
+                    Label("Loading the model list…", systemImage: "hourglass").font(style.smallFont).foregroundStyle(style.secondaryText)
+                case .unavailable:
+                    Label("Model list unavailable", systemImage: "exclamationmark.triangle").font(style.smallFont).foregroundStyle(style.secondaryText)
+                case .noFreeModels:
+                    Label("No free models right now", systemImage: "info.circle").font(style.smallFont).foregroundStyle(style.secondaryText)
                 }
             }
             VStack(spacing: style.spacing * 2) {
@@ -224,7 +286,7 @@ public struct OnboardingView: View {
                     symbol: "square.and.arrow.down", prominent: false, shortcut: "2"
                 ) { step.value = .importing }
                 choice(
-                    "Skip for now", detail: "Use the free models. Nothing is sent anywhere until you start a thread.",
+                    "Skip for now", detail: catalog.skipDetail,
                     symbol: "arrow.right.circle", prominent: false, shortcut: "3"
                 ) { onFinish(.skipped) }
             }

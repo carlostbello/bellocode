@@ -81,12 +81,16 @@ public enum AgentUIFactories {
     }
 
     /// The first-run flow, for the main window's content area or a panel. It never blocks the app.
+    /// `catalogTimedOut`: the caller stopped waiting for the catalog, so a missing one is "unavailable", not "loading".
     public static func onboarding(
         auth: AuthService, engine: Engine, importSource: CredentialImportSource? = .userInstall(),
-        style: AgentUIStyle = .standard, onFinish: @escaping (OnboardingOutcome) -> Void
+        style: AgentUIStyle = .standard, catalogTimedOut: Bool = true, onFinish: @escaping (OnboardingOutcome) -> Void
     ) -> NSViewController {
-        let free = (engine.root.catalog.current?.models ?? []).filter(\.isFree).map(\.name)
-        return controller(OnboardingView(auth: auth, freeModels: free, importSource: importSource, onFinish: onFinish), style: style)
+        let catalog: @MainActor () -> OnboardingCatalog = { [weak engine] in
+            let current = engine?.root.catalog.current
+            return .from(catalogLoaded: current != nil, freeModels: (current?.models ?? []).filter(\.isFree).map(\.name), timedOut: catalogTimedOut)
+        }
+        return controller(OnboardingView(auth: auth, catalog: catalog, importSource: importSource, onFinish: onFinish), style: style)
     }
 
     /// Settings ▸ Accounts.
