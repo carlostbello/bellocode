@@ -690,12 +690,18 @@ extension SecretManager {
         guard let (port, token, socket) = prepareScope(spec) else {
             throw EgressGatewayError("BelloCode's egress proxy is not running, so this project's container has no network. Open Settings ▸ Secrets.")
         }
-        let gatewaySpec = EgressGatewaySpec(scopeKey: egress.scopeKey, image: spec.image, proxyPort: Int(port), token: token,
-                                            extraLabels: spec.extraLabels)
+        let gatewaySpec = Self.gatewaySpec(for: spec, proxyPort: port, token: token)
         let setup = Task { try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(gatewaySpec) }
         gatewaySetups[egress.scopeKey] = setup
         defer { gatewaySetups[egress.scopeKey] = nil }
         try await setup.value
+    }
+
+    /// A workspace's gateway: BelloCode's own image whatever the workspace runs (R08: the token and the outbound bridge
+    /// never reach project-controlled code), in every execution mode that has a workspace.
+    nonisolated static func gatewaySpec(for spec: WorkspaceSpec, proxyPort: UInt16, token: String) -> EgressGatewaySpec {
+        EgressGatewaySpec(scopeKey: spec.egress?.scopeKey ?? spec.projectKey, image: nil, proxyPort: Int(proxyPort), token: token,
+                          extraLabels: spec.extraLabels)
     }
 
     /// The filtered Docker endpoint (execution modes) started: gateways relay workspace `docker` through the proxy to it.

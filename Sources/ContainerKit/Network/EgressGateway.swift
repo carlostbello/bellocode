@@ -64,15 +64,17 @@ public struct EgressAttachment: Codable, Sendable, Equatable, Hashable {
 public struct EgressGatewaySpec: Sendable, Equatable {
     /// `<projectKey>` for a project's container, or the shared workspace's key.
     public var scopeKey: String
-    /// An image with `node` or `python3` (the workspace's own image normally: already pulled and allowed by policy).
-    public var image: String
+    /// Nil (workspaces, R08): BelloCode's own gateway image (`EgressGatewayImage`), never the project's image, so no
+    /// project-controlled code ever holds the token or joins the outbound bridge. Otherwise another BelloCode-built
+    /// image with `node` or `python3` (the shared browser's).
+    public var image: String?
     /// BelloCode's proxy on the Mac (reached as `host.docker.internal:<port>`).
     public var proxyPort: Int
     /// Per-launch token the gateway sends first on every connection (the proxy refuses connections without it).
     public var token: String
     public var extraLabels: [String: String]
 
-    public init(scopeKey: String, image: String, proxyPort: Int, token: String, extraLabels: [String: String] = [:]) {
+    public init(scopeKey: String, image: String? = nil, proxyPort: Int, token: String, extraLabels: [String: String] = [:]) {
         self.scopeKey = scopeKey
         self.image = image
         self.proxyPort = proxyPort
@@ -83,9 +85,12 @@ public struct EgressGatewaySpec: Sendable, Equatable {
     public var networkName: String { EgressGateway.networkName(scopeKey) }
     public var containerName: String { "bellocode-egress-gw-\(scopeKey)" }
 
+    /// The image the gateway runs.
+    public var resolvedImage: String { image ?? EgressGatewayImage.tag }
+
     /// Identifies the configuration (recreated when it changes); the token is hashed, never stored in a label.
     var configHash: String {
-        SHA256.hash(data: Data("\(image)\n\(proxyPort)\n\(token)\n\(EgressGateway.relayScriptVersion)".utf8))
+        SHA256.hash(data: Data("\(resolvedImage)\n\(proxyPort)\n\(token)\n\(EgressGateway.relayScriptVersion)".utf8))
             .map { String(format: "%02x", $0) }.joined().prefix(16).description
     }
 }
@@ -131,16 +136,33 @@ public struct EgressGateway: Sendable {
     /// bridge (its only way out, to the Mac).
     public func ensure(_ spec: EgressGatewaySpec) async throws {
         try await ensureNetwork(scopeKey: spec.scopeKey, extraLabels: spec.extraLabels)
+        if spec.image == nil { _ = try await EgressGatewayImage.ensure(client: client, extraLabels: spec.extraLabels) }
         if let existing = try await client.inspectContainer(spec.containerName) {
             if existing.config.labels?[Self.labelConfig] == spec.configHash, existing.state.running { return }
             try? await client.removeContainer(existing.id, force: true)
         }
-        var body = ContainerCreate(image: spec.image)
-        body.entrypoint = ["/bin/sh", "-c", Self.relayLauncher]
-        body.cmd = []
-        body.env = ["BC_HOST=host.docker.internal", "BC_PORT=\(spec.proxyPort)", "BC_TOKEN=\(spec.token)",
-                    "BC_LISTEN_PORT=\(EgressAttachment.proxyPort)", "BC_NODE=\(Self.nodeRelay)", "BC_PY=\(Self.pythonRelay)"]
-            + ["BC_DOCKER_LISTEN=\(EgressAttachment.dockerPort)"]
+        let id = try await client.createContainer(name: spec.containerName, Self.createBody(spec))
+        try await client.startContainer(id)
+        // The relay binds only the internal network's address, chosen at start while that is its only interface; it
+        // retries its upstream dial for a few seconds, so a connection that arrives before the bridge joins still works.
+        try await waitForRelay(id)
+        try await client.connectNetwork("bridge", container: id)
+    }
+
+    /// The gateway container: BelloCode's relay (its own image's entrypoint, or the launcher in another BelloCode
+    /// image), read-only, unprivileged, on the internal network only until the relay listens.
+    static func createBody(_ spec: EgressGatewaySpec) -> ContainerCreate {
+        var body = ContainerCreate(image: spec.resolvedImage)
+        let common = ["BC_HOST=host.docker.internal", "BC_PORT=\(spec.proxyPort)", "BC_TOKEN=\(spec.token)",
+                      "BC_LISTEN_PORT=\(EgressAttachment.proxyPort)", "BC_DOCKER_LISTEN=\(EgressAttachment.dockerPort)"]
+        if spec.image == nil {
+            // The relay is the image's entrypoint; no program text travels in the environment.
+            body.env = common
+        } else {
+            body.entrypoint = ["/bin/sh", "-c", Self.relayLauncher]
+            body.cmd = []
+            body.env = common + ["BC_NODE=\(Self.nodeRelay)", "BC_PY=\(Self.pythonRelay)"]
+        }
         body.user = "65534:65534"
         body.labels = [Self.labelEgress: "1", Self.labelScope: spec.scopeKey, Self.labelConfig: spec.configHash, WorkspaceSpec.labelWorkspace: "1"]
             .merging(spec.extraLabels) { a, _ in a }
@@ -159,12 +181,7 @@ public struct EgressGateway: Sendable {
         host.sysctls = ["net.ipv6.conf.all.disable_ipv6": "1"]
         body.hostConfig = host
         body.networkingConfig = NetworkingConfig(endpointsConfig: [spec.networkName: .init(aliases: [EgressAttachment.proxyAlias])])
-        let id = try await client.createContainer(name: spec.containerName, body)
-        try await client.startContainer(id)
-        // The relay binds only the internal network's address, chosen at start while that is its only interface; it
-        // retries its upstream dial for a few seconds, so a connection that arrives before the bridge joins still works.
-        try await waitForRelay(id)
-        try await client.connectNetwork("bridge", container: id)
+        return body
     }
 
     /// Waits (bounded) until the relay printed `ready`, or reports why it could not start.
@@ -173,7 +190,7 @@ public struct EgressGateway: Sendable {
             let text = try await logText(id)
             if text.contains("bellocode-relay ready") { return }
             if text.contains("bellocode-relay unavailable") {
-                throw EgressGatewayError("The egress gateway needs node or python3 in its image; the workspace's image has neither. Choose an image with one of them (Project Settings ▸ Environment).")
+                throw EgressGatewayError("The egress gateway's image has neither node nor python3.")
             }
             if let inspect = try await client.inspectContainer(id), !inspect.state.running {
                 throw EgressGatewayError("The egress gateway stopped (exit \(inspect.state.exitCode ?? -1)).")

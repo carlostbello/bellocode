@@ -1,4 +1,5 @@
 import BelloCore
+import ContainerKit
 import Foundation
 import GRDB
 import Security
@@ -210,6 +211,19 @@ struct SecretManagerTests {
         // The code root is removed: the grant no longer admits delivery.
         f.manager.codeRoots = { [] }
         #expect(await f.manager.secretVariables(for: "ses_r")["ROOTS_KEY"] == nil)
+    }
+
+    /// R08: whatever image a workspace runs (in a project container or the shared workspace), its gateway is
+    /// BelloCode's own image, so the scope token and the outbound bridge never reach project-controlled code.
+    @Test func workspaceGatewayUsesBelloCodesImage() {
+        let project = WorkspaceSpec(projectRoot: "/repos/app", image: "registry.example/app-dev:latest")
+        let shared = WorkspaceSpec.shared(roots: ["/repos"], image: "ghcr.io/someone/workspace:1")
+        for var spec in [project, shared] {
+            spec.egress = EgressAttachment(network: EgressGateway.networkName(spec.projectKey), caFingerprint: "f")
+            let gateway = SecretManager.gatewaySpec(for: spec, proxyPort: 40_000, token: "t")
+            #expect(gateway.image == nil && gateway.resolvedImage == EgressGatewayImage.tag, "\(spec.image)")
+            #expect(gateway.scopeKey == spec.egress?.scopeKey)
+        }
     }
 
     @Test func agentListingNeverShowsValues() async throws {
