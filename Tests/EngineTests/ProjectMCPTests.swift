@@ -74,8 +74,19 @@ final class FakeMCPTransport: HTTPTransport {
     }
 
     let state = Mutex(State())
+    /// Yields after every answered request, so a test waits on the transport's progress instead of polling.
+    let changes: AsyncStream<Void>
+    private let changed: AsyncStream<Void>.Continuation
+
+    init() {
+        (changes, changed) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+    }
+
+    /// Wakes a waiter on `changes` without a request (an observed model change, the watchdog).
+    func poke() { changed.yield() }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        defer { changed.yield() }
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
         var status = 200
@@ -110,6 +121,7 @@ final class FakeMCPTransport: HTTPTransport {
 @Suite("Project MCP server removal", .timeLimit(.minutes(1)))
 struct ProjectMCPRemovalTests {
     @Test func aRefusedRemovalStaysPendingAndIsRetriedUntilOpencodeConfirms() async throws {
+        let start = ContinuousClock.now
         let base = NSTemporaryDirectory() + "bc-mcprm-\(UUID().uuidString.prefix(8))"
         let project = base + "/project"
         try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
@@ -132,12 +144,21 @@ struct ProjectMCPRemovalTests {
         await service.update(project, settings: settings)
         let model = service.environment(for: project)
         service.activate(project)
-        func waitFor(_ condition: @MainActor () -> Bool) async -> Bool {
-            for _ in 0..<250 {
-                if condition() { return true }
-                try? await Task.sleep(for: .milliseconds(20))
+        // Barrier waits (no wall-clock polling): the condition is re-checked whenever the transport answers a request or
+        // a model property it read changes. A watchdog well inside the suite's limit turns a hang into a failure.
+        var wakeups = transport.changes.makeAsyncIterator()
+        let deadline = start + .seconds(45)
+        let watchdog = Task { [transport] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            transport.poke()
+        }
+        defer { watchdog.cancel() }
+        func waitFor(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
+            while true {
+                if withObservationTracking({ condition() }, onChange: { [transport] in transport.poke() }) { return true }
+                if ContinuousClock.now >= deadline { return false }
+                _ = await wakeups.next(isolation: #isolation)
             }
-            return condition()
         }
         #expect(await waitFor { transport.state.withLock { $0.servers["tools"] } == "connected" }, "\(model.phase)")
 
