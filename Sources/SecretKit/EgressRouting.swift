@@ -19,10 +19,16 @@ public enum EgressRoute: Sendable {
 public struct EgressDial: Sendable, Hashable {
     public var endpoint: HostPort
     public var preamble: Data?
+    /// The shared browser's canonical `https://<project>.bc:<port>/` URLs (docs/features/shared-browser.md): the proxy
+    /// has already terminated the client's TLS with a leaf for the exact requested host (from BelloCode's egress CA,
+    /// which the browser trusts), so an `https` request may continue as plain HTTP on this registered private hop.
+    /// Off by default: other routes stay http-only.
+    public var terminatesTLS: Bool
 
-    public init(endpoint: HostPort, preamble: Data? = nil) {
+    public init(endpoint: HostPort, preamble: Data? = nil, terminatesTLS: Bool = false) {
         self.endpoint = endpoint
         self.preamble = preamble
+        self.terminatesTLS = terminatesTLS
     }
 }
 

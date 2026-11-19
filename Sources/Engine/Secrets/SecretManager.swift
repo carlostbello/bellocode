@@ -104,12 +104,15 @@ public final class SecretManager {
     @ObservationIgnored var environments: EnvironmentService?
     @ObservationIgnored private(set) var grants: [String: PlaceholderGrant] = [:]
     @ObservationIgnored var proxy: EgressProxy?
-    @ObservationIgnored private var scopes: [String: EgressScope] = [:]
+    @ObservationIgnored var scopes: [String: EgressScope] = [:]
     @ObservationIgnored private var gatewaySetups: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
     @ObservationIgnored private var started = false
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
+    /// The shared browser's routing (docs/features/shared-browser.md): wraps the configured router before the proxy
+    /// starts, so `*.bc` names reach project containers. Nil: the configured router alone.
+    @ObservationIgnored public var routerOverride: (@Sendable (any EgressRouter) -> any EgressRouter)?
     /// GitLab instances and the like, for the read-only "built-in brokered" rows.
     @ObservationIgnored public var builtInBrokered: () -> [BuiltInBrokeredSecret] = { [] }
     @ObservationIgnored let log = Logger(subsystem: "app.bellocode", category: "secret-manager")
@@ -462,7 +465,9 @@ extension SecretManager {
         do {
             let authority = try await loadAuthority(configuration)
             authorityFingerprint = authority.fingerprint
-            let proxy = EgressProxy(authority: authority, configuration: configuration.proxy)
+            var proxyConfiguration = configuration.proxy
+            if let routerOverride { proxyConfiguration.router = routerOverride(proxyConfiguration.router) }
+            let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration)
             let port = try await proxy.start()
             self.proxy = proxy
             try await writeCertificates(configuration, authority: authority)

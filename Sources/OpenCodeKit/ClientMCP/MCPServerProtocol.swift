@@ -39,13 +39,26 @@ public struct ClientMCPCall: Sendable, Equatable {
 public struct ClientMCPResult: Sendable, Equatable {
     public var text: String
     public var isError: Bool
+    /// Image blocks after the text (the shared browser's screenshots), base64 with their MIME type.
+    public var images: [ClientMCPImage] = []
 
-    public init(text: String, isError: Bool = false) {
+    public init(text: String, isError: Bool = false, images: [ClientMCPImage] = []) {
         self.text = text
         self.isError = isError
+        self.images = images
     }
 
     public static func error(_ message: String) -> ClientMCPResult { ClientMCPResult(text: message, isError: true) }
+}
+
+/// An MCP image content block (`{type: image, data, mimeType}`).
+public struct ClientMCPImage: Sendable, Equatable {
+    public var base64: String
+    public var mimeType: String
+    public init(base64: String, mimeType: String) {
+        self.base64 = base64
+        self.mimeType = mimeType
+    }
 }
 
 /// What the app offers over client MCP. Implemented by Engine's `OrchestrationService` (UI tools); later packages add
@@ -131,7 +144,8 @@ public struct MCPServerProtocol: Sendable {
         response(
             id: id,
             result: .object([
-                "content": .array([.object(["type": .string("text"), "text": .string(result.text)])]),
+                "content": .array([.object(["type": .string("text"), "text": .string(result.text)])]
+                    + result.images.map { .object(["type": .string("image"), "data": .string($0.base64), "mimeType": .string($0.mimeType)]) }),
                 "isError": .bool(result.isError),
             ]))
     }

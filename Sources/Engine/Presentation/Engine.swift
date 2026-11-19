@@ -166,6 +166,9 @@ public final class Engine {
     public let environments: EnvironmentService
     /// Git parity: clone from GitLab, publish, new projects (docs/features/git-parity.md).
     public private(set) var gitProjects: GitProjectService!
+    /// The one shared Chromium for every thread and project: lifecycle, approvals, tab groups, routes, live view
+    /// (docs/features/shared-browser.md).
+    public private(set) var sharedBrowser: SharedBrowserService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -243,6 +246,13 @@ public final class Engine {
             secretManager.codeRoots = { environments.codeRootsValidation.roots }
         }
         extras.secretManager = secretManager
+        let sharedBrowser = SharedBrowserService(store: store, configuration: configuration.sharedBrowser)
+        sharedBrowser.environments = environments
+        sharedBrowser.secrets = secretManager
+        if configuration.sharedBrowser != nil {
+            secretManager.routerOverride = { [weak sharedBrowser] fallback in sharedBrowser?.makeRouter(fallback: fallback) ?? fallback }
+        }
+        self.sharedBrowser = sharedBrowser
         let mergeRequests = extras.mergeRequests
         secretManager.builtInBrokered = { [weak mergeRequests] in
             guard let mergeRequests else { return [] }
@@ -321,6 +331,8 @@ public final class Engine {
         auto.start()
         await extras.start(store: store)
         await secretManager.start()
+        sharedBrowser.engine = self
+        await sharedBrowser.start()
         await modelPreferences.load()
         await frecency.load()
         await core.start()
@@ -350,6 +362,8 @@ public final class Engine {
         await orchestration.shutdown()
         auto.shutdown()
         extras.stop()
+        // Before the egress proxy goes: the browser stops in order (its cookie store is committed).
+        await sharedBrowser.shutdown()
         await secretManager.stop()
         for thread in Array(openThreads.values) { thread.tearDown() }
         openThreads.removeAll()
@@ -517,6 +531,7 @@ public final class Engine {
             Task {
                 if let first = directories.first ?? self.configuration.defaultDirectory { await orchestration.checkPlugin(directory: first) }
                 await orchestration.hostAppTools(directories: directories)
+                await self.sharedBrowser.hostTools(directories: directories)
             })
         // Project MCP servers are runtime registrations: a (re)connected server has none.
         environments.serverConnected()

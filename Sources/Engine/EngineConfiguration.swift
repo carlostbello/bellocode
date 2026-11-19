@@ -79,6 +79,8 @@ public struct EngineConfiguration: Sendable {
     /// Secret manager (docs/features/secrets.md): the egress proxy's CA and settings. Nil: no enforced egress (tests,
     /// mock mode); brokered and visible secrets still work.
     public var secretManager: SecretManagerConfiguration?
+    /// The shared browser (docs/features/shared-browser.md). Nil: unavailable (tests, mock mode).
+    public var sharedBrowser: SharedBrowserConfiguration?
     /// The brokered HTTP tool's extra trusted roots (tests' loopback servers only).
     public var brokerAnchors: [Data] = []
 

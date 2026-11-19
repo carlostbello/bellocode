@@ -573,6 +573,15 @@ public final class ExtrasHub {
                     await engine?.answerServiceRestart(approval, approved: false, always: false)
                 }
                 return
+            case (.browserMCP, let response):
+                // Shared browser (docs/features/shared-browser.md): the person allows the browse MCP server.
+                await core.resolveAppRequest(id)
+                if case .approve(let always) = response {
+                    await engine?.sharedBrowser?.answerApproval(approval, approved: true, always: always)
+                } else {
+                    await engine?.sharedBrowser?.answerApproval(approval, approved: false, always: false)
+                }
+                return
             case (.secretCommand, _):
                 await core.resolveAppRequest(id)
                 if let pending = pendingSecretCommands.removeValue(forKey: approval.subjectID) {
