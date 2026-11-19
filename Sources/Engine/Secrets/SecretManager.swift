@@ -323,6 +323,10 @@ public final class SecretManager {
         try await persist(next)
         if current.mode != next.mode || current.name != next.name {
             await dropGrants(account: next.account)
+        } else if current.scope != next.scope {
+            // Narrowed scope (R13): threads of projects it no longer admits lose their placeholder or visible value now.
+            let roots = codeRoots()
+            await dropGrants(account: next.account) { !next.scope.admits(projectDirectory: $0.projectDirectory, codeRoots: roots) }
         }
         await refreshProxySnapshot()
     }
@@ -434,6 +438,15 @@ public final class SecretManager {
         for session in sessions { await applyEnvironment(session) }
     }
 
+    /// Drops the secret's grants matching `predicate` and replaces the affected threads' environments.
+    private func dropGrants(account: String, where predicate: (PlaceholderGrant) -> Bool) async {
+        let dropped = grants.values.filter { $0.account == account && predicate($0) }
+        guard !dropped.isEmpty else { return }
+        for grant in dropped { grants[grant.placeholder] = nil }
+        try? await store.deletePlaceholderGrants(placeholders: dropped.map(\.placeholder))
+        for session in Set(dropped.map(\.sessionID)) { await applyEnvironment(session) }
+    }
+
     /// Threads deleted: their placeholders go.
     func removed(sessions: [SessionID]) async {
         let ids = Set(sessions.map(\.rawValue))
@@ -454,8 +467,18 @@ public final class SecretManager {
             "SHELL": containers.helperURL.path, "BELLOCODE_EXEC_PATH": containers.helperURL.path,
             "BELLOCODE_EXEC_CONFIG": containers.execConfigURL.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
         ]
+        variables.merge(await secretVariables(for: session)) { _, secret in secret }
+        return variables
+    }
+
+    /// The thread's secret variables: each grant's secret only while it is live, in its current mode and its current
+    /// scope admits the grant's project (R13: checked at every delivery, not only when granted).
+    func secretVariables(for session: String) async -> [String: String] {
+        var variables: [String: String] = [:]
+        let roots = codeRoots()
         for grant in grants.values where grant.sessionID == session {
-            guard let secret = secret(grant.account), !secret.revoked else { continue }
+            guard let secret = secret(grant.account), !secret.revoked,
+                  secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: roots) else { continue }
             switch secret.mode {
             case .placeholder: variables[secret.name] = grant.placeholder
             case .visible where secret.visibleConfirmed:
@@ -738,7 +761,8 @@ extension SecretManager {
         let hidden = secrets.filter { $0.mode == .placeholder && !$0.revoked }
         let values = await Self.readAll(vault, accounts: hidden.map(\.account))
         let placeholderGrants = grants.filter { Placeholder.isPlaceholder($0.key) }
-        proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }), values: values))
+        proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }),
+                                    values: values, codeRoots: codeRoots()))
     }
 
     /// One proxy event → the audit (and use counts).

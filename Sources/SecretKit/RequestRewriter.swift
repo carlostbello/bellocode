@@ -145,6 +145,8 @@ public struct ResolvedPlaceholder: Sendable {
     public var grant: PlaceholderGrant
     public var secret: ManagedSecret
     public var value: SecretValue
+    /// Whether the secret's current scope admits the grant's project (R13). The brokered tool checks scope itself.
+    public var scopeAdmits = true
 
     public init(grant: PlaceholderGrant, secret: ManagedSecret, value: SecretValue) {
         self.grant = grant
@@ -229,6 +231,7 @@ public struct RequestRewriter: Sendable {
             let refuse = { (reason: SecretRefusal) -> RewriteDecision in .refused(reason, account: secret.account, sessionID: entry.grant.sessionID) }
             if secret.revoked { return refuse(.revoked(label: secret.label)) }
             guard secret.mode == .placeholder else { return refuse(.notPlaceholderMode(label: secret.label)) }
+            if !entry.scopeAdmits { return refuse(.wrongProject(label: secret.label)) }
             if let admitsProject, !admitsProject(entry.grant.projectDirectory) { return refuse(.wrongProject(label: secret.label)) }
             let origins = secret.bindings.filter { $0.matchesOrigin(scheme: request.scheme, host: request.host, port: request.port) }
             guard !origins.isEmpty else { return refuse(.unboundDestination(label: secret.label, origin: request.origin)) }

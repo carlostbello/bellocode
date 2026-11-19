@@ -154,6 +154,21 @@ struct ProxyTests {
         guard case .refused(.useLimit, _, _, _, _)? = await events.next() else { Issue.record("no refusal event"); return }
     }
 
+    /// R13: the secret's current scope must admit the grant's project at substitution, even if a stale grant survives.
+    @Test func grantOutsideTheCurrentScopeIsRefused() async throws {
+        let f = try await Self.makeFixture()
+        defer { f.stop() }
+        var narrowed = f.secret
+        narrowed.scope = .project("/elsewhere")
+        f.proxy.update(EgressSnapshot(
+            grants: [f.placeholder: PlaceholderGrant(placeholder: f.placeholder, account: f.secret.account, sessionID: "ses_test", projectDirectory: "/project")],
+            secrets: [f.secret.account: narrowed], values: [f.secret.account: SecretValue(Self.canary)]))
+        let (status, headers, body) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
+        #expect(status == 403 && headers["X-BelloCode-Refused"] == SecretRefusal.wrongProject(label: "").code, "\(status) \(headers)")
+        f.expectClean(status, headers, body)
+        #expect(!ByteSearch.contains(f.bound.receivedBytes, Data(Self.canary.utf8)))
+    }
+
     /// R12: a limited binding's use is recorded durably before the request leaves; if it cannot be, nothing is sent.
     @Test func limitedUseThatCannotBeRecordedIsRefused() async throws {
         let f = try await Self.makeFixture(binding: SecretBinding(host: "bound.test", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")], maxUses: 5))

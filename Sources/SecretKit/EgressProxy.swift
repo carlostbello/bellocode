@@ -53,16 +53,23 @@ public struct EgressSnapshot: Sendable {
     public var grants: [String: PlaceholderGrant]
     public var secrets: [String: ManagedSecret]
     public var values: [String: SecretValue]
+    /// The developer's code roots (a `.codeRoots` scope admits projects inside them).
+    public var codeRoots: [String]
 
-    public init(grants: [String: PlaceholderGrant] = [:], secrets: [String: ManagedSecret] = [:], values: [String: SecretValue] = [:]) {
+    public init(grants: [String: PlaceholderGrant] = [:], secrets: [String: ManagedSecret] = [:], values: [String: SecretValue] = [:],
+                codeRoots: [String] = []) {
         self.grants = grants
         self.secrets = secrets
         self.values = values
+        self.codeRoots = codeRoots
     }
 
     func resolve(_ placeholder: String) -> ResolvedPlaceholder? {
         guard let grant = grants[placeholder], let secret = secrets[grant.account], let value = values[grant.account] else { return nil }
-        return ResolvedPlaceholder(grant: grant, secret: secret, value: value)
+        var resolved = ResolvedPlaceholder(grant: grant, secret: secret, value: value)
+        // The secret's current scope must admit the grant's project at every substitution (R13).
+        resolved.scopeAdmits = secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: codeRoots)
+        return resolved
     }
 
     /// Hidden secrets with a binding at this origin: their values are looked for in its responses.

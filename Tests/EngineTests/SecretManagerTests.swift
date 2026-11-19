@@ -174,6 +174,44 @@ struct SecretManagerTests {
         #expect(relaunched.metadataProblem == nil)
     }
 
+    /// R13: narrowing a secret's scope revokes grants of threads in projects it no longer admits (placeholder and
+    /// visible), and the visible-environment builder checks the current scope at every delivery.
+    @Test func narrowingScopeRevokesOutOfScopeGrants() async throws {
+        let f = try await fixture()
+        let visible = try await f.manager.create(label: "Visible key", value: Self.value, mode: .visible, confirmVisible: true)
+        let hidden = try await f.manager.create(label: "Hidden key", value: SecretValue("sk_test_hidden_0123456789"), mode: .placeholder, bindings: [Self.binding])
+        for secret in [visible, hidden] {
+            try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_a"), projectDirectory: "/a")
+            try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_b"), projectDirectory: "/b")
+        }
+        #expect(await f.manager.secretVariables(for: "ses_b")["VISIBLE_KEY"] != nil)
+        for secret in [visible, hidden] {
+            var narrowed = try #require(f.manager.secret(secret.account))
+            narrowed.scope = .project("/a")
+            try await f.manager.update(narrowed)
+        }
+        let b = await f.manager.secretVariables(for: "ses_b")
+        #expect(b["VISIBLE_KEY"] == nil && b["HIDDEN_KEY"] == nil, "the excluded project keeps nothing")
+        #expect(f.manager.placeholder(account: hidden.account, sessionID: SessionID("ses_b")) == nil)
+        let a = await f.manager.secretVariables(for: "ses_a")
+        #expect(a["VISIBLE_KEY"] != nil && a["HIDDEN_KEY"] != nil, "the project still in scope keeps its grants")
+        #expect(try await f.store.placeholderGrants().allSatisfy { $0.sessionID == "ses_a" }, "dropped durably")
+        // A rotated visible value never reaches the excluded thread.
+        try await f.manager.rotate(account: visible.account, value: SecretValue("sk_test_rotated_after_narrowing"))
+        #expect(await f.manager.secretVariables(for: "ses_b").isEmpty)
+    }
+
+    @Test func environmentBuilderChecksTheCurrentScope() async throws {
+        let f = try await fixture()
+        f.manager.codeRoots = { ["/repos"] }
+        let secret = try await f.manager.create(label: "Roots key", value: Self.value, mode: .visible, scope: .codeRoots, confirmVisible: true)
+        try await f.manager.grant(account: secret.account, sessionID: SessionID("ses_r"), projectDirectory: "/repos/app")
+        #expect(await f.manager.secretVariables(for: "ses_r")["ROOTS_KEY"] != nil)
+        // The code root is removed: the grant no longer admits delivery.
+        f.manager.codeRoots = { [] }
+        #expect(await f.manager.secretVariables(for: "ses_r")["ROOTS_KEY"] == nil)
+    }
+
     @Test func agentListingNeverShowsValues() async throws {
         let f = try await fixture()
         _ = try await f.manager.create(label: "Key", value: Self.value, mode: .brokered, bindings: [Self.binding])

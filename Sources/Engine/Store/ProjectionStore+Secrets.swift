@@ -101,6 +101,13 @@ extension ProjectionStore {
         try await writer.write { db in try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE account = ?", arguments: [account]) }
     }
 
+    public func deletePlaceholderGrants(placeholders: [String]) async throws {
+        guard !placeholders.isEmpty else { return }
+        try await writer.write { db in
+            for placeholder in placeholders { try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE placeholder = ?", arguments: [placeholder]) }
+        }
+    }
+
     public func deletePlaceholderGrants(sessionIDs: [String]) async throws {
         guard !sessionIDs.isEmpty else { return }
         try await writer.write { db in
