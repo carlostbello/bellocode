@@ -14,6 +14,22 @@ public final class ModelPickerModel {
         /// A provider that is not connected: shown disabled with a direct "Connect…".
         case connect(integrationID: String, name: String)
         case connectOther
+        /// A choice that is not one model ("Same as thread", "Server default", "Small model"): Settings ▸ Models.
+        case choice(Choice)
+    }
+
+    /// A non-model option listed above the models (Settings ▸ Models rows).
+    public struct Choice: Hashable, Sendable, Identifiable {
+        public var id: String
+        public var title: String
+        /// What it resolves to now ("Anthropic · Claude Sonnet 5"), shown on the right.
+        public var detail: String?
+
+        public init(id: String, title: String, detail: String? = nil) {
+            self.id = id
+            self.title = title
+            self.detail = detail
+        }
     }
 
     public struct Row: Hashable, Sendable, Identifiable {
@@ -41,6 +57,16 @@ public final class ModelPickerModel {
     /// Opens the provider connection UI (nil: let the user pick a provider).
     @ObservationIgnored public var onConnect: @MainActor (String?) -> Void
     public let preferences: ModelPreferencesModel
+    /// Non-model options listed first (empty for the composer).
+    @ObservationIgnored public var choices: @MainActor () -> [Choice] = { [] }
+    /// The choice in effect (nil when a model is).
+    @ObservationIgnored public var currentChoice: @MainActor () -> String? = { nil }
+    /// Applies a choice; returns an error message on failure.
+    @ObservationIgnored public var applyChoice: @MainActor (Choice) async -> String? = { _ in nil }
+    /// The key that opens this picker, shown in its header (nil: none).
+    @ObservationIgnored public var shortcutHint: String? = AgentShortcut.modelPicker.display
+    /// A choice applied but not yet confirmed.
+    public private(set) var pendingChoice: String?
 
     // State
     public var query = "" {
@@ -73,6 +99,9 @@ public final class ModelPickerModel {
         self.onConnect = onConnect
     }
 
+    /// The catalog the picker shows now.
+    public var catalogNow: Catalog? { catalog() }
+
     /// The selection to show: the optimistic one while pending, else the thread's.
     public var selection: ModelSelection? { pending ?? current() }
 
@@ -92,13 +121,32 @@ public final class ModelPickerModel {
         query = ""
         error = nil
         let id = selection.map { "\($0.providerID)/\($0.modelID)" }
-        highlightedID = selectableRows.first { $0.model?.id == id }?.id ?? selectableRows.first?.id
+        let choice = pendingChoice ?? currentChoice()
+        highlightedID = selectableRows.first { row in
+            if case .choice(let item) = row.kind { return item.id == choice }
+            return choice == nil && row.model?.id == id
+        }?.id ?? selectableRows.first?.id
         if let selection, let variant = selection.variant { variantChoice[id ?? ""] = variant }
     }
 
     // MARK: Rows
 
-    public var sections: [Section] {
+    public var sections: [Section] { choiceSections + modelSections }
+
+    /// The non-model options, matching the query when there is one.
+    private var choiceSections: [Section] {
+        let items = choices()
+        guard !items.isEmpty else { return [] }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let shown = trimmed.isEmpty ? items : items.filter { FuzzyMatcher.score(trimmed, fields: [$0.title]) != nil }
+        guard !shown.isEmpty else { return [] }
+        return [Section(id: "choices", title: "Use", rows: shown.map { Row(id: "choice|\($0.id)", kind: .choice($0), isEnabled: true) })]
+    }
+
+    /// Whether `item` is the choice in effect (or being applied).
+    public func isChosen(_ item: Choice) -> Bool { (pendingChoice ?? currentChoice()) == item.id }
+
+    private var modelSections: [Section] {
         guard let catalog = catalog() else { return connectSections(matching: query) }
         let names = Dictionary(catalog.providers.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         let disabledProviders = Set(catalog.providers.filter { $0.activation == "disabled" }.map(\.id))
@@ -226,6 +274,23 @@ public final class ModelPickerModel {
         case .connectOther:
             onConnect(nil)
             return true
+        case .choice(let item):
+            chooseChoice(item)
+            return true
+        }
+    }
+
+    private func chooseChoice(_ item: Choice) {
+        guard (pendingChoice ?? currentChoice()) != item.id else { return }
+        pendingChoice = item.id
+        error = nil
+        let previous = applyTask
+        applyTask = Task {
+            await previous?.value
+            let failure = await applyChoice(item)
+            guard pendingChoice == item.id else { return }
+            pendingChoice = nil
+            error = failure
         }
     }
 
@@ -238,7 +303,7 @@ public final class ModelPickerModel {
 
     /// Applies at once (shown as `pending`), confirms with the server, and rolls back with a visible error on failure.
     public func select(_ selection: ModelSelection) {
-        guard selection != current() else { return }
+        guard selection != current() || currentChoice() != nil else { return }
         pending = selection
         error = nil
         let previous = applyTask

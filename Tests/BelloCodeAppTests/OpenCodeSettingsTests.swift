@@ -76,6 +76,15 @@ struct OpenCodeSettingsTests {
         #expect(AppSettings(defaults: defaults).repositoryConfigPolicy == .native)
     }
 
+    @Test func modelsSettingsHasAMenuItemAndShortcut() {
+        let menu = MainMenu.make()
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items + menu.items.compactMap(\.submenu).flatMap(items) }
+        let item = items(menu).first { $0.title == ShellCommand.showModelSettings.title }
+        #expect(item != nil, "Window ▸ Models… missing")
+        #expect(item?.keyEquivalent == "m")
+        #expect(item?.keyEquivalentModifierMask == [.command, .control, .option])
+    }
+
     @Test func everyOpenCodeActionHasAMenuItem() {
         let menu = MainMenu.make()
         func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items + menu.items.compactMap(\.submenu).flatMap(items) }

@@ -208,3 +208,16 @@ extension ModelSettingsService {
             client: { try await core.currentClient() })
     }
 }
+
+extension Engine {
+    /// Snapshots and demos against a server BelloCode does not manage: Settings ▸ Models edits `folder`'s
+    /// `opencode.json` instead (the server still reloads).
+    public func useModelSettings(folder: GlobalConfigFolder) async {
+        let core = self.core
+        models = ModelSettingsService(
+            store: store, folder: folder, modelDefaultsFile: folder.url.appending(path: "bellocode-models.json"),
+            client: { try await core.currentClient() })
+        models.engine = self
+        await models.load()
+    }
+}
