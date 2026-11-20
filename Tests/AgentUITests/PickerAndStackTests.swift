@@ -95,6 +95,43 @@ struct ModelPickerModelTests {
         #expect(model.sections.first { $0.title == "Anthropic" }!.rows.contains { $0.model?.modelID == "haiku" })
     }
 
+    /// Settings ▸ Models rows: non-model choices first, one of them or a model in effect, both applied through the picker.
+    @Test func choicesComeFirstAndApplyLikeModels() async {
+        let box = Box()
+        let model = make(box)
+        var choice: String? = "thread"
+        var applied: [String] = []
+        model.choices = { [.init(id: "thread", title: "Same as thread", detail: "Anthropic · Claude Sonnet"), .init(id: "server", title: "Server default")] }
+        model.currentChoice = { choice }
+        model.applyChoice = { item in
+            applied.append(item.id)
+            choice = item.id
+            return nil
+        }
+        model.shortcutHint = nil
+        #expect(model.sections.first?.id == "choices")
+        #expect(model.sections.first?.title == "Use")
+        model.prepareForOpen()
+        #expect(model.highlightedRow?.id == "choice|thread", "the choice in effect is highlighted, not the model")
+        // A model replaces the choice (even the model the picker would show as current).
+        let pickle = model.selectableRows.first { $0.model?.modelID == "sonnet" }!
+        #expect(model.choose(pickle))
+        await model.settle()
+        #expect(box.applied.last?.modelID == "sonnet")
+        choice = nil
+        // A choice replaces the model.
+        let server = model.selectableRows.first { $0.id == "choice|server" }!
+        #expect(model.choose(server))
+        await model.settle()
+        #expect(applied == ["server"])
+        #expect(model.isChosen(.init(id: "server", title: "Server default")))
+        // Search filters the choices too.
+        model.query = "same"
+        #expect(model.sections.first?.rows.map(\.id) == ["choice|thread"])
+        model.query = "sonnet"
+        #expect(model.sections.first?.id != "choices")
+    }
+
     @Test func keyboardSelectionVariantAndApply() async {
         let box = Box()
         let model = make(box)

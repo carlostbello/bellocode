@@ -48,6 +48,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             },
         ]
         if let engine {
+            // Which model each task uses (docs/features/models.md).
+            panes.append(
+                SettingsPane(id: "models", title: "Models", symbolName: "sparkles") {
+                    let model = ModelsSettingsModel(engine: engine, auth: auth) { id in
+                        (NSApp.delegate as? AppDelegate)?.openConnect(id)
+                    }
+                    let controller = NSHostingController(rootView: ModelsSettingsView(model: model))
+                    controller.sizingOptions = [.preferredContentSize]
+                    return controller
+                })
             panes.append(
                 SettingsPane(id: "threads", title: "Threads", symbolName: "tray.2") {
                     let controller = NSHostingController(rootView: ThreadSettingsView(engine: engine, root: engine.root))

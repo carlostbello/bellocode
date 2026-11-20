@@ -95,7 +95,7 @@ final class MergeRequestSurfaces {
                 }
                 return []
             },
-            generate: { prompt in try await engine.generateText(in: sessionID, prompt: prompt) })
+            generate: { prompt in try await engine.generateText(in: sessionID, prompt: prompt, task: "Merge request text") })
     }
 
     func display(_ context: ThreadSurfaceContext?) {

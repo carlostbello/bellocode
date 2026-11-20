@@ -20,9 +20,30 @@ import os
 public final class AutoModeService {
     /// Settings for the reviewer (persisted in `app_preference` under `auto.reviewer`).
     public private(set) var settings: AutoReviewer.Settings = .standard
-    /// The model reviews use now (`settings.model`, else a fast free catalogue model, else the server's default).
-    public var reviewerModel: ModelRef? {
-        AutoReviewer.modelRef(settings.model) ?? AutoReviewer.defaultModel(from: engine?.root.catalog.current?.models ?? [])
+    /// The model a review of `session` uses (`BackgroundModelResolver.reviewer`): the owner's choice, else the thread's
+    /// model, else opencode's default, else a fast catalogue model; free models are skipped by the automatic steps when
+    /// a paid provider is connected. Nil: opencode picks.
+    public func reviewerResolution(for session: Session?) -> BackgroundModelResolver.Resolution {
+        let catalog = session.flatMap { engine?.root.catalog.catalog(for: $0.directory) } ?? engine?.root.catalog.current
+        return BackgroundModelResolver.reviewer(choice: settings.choice, thread: session?.model, catalog: catalog)
+    }
+
+    /// The model reviews use for a thread on opencode's default model (Settings and the audit footer).
+    public var reviewerModel: ModelRef? { AutoReviewer.modelRef(reviewerResolution(for: nil).selection) }
+
+    /// The reviewer's model for a thread that is open (else for one on opencode's default).
+    public func reviewerLabel(sessionID: SessionID?) -> String {
+        reviewerLabel(for: sessionID.flatMap { engine?.loadedThread($0)?.session })
+    }
+
+    /// Audit reason codes of a provider refusing the reviewer (shown with a link to Settings ▸ Models).
+    public static let providerRefusalCodes: Set<String> = ["provider_limit", "provider_rate_limited", "provider_auth", "model_unavailable", "provider_overloaded"]
+
+    /// "OpenCode Zen · Big Pickle", or "opencode's default".
+    public func reviewerLabel(for session: Session?) -> String {
+        let catalog = session.flatMap { engine?.root.catalog.catalog(for: $0.directory) } ?? engine?.root.catalog.current
+        guard let selection = reviewerResolution(for: session).selection else { return "opencode's default" }
+        return BackgroundModelResolver.label(selection, in: catalog)
     }
     /// Unreviewed Full-access notices per thread (newest last), for Needs you. Reviewing clears them.
     public private(set) var unreviewed: [SessionID: [Notice]] = [:]
@@ -157,8 +178,8 @@ public final class AutoModeService {
                 return
             }
             let input = AutoReviewer.Input.make(action: action, context: policyContext, purpose: context.threadTitle, note: note)
-            let model = reviewerModel
-            let result = await reviewer.review(input, model: model)
+            let resolution = reviewerResolution(for: session)
+            let result = await reviewer.review(input, model: AutoReviewer.modelRef(resolution.selection), label: reviewerLabel(for: session))
             // Binding: the same request, still waiting, same input, same policy, same run of a session still in Auto.
             guard !Task.isCancelled else { return }
             guard await core.isInAutoTriage(id), let now = await core.autoContext(for: id) else { return }

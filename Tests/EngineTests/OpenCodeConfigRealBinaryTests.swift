@@ -71,7 +71,7 @@ struct OpenCodeConfigRealBinaryTests {
                 """
                 {"providers": {"mock": {"name": "Mock", "package": "@ai-sdk/openai-compatible",
                   "settings": {"baseURL": "http://127.0.0.1:\(llmPort)/v1", "apiKey": "none"},
-                  "models": {"m1": {"name": "m1"}}}}}
+                  "models": {"m1": {"name": "m1"}, "m2": {"name": "m2"}, "m-limited": {"name": "m-limited"}}}}}
                 """, to: global.appending(path: "opencode.json"))
             try write(OpenCodeConfigRealBinaryTests.globalMarker, to: global.appending(path: "AGENTS.md"))
             try write("---\ndescription: Global test agent\nmode: subagent\n---\nYou are the global test agent.\n",
@@ -158,6 +158,54 @@ struct OpenCodeConfigRealBinaryTests {
         let file = sandbox.directories.connectionFile
         await sandbox.stop()
         #expect(!FileManager.default.fileExists(atPath: file.path), "connection file left after stop")
+    }
+
+    /// Settings ▸ Models (docs/features/models.md): the default and small model written to the isolated global
+    /// opencode.json are what opencode applies after the reload; generate.text uses the model it is given; a quota
+    /// refusal comes back in a shape BelloCode maps to "usage limit".
+    @Test func modelsPaneSettingsAreAppliedByOpencode() async throws {
+        let sandbox = try await Sandbox.start("models")
+        defer { Task { await sandbox.stop() } }
+        _ = try await sandbox.inventory()
+        let models = try #require(sandbox.engine.models)
+        #expect(models.folder?.url == sandbox.directories.globalConfigFolder)
+        #expect(await models.setDefaultModel(ModelSelection(providerID: "mock", modelID: "m2")) == nil)
+        #expect(await models.setSmallModel(ModelSelection(providerID: "mock", modelID: "m1")) == nil)
+        let text = try String(contentsOf: sandbox.directories.globalConfigFolder.appending(path: "opencode.json"), encoding: .utf8)
+        #expect(text.contains("\"providers\""), "the rest of the file is kept")
+        let client = try await sandbox.client()
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(30)
+        var defaultID: String?
+        var titleModel: ModelRef?
+        while clock.now < deadline {
+            defaultID = try? await client.defaultModel(directory: sandbox.project.path)?.id
+            titleModel = (try? await client.agents(directory: sandbox.project.path))?.first { $0.id == "title" }?.model
+            if defaultID == "m2", titleModel?.id == "m1" { break }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        #expect(defaultID == "m2", "model.default after the reload")
+        #expect(titleModel == ModelRef(id: "m1", providerID: "mock"), "the title agent's model (thread titles)")
+        // The catalog the pane and the composer read follows.
+        try await waitUntil("catalog default", timeout: .seconds(30)) {
+            sandbox.engine.root.catalog.catalog(for: sandbox.project.path)?.defaultModel?.modelID == "m2"
+        }
+
+        // generate.text with a chosen model reaches that model.
+        let before = sandbox.llm.bodies.count
+        let reply = try await client.generateText(prompt: "Say ok", model: ModelRef(id: "m2", providerID: "mock"), timeout: .seconds(60))
+        #expect(reply.contains("ok"))
+        #expect(sandbox.llm.bodies.dropFirst(before).contains { $0.contains("\"m2\"") })
+
+        // A provider's quota refusal maps to "usage limit" (not a generic failure).
+        do {
+            _ = try await client.generateText(prompt: "Say ok", model: ModelRef(id: "m-limited", providerID: "mock"), timeout: .seconds(90))
+            Issue.record("expected a refusal")
+        } catch {
+            let summary = (error as? OpenCodeError)?.logSummary ?? String(describing: type(of: error))
+            print("MODELS real refusal: \(summary)")
+            #expect(BackgroundModelError.classify(error) == .quota, "classified as \(String(describing: BackgroundModelError.classify(error))) from \(summary)")
+        }
     }
 
     @Test func repositoryAgentsMdReachesTheSystemPromptOfAnUntrustedProject() async throws {
@@ -247,7 +295,12 @@ final class MockLLMServer: Sendable {
         }
         let body = String(decoding: data[headEnd.upperBound...], as: UTF8.self)
         let response: String
-        if head.hasPrefix("POST") {
+        if head.hasPrefix("POST"), body.contains("\"m-limited\"") {
+            // An exhausted allowance as OpenAI-compatible providers report it (Settings ▸ Models maps it).
+            recorded.withLock { $0.append(body) }
+            let json = #"{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}"#
+            response = "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: \(json.utf8.count)\r\nConnection: close\r\n\r\n\(json)"
+        } else if head.hasPrefix("POST") {
             recorded.withLock { $0.append(body) }
             let chunk = #"{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m1","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}"#
             let done = #"{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#

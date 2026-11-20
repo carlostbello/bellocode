@@ -111,6 +111,8 @@ enum ShellCommand: String, CaseIterable, Sendable {
     case showMCPServers
     /// Settings ▸ Secrets (secret manager, docs/features/secrets.md).
     case showSecrets
+    /// Settings ▸ Models: which model each task uses (docs/features/models.md).
+    case showModelSettings
     /// Settings ▸ opencode, reload, and the command-line tool (docs/features/opencode-config.md).
     case showOpenCodeSettings, reloadOpenCode, installCommandLineTool, uninstallCommandLineTool
     // Containers 2: housekeeping (Settings ▸ Containers).
@@ -246,6 +248,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .installCommandLineTool: #selector(AppDelegate.installCommandLineTool(_:))
         case .uninstallCommandLineTool: #selector(AppDelegate.uninstallCommandLineTool(_:))
         case .showSecrets: #selector(AppDelegate.showSecrets(_:))
+        case .showModelSettings: #selector(AppDelegate.showModelSettings(_:))
         case .verifyIsolation: #selector(AppDelegate.verifyIsolation(_:))
         case .gitQuickAction: #selector(MainWindowController.gitQuickAction(_:))
         case .showGitActions: #selector(MainWindowController.showGitActions(_:))
@@ -391,6 +394,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .installCommandLineTool: "Install Command Line Tool…"
         case .uninstallCommandLineTool: "Uninstall Command Line Tool…"
         case .showSecrets: "Secrets…"
+        case .showModelSettings: "Models…"
         case .verifyIsolation: "Verify Container Isolation"
         case .pruneContainerResources: "Prune BelloCode Resources…"
         case .modeAsk: "Ask Every Time"
@@ -554,6 +558,7 @@ enum ShellCommand: String, CaseIterable, Sendable {
         case .showMergeRequests: ("m", [.command, .control])
         case .showScheduledTasks: ("e", [.command, .control])
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: ("", [])
+        case .showModelSettings: ("m", [.command, .control, .option])
         case .showOpenCodeSettings, .reloadOpenCode, .installCommandLineTool, .uninstallCommandLineTool: ("", [])
         case .pruneContainerResources: ("", [])
         case .modeAsk: ("1", [.command, .control, .option])
@@ -772,7 +777,7 @@ struct CommandContext: Equatable, Sendable {
         case .openParentThread: return agents.hasParent
         case .showMergeRequests: return agents.available
         case .showScheduledTasks: return true
-        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets: return true
+        case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets, .showModelSettings: return true
         case .showOpenCodeSettings, .reloadOpenCode, .installCommandLineTool, .uninstallCommandLineTool: return true
         case .pruneContainerResources: return true
         case .modeAsk, .modeAutoEdit, .modeAuto, .modeFullAccess: return composerVisible

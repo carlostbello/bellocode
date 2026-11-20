@@ -185,6 +185,8 @@ public final class GitCommitModel {
     public var followUp: GitAction = .commit
     public private(set) var isGenerating = false
     public var error: String?
+    /// The provider refused the generation (usage limit, sign-in, model gone): the form links to Settings ▸ Models.
+    public private(set) var modelProblem: BackgroundModelError?
     public private(set) var summary = ""
 
     public init(repository: GitRepositoryModel, generate: (@MainActor (String) async throws -> String)?) {
@@ -208,6 +210,7 @@ public final class GitCommitModel {
         guard let generate, !isGenerating else { return }
         isGenerating = true
         defer { isGenerating = false }
+        modelProblem = nil
         let typed = message
         do {
             let context = try await repository.repository.commitContext()
@@ -218,8 +221,12 @@ public final class GitCommitModel {
                 return
             }
             if message == typed { message = proposal }
+        } catch let refusal as BackgroundModelError {
+            modelProblem = refusal
+            self.error = "Could not generate a message: \(refusal.message)"
         } catch {
-            self.error = "Could not generate a message: \((error as? GitError)?.userMessage ?? String(describing: type(of: error)))"
+            let detail = (error as? GitError)?.userMessage ?? (error as? EngineError)?.userMessage ?? String(describing: type(of: error))
+            self.error = "Could not generate a message: \(detail)"
         }
     }
 }

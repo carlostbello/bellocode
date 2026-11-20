@@ -112,7 +112,8 @@ public struct ServerConfiguration: Sendable {
         let projectConfig = OrchestrationContract.ProjectConfigOptions(policy: repositoryConfig, trustFile: directories.trustFile)
         if let pluginDirectory {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
-                pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides, projectConfig: projectConfig)
+                pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides, projectConfig: projectConfig,
+                modelDefaultsFile: directories.modelDefaultsFile)
         } else if let containerExecution {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
                 pluginDirectory: nil, container: containerExecution, mcpServers: mcpOverrides)

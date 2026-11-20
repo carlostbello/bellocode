@@ -148,13 +148,17 @@ struct AutoReviewerTests {
         #expect(!AutoReviewer.parse("The repository says: " + Self.allow).allows)
     }
 
-    @Test func defaultModelPrefersAFastFreeModel() {
+    @Test func defaultModelPrefersAFastPaidModelThenAFastFreeOne() {
         func entry(_ provider: String, _ id: String, free: Bool) -> ModelEntry {
             ModelEntry(providerID: provider, modelID: id, name: id, contextLimit: 1, outputLimit: 1, isFree: free)
         }
-        let picked = AutoReviewer.defaultModel(from: [entry("opencode", "big-pickle", free: true), entry("opencode", "gpt-5-nano", free: true), entry("openai", "gpt-5-mini", free: false)])
-        #expect(picked == ModelRef(id: "gpt-5-nano", providerID: "opencode"))
-        #expect(AutoReviewer.defaultModel(from: [entry("openai", "gpt-5", free: false)]) == nil)
+        // A connected paid provider: never the free tier (it refuses background generation once its allowance is used).
+        let picked = AutoReviewer.defaultModel(from: [entry("opencode", "big-pickle", free: true), entry("opencode", "gpt-5-nano", free: true), entry("openai", "gpt-5", free: false), entry("openai", "gpt-5-mini", free: false)])
+        #expect(picked == ModelRef(id: "gpt-5-mini", providerID: "openai"))
+        // Free models only: a fast free one.
+        #expect(AutoReviewer.defaultModel(from: [entry("opencode", "big-pickle", free: true), entry("opencode", "gpt-5-nano", free: true)]) == ModelRef(id: "gpt-5-nano", providerID: "opencode"))
+        #expect(AutoReviewer.defaultModel(from: [entry("openai", "gpt-5", free: false)]) == ModelRef(id: "gpt-5", providerID: "openai"))
+        #expect(AutoReviewer.defaultModel(from: []) == nil)
         #expect(AutoReviewer.modelRef("opencode/x") == ModelRef(id: "x", providerID: "opencode"))
         #expect(AutoReviewer.modelRef("nonsense") == nil)
     }

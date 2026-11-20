@@ -89,6 +89,7 @@ public final class ExtrasHub {
         mergeRequests.host = self
         gitLabWork.host = self
         schedules.needsApproval = { [weak self] task in await self?.raiseScheduleCard(task, requestedBy: nil) }
+        schedules.defaultModel = { [weak self] task in await self?.scheduledRunModel(task) }
     }
 
     func start(store: ProjectionStore) async {
@@ -818,6 +819,18 @@ enum SHA256Hex {
 }
 
 // MARK: - The engine behind the services
+
+extension ExtrasHub {
+    /// A scheduled run that names no model: none when its agent has its own, else the owner's default for delegated
+    /// threads and scheduled tasks, where "Same as parent" is the model of the thread that created the schedule.
+    func scheduledRunModel(_ task: ScheduledTask) async -> ModelSelection? {
+        guard let engine else { return nil }
+        let catalog = engine.root.catalog.catalog(for: task.directory)
+        if let agent = task.agent, catalog?.agents.first(where: { $0.id == agent })?.model != nil { return nil }
+        let parent: ModelSelection? = if let creator = task.createdBy { await core.knownSession(creator)?.model } else { nil }
+        return BackgroundModelResolver.child(choice: engine.models?.background.delegated ?? .sameAsThread, parent: parent, catalog: catalog)
+    }
+}
 
 extension ExtrasHub: ScheduleRunner {
     public func startThread(

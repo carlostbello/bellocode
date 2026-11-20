@@ -150,6 +150,15 @@ public actor MockOpenCodeServer {
     var recordedPrompts: [JSONValue] = [] {
         didSet { if recordedPrompts.count > 200 { recordedPrompts.removeFirst(recordedPrompts.count - 200) } }
     }
+    /// `generate.text` request bodies, oldest first (bounded).
+    var recordedGenerations: [JSONValue] = [] {
+        didSet { if recordedGenerations.count > 200 { recordedGenerations.removeFirst(recordedGenerations.count - 200) } }
+    }
+    /// Sessions asked with `session.generate`, oldest first (bounded).
+    var recordedSessionGenerations: [String] = [] {
+        didSet { if recordedSessionGenerations.count > 200 { recordedSessionGenerations.removeFirst(recordedSessionGenerations.count - 200) } }
+    }
+    var generateTextFailure: GenerateTextFailure?
     /// `session.command` runs: session, name, argument text (bounded).
     var recordedCommands: [(sessionID: String, name: String, text: String)] = [] {
         didSet { if recordedCommands.count > 200 { recordedCommands.removeFirst(recordedCommands.count - 200) } }
@@ -273,6 +282,15 @@ public actor MockOpenCodeServer {
     /// The next prompt (for `sessionID`, or any session when `nil`) plays `script`. Scripts queue in order.
     /// The `prompt` request bodies received so far, oldest first (at most 200).
     public func promptBodies() -> [JSONValue] { recordedPrompts }
+
+    /// The `generate.text` bodies received so far (at most 200).
+    public func generateTextBodies() -> [JSONValue] { recordedGenerations }
+
+    /// The sessions asked with `session.generate` so far (at most 200).
+    public func sessionGenerations() -> [String] { recordedSessionGenerations }
+
+    /// Makes `generate.text` fail (nil: answer again).
+    public func setGenerateTextFailure(_ failure: GenerateTextFailure?) { generateTextFailure = failure }
 
     /// The `session.command` runs received so far (at most 200).
     public func commandRuns() -> [(sessionID: String, name: String, text: String)] { recordedCommands }

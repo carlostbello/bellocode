@@ -347,6 +347,7 @@ enum MainMenu {
         menu.add(.showContainers)
         menu.add(.showEnvironment)
         menu.add(.showMCPServers)
+        menu.add(.showModelSettings)
         menu.add(.showOpenCodeSettings)
         menu.add(.reloadOpenCode)
         menu.add(.showSecrets)

@@ -81,7 +81,8 @@ public enum OrchestrationContract {
     /// plugin its container guard options. `mcpServers` replaces those local MCP servers' entries (container execution:
     /// servers configured for all projects are refused, `MCPRouting`).
     public static func serverConfig(pluginDirectory: URL?, limits: Limits = .standard, container: ContainerExecution? = nil,
-                                    mcpServers: [String: JSONValue] = [:], projectConfig: ProjectConfigOptions? = nil) -> String {
+                                    mcpServers: [String: JSONValue] = [:], projectConfig: ProjectConfigOptions? = nil,
+                                    modelDefaultsFile: URL? = nil) -> String {
         var options: [String: JSONValue] = [
             "limits": .object([
                 "maxDepth": .number(Double(limits.maxDepth)),
@@ -94,6 +95,7 @@ public enum OrchestrationContract {
         ]
         if let container { options["container"] = container.pluginOptions }
         if let projectConfig { options["projectConfig"] = projectConfig.pluginOptions }
+        if let modelDefaultsFile { options["modelDefaultsFile"] = .string(modelDefaultsFile.path) }
         var config: [String: JSONValue] = [
             "experimental": .object(["subagent_depth": .number(Double(limits.maxDepth))])
         ]

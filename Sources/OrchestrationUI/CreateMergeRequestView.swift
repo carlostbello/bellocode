@@ -62,7 +62,13 @@ struct CreateMergeRequestView: View {
                         .accessibilityLabel("Merge request description")
                 }
                 if !model.proposalSource.isEmpty {
-                    Text(model.proposalSource + "; edit freely.").font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).padding(.leading, 84)
+                    Text(model.proposalSource + (model.modelProblem == nil ? "; edit freely." : " Edit freely."))
+                        .font(.ds(.meta)).foregroundStyle(model.modelProblem == nil ? SwiftUI.Color.ds.text3 : SwiftUI.Color.ds.warningText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 84)
+                    if model.modelProblem != nil, let open = ModelSettingsLink.open {
+                        Button(ModelSettingsLink.title) { open() }.buttonStyle(DSButtonStyle(.outline, size: .small)).padding(.leading, 84)
+                    }
                 }
                 field("Options") {
                     HStack(spacing: DS.Space.s12) {

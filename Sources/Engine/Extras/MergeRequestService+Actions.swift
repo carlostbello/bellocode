@@ -119,7 +119,8 @@ public enum MergeRequestTemplate {
     /// The prompt for the thread's model. The answer must be a title line, a blank line, then the description.
     public static func prompt(branch: String, target: String, commits: [String]) -> String {
         """
-        Write a GitLab merge request title and description for the work in this conversation (branch \(branch) into \(target)).
+        Write a GitLab merge request title and description for branch \(branch) into \(target). Use what you know of this \
+        work from the conversation, if you have one, and its commits.
         Commits:
         \(commits.prefix(40).map { "- \($0)" }.joined(separator: "\n"))
         Answer with the title on the first line (under 72 characters, no prefix), a blank line, then a short Markdown description (what changed and why, how it was tested). Nothing else.

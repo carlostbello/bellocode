@@ -42,6 +42,7 @@ struct SnapshotRunner {
         if name == "containers3" { return await runContainers3() }
         if name == "chrome" { return await runSharedChrome() }
         if name == "opencode" { return await runOpenCode() }
+        if name == "models" { return await runModels() }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {

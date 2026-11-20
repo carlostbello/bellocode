@@ -41,7 +41,7 @@ extension MainWindowController {
         let engine = workspace.engine
         var generate: (@MainActor (String) async throws -> String)?
         if let id = container.context?.thread?.sessionID {
-            generate = { prompt in try await engine.generateText(in: id, prompt: prompt) }
+            generate = { prompt in try await engine.generateText(in: id, prompt: prompt, task: "Commit message") }
         }
         let create: @MainActor () -> Void = { [weak self] in self?.perform(.createMergeRequest) }
         let open: @MainActor () -> Void = { [weak self] in self?.perform(.showMergeRequests) }

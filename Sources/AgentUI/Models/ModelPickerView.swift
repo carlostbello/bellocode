@@ -127,7 +127,7 @@ public struct ModelPickerView: View {
             .help(model.showsHidden ? "Hide hidden models" : "Show hidden models")
             .accessibilityLabel("Show hidden models")
             .accessibilityValue(model.showsHidden ? "on" : "off")
-            DSKbdView(AgentShortcut.modelPicker.display)
+            if let hint = model.shortcutHint { DSKbdView(hint) }
         }
         .padding(.horizontal, DS.Space.s12)
         .frame(height: 44)
@@ -263,6 +263,24 @@ struct ModelPickerRow: View {
             .font(.ds(.body))
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(name), not connected. Connect.")
+        case .choice(let item):
+            HStack(spacing: DS.Space.s8) {
+                ZStack {
+                    SwiftUI.Color.clear
+                    if model.isChosen(item) { Image(systemName: "checkmark").foregroundStyle(SwiftUI.Color.ds.accent) }
+                }
+                .font(.system(size: DS.Size.iconPointMeta, weight: .semibold))
+                .frame(width: 14, height: 14)
+                .accessibilityHidden(true)
+                Text(item.title).foregroundStyle(SwiftUI.Color.ds.text).lineLimit(1).layoutPriority(1)
+                Spacer(minLength: DS.Space.s4)
+                if let detail = item.detail {
+                    Text(detail).font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            .font(.ds(.body))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel([item.title, item.detail, model.isChosen(item) ? "current" : nil].compactMap { $0 }.joined(separator: ", "))
         case .connectOther:
             HStack(spacing: DS.Space.s8) {
                 Image(systemName: "plus").font(.system(size: DS.Size.iconPointMeta, weight: .semibold)).foregroundStyle(SwiftUI.Color.ds.text3).frame(width: 14)

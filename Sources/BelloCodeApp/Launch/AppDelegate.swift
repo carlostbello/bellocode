@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let settings = AppSettings(defaults: runtime.defaults)
                 settings.apply()
                 services = makeServices(settings: settings, auth: runtime.auth)
+                // A provider refusing a background generation links here (audit, commit form, merge request form).
+                ModelSettingsLink.open = { [weak self] in self?.openSettings(pane: "models") }
                 // Quick Look copies of pasted content left by a crashed run.
                 Task { await PreviewFiles.current.cleanUpAbandoned() }
                 showMainWindow()
@@ -232,6 +234,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showMCPServers(_ sender: Any?) { openSettings(pane: "mcp") }
     /// Window ▸ Secrets… (secret manager).
     @objc func showSecrets(_ sender: Any?) { openSettings(pane: "secrets") }
+    /// Window ▸ Models… (⌃⌥⌘M): Settings ▸ Models.
+    @objc func showModelSettings(_ sender: Any?) { openSettings(pane: "models") }
 
     // MARK: opencode configuration (docs/features/opencode-config.md)
 

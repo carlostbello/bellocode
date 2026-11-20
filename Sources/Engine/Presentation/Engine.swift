@@ -172,6 +172,9 @@ public final class Engine {
     /// opencode's global configuration folder, per-project trust of repository configuration, what the server reports,
     /// reload and restart (docs/features/opencode-config.md).
     public private(set) var openCodeConfig: OpenCodeConfigService!
+    /// Settings ▸ Models: opencode's default and small model, and the models of background tasks (Auto's reviewer
+    /// lives in `auto`) (docs/features/models.md).
+    public internal(set) var models: ModelSettingsService!
     let core: EngineCore
 
     private let tasks = TaskBox()
@@ -257,6 +260,8 @@ public final class Engine {
         }
         self.sharedBrowser = sharedBrowser
         openCodeConfig = OpenCodeConfigService.make(configuration: configuration, store: store, core: core)
+        models = ModelSettingsService.make(configuration: configuration, store: store, core: core)
+        models.engine = self
         let mergeRequests = extras.mergeRequests
         secretManager.builtInBrokered = { [weak mergeRequests] in
             guard let mergeRequests else { return [] }
@@ -332,6 +337,8 @@ public final class Engine {
         await environments.writeConfigNow()
         // The plugin reads the trust file when each location is set up.
         await openCodeConfig.load()
+        // The plugin reads the delegated-thread default at each delegate_task.
+        await models.load()
         orchestration.start()
         await core.setCodeRoots(codeRoots)
         auto.start()
@@ -501,6 +508,9 @@ public final class Engine {
 
     /// Re-reads the provider, model and agent catalog for a location.
     public func refreshCatalog(directory: String) async { await core.refreshCatalog(directory: directory) }
+
+    /// Re-reads every location's catalog (credentials and the default model are server-wide).
+    public func refreshAllCatalogs() async { await core.refreshAllCatalogs() }
 
     /// Waits until every buffered stream delta is published and every pending write is on disk (tests, shutdown).
     public func flush() async { await core.flush() }

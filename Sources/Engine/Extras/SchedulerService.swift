@@ -49,6 +49,9 @@ public final class SchedulerService {
     @ObservationIgnored public weak var runner: (any ScheduleRunner)?
     /// Called when a task was found changed after its approval (it is now pending): the hub raises a card.
     @ObservationIgnored public var needsApproval: (@MainActor (ScheduledTask) async -> Void)?
+    /// The model of a new-thread run whose task names none (Settings ▸ Models ▸ Delegated threads and scheduled tasks;
+    /// nil: opencode's default, or the agent's own model).
+    @ObservationIgnored public var defaultModel: (@MainActor (ScheduledTask) async -> ModelSelection?)?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var started = false
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "scheduler")
@@ -298,8 +301,10 @@ public final class SchedulerService {
                 switch task.destination {
                 case .newThread:
                     let title = "\(task.name) · \(Self.runTitle(started, timeZone: task.timeZone))"
+                    var model = task.model
+                    if model == nil, let defaultModel { model = await defaultModel(task) }
                     let id = try await runner.startThread(
-                        directory: task.directory, title: title, prompt: prompt, agent: task.agent, model: task.model,
+                        directory: task.directory, title: title, prompt: prompt, agent: task.agent, model: model,
                         permissionMode: task.permissionMode)
                     outcome = .started(id)
                 case .thread(let thread):
