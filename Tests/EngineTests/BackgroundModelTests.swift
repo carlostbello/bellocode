@@ -289,6 +289,49 @@ struct BackgroundModelMockTests {
         #expect(JSONCEditor.value(at: ["agents", "title"], in: try String(contentsOf: config, encoding: .utf8)) == nil)
     }
 
+    final class RecordingRunner: ScheduleRunner {
+        var models: [ModelSelection?] = []
+        func startThread(
+            directory: String, title: String, prompt: String, agent: String?, model: ModelSelection?, permissionMode: PermissionMode?
+        ) async throws -> SessionID {
+            models.append(model)
+            return SessionID("ses_run\(models.count)")
+        }
+        func send(_ prompt: String, to thread: SessionID) async throws {}
+        func threadExists(_ id: SessionID) -> Bool { true }
+    }
+
+    @Test func scheduledRunsWithoutAModelUseTheOwnersDefault() async throws {
+        let (harness, engine) = try await start()
+        defer { Task { await engine.stop(); await harness.stop() } }
+        let large = ModelSelection(providerID: "mockai", modelID: "mock-large")
+        let creator = try await engine.createThread(in: Self.project, title: "creator", model: large)
+        var task = ScheduledTask(name: "Nightly", prompt: "p", rule: .interval(minutes: 60), directory: Self.project, created: Date())
+        task.createdBy = creator.id
+        // Same as parent: the model of the thread that created the schedule.
+        #expect(await engine.extras.scheduledRunModel(task) == large)
+        await engine.models.setDelegated(.serverDefault)
+        #expect(await engine.extras.scheduledRunModel(task) == nil)
+        let small = ModelSelection(providerID: "mockai", modelID: "mock-small")
+        await engine.models.setDelegated(.specific(small))
+        #expect(await engine.extras.scheduledRunModel(task) == small)
+
+        // The scheduler asks only when the task names no model.
+        let clock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let service = SchedulerService(store: try ProjectionStore(location: .inMemory), clock: clock)
+        let runner = RecordingRunner()
+        service.runner = runner
+        service.defaultModel = { _ in small }
+        await service.start()
+        _ = try await service.create(ScheduledTask(name: "A", prompt: "p", rule: .once(clock.now().addingTimeInterval(60)), directory: "/r", created: clock.now()))
+        _ = try await service.create(ScheduledTask(
+            name: "B", prompt: "p", rule: .once(clock.now().addingTimeInterval(60)), directory: "/r", model: large, created: clock.now()))
+        clock.advance(by: 60)
+        await service.tick()
+        #expect(Set(runner.models.map { $0?.modelID }) == ["mock-small", "mock-large"])
+        service.shutdown()
+    }
+
     @Test func aCredentialChangeRefreshesEveryCatalog() {
         var state = ProjectionState()
         let decoder = OpenCodeEventDecoder()

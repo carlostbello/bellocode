@@ -75,6 +75,19 @@ describe("models", () => {
     expect(L.parseModel(undefined, "low")).toHaveProperty("error")
     expect(L.parseModel(undefined)).toBeUndefined()
   })
+
+  test("delegated child model follows the owner's default", () => {
+    const parent = { providerID: "anthropic", id: "claude-sonnet-5", variant: "high" }
+    expect(L.childModel(undefined, parent)).toEqual({ providerID: "anthropic", id: "claude-sonnet-5", variant: "high" })
+    expect(L.childModel("thread", parent)).toEqual({ providerID: "anthropic", id: "claude-sonnet-5", variant: "high" })
+    expect(L.childModel("server", parent)).toBeUndefined()
+    expect(L.childModel("openai/gpt-x#low", parent)).toEqual({ providerID: "openai", id: "gpt-x", variant: "low" })
+    expect(L.childModel("nonsense", parent)).toEqual({ providerID: "anthropic", id: "claude-sonnet-5", variant: "high" })
+    expect(L.childModel("thread", null)).toBeUndefined()
+    expect(L.readModelDefaults(() => '{"version":1,"delegated":"server"}')).toBe("server")
+    expect(L.readModelDefaults(() => "{not json")).toBeUndefined()
+    expect(L.readModelDefaults(() => { throw new Error("ENOENT") })).toBeUndefined()
+  })
 })
 
 describe("text", () => {

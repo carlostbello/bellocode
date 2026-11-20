@@ -547,7 +547,11 @@ export default {
           await ctx.permission.assert({ ...invocation(tool), action: "subagent", resources: [agentID], save: [agentID] })
           const parsed = L.parseModel(input.model, input.variant)
           if (parsed && "error" in parsed) fail(parsed.error)
-          const model = parsed ?? agent.model ?? caller.model ?? undefined
+          // The call's model, else the agent's, else the owner's default for delegated threads (Settings ▸ Models;
+          // read at each call, so a change applies without a restart).
+          const modelDefaultsFile: string | undefined = typeof ctx.options?.modelDefaultsFile === "string" ? ctx.options.modelDefaultsFile : undefined
+          const ownerDefault = modelDefaultsFile ? L.readModelDefaults(() => readFileSync(modelDefaultsFile, "utf8")) : undefined
+          const model = parsed ?? agent.model ?? L.childModel(ownerDefault, caller.model) ?? undefined
           let directory: string | undefined
           const made = { threads: [] as string[], worktrees: [] as string[] }
           if (input.workspace === "worktree") {

@@ -131,6 +131,35 @@ export function parseModel(
   return { providerID: ref.slice(0, slash), id: ref.slice(slash + 1), ...(chosen ? { variant: chosen } : {}) }
 }
 
+/**
+ * The model of a delegated child when neither the call nor the agent names one (Settings ▸ Models ▸ Delegated
+ * threads, docs/features/models.md). `owner` is the defaults file's token: `thread` (or missing/unreadable) keeps the
+ * parent's model, `server` leaves it to opencode's default, `providerID/modelID[#variant]` names one.
+ */
+export function childModel(
+  owner: string | undefined,
+  parent: { readonly providerID?: string; readonly id?: string; readonly variant?: string | null } | null | undefined,
+): { providerID: string; id: string; variant?: string } | undefined {
+  const fromParent =
+    parent?.providerID && parent.id
+      ? { providerID: parent.providerID, id: parent.id, ...(parent.variant ? { variant: parent.variant } : {}) }
+      : undefined
+  if (!owner || owner === "thread") return fromParent
+  if (owner === "server") return undefined
+  const parsed = parseModel(owner)
+  return parsed && !("error" in parsed) ? parsed : fromParent
+}
+
+/** Reads the defaults file's `delegated` token; undefined when missing or unreadable (the parent's model then). */
+export function readModelDefaults(read: () => string): string | undefined {
+  try {
+    const value = JSON.parse(read())
+    return typeof value?.delegated === "string" ? value.delegated : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Depth below the top-level thread: `chain` is the caller followed by its ancestors (top-level last). */
 export function depthOf(chain: readonly SessionLike[]): number {
   return Math.max(0, chain.length - 1)
