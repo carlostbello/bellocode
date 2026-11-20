@@ -757,6 +757,8 @@ actor EngineCore {
             commit(reduction)
         case .refreshCatalog(let directory):
             await refreshCatalog(directory: directory ?? defaultCatalogDirectory())
+        case .refreshAllCatalogs:
+            await refreshAllCatalogs()
         case .resolveProject(let directory):
             await resolveProject(directory: directory, client: client)
         }
@@ -1332,6 +1334,19 @@ actor EngineCore {
     }
 
     func catalog(directory: String?) -> Catalog? { catalogs[directory ?? defaultCatalogDirectory()] }
+
+    /// Every location with a cached catalog, plus the default one (at most 16, the most recently fetched first).
+    func refreshAllCatalogs() async {
+        var directories = [defaultCatalogDirectory()]
+        for catalog in catalogs.values.sorted(by: { $0.fetched > $1.fetched }) where !directories.contains(catalog.directory) {
+            directories.append(catalog.directory)
+        }
+        await withTaskGroup(of: Void.self) { group in
+            for directory in directories.prefix(16) {
+                group.addTask { await self.refreshCatalog(directory: directory) }
+            }
+        }
+    }
 
     func refreshCatalog(directory: String) async {
         guard let client = try? await currentClient() else { return }

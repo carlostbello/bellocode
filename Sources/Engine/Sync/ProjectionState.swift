@@ -139,6 +139,9 @@ enum SyncEffect: Hashable, Sendable {
     case fetchSession(SessionID)
     /// The provider, model or agent catalog changed for a location (nil: the default location).
     case refreshCatalog(directory: String?)
+    /// Credentials or integrations changed: they are server-wide, so every cached location's catalog is stale (a
+    /// provider added with Settings ▸ Accounts or `bellocode-opencode auth login` shows in every project's picker).
+    case refreshAllCatalogs
     /// An added folder has no opencode project of its own directory (a subfolder of a repository, or not used yet):
     /// ask the server which project it belongs to (`GET /api/location`) and record that ID.
     case resolveProject(directory: String)

@@ -13,12 +13,22 @@ extension MockOpenCodeServer {
             guard case .success(let body) = jsonBody(request), let prompt = body["prompt"]?.stringValue else {
                 return .error(400, tag: "InvalidRequestError", message: "Missing key prompt")
             }
+            recordedGenerations.append(body)
+            if let failure = generateTextFailure, failure.modelIDs.isEmpty || failure.modelIDs.contains(body["model"]?["id"]?.stringValue ?? "") {
+                return .error(failure.status, tag: failure.tag, message: failure.message, extra: failure.extra)
+            }
+            if !prompt.contains("BelloCode Auto's safety reviewer") {
+                return .json(["data": ["text": .string("Add launch checklist\n\nGenerated statelessly.")]])
+            }
             let payload = prompt.components(separatedBy: "\n\n").last ?? ""
             let text = payload.contains(".sh") || payload.contains("mystery")
                 ? #"{"decision":"escalate","reason_code":"opaque_script","explanation":"Runs a script whose contents were not shown."}"#
                 : #"{"decision":"allow_once","reason_code":"routine_build","explanation":"Builds and tests the project inside its container."}"#
             return .json(["data": ["text": .string(text)]])
         }
+        // `POST /api/location/reload` (location.reload): every location re-reads its configuration (the mock has
+        // none to read; Settings ▸ Models only needs the call to succeed).
+        if method == "POST", parts == ["api", "location", "reload"] { return .noContent() }
         guard parts.count == 4, parts[0] == "api", parts[1] == "session" else { return nil }
         let id = parts[2]
         switch (method, parts[3]) {
@@ -39,10 +49,11 @@ extension MockOpenCodeServer {
             }
         case ("POST", "generate"):
             // session.generate: a fixed, recognisable proposal (title line, blank line, description).
-            return withSession(id) { _ in
+            return withSession(id) { session in
                 guard case .success(let body) = self.jsonBody(request), body["prompt"]?.stringValue != nil else {
                     return .error(400, tag: "InvalidRequestError", message: "Missing key prompt")
                 }
+                self.recordedSessionGenerations.append(session.id)
                 let text = "Parser: precedence climbing for binary operators\n\nReplaces the recursive-descent expression parser with precedence climbing.\n\n- Operators keep their associativity\n- Tested with the parser suite"
                 return .json(["data": ["text": .string(text), "tokens": ["input": 0, "output": 0], "cost": 0]])
             }
@@ -86,5 +97,29 @@ extension MockOpenCodeServer {
         out.append(contentsOf: state.syntheticLog)
         for session in state.sessions.values { out.append(String(describing: session.metadata ?? .null)) }
         return out.joined(separator: "\n")
+    }
+}
+
+/// A failure `generate.text` answers with (tests of provider refusals), for every model or only the listed model IDs.
+public struct GenerateTextFailure: Sendable {
+    public var status: Int
+    public var tag: String
+    public var message: String
+    public var extra: [(String, JSONValue)]
+    public var modelIDs: Set<String>
+
+    public init(status: Int, tag: String, message: String, extra: [(String, JSONValue)] = [], modelIDs: Set<String> = []) {
+        self.status = status
+        self.tag = tag
+        self.message = message
+        self.extra = extra
+        self.modelIDs = modelIDs
+    }
+
+    /// opencode's answer when the free tier's allowance is used up (`ProviderRequestError`, 502).
+    public static func freeUsageLimit(modelIDs: Set<String> = []) -> GenerateTextFailure {
+        GenerateTextFailure(
+            status: 502, tag: "ProviderRequestError", message: "Free usage limit reached. Add credits or use your own provider.",
+            extra: [("providerID", .string("opencode")), ("reason", .string("rate_limit")), ("status", .int(429))], modelIDs: modelIDs)
     }
 }

@@ -32,6 +32,9 @@ public struct OpenCodeDirectories: Sendable, Hashable {
     public var connectionFile: URL { runDirectory.appending(path: "server.json") }
     /// Which projects' repository opencode configuration BelloCode's plugin loads (`ProjectTrustFile`).
     public var trustFile: URL { dataRoot.appending(path: "bellocode-trust.json") }
+    /// The owner's default model for delegated child threads, read by BelloCode's plugin at each `delegate_task`
+    /// (`ModelDefaultsFile`, Settings ▸ Models).
+    public var modelDefaultsFile: URL { dataRoot.appending(path: "bellocode-models.json") }
 
     /// The variables that point opencode at these directories, shared by the server and the CLI wrapper. Model
     /// catalogue fetches and auto-update stay off (pinned binary); Claude Code files are not read.
@@ -154,6 +157,31 @@ public struct CLIConnectionFile: Codable, Sendable, Hashable {
 /// The projects whose repository opencode configuration BelloCode's plugin loads in `.bellocode` mode
 /// (`<data>/bellocode-trust.json`, rewritten by the app; no secrets). The plugin reads it at each location's setup
 /// and when the app asks it to reload.
+/// Settings ▸ Models values the plugin needs (docs/features/models.md): `delegated` is a `ModelChoice` token
+/// (`thread`, `server` or `providerID/modelID[#variant]`) used when `delegate_task` names no model and the agent has
+/// none. Missing or unreadable: "thread" (the parent's model, opencode's behaviour before the setting existed).
+public struct ModelDefaultsFile: Codable, Sendable, Hashable {
+    public var version: Int
+    public var delegated: String
+
+    public init(delegated: String) {
+        version = 1
+        self.delegated = delegated
+    }
+
+    public func write(to file: URL) throws {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+        try encoder.encode(self).write(to: file, options: .atomic)
+    }
+
+    public static func read(from file: URL) -> ModelDefaultsFile? {
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return try? JSONDecoder().decode(ModelDefaultsFile.self, from: data)
+    }
+}
+
 public struct ProjectTrustFile: Codable, Sendable, Hashable {
     public var version: Int
     /// Absolute project directories, sorted.

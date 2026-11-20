@@ -150,6 +150,9 @@ public struct GitCommitView: View {
             if let error = form.error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.dangerText)
                     .fixedSize(horizontal: false, vertical: true)
+                if form.modelProblem != nil, let open = ModelSettingsLink.open {
+                    Button(ModelSettingsLink.title) { open() }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                }
             }
             HStack(spacing: DS.Space.s8) {
                 Button("Cancel") { close() }.buttonStyle(DSButtonStyle(.ghost, size: .small)).keyboardShortcut(.cancelAction)

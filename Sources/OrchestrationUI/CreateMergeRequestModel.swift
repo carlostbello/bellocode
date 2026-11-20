@@ -79,6 +79,8 @@ public final class CreateMergeRequestModel {
     public private(set) var generating = false
     public private(set) var pushing = false
     public private(set) var problem: String?
+    /// The provider refused the proposal (usage limit, sign-in, model gone): the form links to Settings ▸ Models.
+    public private(set) var modelProblem: BackgroundModelError?
     @ObservationIgnored private var generatedTitle = ""
     @ObservationIgnored private var generatedDescription = ""
     @ObservationIgnored private var edited = false
@@ -159,6 +161,9 @@ public final class CreateMergeRequestModel {
         do {
             let answer = try await generate(MergeRequestTemplate.prompt(branch: branch, target: target, commits: commits))
             if !edited, let proposal = MergeRequestTemplate.parse(answer) { apply(proposal, source: "Proposed by the thread's model") }
+        } catch let refusal as BackgroundModelError {
+            modelProblem = refusal
+            proposalSource = "From the branch's commits. \(refusal.message)"
         } catch {
             proposalSource = "From the branch's commits (the model could not be asked)"
         }

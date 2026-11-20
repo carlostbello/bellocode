@@ -146,7 +146,7 @@ extension Engine {
     public func renameGeneratedBranch(_ id: SessionID, created: CreatedWorktree, firstPrompt: String) async -> String? {
         // The temporary name is `<prefix><slug>`; the proposal keeps the same prefix.
         let prefix = created.branch.lastIndex(of: "/").map { String(created.branch[...$0]) } ?? ""
-        guard let reply = try? await generateText(in: id, prompt: GitTextGeneration.branchPrompt(firstPrompt: firstPrompt, prefix: prefix)),
+        guard let reply = try? await generateText(in: id, prompt: GitTextGeneration.branchPrompt(firstPrompt: firstPrompt, prefix: prefix), task: "Branch name"),
               let proposal = GitTextGeneration.branchName(from: reply, prefix: prefix), proposal != created.branch
         else { return nil }
         let repository = GitRepository(directory: created.directory, runner: git.runner)

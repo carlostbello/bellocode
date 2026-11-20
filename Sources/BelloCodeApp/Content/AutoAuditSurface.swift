@@ -126,7 +126,7 @@ struct AutoAuditView: View {
 
     private var footer: some View {
         HStack(spacing: DS.Space.s6) {
-            Text("Policy \(RiskPolicy.version) · reviewer \(auto.reviewerModel.map { "\($0.providerID)/\($0.id)" } ?? "server default") · detection is best effort")
+            Text("Policy \(RiskPolicy.version) · reviewer \(auto.reviewerLabel(sessionID: state.sessionID)) · detection is best effort")
                 .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text4).lineLimit(1)
             Spacer()
             if let id = state.sessionID, auto.noticeCount(id) > 0 {
@@ -157,6 +157,19 @@ struct AutoAuditView: View {
     }
 
     private func row(_ entry: AutoAuditEntry) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            rowButton(entry)
+            // The reviewer's provider refused (usage limit, sign-in, model gone): the fix is a model choice.
+            if AutoModeService.providerRefusalCodes.contains(entry.reasonCode), let open = ModelSettingsLink.open {
+                Button(ModelSettingsLink.title) { open() }
+                    .buttonStyle(DSButtonStyle(.outline, size: .small))
+                    .padding(.leading, DS.Space.s20 + DS.Space.s12)
+                    .padding(.bottom, DS.Space.s4)
+            }
+        }
+    }
+
+    private func rowButton(_ entry: AutoAuditEntry) -> some View {
         let isExpanded = state.expanded == entry.id
         return Button {
             state.expanded = isExpanded ? nil : entry.id

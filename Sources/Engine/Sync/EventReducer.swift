@@ -77,10 +77,9 @@ enum EventReducer {
         case .resourcesChanged(let type):
             // Credentials change which models are usable, so they refresh the catalog too (and, through its revision,
             // the AuthService's integration and credential lists).
-            if [
-                "provider.updated", "model.updated", "agent.updated", "integration.updated", "models-dev.refreshed",
-                "credential.updated", "credential.switched",
-            ].contains(type) {
+            if ["integration.updated", "credential.updated", "credential.switched", "models-dev.refreshed"].contains(type) {
+                reduction.effects.append(.refreshAllCatalogs)
+            } else if ["provider.updated", "model.updated", "agent.updated"].contains(type) {
                 reduction.effects.append(.refreshCatalog(directory: envelope.directory))
             }
 

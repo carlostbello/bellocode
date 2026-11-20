@@ -19,7 +19,8 @@ public actor AutoReviewer {
     }
 
     public struct Settings: Sendable, Equatable, Codable {
-        /// `providerID/modelID`; nil picks a fast free model from the catalogue (`defaultModel`).
+        /// The owner's choice as a `ModelChoice` token (Settings ▸ Models ▸ Auto reviewer): nil or `thread` = the thread's
+        /// model, `server` = opencode's default, or `providerID/modelID`. See `choice` and `BackgroundModelResolver`.
         public var model: String?
         public var timeoutSeconds: Double
         public var maxConcurrent: Int
@@ -38,6 +39,12 @@ public actor AutoReviewer {
         }
 
         public var timeout: Duration { .milliseconds(Int(max(0.5, min(60, timeoutSeconds)) * 1000)) }
+
+        /// The owner's model choice (nil `model` is "Same as thread").
+        public var choice: ModelChoice {
+            get { model.flatMap(ModelChoice.init(token:)) ?? .sameAsThread }
+            set { model = newValue == .sameAsThread ? nil : newValue.token }
+        }
     }
 
     /// What the reviewer sees. Built by `Input.make`, which bounds and redacts every field.
@@ -129,8 +136,9 @@ public actor AutoReviewer {
     /// Queue depth now (running + waiting), for the UI.
     public var load: (running: Int, queued: Int) { (running, waiters.count) }
 
-    /// Reviews one input with `model`. Never throws: every failure is an escalation with a reason code.
-    public func review(_ input: Input, model: ModelRef?) async -> Result {
+    /// Reviews one input with `model`. Never throws: every failure is an escalation with a reason code. `label` names
+    /// the model to the owner when its provider refuses ("OpenCode Zen · Big Pickle").
+    public func review(_ input: Input, model: ModelRef?, label modelLabel: String? = nil) async -> Result {
         let hash = input.hash
         let label = model.map { "\($0.providerID)/\($0.id)" }
         let started = clock.now
@@ -159,8 +167,8 @@ public actor AutoReviewer {
         }
         if Task.isCancelled { return result(.escalate(reasonCode: "cancelled", explanation: "The review was cancelled.")) }
         history.append(clock.now)
-        let outcome = await run(input, model: model)
-        if !Task.isCancelled, outcome.reasonCode != "timeout", outcome.reasonCode != "model_error" {
+        let outcome = await run(input, model: model, label: modelLabel ?? label)
+        if !Task.isCancelled, !Self.uncached.contains(outcome.reasonCode) {
             cache[cacheKey] = (outcome, clock.now)
             cacheOrder.append(cacheKey)
             if cacheOrder.count > Self.cacheLimit { cache[cacheOrder.removeFirst()] = nil }
@@ -168,7 +176,12 @@ public actor AutoReviewer {
         return result(outcome)
     }
 
-    private func run(_ input: Input, model: ModelRef?) async -> Outcome {
+    /// Failures that say nothing about the input: never served from the cache.
+    static let uncached: Set<String> = [
+        "timeout", "model_error", "provider_limit", "provider_rate_limited", "provider_auth", "model_unavailable", "provider_overloaded",
+    ]
+
+    private func run(_ input: Input, model: ModelRef?, label: String?) async -> Outcome {
         let prompt = Self.prompt(for: input)
         let backend = self.backend
         let timeout = settings.timeout
@@ -179,7 +192,11 @@ public actor AutoReviewer {
             await withCheckedContinuation { (continuation: CheckedContinuation<Reply, Never>) in
                 race.arm(continuation)
                 race.attach(Task {
-                    do { race.finish(.text(try await backend.generate(prompt: prompt, model: model))) } catch { race.finish(.failed) }
+                    do {
+                        race.finish(.text(try await backend.generate(prompt: prompt, model: model)))
+                    } catch {
+                        race.finish(.failed(BackgroundModelError.from(error, model: label, task: "Auto's reviewer")))
+                    }
                 })
                 race.attach(Task {
                     // ContinuousClock-based sleep (AGENTS.md rule 21).
@@ -193,7 +210,12 @@ public actor AutoReviewer {
         if Task.isCancelled { return .escalate(reasonCode: "cancelled", explanation: "The review was cancelled.") }
         switch reply {
         case .text(let text): return Self.parse(text)
-        case .failed: return .escalate(reasonCode: "model_error", explanation: "The reviewer could not be reached, so you decide.")
+        case .failed(let refusal?):
+            // The provider refused (usage limit, sign-in, model gone): say which model and where to change it.
+            return .escalate(reasonCode: refusal.reasonCode, explanation: refusal.message + " You decide this one.")
+        case .failed(nil):
+            let named = label.map { " (\($0))" } ?? ""
+            return .escalate(reasonCode: "model_error", explanation: "The reviewer\(named) could not be reached, so you decide.")
         case .timedOut: return .escalate(reasonCode: "timeout", explanation: "The reviewer did not answer in time, so you decide.")
         }
     }
@@ -283,16 +305,16 @@ public actor AutoReviewer {
 
     // MARK: Model choice
 
-    /// A sensible default: a free, enabled chat model whose name says it is small and fast; else any free one; else
-    /// the server's default (nil).
+    /// The catalogue fallback: a fast model, paid ones first whenever a connected provider offers one (opencode's
+    /// free tier refuses background generation once its allowance is used); else a fast free one; nil when nothing
+    /// is usable. The full order (owner, thread, server default, this) is `BackgroundModelResolver.reviewer`.
     public static func defaultModel(from models: [ModelEntry]) -> ModelRef? {
-        let usable = models.filter { $0.enabled && $0.status != "deprecated" }
-        let fast = ["nano", "mini", "flash", "haiku", "lite", "small", "fast", "instant"]
-        let ranked = usable.filter(\.isFree).sorted { $0.name < $1.name }
-        if let pick = ranked.first(where: { entry in fast.contains { entry.modelID.lowercased().contains($0) || entry.name.lowercased().contains($0) } }) ?? ranked.first {
-            return ModelRef(id: pick.modelID, providerID: pick.providerID)
-        }
-        return nil
+        let catalog = Catalog(directory: "", models: models, fetched: .now)
+        return BackgroundModelResolver.fallback(catalog).map { ModelRef(id: $0.modelID, providerID: $0.providerID, variant: $0.variant) }
+    }
+
+    public static func modelRef(_ selection: ModelSelection?) -> ModelRef? {
+        selection.map { ModelRef(id: $0.modelID, providerID: $0.providerID, variant: $0.variant) }
     }
 
     public static func modelRef(_ value: String?) -> ModelRef? {
@@ -313,7 +335,7 @@ struct OpenCodeReviewModel: AutoReviewer.Model {
     }
 }
 
-enum Reply: Sendable { case text(String), failed, timedOut }
+enum Reply: Sendable { case text(String), failed(BackgroundModelError?), timedOut }
 
 /// Resumes once with the first result and cancels the losers.
 final class ReplyRace: Sendable {
