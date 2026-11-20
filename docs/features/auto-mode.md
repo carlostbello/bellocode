@@ -64,9 +64,11 @@ root still escalates. Tests: `RiskPolicyCodeRootTests`, `AutoCodeRootTests`.
 
 ## Reviewer (`AutoReviewer`)
 `POST /api/experimental/generate/text`: stateless, no session, no tools, nothing stored (chosen over a dedicated session:
-no transcript, no rule inheritance; over `session.generate`: that uses the working thread's history). Model: Settings value,
-else a fast free catalogue model (`*nano|mini|flash|haiku|lite…`, free; live sandbox picked `opencode/deepseek-v4.1-flash-free`),
-else the server default. Input (bounded, redacted): action, tool, ≤8 project-relative targets, command ≤600 chars with
+no transcript, no rule inheritance; over `session.generate`: that uses the working thread's history). Model: Settings ▸
+Models ▸ Auto reviewer, else the thread's model, else the server default, else a fast catalogue model; while a paid
+provider is connected the automatic steps never pick a free model (the free tier refuses `generate.text` once its
+allowance is used). A provider refusal escalates with `provider_limit` and similar codes naming the model
+([models.md](models.md)). Input (bounded, redacted): action, tool, ≤8 project-relative targets, command ≤600 chars with
 `KEY=`, auth headers, bearer, userinfo and long opaque strings redacted, thread title ≤80, policy note; never history,
 file contents or output. Fixed policy text first, then one JSON object `{"untrusted": …}` (JSON-escaped, so injected text
 stays a string). Output: exactly `{"decision":"allow_once"|"escalate","reason_code","explanation"}` (one ```json fence

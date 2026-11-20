@@ -8,7 +8,7 @@ import SwiftUI
 
 /// `--snapshot models` (docs/features/models.md): Settings ▸ Models in light and dark against the mock catalog (free
 /// OpenCode models plus the paid Mock AI provider): `default` (nothing chosen: the reviewer resolves to a paid model),
-/// `chosen` (every row set, one model no longer connected), `picker` (the reviewer row's picker with its choices) and
+/// `chosen` (every row set, one model no longer connected), `row-picker` (the reviewer row's picker with its choices) and
 /// `window` (the pane inside the Settings window).
 extension SnapshotRunner {
     func runModels() async -> Bool {
@@ -52,7 +52,7 @@ extension SnapshotRunner {
         picking.reviewer.prepareForOpen()
         written += await renderHosted(
             ModelPickerView(model: picking.reviewer) {}.background(SwiftUI.Color.ds.raised).padding(DS.Space.s12).background(SwiftUI.Color.ds.canvas),
-            state: "picker", title: "Auto reviewer")
+            state: "row-picker", title: "Auto reviewer")
 
         let controller = SettingsWindowController(settings: settings, auth: nil, importSource: nil, engine: engine)
         controller.show(pane: "models")
