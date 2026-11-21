@@ -127,8 +127,11 @@ struct BrowserTabGateTests {
         let gate = BrowserTabGate(limits: limits)
         let held = try await gate.acquire(tab: "t0", session: "a", shared: false)
         var waiting: [Task<BrowserTabGate.Ticket, any Error>] = []
-        for index in 1...2 { waiting.append(Task { try await gate.acquire(tab: "t\(index)", session: "a", shared: false) }) }
-        #expect(await eventually { await gate.counts.queued == 2 })
+        // One at a time: separate tasks reach the actor in either order, and the order queued is the order served.
+        for index in 1...2 {
+            waiting.append(Task { try await gate.acquire(tab: "t\(index)", session: "a", shared: false) })
+            #expect(await eventually { await gate.counts.queued == index })
+        }
         await #expect(throws: BrowserTabGate.Busy.threadQueueFull) { _ = try await gate.acquire(tab: "t9", session: "a", shared: false) }
         waiting.append(Task { try await gate.acquire(tab: "t3", session: "b", shared: false) })
         #expect(await eventually { await gate.counts.queued == 3 })
