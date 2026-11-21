@@ -277,7 +277,7 @@ public struct SecretPatterns: Sendable {
         out.reserveCapacity(bytes.count)
         var i = 0
         func scalar(at index: Int) -> UInt32? {
-            guard index + 4 < bytes.count + 0, index + 4 <= bytes.count else { return nil }
+            guard index >= 0, index + 4 <= bytes.count else { return nil }
             var value: UInt32 = 0
             for k in 0..<4 {
                 guard let digit = hexValue(bytes[index + k]) else { return nil }
@@ -296,7 +296,7 @@ public struct SecretPatterns: Sendable {
             case UInt8(ascii: "u"), UInt8(ascii: "U"):
                 if var value = scalar(at: i + 2) {
                     var consumed = 6
-                    if (0xD800...0xDBFF).contains(value), i + 11 < bytes.count + 1, bytes.count > i + 7, bytes[i + 6] == 0x5C,
+                    if (0xD800...0xDBFF).contains(value), i + 12 <= bytes.count, bytes[i + 6] == 0x5C,
                        bytes[i + 7] == UInt8(ascii: "u"), let low = scalar(at: i + 8), (0xDC00...0xDFFF).contains(low) {
                         value = 0x10000 + ((value - 0xD800) << 10) + (low - 0xDC00)
                         consumed = 12
