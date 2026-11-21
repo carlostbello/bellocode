@@ -376,7 +376,8 @@ public struct DockerFilterPolicy: Sendable {
             var mounts = (host["Mounts"] as? [[String: Any]]) ?? []
             let targets = Set(mounts.compactMap { $0["Target"] as? String })
             for mount in corporate.mounts where !targets.contains(mount.target) {
-                mounts.append(["Type": "bind", "Source": mount.source, "Target": mount.target, "ReadOnly": true])
+                guard let source = mount.source else { continue }
+                mounts.append(["Type": "bind", "Source": source, "Target": mount.target, "ReadOnly": true])
             }
             host["Mounts"] = mounts
         }

@@ -67,8 +67,10 @@ struct DevContainerBuildTests {
         return service
     }
 
+    /// Polls until `condition` holds or 30 s pass on the continuous clock (generous: the full suite loads the machine).
     func waitFor(_ condition: @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<250 {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while ContinuousClock.now < deadline {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -267,7 +269,13 @@ struct DevBuildProcessTests {
     /// A stand-in docker: writes its process ID to the file named by its first argument, then runs `body`.
     func script(_ body: String) throws -> String {
         let path = folder + "/docker-\(UUID().uuidString.prefix(6))"
-        try "#!/bin/sh\necho $$ > \"$1\"\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        // A leading `trap` line is installed before the pid is published, so a signal sent once the pid is known
+        // always meets the trap.
+        var lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let traps = lines.prefix { $0.hasPrefix("trap ") }
+        lines.removeFirst(traps.count)
+        let text = (["#!/bin/sh"] + traps + ["echo $$ > \"$1\""] + lines).joined(separator: "\n") + "\n"
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
         return path
     }
