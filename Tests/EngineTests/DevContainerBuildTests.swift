@@ -204,7 +204,9 @@ struct DevContainerBuildTests {
         let model = service.environment(for: project)
         #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
         let first = try #require(builds.list.withLock { $0.first }.flatMap(Self.tag))
-        #expect(await waitFor { model.image == first })
+        // The tag is known before the build is published; activation is ignored while the build is still shown, so
+        // wait for the build to settle (the image exists, no container yet).
+        #expect(await waitFor { model.image == first && model.phase == .idle }, "\(model.phase)")
         service.activate(project)
         #expect(await waitFor { model.phase == .ready }, "\(model.phase)")
 
@@ -213,7 +215,8 @@ struct DevContainerBuildTests {
         try write("x", "/node_modules/big.js")
         try write("x", "/debug.log")
         await service.retry(project)
-        try await Task.sleep(for: .milliseconds(200))
+        // The tag computation the retry started has finished (its result is applied on the main actor).
+        #expect(await waitFor { !service.devTagsInFlight.contains(model.directory) && !service.devTagsStale.contains(model.directory) })
         #expect(builds.count == 1 && model.image == first, "ignored files leave the tag alone")
 
         // A file the Dockerfile copies: a new tag, built (not pulled), and the container follows it.
@@ -228,8 +231,12 @@ struct DevContainerBuildTests {
         service.rebuild(project)
         #expect(await waitFor { builds.count == 3 }, "\(model.phase)")
         #expect(builds.list.withLock { $0.last }.flatMap(Self.tag) == second)
+        // The rebuild settles, then an activation runs to the end (pull policy "always" pulls before starting).
+        #expect(await waitFor {
+            switch model.phase { case .pulling, .starting, .unknown: false; default: true }
+        }, "\(model.phase)")
         service.activate(project)
-        try await Task.sleep(for: .milliseconds(100))
+        #expect(await waitFor { model.phase == .ready }, "\(model.phase)")
         let pulled = runtime.state.withLock { $0.pulled }
         #expect(!pulled.contains { $0.hasPrefix("bellocode-dev-") }, "a locally built tag is never pulled: \(pulled)")
     }
