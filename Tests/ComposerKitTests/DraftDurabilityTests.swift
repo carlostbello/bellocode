@@ -180,7 +180,9 @@ struct DraftDurabilityTests {
     /// N16: quit hands an edit still inside the composer's save delay to its host.
     @MainActor
     @Test func quitFlushesEveryComposersPendingEdit() async throws {
-        let controller = ComposerController()
+        // Its own registry: the shared one would also flush composers of tests running beside this one.
+        let registry = ComposerController.Registry()
+        let controller = ComposerController(registry: registry)
         let host = FakeComposerHost("k")
         controller.attach(host)
         var current = ComposerDraft(text: "")
@@ -188,7 +190,7 @@ struct DraftDurabilityTests {
         current = ComposerDraft(text: "typed just before quit")
         controller.draftDidChange()
         #expect(host.draft.text.isEmpty, "still inside the save delay")
-        ComposerController.flushAllDrafts()
+        registry.flushAll()
         #expect(host.draft.text == "typed just before quit")
     }
 }
