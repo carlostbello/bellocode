@@ -109,6 +109,9 @@ public final class SecretManager {
     @ObservationIgnored private(set) var grants: [String: PlaceholderGrant] = [:]
     @ObservationIgnored var proxy: EgressProxy?
     @ObservationIgnored var scopes: [String: EgressScope] = [:]
+    /// The folders each workspace scope serves (its spec's workspace roots), to rebuild it when code roots or raw
+    /// allowlists change (N13).
+    @ObservationIgnored var scopeRoots: [String: [String]] = [:]
     @ObservationIgnored private var gatewaySetups: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
@@ -168,6 +171,7 @@ public final class SecretManager {
         started = false
         let keys = Array(scopes.keys)
         scopes = [:]
+        scopeRoots = [:]
         gatewaySetups.values.forEach { $0.cancel() }
         gatewaySetups = [:]
         guard !keys.isEmpty, let socket = environments?.activeRuntime.socketPath else { return }
@@ -242,7 +246,16 @@ public final class SecretManager {
         }
         secrets = loaded.filter { $0.incomplete != true }.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         useLedger.seed(secrets)
-        grants = Dictionary(((try? await store.placeholderGrants()) ?? []).map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
+        // Grants that no longer fit their secret (a deletion that failed earlier: revoked, other mode, narrower scope or
+        // code roots) are not brought back; their rows are removed again (N13).
+        let stored = (try? await store.placeholderGrants()) ?? []
+        let roots = codeRoots()
+        let valid = stored.filter { grantFits($0, codeRoots: roots) }
+        if valid.count != stored.count {
+            let keep = Set(valid.map(\.placeholder))
+            try? await store.deletePlaceholderGrants(placeholders: stored.map(\.placeholder).filter { !keep.contains($0) })
+        }
+        grants = Dictionary(valid.map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
         recentAudit = (try? await store.auditEntries(limit: 100)) ?? []
         await refreshProxySnapshot()
     }
@@ -283,6 +296,40 @@ public final class SecretManager {
     }
 
     public func secret(_ account: String) -> ManagedSecret? { secrets.first { $0.account == account } }
+
+    /// Whether a stored grant still matches its secret: live, the grant's kind matches the mode, in scope.
+    func grantFits(_ grant: PlaceholderGrant, codeRoots roots: [String]) -> Bool {
+        guard let secret = secret(grant.account), !secret.revoked,
+              secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: roots) else { return false }
+        switch secret.mode {
+        case .placeholder: return Placeholder.isPlaceholder(grant.placeholder)
+        case .visible: return grant.placeholder.hasPrefix("visible_")
+        case .brokered: return false
+        }
+    }
+
+    /// The developer's code roots changed (Settings ▸ Containers ▸ Code roots), N13: grants for projects a secret's scope
+    /// no longer admits go now (their threads' environments are replaced), the shared workspace's scope serves only its
+    /// current roots, and the proxy gets the new roots.
+    func codeRootsDidChange() {
+        tasks.set("code-roots", Task { [weak self] in await self?.applyCodeRoots() })
+    }
+
+    func applyCodeRoots() async {
+        let roots = codeRoots()
+        for account in Set(grants.values.map(\.account)) {
+            guard let secret = secret(account) else { continue }
+            await dropGrants(account: account) { !secret.scope.admits(projectDirectory: $0.projectDirectory, codeRoots: roots) }
+        }
+        if let environments {
+            let key = environments.sharedKey
+            if let scope = scopes[key] {
+                rebuildScope(key, token: scope.token, roots: environments.sharedSpec()?.workspaceRoots ?? [])
+            }
+        }
+        proxy?.setScopes(Array(scopes.values))
+        await refreshProxySnapshot()
+    }
 
     /// The Keychain account an approved command or reference may read for `account`: the value saved together with the
     /// policy revision it was approved or issued under (A02), or nil when that revision no longer holds. Revisions
@@ -652,8 +699,15 @@ public final class SecretManager {
     private func dropGrants(account: String) async {
         let sessions = Set(grants.values.filter { $0.account == account }.map(\.sessionID))
         grants = grants.filter { $0.value.account != account }
-        try? await store.deletePlaceholderGrants(account: account)
+        do { try await store.deletePlaceholderGrants(account: account) } catch { grantDeletionFailed(error) }
         for session in sessions { await applyEnvironment(session) }
+    }
+
+    /// Grants are already gone in memory (no use is possible now); the next launch drops rows that no longer fit their
+    /// secret. Shown, never silent (N13).
+    private func grantDeletionFailed(_ error: any Error) {
+        lastError = "BelloCode stopped the secret's use by those threads, but could not update its database (\(ExtrasError.message(error))). It is retried at the next launch."
+        log.error("placeholder grant deletion failed")
     }
 
     /// Drops the secret's grants matching `predicate` and replaces the affected threads' environments.
@@ -661,7 +715,7 @@ public final class SecretManager {
         let dropped = grants.values.filter { $0.account == account && predicate($0) }
         guard !dropped.isEmpty else { return }
         for grant in dropped { grants[grant.placeholder] = nil }
-        try? await store.deletePlaceholderGrants(placeholders: dropped.map(\.placeholder))
+        do { try await store.deletePlaceholderGrants(placeholders: dropped.map(\.placeholder)) } catch { grantDeletionFailed(error) }
         for session in Set(dropped.map(\.sessionID)) { await applyEnvironment(session) }
     }
 
@@ -935,15 +989,32 @@ extension SecretManager {
     /// Registers (or reuses) the scope's token; nil when the proxy is not running.
     private func prepareScope(_ spec: WorkspaceSpec) -> (UInt16, String, String)? {
         guard case .ready(let port) = egressStatus, let proxy, let egress = spec.egress, let socket = environments?.activeRuntime.socketPath else { return nil }
-        let roots = spec.workspaceRoots
-        let scope = scopes[egress.scopeKey] ?? EgressScope(
-            id: egress.scopeKey, token: UUID().uuidString.lowercased() + UUID().uuidString.lowercased(),
-            rawAllowlist: rawAllowlist(projectDirectory: spec.projectRoot)) { project in
-                roots.contains { project == $0 || project.hasPrefix($0 + "/") } || roots.contains { $0 == project }
-            }
-        scopes[egress.scopeKey] = scope
+        // The token is kept for the launch; what the scope serves always follows the spec now (N13: code roots change).
+        let token = scopes[egress.scopeKey]?.token ?? UUID().uuidString.lowercased() + UUID().uuidString.lowercased()
+        let scope = rebuildScope(egress.scopeKey, token: token, roots: spec.workspaceRoots)
         proxy.setScopes(Array(scopes.values))
         return (port, scope.token, socket)
+    }
+
+    /// (Re)makes a workspace scope serving exactly `roots`, with the raw allowlists of the projects inside them.
+    @discardableResult
+    func rebuildScope(_ key: String, token: String, roots: [String]) -> EgressScope {
+        scopeRoots[key] = roots
+        let scope = EgressScope(id: key, token: token, rawAllowlist: rawAllowlist(roots: roots)) { project in
+            roots.contains { project == $0 || project.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+        }
+        scopes[key] = scope
+        return scope
+    }
+
+    /// The raw allowlists of every project a scope serving `roots` admits (the shared workspace serves many; one gateway
+    /// cannot tell them apart, so its scope carries their union, as Settings says).
+    func rawAllowlist(roots: [String]) -> Set<HostPort> {
+        let inside = { (project: String) in roots.contains { project == $0 || project.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") } }
+        let prefix = "secrets.rawEgress."
+        let configured = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+        let projects = Set(configured + roots).filter(inside)
+        return projects.reduce(into: Set<HostPort>()) { $0.formUnion(rawAllowlist(projectDirectory: $1)) }
     }
 
     /// Per-project `host:port` pairs reached without inspection ("no secret protection"), from the project's settings.
@@ -968,11 +1039,14 @@ extension SecretManager {
     public func setRawEgressAllowlist(_ entries: [String], projectDirectory: String) {
         let valid = entries.compactMap(HostPort.init(authority:)).map(\.description)
         UserDefaults.standard.set(valid, forKey: "secrets.rawEgress.\(projectDirectory)")
-        if let key = scopes.keys.first(where: { $0 == WorkspaceSpec.projectKey(for: projectDirectory) }), var scope = scopes[key] {
-            scope.rawAllowlist = Set(valid.compactMap(HostPort.init(authority:)))
-            scopes[key] = scope
-            proxy?.setScopes(Array(scopes.values))
+        // Every scope serving the project: its own container's and the shared workspace's (N13).
+        var changed = false
+        for (key, roots) in scopeRoots where scopes[key] != nil
+            && roots.contains(where: { projectDirectory == $0 || projectDirectory.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
+            scopes[key]?.rawAllowlist = rawAllowlist(roots: roots)
+            changed = true
         }
+        if changed { proxy?.setScopes(Array(scopes.values)) }
     }
 
     /// Services join the internal network under their names (the workspace reaches them; they keep their own network).

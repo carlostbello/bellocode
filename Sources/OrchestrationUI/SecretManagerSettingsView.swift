@@ -352,7 +352,6 @@ struct SecretEditorForm: View {
 
     private func save() {
         let value = SecretValue(state.value)
-        state.value = ""
         let choice = SecretChoice(mode: SecretChoice.Mode(rawValue: state.mode.rawValue) ?? .placeholder, destination: state.destination,
                                   headerName: state.header, headerPrefix: state.prefix, pathPrefix: state.path)
         Task {
@@ -360,6 +359,8 @@ struct SecretEditorForm: View {
                 let bindings = state.mode == .visible ? [] : [try SecretManager.binding(from: choice)]
                 try await manager.create(label: state.label, name: state.name.isEmpty ? nil : state.name, value: value, mode: state.mode,
                                          bindings: bindings, confirmVisible: state.confirmVisible)
+                // Cleared only once saved: a validation error keeps what the person pasted (N13).
+                state.value = ""
                 state.adding = false
                 state.label = ""
                 state.name = ""
@@ -502,10 +503,10 @@ struct SecretDetail: View {
 
     private func rotate() {
         let value = SecretValue(state.rotateValue)
-        state.rotateValue = ""
         Task {
             do {
                 try await manager.rotate(account: secret.account, value: value)
+                state.rotateValue = ""
                 state.audit = await manager.audit(account: secret.account, limit: 20)
             } catch {
                 state.error = String(describing: error)
