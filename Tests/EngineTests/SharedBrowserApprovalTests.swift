@@ -1,6 +1,7 @@
 import BelloCore
 import Foundation
 import OpenCodeKit
+import Synchronization
 import Testing
 
 @testable import Engine
@@ -93,6 +94,24 @@ struct SharedBrowserApprovalTests {
             try await service.answerApproval(forged, session: SessionID("ses_a"), approved: true, always: true)
         }
         #expect(service.approvedProjects.isEmpty)
+    }
+
+    /// N24: the decision is recorded but the thread cannot be woken (opencode offline): the answer throws so the
+    /// card stays, and answering it again once opencode is back wakes the thread.
+    @Test func aFailedWakeKeepsTheCardAndCanBeAnsweredAgain() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        let service = await fixture.service()
+        struct Offline: Error {}
+        service.wake = { _, _, _ in throw Offline() }
+        await #expect(throws: Offline.self) {
+            try await service.answerApproval(Self.card(), session: SessionID("ses_a"), approved: true, always: false)
+        }
+        let woken = Mutex<[String]>([])
+        service.wake = { session, _, _ in woken.withLock { $0.append(session.rawValue) } }
+        try await service.answerApproval(Self.card(), session: SessionID("ses_a"), approved: true, always: false)
+        #expect(woken.withLock { $0 } == ["ses_a"])
+        #expect(service.approvedSessions["ses_a"] == Self.directory)
     }
 
     @Test func aRevocationThatCannotBeSavedStaysInForceAcrossRelaunch() async throws {

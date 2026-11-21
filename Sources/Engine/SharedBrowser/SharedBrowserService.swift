@@ -443,10 +443,20 @@ public final class SharedBrowserService {
         let text = approved
             ? "[BelloCode Chrome] The person allowed the shared Chrome\(always ? " for this project" : " for this thread"). Its tools are available now as chrome_* (your own tab group; see the bellocode.chrome instructions)."
             : "[BelloCode Chrome] The person did not allow the shared Chrome. Do not ask again in this turn; use the built-in browser preview (browser.*) or explain what you need."
-        try? await engine?.core.postSynthetic(SessionID(pending.session), text: text, metadata: .object(["bellocode": .object([
+        // The thread must be woken for the answer to count: a failed wake throws, so the card stays and can be
+        // answered again (the decision above is idempotent), instead of vanishing with the agent never told (N24).
+        let metadata: JSONValue = .object(["bellocode": .object([
             "wake": .string("chrome"), "outcome": .string(approved ? "allowed" : "declined"),
-        ])]))
+        ])])
+        if let wake {
+            try await wake(SessionID(pending.session), text, metadata)
+        } else if let engine {
+            try await engine.core.postSynthetic(SessionID(pending.session), text: text, metadata: metadata)
+        }
     }
+
+    /// Test seam: how a thread is woken after an approval (nil: the engine's synthetic message).
+    @ObservationIgnored var wake: ((SessionID, String, JSONValue) async throws -> Void)?
 
     func binding(session: String, directory: String) async -> BrowserBinding {
         if let existing = bindings[session] { return existing }
