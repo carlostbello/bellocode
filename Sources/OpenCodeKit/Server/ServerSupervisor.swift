@@ -234,7 +234,8 @@ public actor ServerSupervisor {
         try configuration.prepareDirectories()
         // One server per data root, whoever starts it: the app or a private `bellocode-opencode` server (A13).
         if configuration.publishesCLIConnection {
-            guard let lock = try? OpenCodeDataLock.tryAcquire(configuration.directories) else { throw ServerSupervisorError.dataInUse }
+            // A lock that cannot be opened is a failure (counted, shown); a lock held by someone else is a wait.
+            guard let lock = try OpenCodeDataLock.tryAcquire(configuration.directories) else { throw ServerSupervisorError.dataInUse }
             dataLock = lock
         }
         defer {
