@@ -287,6 +287,13 @@ struct BuildContextScannerHostileTests {
     /// A22: whatever the bytes, the scanner returns an outcome; it never traps. Seeded mutations of a real archive
     /// (plain and gzip) and random headers.
     @Test func arbitraryBytesNeverTrap() throws {
+        // Negative sizes in special headers (a GNU long name, a PAX header) used to reach collection operations.
+        for type: Character in ["L", "x", "0", "K", "g"] {
+            for size in ["-1", "-512", "-0000001", " -7"] {
+                let bytes = Self.header("n", type: type, sizeField: size) + Array("abc".utf8) + Self.end
+                for chunk in [1, 600] { _ = BuildContextScannerTests.scan(Data(bytes), chunk: chunk) }
+            }
+        }
         var generator = SplitMix(seed: 0xB311_0C0D)
         let base = Self.pax([("path", "Dockerfile")]) + Self.file("x", Self.allowed) + Self.header("l", type: "2", link: "y")
             + Self.file("app/a.js", String(repeating: "y", count: 2000)) + Self.end
