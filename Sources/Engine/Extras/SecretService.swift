@@ -214,22 +214,46 @@ public final class SecretService {
     }
 
     /// Exchanges a reference (once) for a one-read pipe path. Only the session it was issued to may use it, and only
-    /// while `currentRevision` (the secret's command policy now; nil: not usable by commands) still equals the
-    /// revision it was issued under (R03).
-    func redeem(_ reference: String, by sessionID: SessionID, currentRevision: ((String) -> String?)? = nil) throws -> (path: String, label: String) {
+    /// while `authorize(account, revision)` still allows it: the secret's command policy is still the revision it was
+    /// issued under (R03). It returns the Keychain account holding the value of that policy (A02: never a newer value
+    /// saved under another policy); nil refuses. Without `authorize` (the legacy path alone) the account itself is read.
+    func redeem(
+        _ reference: String, by sessionID: SessionID, authorize: ((_ account: String, _ revision: String) -> String?)? = nil
+    ) throws -> (path: String, label: String) {
         guard let entry = references[reference], entry.expires > clock.now() else {
             references[reference] = nil
             throw ExtrasError("That secretRef is unknown, used or expired. Ask again with request_secret.")
         }
         guard entry.sessionID == sessionID else { throw ExtrasError("That secretRef belongs to another thread.") }
         references[reference] = nil
-        if let currentRevision, currentRevision(entry.account) != entry.revision {
-            throw ExtrasError("“\(entry.label)” changed since this secretRef was issued (its protection, scope or value). Nothing was delivered; ask again with request_secret.")
+        var valueAccount = entry.account
+        if let authorize {
+            guard let authorized = authorize(entry.account, entry.revision) else {
+                throw ExtrasError("“\(entry.label)” changed since this secretRef was issued (its protection, scope or value). Nothing was delivered; ask again with request_secret.")
+            }
+            valueAccount = authorized
         }
-        return (try deliverFile(account: entry.account), entry.label)
+        return (try deliverFile(account: valueAccount), entry.label)
     }
 
-    /// Creates the one-read pipe for `account` and starts filling it. Returns its path.
+    /// Records (or renames) the label row of a value the secret manager stores itself (no Keychain write here).
+    func recordLabel(account: String, label: String) async throws {
+        let existing = labels.first { $0.account == account }
+        let row = StoredSecretLabel(account: account, label: label, created: existing?.created ?? clock.now(), lastUsed: existing?.lastUsed ?? clock.now())
+        try await store.saveSecretLabel(row)
+        labels.removeAll { $0.account == account }
+        labels.append(row)
+        labels.sort { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+
+    /// Removes a label row (an unfinished first save, or a deleted secret) without touching the Keychain.
+    func forgetLabel(account: String) async throws {
+        try await store.deleteSecretLabel(account: account)
+        labels.removeAll { $0.account == account }
+        references = references.filter { $0.value.account != account }
+    }
+
+    /// Creates the one-read pipe for the Keychain item `account` and starts filling it. Returns its path.
     func deliverFile(account: String) throws -> String {
         pipes = pipes.filter { !$0.value.isFinished }
         guard pipes.count < Self.maxPipes else { throw ExtrasError("Too many secret files are waiting to be read. Use or let them expire first.") }

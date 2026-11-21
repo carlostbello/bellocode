@@ -53,6 +53,7 @@ extension ProjectionStore {
     /// Records a legacy (pre-modes) secret's metadata only when its account has no row at all: never replaces a row,
     /// readable or not. False when a row already existed.
     public func adoptLegacySecret(_ secret: ManagedSecret) async throws -> Bool {
+        try await runWriteHook()
         let data = try Self.secretsEncoder.encode(secret)
         return try await writer.write { db in
             try db.execute(
@@ -63,6 +64,7 @@ extension ProjectionStore {
     }
 
     public func saveManagedSecret(_ secret: ManagedSecret) async throws {
+        try await runWriteHook()
         let data = try Self.secretsEncoder.encode(secret)
         try await writer.write { db in
             try db.execute(
@@ -73,6 +75,7 @@ extension ProjectionStore {
 
     /// Removes the secret's row, its placeholders and its audit.
     public func deleteManagedSecret(account: String) async throws {
+        try await runWriteHook()
         try await writer.write { db in
             try db.execute(sql: "DELETE FROM app_managed_secret WHERE account = ?", arguments: [account])
             try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE account = ?", arguments: [account])
@@ -90,6 +93,7 @@ extension ProjectionStore {
     }
 
     public func savePlaceholderGrant(_ grant: PlaceholderGrant) async throws {
+        try await runWriteHook()
         try await writer.write { db in
             try db.execute(
                 sql: "INSERT OR REPLACE INTO app_secret_placeholder (placeholder, account, session_id, project, created) VALUES (?, ?, ?, ?, ?)",
@@ -98,10 +102,12 @@ extension ProjectionStore {
     }
 
     public func deletePlaceholderGrants(account: String) async throws {
+        try await runWriteHook()
         try await writer.write { db in try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE account = ?", arguments: [account]) }
     }
 
     public func deletePlaceholderGrants(placeholders: [String]) async throws {
+        try await runWriteHook()
         guard !placeholders.isEmpty else { return }
         try await writer.write { db in
             for placeholder in placeholders { try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE placeholder = ?", arguments: [placeholder]) }
@@ -109,6 +115,7 @@ extension ProjectionStore {
     }
 
     public func deletePlaceholderGrants(sessionIDs: [String]) async throws {
+        try await runWriteHook()
         guard !sessionIDs.isEmpty else { return }
         try await writer.write { db in
             for id in sessionIDs { try db.execute(sql: "DELETE FROM app_secret_placeholder WHERE session_id = ?", arguments: [id]) }

@@ -206,8 +206,8 @@ public final class ExtrasHub {
                     throw ExtrasError("Commands in this project run in a container, where a file on the Mac cannot be read. Use bellocode_app_secret_exec with this secretRef.")
                 }
                 let project = caller.projectDirectory
-                let (path, label) = try secrets.redeem(reference, by: caller.sessionID) { [weak self] account in
-                    self?.commandRevision(account: account, projectDirectory: project)
+                let (path, label) = try secrets.redeem(reference, by: caller.sessionID) { [weak self] account, revision in
+                    self?.commandValueAccount(account: account, revision: revision, projectDirectory: project)
                 }
                 return ClientMCPResult(
                     text: "Path for “\(label)”: \(path)\nIt yields the value once, to the first process that reads it, then disappears (10 minutes at most). Use it in one command (--token-file \(path) or \"$(cat \(path))\"). Never print, echo or log it.")
@@ -622,8 +622,12 @@ public final class ExtrasHub {
             guard let saved = secrets.account(forLabel: prompt.label) else { throw ExtrasError("“\(prompt.label)” was not saved.") }
             account = saved
         case .saveSecret(let value):
-            account = try await secrets.save(label: prompt.label, value: value)
-            await secretManager?.reload()
+            // With the secret manager, a value is only ever stored with its policy (A02); the legacy store otherwise.
+            if let secretManager {
+                account = try await secretManager.saveForApprovedCommands(label: prompt.label, value: value)
+            } else {
+                account = try await secrets.save(label: prompt.label, value: value)
+            }
         case .useSavedSecret:
             if let secretManager, let text = try await secretManager.useSaved(label: prompt.label, sessionID: request.sessionID, projectDirectory: prompt.projectDirectory) {
                 try await core.postSynthetic(
@@ -666,8 +670,10 @@ public final class ExtrasHub {
             text = "[BelloCode secret] The user saved “\(prompt.label)”. secretRef: \(reference) (one use, this thread, 1 hour). Exchange it with bellocode_app_secret_file for a one-read path when you run the command that needs it. Never print the value."
         case .file:
             // Delivered now: re-checked immediately before the value is read.
-            guard commandRevision(account: account, projectDirectory: projectDirectory) == revision else { throw ExtrasError("“\(prompt.label)” changed; nothing was delivered.") }
-            let path = try secrets.deliverFile(account: account)
+            guard let valueAccount = commandValueAccount(account: account, revision: revision, projectDirectory: projectDirectory) else {
+                throw ExtrasError("“\(prompt.label)” changed; nothing was delivered.")
+            }
+            let path = try secrets.deliverFile(account: valueAccount)
             text = "[BelloCode secret] The user saved “\(prompt.label)”. One-read path: \(path) (yields the value once to one command within 10 minutes, then disappears). Use it as --token-file \(path) or \"$(cat \(path))\". Never print the value."
         }
         try await core.postSynthetic(
@@ -708,6 +714,13 @@ extension ExtrasHub {
     func commandRevision(account: String, projectDirectory: String?) -> String? {
         guard let secretManager else { return secrets.labels.contains { $0.account == account } ? "unmanaged" : nil }
         return secretManager.commandRevision(account: account, projectDirectory: projectDirectory)
+    }
+
+    /// The Keychain account a command approved (or a reference issued) at `revision` may read: the value saved with that
+    /// policy, never a newer one (A02). Nil when the revision no longer holds.
+    func commandValueAccount(account: String, revision: String, projectDirectory: String?) -> String? {
+        guard let secretManager else { return commandRevision(account: account, projectDirectory: projectDirectory) == revision ? account : nil }
+        return secretManager.commandValueAccount(account: account, revision: revision, projectDirectory: projectDirectory)
     }
 
     /// `secret_exec` (C3 in docs/reviews/M3-M6-review.md). The agent names the command, so the agent controls what
@@ -787,10 +800,10 @@ extension ExtrasHub {
     private func runSecretCommand(_ pending: PendingSecretCommand) async throws -> String {
         guard let environments else { throw ExtrasError("Container execution is off.") }
         // Reauthorized immediately before the value is read: the approval covered the secret as it was (R03).
-        guard commandRevision(account: pending.account, projectDirectory: pending.projectDirectory) == pending.revision else {
+        guard let valueAccount = commandValueAccount(account: pending.account, revision: pending.revision, projectDirectory: pending.projectDirectory) else {
             throw ExtrasError("“\(pending.label)” changed since this command was approved (its protection, scope or value). Nothing ran; ask again with request_secret.")
         }
-        guard let value = try secretVault.read(account: pending.account), !value.isEmpty else {
+        guard let value = try secretVault.read(account: valueAccount), !value.isEmpty else {
             throw ExtrasError("“\(pending.label)” is no longer saved. Ask again with request_secret.")
         }
         // The container gets exactly the approved mounts: refused if the project's setting no longer allows one as

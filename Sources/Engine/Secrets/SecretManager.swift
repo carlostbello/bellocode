@@ -113,6 +113,12 @@ public final class SecretManager {
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var pendingAudit: [SecretAuditEntry] = []
     @ObservationIgnored private var started = false
+    /// Secrets whose value is being replaced right now (A02): a reload leaves their unfinished markers alone.
+    @ObservationIgnored private var savingAccounts: Set<String> = []
+    /// Labels being saved for the first time (lowercased), so two saves never make two secrets with one label.
+    @ObservationIgnored private var savingLabels: Set<String> = []
+    /// Increases with every proxy snapshot built; an older one finishing late is never applied over a newer one.
+    @ObservationIgnored private var snapshotGeneration = 0
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
     /// Per-binding use counts shared by the proxy and the brokered tool (R12).
     @ObservationIgnored let useLedger = SecretUseLedger()
@@ -206,9 +212,11 @@ public final class SecretManager {
             await refreshProxySnapshot()
             return
         }
-        var loaded = rows.secrets
         var quarantined = Set(rows.unreadable)
-        let known = Set(loaded.map(\.account)).union(quarantined)
+        // A row of any kind (unfinished first saves included) means the label is never adopted as a legacy secret.
+        let known = Set(rows.secrets.map(\.account)).union(quarantined)
+        var discarded: [String] = []
+        var loaded = await recoverInterruptedSaves(rows.secrets, quarantined: &quarantined, discarded: &discarded)
         for label in legacy.labels where !known.contains(label.account) {
             let adopted = ManagedSecret(account: label.account, name: uniqueHandle(ManagedSecret.handle(from: label.label), in: loaded),
                                         label: label.label, mode: .visible, created: label.created)
@@ -227,14 +235,60 @@ public final class SecretManager {
             let what = names.isEmpty ? "\(quarantined.count) secret\(quarantined.count == 1 ? "" : "s")" : names.sorted().joined(separator: ", ")
             metadataProblem = "The settings of \(what) could not be read, so \(quarantined.count == 1 ? "it is" : "they are") unavailable to agents and commands. Delete \(quarantined.count == 1 ? "it" : "them") and save again."
         }
-        secrets = loaded.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        if !discarded.isEmpty {
+            lastError = "BelloCode stopped while saving \(discarded.sorted().map { "“\($0)”" }.joined(separator: ", ")); that save was discarded and nothing from it can be used. Save it again."
+        }
+        secrets = loaded.filter { $0.incomplete != true }.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         useLedger.seed(secrets)
         grants = Dictionary(((try? await store.placeholderGrants()) ?? []).map { ($0.placeholder, $0) }, uniquingKeysWith: { a, _ in a })
         recentAudit = (try? await store.auditEntries(limit: 100)) ?? []
         await refreshProxySnapshot()
     }
 
+    /// Finishes or undoes value saves that stopped part-way (A02), except those still running in this launch: a first
+    /// save that never activated is removed (its value, label and row; quarantined if that fails), an inactive new value
+    /// and retired old values are removed from the Keychain. Returns the rows to load.
+    private func recoverInterruptedSaves(_ rows: [ManagedSecret], quarantined: inout Set<String>, discarded: inout [String]) async -> [ManagedSecret] {
+        var out: [ManagedSecret] = []
+        for row in rows {
+            if savingAccounts.contains(row.account) {
+                out.append(row)
+                continue
+            }
+            if row.incomplete == true {
+                do {
+                    for valueAccount in row.allValueAccounts { try vault.delete(account: valueAccount) }
+                    try await legacy.forgetLabel(account: row.account)
+                    try await store.deleteManagedSecret(account: row.account)
+                    discarded.append(row.label)
+                } catch {
+                    quarantined.insert(row.account)
+                }
+                continue
+            }
+            var next = row
+            if let pending = row.pendingValueAccount, pending != row.activeValueAccount, (try? vault.delete(account: pending)) != nil {
+                next.pendingValueAccount = nil
+            }
+            if let retired = row.retiredValueAccounts {
+                let remaining = retired.filter { $0 == row.activeValueAccount || (try? vault.delete(account: $0)) == nil }
+                next.retiredValueAccounts = remaining.filter { $0 != row.activeValueAccount }.nilIfEmpty
+            }
+            if next != row { try? await store.saveManagedSecret(next) }
+            out.append(next)
+        }
+        return out
+    }
+
     public func secret(_ account: String) -> ManagedSecret? { secrets.first { $0.account == account } }
+
+    /// The Keychain account an approved command or reference may read for `account`: the value saved together with the
+    /// policy revision it was approved or issued under (A02), or nil when that revision no longer holds. Revisions
+    /// include the value's account, so a newer value is never read under an older approval.
+    public func commandValueAccount(account: String, revision: String, projectDirectory: String?) -> String? {
+        guard let current = commandRevision(account: account, projectDirectory: projectDirectory), current == revision else { return nil }
+        return secret(account)?.activeValueAccount
+    }
 
     /// The approved-command path's authorization (R03): the secret's current policy revision when commands may receive
     /// it now (a commands-only or visible secret, not revoked, in scope for `projectDirectory`), else nil. References
@@ -259,8 +313,9 @@ public final class SecretManager {
         case .codeRoots: "code-roots"
         case .project(let root): "project:" + root
         }
-        let parts = [secret.account, secret.mode.rawValue, secret.revoked ? "revoked" : "live", secret.visibleConfirmed ? "confirmed" : "commands",
+        let parts: [String] = [secret.account, secret.mode.rawValue, secret.revoked ? "revoked" : "live", secret.visibleConfirmed ? "confirmed" : "commands",
                      scope, String(secret.rotated?.timeIntervalSince1970 ?? 0), String(secret.created.timeIntervalSince1970)]
+            + (secret.valueAccount.map { ["value:" + $0] } ?? [])
         return SHA256Hex.of(parts.joined(separator: "\u{1F}"))
     }
     /// The label a quarantined account was saved under (Settings shows it; never the value).
@@ -296,23 +351,154 @@ public final class SecretManager {
         if let existing = legacy.account(forLabel: trimmed), quarantinedAccounts.contains(existing) {
             throw ExtrasError("“\(trimmed)” has settings BelloCode cannot read. Delete it in Settings ▸ Secrets first.")
         }
-        let account = try await legacy.save(label: trimmed, value: value)
-        let replaced = self.secret(account) != nil
-        var secret = self.secret(account) ?? ManagedSecret(account: account, name: handle, label: trimmed, mode: mode, created: clock.now())
-        // A new value under an existing label is a rotation: outstanding command references and approvals end (R03).
-        if replaced { secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now()) }
-        secret.name = handle
-        secret.mode = mode
-        secret.scope = scope
-        secret.bindings = bindings
-        secret.visibleConfirmed = mode == .visible && confirmVisible
-        secret.revoked = false
-        if mode == .brokered, secret.operation == nil { secret.operation = "http" }
-        try await persist(secret)
-        await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .created, detail: mode.title))
+        guard !value.isEmpty else { throw ExtrasError("The value is empty.") }
+        guard value.utf8.count <= SecretService.maxValueBytes else {
+            throw ExtrasError("The value is longer than \(SecretService.maxValueBytes / 1024) KB, the most a one-read path can carry.")
+        }
+        let key = trimmed.lowercased()
+        guard !savingLabels.contains(key) else { throw ExtrasError("“\(trimmed)” is already being saved.") }
+        savingLabels.insert(key)
+        defer { savingLabels.remove(key) }
+        let now = clock.now()
+        let apply: (inout ManagedSecret) -> Void = { secret in
+            secret.name = handle
+            secret.mode = mode
+            secret.scope = scope
+            secret.bindings = bindings
+            secret.visibleConfirmed = mode == .visible && confirmVisible
+            secret.revoked = false
+            if mode == .brokered, secret.operation == nil { secret.operation = "http" }
+        }
+        let saved: ManagedSecret
+        if let existing = legacy.account(forLabel: trimmed) {
+            guard self.secret(existing) != nil else { throw ExtrasError("“\(trimmed)” is still being set up. Try again in a moment.") }
+            // A new value under an existing label is a rotation: outstanding command references and approvals end (R03).
+            saved = try await replaceValue(of: existing, with: value, label: trimmed) { secret in
+                apply(&secret)
+                secret.rotated = Self.nextRotation(after: secret.rotated, now: now)
+            }
+        } else {
+            saved = try await createFirstValue(account: Self.newAccount(), label: trimmed, value: value, apply: apply)
+        }
+        await record(SecretAuditEntry(account: saved.account, at: clock.now(), destination: "", outcome: .created, detail: mode.title))
         await refreshProxySnapshot()
         log.info("secret saved (value in Keychain only)")
-        return secret
+        return saved
+    }
+
+    nonisolated static func equalInConstantTime(_ a: Data, _ b: Data) -> Bool {
+        guard a.count == b.count else { return false }
+        var difference: UInt8 = 0
+        for (x, y) in zip(a, b) { difference |= x ^ y }
+        return difference == 0
+    }
+
+    nonisolated static func newAccount() -> String { "bcs_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
+
+    /// A fresh Keychain account for one value of `account` (A02: values are never overwritten in place).
+    nonisolated static func newValueAccount(for account: String) -> String {
+        account + ".v" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased()
+    }
+
+    /// A first save (A02). Order: an unusable row (so a crash never leaves a label to adopt), the value under a fresh
+    /// Keychain account, the label, then one row write that activates value and policy together. A failure removes what
+    /// was written; a crash is cleaned up at the next launch.
+    private func createFirstValue(account: String, label: String, value: SecretValue, apply: (inout ManagedSecret) -> Void) async throws -> ManagedSecret {
+        let valueAccount = Self.newValueAccount(for: account)
+        var draft = ManagedSecret(account: account, name: "", label: label, mode: .visible, created: clock.now())
+        apply(&draft)
+        draft.incomplete = true
+        draft.pendingValueAccount = valueAccount
+        savingAccounts.insert(account)
+        defer { savingAccounts.remove(account) }
+        try await store.saveManagedSecret(draft)
+        do {
+            try vault.store(account: valueAccount, label: label, value: value)
+            try await legacy.recordLabel(account: account, label: label)
+            var active = draft
+            active.incomplete = nil
+            active.pendingValueAccount = nil
+            active.valueAccount = valueAccount
+            try await persist(active)
+            return active
+        } catch {
+            try? vault.delete(account: valueAccount)
+            try? await legacy.forgetLabel(account: account)
+            try? await store.deleteManagedSecret(account: account)
+            throw error
+        }
+    }
+
+    /// Replaces the value of an existing secret (A02). The new value goes to a fresh Keychain account recorded first
+    /// as pending (never read); one row write then makes it active together with the policy `change` gives it; only
+    /// then is the old value removed. Until that write, every reader keeps the old value under the old policy; after
+    /// it, the new value under the new policy. A failure removes the unused new value.
+    @discardableResult
+    func replaceValue(of account: String, with value: SecretValue, label: String?, change: @escaping (inout ManagedSecret) -> Void) async throws -> ManagedSecret {
+        guard let current = secret(account) else { throw ExtrasError("That secret no longer exists.") }
+        guard !savingAccounts.contains(account) else { throw ExtrasError("“\(current.label)” is already being saved.") }
+        let valueAccount = Self.newValueAccount(for: account)
+        savingAccounts.insert(account)
+        defer { savingAccounts.remove(account) }
+        try await mutate(account) { $0.pendingValueAccount = valueAccount }
+        do {
+            try vault.store(account: valueAccount, label: label ?? current.label, value: value)
+            if let label, label != current.label {
+                try await legacy.recordLabel(account: account, label: label)
+            }
+            try await mutate(account) { secret in
+                change(&secret)
+                if let label { secret.label = label }
+                secret.retiredValueAccounts = ((secret.retiredValueAccounts ?? []) + [secret.activeValueAccount]).filter { $0 != valueAccount }
+                secret.valueAccount = valueAccount
+                secret.pendingValueAccount = nil
+            }
+        } catch {
+            try? vault.delete(account: valueAccount)
+            try? await mutate(account) { if $0.pendingValueAccount == valueAccount { $0.pendingValueAccount = nil } }
+            throw error
+        }
+        await removeRetiredValues(account)
+        guard let saved = secret(account) else { throw ExtrasError("That secret no longer exists.") }
+        return saved
+    }
+
+    /// Removes old values from the Keychain once a newer one is active (kept in the row until removed, so a launch
+    /// retries).
+    private func removeRetiredValues(_ account: String) async {
+        guard let secret = secret(account), let retired = secret.retiredValueAccounts, !retired.isEmpty else { return }
+        let active = secret.activeValueAccount
+        let removed = Set(retired.filter { $0 != active && (try? vault.delete(account: $0)) != nil })
+        guard !removed.isEmpty else { return }
+        try? await mutate(account) { $0.retiredValueAccounts = $0.retiredValueAccounts?.filter { !removed.contains($0) }.nilIfEmpty }
+    }
+
+    /// Applies `change` to the secret's row and writes it; the in-memory record gets the same change applied to its
+    /// state after the write (so changes made meanwhile, such as use counts, are kept).
+    private func mutate(_ account: String, _ change: (inout ManagedSecret) -> Void) async throws {
+        guard var next = secret(account) else { throw ExtrasError("That secret no longer exists.") }
+        change(&next)
+        try await store.saveManagedSecret(next)
+        if let index = secrets.firstIndex(where: { $0.account == account }) {
+            var latest = secrets[index]
+            change(&latest)
+            secrets[index] = latest
+        }
+    }
+
+    /// Saves a value from the legacy card ("Approved command" without a managed choice): a new commands-only secret, or
+    /// a new value for the secret already saved under this label (its policy kept).
+    func saveForApprovedCommands(label: String, value: SecretValue) async throws -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let existing = legacy.account(forLabel: trimmed), let secret = secret(existing) {
+            // The same value again changes nothing (approvals stay); a different one is a rotation (R03).
+            if let stored = await Self.read(vault, account: secret.activeValueAccount), Self.equalInConstantTime(stored.utf8, value.utf8) {
+                return existing
+            }
+            try await rotate(account: existing, value: value)
+            return existing
+        }
+        return try await create(label: trimmed, value: value, mode: .visible, commandsOnly: true).account
     }
 
     /// Changes mode, scope, bindings or name (never the value: `rotate`). Leaving placeholder mode drops its placeholders.
@@ -321,9 +507,20 @@ public final class SecretManager {
         try validate(mode: changed.mode, bindings: changed.bindings, value: nil, confirmVisible: confirmVisible || current.visibleConfirmed && changed.mode == .visible)
         guard ManagedSecret.isValidHandle(changed.name) else { throw ExtrasError("“\(changed.name)” cannot be a name.") }
         if let other = secret(named: changed.name), other.account != changed.account { throw ExtrasError("Another secret is already named \(changed.name).") }
-        var next = changed
-        next.visibleConfirmed = changed.mode == .visible && (confirmVisible || current.visibleConfirmed)
-        try await persist(next)
+        // Only the editable settings come from `changed` (a Settings copy may be stale): use counts, rotation,
+        // revocation and the value's Keychain account stay as they are now (N13).
+        let visibleConfirmed = changed.mode == .visible && (confirmVisible || current.visibleConfirmed)
+        let edit: (inout ManagedSecret) -> Void = { secret in
+            secret.name = changed.name
+            secret.mode = changed.mode
+            secret.scope = changed.scope
+            secret.bindings = changed.bindings
+            secret.operation = changed.operation
+            secret.visibleConfirmed = visibleConfirmed
+        }
+        var next = current
+        edit(&next)
+        try await mutate(changed.account, edit)
         if current.mode != next.mode || current.name != next.name {
             await dropGrants(account: next.account)
         } else if current.scope != next.scope {
@@ -336,11 +533,14 @@ public final class SecretManager {
 
     /// Replaces the value; placeholders stay the same (programs and files keep working).
     public func rotate(account: String, value: SecretValue) async throws {
+        guard !value.isEmpty else { throw ExtrasError("The value is empty.") }
         guard var secret = secret(account) else { throw ExtrasError("That secret no longer exists.") }
         try validate(mode: secret.mode, bindings: secret.bindings, value: value, confirmVisible: true)
-        _ = try await legacy.save(label: secret.label, value: value)
-        secret.rotated = Self.nextRotation(after: secret.rotated, now: clock.now())
-        try await persist(secret)
+        guard value.utf8.count <= SecretService.maxValueBytes else {
+            throw ExtrasError("The value is longer than \(SecretService.maxValueBytes / 1024) KB, the most a one-read path can carry.")
+        }
+        let now = clock.now()
+        secret = try await replaceValue(of: account, with: value, label: nil) { $0.rotated = Self.nextRotation(after: $0.rotated, now: now) }
         await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .rotated, detail: "New value; placeholders unchanged"))
         await refreshProxySnapshot()
         if secret.mode == .visible { await reapplyEnvironments(account: account) }
@@ -366,12 +566,25 @@ public final class SecretManager {
     /// Deletes the value from the Keychain and every record of the secret (cannot be undone).
     public func delete(account: String) async {
         await dropGrants(account: account)
+        // Every value this secret owns first (current, pending, retired), so nothing can be read even if a later step fails.
+        do {
+            for valueAccount in secret(account)?.allValueAccounts ?? [account] { try vault.delete(account: valueAccount) }
+        } catch {
+            lastError = ExtrasError.message(error)
+            return
+        }
         await legacy.delete(account: account)
         if let error = legacy.lastError {
             lastError = error
             return
         }
-        try? await store.deleteManagedSecret(account: account)
+        do {
+            try await store.deleteManagedSecret(account: account)
+        } catch {
+            // The row would bring the secret back (without a value) at the next launch: shown, so it can be retried.
+            lastError = "“\(secret(account)?.label ?? "The secret")” was removed from the Keychain, but its settings could not be deleted (\(ExtrasError.message(error))). Delete it again."
+            return
+        }
         secrets.removeAll { $0.account == account }
         if quarantinedAccounts.remove(account) != nil, quarantinedAccounts.isEmpty { metadataProblem = nil }
         await refreshProxySnapshot()
@@ -485,7 +698,12 @@ public final class SecretManager {
             switch secret.mode {
             case .placeholder: variables[secret.name] = grant.placeholder
             case .visible where secret.visibleConfirmed:
-                if let value = await Self.read(vault, account: secret.account) { variables[secret.name] = String(decoding: value.utf8, as: UTF8.self) }
+                // The value saved with this policy (A02), and only if the policy did not change while it was read.
+                let revision = Self.policyRevision(secret)
+                if let value = await Self.read(vault, account: secret.activeValueAccount),
+                   let now = self.secret(grant.account), Self.policyRevision(now) == revision {
+                    variables[secret.name] = String(decoding: value.utf8, as: UTF8.self)
+                }
             default: break
             }
         }
@@ -527,9 +745,12 @@ public final class SecretManager {
         try? vault.read(account: account)
     }
 
-    nonisolated static func readAll(_ vault: any SecretVault, accounts: [String]) async -> [String: SecretValue] {
+    /// Values by secret account, each read from the Keychain account given for it (the value of its current policy).
+    nonisolated static func readAll(_ vault: any SecretVault, accounts: [(account: String, valueAccount: String)]) async -> [String: SecretValue] {
         var out: [String: SecretValue] = [:]
-        for account in accounts { if let value = try? vault.read(account: account), !value.isEmpty { out[account] = value } }
+        for (account, valueAccount) in accounts {
+            if let value = try? vault.read(account: valueAccount), !value.isEmpty { out[account] = value }
+        }
         return out
     }
 
@@ -767,8 +988,12 @@ extension SecretManager {
     /// Gives the proxy the current secrets, grants and (in memory) values of placeholder secrets.
     func refreshProxySnapshot() async {
         guard let proxy else { return }
+        snapshotGeneration += 1
+        let generation = snapshotGeneration
         let hidden = secrets.filter { $0.mode == .placeholder && !$0.revoked }
-        let values = await Self.readAll(vault, accounts: hidden.map(\.account))
+        let values = await Self.readAll(vault, accounts: hidden.map { ($0.account, $0.activeValueAccount) })
+        // A newer snapshot (a revocation, a narrower scope, a new value) was built while this one read the Keychain.
+        guard generation == snapshotGeneration, self.proxy === proxy else { return }
         let placeholderGrants = grants.filter { Placeholder.isPlaceholder($0.key) }
         proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }),
                                     values: values, codeRoots: codeRoots()))
@@ -802,4 +1027,9 @@ extension SecretManager {
             auditGap += count
         }
     }
+}
+
+fileprivate extension Array {
+    /// Nil for an empty array (optional list fields that are absent when empty).
+    var nilIfEmpty: [Element]? { isEmpty ? nil : self }
 }

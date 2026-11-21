@@ -108,7 +108,7 @@ extension SecretManager {
             guard secret.scope.admits(projectDirectory: caller.projectDirectory, codeRoots: codeRoots()) else {
                 return ClientMCPResult(text: "“\(secret.label)” is not available to this project.", isError: true)
             }
-            guard let value = await Self.read(vault, account: secret.account) else {
+            guard let value = await Self.read(vault, account: secret.activeValueAccount) else {
                 return ClientMCPResult(text: "“\(secret.label)” is not in the Keychain any more.", isError: true)
             }
             resolved[name] = (secret, value)

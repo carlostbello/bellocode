@@ -208,6 +208,27 @@ public struct ManagedSecret: Codable, Sendable, Hashable, Identifiable {
     public var uses: [String: Int]
     /// Revoked secrets keep their audit but no use succeeds.
     public var revoked: Bool
+    /// The Keychain account holding the current value. Each new value is written to a fresh account and activated
+    /// together with its policy in one metadata write, so a value is never readable under another value's policy
+    /// (v1.0.0 review A02). Nil: `account` itself (saved before value generations).
+    public var valueAccount: String?
+    /// A new value written (or being written) but not active yet: never read; removed at launch if a save stopped.
+    public var pendingValueAccount: String?
+    /// Previous values' accounts still to be removed from the Keychain (removed at launch if that stopped).
+    public var retiredValueAccounts: [String]?
+    /// A secret whose first save has not finished: unusable by every path, removed at launch.
+    public var incomplete: Bool?
+
+    /// The Keychain account every reader of the current value uses.
+    public var activeValueAccount: String { valueAccount ?? account }
+    /// Every Keychain account this secret may own (delete removes them all).
+    public var allValueAccounts: [String] {
+        var out = [account, activeValueAccount]
+        if let pendingValueAccount { out.append(pendingValueAccount) }
+        out += retiredValueAccounts ?? []
+        var seen = Set<String>()
+        return out.filter { seen.insert($0).inserted }
+    }
 
     public init(account: String, name: String, label: String, mode: SecretUseMode, scope: SecretScope = .global,
                 bindings: [SecretBinding] = [], operation: String? = nil, created: Date = Date(), rotated: Date? = nil,
