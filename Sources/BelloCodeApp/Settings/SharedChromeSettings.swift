@@ -110,7 +110,7 @@ struct SharedChromeSettingsGroup: View {
 
     private var statusDetail: String {
         switch service.phase {
-        case .failed(let message): message
+        case .failed(let message), .stopUnconfirmed(let message): message
         case .preparingImage(let line): line
         case .ready: "\(service.bindings.count) thread\(service.bindings.count == 1 ? "" : "s") have a tab group · \(service.viewerSubscribers) live view\(service.viewerSubscribers == 1 ? "" : "s")"
         default: service.isAvailable ? "Starts on first use." : "Needs container execution (Rancher Desktop)."

@@ -78,11 +78,18 @@ final class FakeBrowserRuntime: BrowserRuntime {
         var startExit: Int?
         var chromiumRestarts = 0
         var creates = 0
+        /// The stop request fails and the container keeps running (a daemon disconnection).
+        var stopFails = false
     }
     let state = Mutex(State())
     /// When set, image preparation parks on it (an image build in progress) until fired or cancelled.
     let imageHold: ManualSleeper?
-    init(imageHold: ManualSleeper? = nil) { self.imageHold = imageHold }
+    /// When set, `start()` parks on it (a restart in progress) until fired or cancelled.
+    let startHold: ManualSleeper?
+    init(imageHold: ManualSleeper? = nil, startHold: ManualSleeper? = nil) {
+        self.imageHold = imageHold
+        self.startHold = startHold
+    }
     func log(_ entry: String) { state.withLock { $0.log.append(entry) } }
     var entries: [String] { state.withLock { $0.log } }
 
@@ -107,9 +114,12 @@ final class FakeBrowserRuntime: BrowserRuntime {
     func start() async throws {
         log("start")
         state.withLock { $0.running = true; $0.exitCode = nil }
+        if let startHold { try await startHold.sleep(.seconds(7_200)) }
     }
+    struct StopFailed: Error {}
     func stop(timeout: Int) async throws {
         log("stop(\(timeout))")
+        if state.withLock({ $0.stopFails }) { throw StopFailed() }
         state.withLock { $0.running = false; $0.exitCode = 0 }
     }
     func remove() async throws { log("remove"); state.withLock { $0.exists = false; $0.running = false } }
