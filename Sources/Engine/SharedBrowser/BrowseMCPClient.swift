@@ -117,7 +117,7 @@ public actor BrowseMCPClient {
                     guard let first = try await group.next() else { throw Failure.closed }
                     return first
                 } catch {
-                    await self.abandon(id, reason: error)
+                    self.abandon(id, reason: error)
                     throw error
                 }
             }

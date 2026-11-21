@@ -106,6 +106,60 @@ struct GitProjectTests {
         #expect(try await repo.git("stash", "list").isEmpty)
     }
 
+    /// A04: HEAD, the index and the working copy hold three different contents for one path. The handoff must carry
+    /// the staged version to the new worktree's index, not only the final edit, and so must a rollback to the source.
+    @Test func handoffPreservesStagedOnlyContentInBothDirections() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "head\n"])
+        defer { repo.remove() }
+        func threeContents() async throws {
+            try repo.write("a.txt", "staged\n")
+            _ = try await repo.git("add", "a.txt")
+            try repo.write("a.txt", "final\n")
+            try repo.write("added.txt", "staged new file\n")
+            _ = try await repo.git("add", "added.txt")
+        }
+        try await threeContents()
+        let parent = repo.base.appending(path: "worktrees").path
+        let service = WorktreeService(runner: repo.runner)
+        let created = try await service.handoff(from: repo.path, branch: "bellocode/staged", parent: parent)
+        #expect(try await repo.git("show", ":a.txt", in: created.directory) == "staged\n")
+        #expect(try String(contentsOfFile: created.directory + "/a.txt", encoding: .utf8) == "final\n")
+        #expect(try await repo.git("show", ":added.txt", in: created.directory) == "staged new file\n")
+        #expect(try await repo.git("stash", "list").isEmpty)
+
+        // Rollback: a taken branch sends the work back to the source, index included.
+        _ = try await repo.git("branch", "bellocode/taken")
+        try await threeContents()
+        await #expect(throws: WorktreeError.self) { _ = try await service.handoff(from: repo.path, branch: "bellocode/taken", parent: parent) }
+        #expect(try await repo.git("show", ":a.txt") == "staged\n")
+        #expect(try repo.read("a.txt") == "final\n")
+        #expect(try await repo.git("show", ":added.txt") == "staged new file\n")
+        #expect(try await repo.git("stash", "list").isEmpty)
+    }
+
+    /// A04: a restore that does not match the saved copy (here the new worktree's index is changed after the apply)
+    /// is not success: the handoff fails and the work goes back to the source, index included, before any copy is
+    /// dropped.
+    @Test func aHandoffWhoseRestoreDoesNotVerifyFailsAndGivesTheWorkBack() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "head\n"])
+        defer { repo.remove() }
+        try repo.write("a.txt", "staged\n")
+        _ = try await repo.git("add", "a.txt")
+        try repo.write("a.txt", "final\n")
+        let parent = repo.base.appending(path: "worktrees").path
+        let service = WorktreeService(runner: repo.runner)
+        let runner = repo.runner
+        let hooks = WorktreeService.HandoffHooks(beforeVerify: { destination in
+            _ = try? await runner.run(["reset", "-q", "--", "a.txt"], in: destination)
+        })
+        await #expect(throws: GitError.self) {
+            _ = try await service.handoff(from: repo.path, branch: "bellocode/mismatch", parent: parent, hooks: hooks)
+        }
+        #expect(try await repo.git("show", ":a.txt") == "staged\n")
+        #expect(try repo.read("a.txt") == "final\n")
+        #expect(try await repo.git("worktree", "list").split(separator: "\n").count == 1)
+    }
+
     /// R04: the worktree cannot be created and, meanwhile, an editor recreates an untracked file in the source, so the
     /// stash cannot go back. The stash entry and a recovery ref must survive, and the error must say how to recover.
     @Test func failedHandoffKeepsTheStashWhenTheSourceRestoreFails() async throws {

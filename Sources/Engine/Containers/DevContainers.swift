@@ -255,6 +255,11 @@ extension EnvironmentService {
         let tail = Mutex(Data())
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
+            // EOF: an installed handler would re-fire at full CPU until the process exits (N18).
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
             tail.withLock { buffer in
                 buffer.append(data)
                 if buffer.count > 16_384 { buffer = buffer.suffix(8_192) }
@@ -332,7 +337,7 @@ extension EnvironmentService {
             for command in commands {
                 let result = try? await runtimeRef.run(container: container, argv: [shell, "-c", command], workingDir: directory,
                                                        environment: environment, user: user, timeout: .seconds(900))
-                guard let self else { return }
+                guard self != nil else { return }
                 if result?.exitCode != 0 {
                     model.lastError = "The dev container command “\(command.prefix(80))” failed (exit \(result.map { String($0.exitCode) } ?? "unknown"))."
                     return

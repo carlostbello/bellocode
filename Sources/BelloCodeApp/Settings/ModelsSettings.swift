@@ -53,7 +53,12 @@ final class ModelsSettingsModel {
         }
         let models = engine.models!
         let auto: AutoModeService = engine.auto
-        var apply: (@MainActor (ModelSelection?, @escaping @MainActor (ModelSelection?, Bool) async -> String?) async -> String?)!
+        // The pickers are made before `self` exists; they reach `applyModel` through this box, filled in below (a
+        // late-assigned captured `var` is a Swift 6 isolation warning, N32).
+        let applier = ModelApplier()
+        let apply: @MainActor (ModelSelection?, @escaping @MainActor (ModelSelection?, Bool) async -> String?) async -> String? = { selection, write in
+            await applier.apply(selection, write)
+        }
 
         newThreads = picker(current: { [weak models] in models?.configuredDefault }, apply: { selection in await apply(selection) { await models.setDefaultModel($0, reload: $1) } })
         small = picker(current: { [weak models] in models?.configuredSmall }, apply: { selection in await apply(selection) { await models.setSmallModel($0, reload: $1) } })
@@ -106,23 +111,24 @@ final class ModelsSettingsModel {
             await models.setDelegated(item.id == "server" ? .serverDefault : .sameAsThread)
         }
 
-        // Writing opencode.json reloads opencode, which cancels pending approvals and questions: ask first, or save only.
-        apply = { [weak self] selection, write in
-            guard let self else { return nil }
-            let counts = self.attentionCounts()
-            var reloadNow = true
-            if counts.approvals + counts.questions > 0 {
-                let waiting = counts.approvals + counts.questions
-                reloadNow = self.confirm(
-                    "Apply the model change now?",
-                    "opencode reloads its configuration, which cancels \(waiting) pending approval\(waiting == 1 ? "" : "s") or question\(waiting == 1 ? "" : "s"). Choose Save Only to apply it at the next reload (Window ▸ Reload opencode Configuration).",
-                    "Reload Now", "Save Only")
-            }
-            let problem = await write(selection, reloadNow)
-            self.message = problem ?? (reloadNow ? nil : "Saved. It applies when opencode next reloads its configuration.")
-            return problem
-        }
+        applier.model = self
         Self.last = self
+    }
+
+    /// Writing opencode.json reloads opencode, which cancels pending approvals and questions: ask first, or save only.
+    func applyModel(_ selection: ModelSelection?, _ write: @escaping @MainActor (ModelSelection?, Bool) async -> String?) async -> String? {
+        let counts = attentionCounts()
+        var reloadNow = true
+        if counts.approvals + counts.questions > 0 {
+            let waiting = counts.approvals + counts.questions
+            reloadNow = confirm(
+                "Apply the model change now?",
+                "opencode reloads its configuration, which cancels \(waiting) pending approval\(waiting == 1 ? "" : "s") or question\(waiting == 1 ? "" : "s"). Choose Save Only to apply it at the next reload (Window ▸ Reload opencode Configuration).",
+                "Reload Now", "Save Only")
+        }
+        let problem = await write(selection, reloadNow)
+        message = problem ?? (reloadNow ? nil : "Saved. It applies when opencode next reloads its configuration.")
+        return problem
     }
 
     static func choiceID(_ choice: ModelChoice?) -> String? {
@@ -275,5 +281,15 @@ struct ModelsSettingsView: View {
             guard !isSnapshot else { return }
             await model.refresh()
         }
+    }
+}
+
+/// Lets pickers built in `ModelsSettingsModel.init` call the model once it exists (weak: the pane owns the pickers).
+@MainActor
+private final class ModelApplier {
+    weak var model: ModelsSettingsModel?
+
+    func apply(_ selection: ModelSelection?, _ write: @escaping @MainActor (ModelSelection?, Bool) async -> String?) async -> String? {
+        await model?.applyModel(selection, write)
     }
 }

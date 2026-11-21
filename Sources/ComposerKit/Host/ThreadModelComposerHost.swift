@@ -135,8 +135,7 @@ public final class ThreadModelComposerHost: ComposerHost {
         cache.store(draft, for: draftKey, owner: ObjectIdentifier(source))
         if source.draft != draft.text { source.draft = draft.text }
         if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
-            let key = draftKey
-            Task { await archive.save(draft, for: key) }
+            archive.save(draft, for: draftKey)
         }
     }
 

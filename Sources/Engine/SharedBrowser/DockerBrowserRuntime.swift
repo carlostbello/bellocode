@@ -95,6 +95,10 @@ public struct DockerBrowserRuntime: BrowserRuntime {
         try await client.ownedContainer(containerName, required: Self.containerOwnership)
     }
 
+    /// The ID of the container proven BelloCode's (labels), or nil. Every exec and forward addresses it by this ID,
+    /// never by name (R07, N12).
+    public func ownedContainerID() async throws -> String? { try await ownedContainer()?.id }
+
     public func inspect() async throws -> BrowserContainerState? {
         guard let inspect = try await ownedContainer() else { return nil }
         return BrowserContainerState(running: inspect.state.running, configHash: inspect.config.labels?["app.bellocode.config"], exitCode: inspect.state.exitCode)
@@ -136,7 +140,8 @@ public struct DockerBrowserRuntime: BrowserRuntime {
     }
 
     public func status() async throws -> BrowserRuntimeStatus? {
-        let result = try await ExecSession.run(client: client, container: containerName, argv: ["/usr/local/bin/bellocode-browser-ctl", "status"],
+        guard let owned = try await ownedContainer() else { return nil }
+        let result = try await ExecSession.run(client: client, container: owned.id, argv: ["/usr/local/bin/bellocode-browser-ctl", "status"],
                                                wrap: false, limit: 64 * 1024, timeout: .seconds(20))
         return BrowserRuntimeStatus.parse(String(decoding: result.stdout, as: UTF8.self))
     }
@@ -160,13 +165,15 @@ public struct DockerBrowserRuntime: BrowserRuntime {
 
     /// The downloads folder's listing and one file (≤ 256 MiB) for the downloads shelf.
     public func downloads() async throws -> [BrowserDownload] {
-        let result = try await ExecSession.run(client: client, container: containerName, argv: ["/usr/local/bin/bellocode-browser-ctl", "downloads"],
+        guard let owned = try await ownedContainer() else { return [] }
+        let result = try await ExecSession.run(client: client, container: owned.id, argv: ["/usr/local/bin/bellocode-browser-ctl", "downloads"],
                                                wrap: false, limit: 256 * 1024, timeout: .seconds(20))
         return BrowserDownload.parseList(String(decoding: result.stdout, as: UTF8.self))
     }
 
     public func download(_ name: String) async throws -> Data {
-        let result = try await ExecSession.run(client: client, container: containerName, argv: ["/usr/local/bin/bellocode-browser-ctl", "download", name],
+        guard let owned = try await ownedContainer() else { throw ContainerError.notFound(containerName) }
+        let result = try await ExecSession.run(client: client, container: owned.id, argv: ["/usr/local/bin/bellocode-browser-ctl", "download", name],
                                                wrap: false, limit: 256 << 20, timeout: .seconds(120))
         guard result.exitCode == 0 else { throw BrowserStartError.unavailable(String(decoding: result.stderr, as: UTF8.self)) }
         return result.stdout

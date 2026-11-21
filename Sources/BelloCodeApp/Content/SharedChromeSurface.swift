@@ -237,11 +237,11 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
     }
 
     nonisolated func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let event = body["event"] as? String else { return }
-        let ms = body["ms"] as? Int
-        let text = body["text"] as? String
-        let reason = body["reason"] as? String
-        MainActor.assumeIsolated { handle(event: event, ms: ms, text: text, reason: reason) }
+        // WebKit delivers script messages on the main thread; `body` is main-actor isolated, so it is read inside.
+        MainActor.assumeIsolated {
+            guard let body = message.body as? [String: Any], let event = body["event"] as? String else { return }
+            handle(event: event, ms: body["ms"] as? Int, text: body["text"] as? String, reason: body["reason"] as? String)
+        }
     }
 
     private func handle(event: String, ms: Int?, text: String?, reason: String?) {
@@ -373,6 +373,7 @@ struct SharedChromeStatusPill: View {
         case .preparingImage, .starting, .stopping, .recovering: "arrow.triangle.2.circlepath"
         case .failed: "xmark.octagon.fill"
         case .sandboxUnavailable: "exclamationmark.shield.fill"
+        case .stopUnconfirmed: "exclamationmark.triangle.fill"
         }
     }
 
@@ -380,7 +381,7 @@ struct SharedChromeStatusPill: View {
         switch phase {
         case .ready: .ds.successText
         case .failed, .sandboxUnavailable: .ds.dangerText
-        case .recovering: .ds.warningText
+        case .recovering, .stopUnconfirmed: .ds.warningText
         default: .ds.text3
         }
     }
@@ -389,7 +390,7 @@ struct SharedChromeStatusPill: View {
         switch phase {
         case .ready: .ds.successSurface
         case .failed, .sandboxUnavailable: .ds.dangerSurface
-        case .recovering: .ds.warningSurface
+        case .recovering, .stopUnconfirmed: .ds.warningSurface
         default: .ds.fillSubtle
         }
     }
@@ -633,6 +634,7 @@ struct SharedChromePlaceholder: View {
         case .recovering(let detail): return "Restarting: \(detail)"
         case .failed: return "The shared Chrome could not start"
         case .sandboxUnavailable: return "Chromium's sandbox is unavailable"
+        case .stopUnconfirmed: return "The shared Chrome may still be running"
         }
     }
 
@@ -647,6 +649,7 @@ struct SharedChromePlaceholder: View {
         case .recovering: return "Threads that were using it are told; their tabs need to be opened again."
         case .failed(let message): return message
         case .sandboxUnavailable: return BrowserStartError.sandboxUnavailable.description + " See Settings ▸ Browser."
+        case .stopUnconfirmed(let message): return message
         }
     }
 }
@@ -715,7 +718,7 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
         case .takeOver: return service.phase.isReady && service.humanControl.isEmpty
         case .giveBack: return !service.humanControl.isEmpty
         case .start: return service.isAvailable && !service.phase.isReady
-        case .stop: return service.phase.isReady
+        case .stop: return service.phase.isReady || service.phase.isStopUnconfirmed
         }
     }
 }

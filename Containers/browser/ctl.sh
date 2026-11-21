@@ -48,7 +48,27 @@ vnc-password)
   echo ok
   ;;
 downloads)
-  find /data/downloads -maxdepth 1 -type f ! -name '*.crdownload' -printf '{"name":"%f","bytes":%s,"mtime":%T@}\n' 2>/dev/null | sed 's/\.[0-9]*}$/}/'
+  # JSON-encoded by Python (a name may hold quotes, backslashes or control characters); names that are not UTF-8 are
+  # skipped, as are links and partial downloads.
+  python3 -I -c '
+import json, os, stat, sys
+d = "/data/downloads"
+try:
+    names = os.listdir(d)
+except OSError:
+    sys.exit(0)
+for n in sorted(names):
+    if n.endswith(".crdownload"):
+        continue
+    try:
+        n.encode("utf-8")
+        st = os.lstat(os.path.join(d, n))
+    except (UnicodeEncodeError, OSError):
+        continue
+    if not stat.S_ISREG(st.st_mode):
+        continue
+    print(json.dumps({"name": n, "bytes": st.st_size, "mtime": int(st.st_mtime)}, ensure_ascii=False))
+' 2>/dev/null
   ;;
 download)
   name=${2:?name}

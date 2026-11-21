@@ -1,4 +1,5 @@
 import BelloCore
+import ContainerKit
 import DesignSystem
 import Engine
 import Foundation
@@ -65,56 +66,25 @@ final class BrowseStatusModel {
     }
 
     /// Runs the tool with a 15 s limit and a minimal environment, drains both pipes, returns at most 8 KB of output.
+    /// TERM then KILL at the limit; never blocks a thread on a pipe a leftover process holds (N18).
     nonisolated static func run(_ path: String, _ arguments: [String]) async -> String {
-        await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = arguments
-            process.environment = [
-                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",
-                "HOME": NSHomeDirectory(), "NO_COLOR": "1",
-            ]
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-            process.standardInput = FileHandle.nullDevice
-            let collected = OutputBuffer()
-            output.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty { handle.readabilityHandler = nil } else { collected.append(data) }
-            }
-            // The 15 s limit sleeps on ContinuousClock (an uptime-clock `asyncAfter` may not fire in an idle process).
-            let limit = ContinuousDeadline()
-            process.terminationHandler = { _ in
-                limit.cancel()
-                output.fileHandleForReading.readabilityHandler = nil
-                collected.append(output.fileHandleForReading.readDataToEndOfFile())
-                continuation.resume(returning: collected.text)
-            }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(returning: "Could not run \(path).")
-                return
-            }
-            limit.schedule(after: .seconds(15)) {
-                if process.isRunning { process.terminate() }
-            }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.standardInput = FileHandle.nullDevice  // ChildProcess sets it again (input or /dev/null)
+        process.arguments = arguments
+        process.environment = [
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",
+            "HOME": NSHomeDirectory(), "NO_COLOR": "1",
+        ]
+        do {
+            let result = try await ChildProcess.run(process, ChildProcess.Options(timeout: .seconds(15), outputLimit: 8 * 1024, mergeOutput: true))
+            return String(decoding: result.stdout, as: UTF8.self)
+        } catch is ChildProcess.LaunchFailed {
+            return "Could not run \(path)."
+        } catch {
+            return ""
         }
     }
-}
-
-/// Collects a child's output, bounded to 8 KB.
-private final class OutputBuffer: Sendable {
-    private let data = Mutex(Data())
-
-    func append(_ chunk: Data) {
-        data.withLock { data in
-            if data.count < 8_192 { data.append(chunk.prefix(8_192 - data.count)) }
-        }
-    }
-
-    var text: String { data.withLock { String(decoding: $0, as: UTF8.self) } }
 }
 
 /// Settings ▸ Browser: link handling, dev-server offers, and the "Your Chrome" status.

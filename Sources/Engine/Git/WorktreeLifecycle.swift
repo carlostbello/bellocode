@@ -47,16 +47,23 @@ extension WorktreeService {
     struct HandoffHooks: Sendable {
         var afterStash: (@Sendable () async -> Void)?
         var afterCreate: (@Sendable (String) async -> Void)?
-        init(afterStash: (@Sendable () async -> Void)? = nil, afterCreate: (@Sendable (String) async -> Void)? = nil) {
+        /// After the stash applied in the new worktree, before the result is verified.
+        var beforeVerify: (@Sendable (String) async -> Void)?
+        init(
+            afterStash: (@Sendable () async -> Void)? = nil, afterCreate: (@Sendable (String) async -> Void)? = nil,
+            beforeVerify: (@Sendable (String) async -> Void)? = nil
+        ) {
             self.afterStash = afterStash
             self.afterCreate = afterCreate
+            self.beforeVerify = beforeVerify
         }
     }
 
     /// Worktree handoff (T3 Code `t3_worktree_handoff`): moves the uncommitted work of `projectDirectory`'s checkout
     /// into a new worktree on a new branch from the current HEAD. The changes are stashed (untracked included, by
-    /// hash) so the source is clean, the worktree is created, and the stash is applied there (stashes are shared by
-    /// a repository's worktrees). An operation-specific ref keeps the stash commit reachable throughout.
+    /// hash) so the source is clean, the worktree is created, and the stash is applied there with its index (stashes
+    /// are shared by a repository's worktrees). The index, the working files and the untracked files are each
+    /// verified against the stash before anything that holds a copy is dropped (A04). An operation-specific ref keeps the stash commit reachable throughout.
     ///
     /// On failure the stash goes back to the source. The stash entry, the ref and the new worktree are removed only
     /// once that restore verifiably succeeded; otherwise everything is kept and `StashRecoveryError` says how to
@@ -103,7 +110,8 @@ extension WorktreeService {
         }
         await hooks.afterCreate?(created.directory)
         let destination = GitRepository(directory: created.directory, runner: runner)
-        if let failure = await destination.restore(stash) {
+        let verifyHook = hooks.beforeVerify.map { hook in { @Sendable in await hook(created.directory) } }
+        if let failure = await destination.restore(stash, beforeVerify: verifyHook) {
             throw await giveBack(createdAt: created.directory, original: GitError.failed(command: "stash", status: 1, message: failure.message))
         }
         try? await source.dropStash(stash)

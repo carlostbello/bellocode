@@ -202,9 +202,11 @@ extension GitRepository {
         }
     }
 
-    /// Applies the stash `hash` (no index restore; conflicts are reported by git). Kept in the list until dropped.
-    public func applyStash(_ hash: String) async throws {
-        _ = try await git(["stash", "apply", "--quiet", hash])
+    /// Applies the stash `hash` (conflicts are reported by git). Kept in the list until dropped. With `index`, the
+    /// staged changes are restored to the index too (git refuses when they no longer apply); without it they are
+    /// folded into the working tree.
+    public func applyStash(_ hash: String, index: Bool = false) async throws {
+        _ = try await git(["stash", "apply", "--quiet"] + (index ? ["--index"] : []) + [hash])
     }
 
     /// Drops the stash entry whose commit is `hash` (found by hash, never by a remembered position: the entry's
@@ -232,23 +234,89 @@ extension GitRepository {
         _ = try? await git(["update-ref", "-d", ref], allowFailure: true)
     }
 
-    /// Applies `hash` and reports what stopped it: nil when it applied cleanly with no unmerged paths, otherwise git's
-    /// message and the paths left unresolved (an untracked file in the way, a conflict).
+    /// Applies `hash`, index included, and reports what stopped it: nil only when it applied cleanly and the result
+    /// verifiably matches the saved copy (index, tracked working files and untracked files each compared with the
+    /// stash), otherwise git's message and the paths concerned (an untracked file in the way, a conflict, a mismatch).
     ///
     /// Untracked files already in the way are checked first: git would otherwise apply the tracked changes and then
-    /// stop, leaving a half-restored checkout that the recovery instructions could not describe.
-    func restore(_ hash: String) async -> (message: String, unresolved: [String])? {
+    /// stop, leaving a half-restored checkout that the recovery instructions could not describe. "No unmerged paths"
+    /// is not proof of a restore: a stash applied without its index loses staged-only content silently (A04).
+    func restore(_ hash: String, beforeVerify: (@Sendable () async -> Void)? = nil) async -> (message: String, unresolved: [String])? {
         let inTheWay = await untrackedInTheWay(hash: hash)
         if !inTheWay.isEmpty { return ("Untracked files are in the way; nothing was applied.", inTheWay) }
         do {
-            try await applyStash(hash)
+            try await applyStash(hash, index: true)
         } catch {
             let message = (error as? GitError)?.userMessage ?? String(describing: error)
             return (message, await unresolvedPaths(hash: hash))
         }
         let unmerged = (try? await git(["diff", "--name-only", "--diff-filter=U", "-z"], allowFailure: true).text) ?? ""
         let paths = unmerged.split(separator: "\0").map(String.init)
-        return paths.isEmpty ? nil : ("Some changes conflict.", paths)
+        if !paths.isEmpty { return ("Some changes conflict.", paths) }
+        await beforeVerify?()
+        if let mismatch = await restoreMismatch(hash) {
+            return ("The restored changes do not match the saved copy (\(mismatch.part)); the saved copy was kept.", mismatch.paths)
+        }
+        return nil
+    }
+
+    /// Compares the checkout with the stash `hash`: the index with its index commit (`^2`), tracked working files with
+    /// its working-tree commit, and its untracked files (`^3`) with the files here. Nil when all three match.
+    func restoreMismatch(_ hash: String) async -> (part: String, paths: [String])? {
+        let common = ["--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--no-renames"]
+        func differing(_ arguments: [String]) async -> [String]? {
+            guard let output = try? await git(["diff"] + common + ["--name-only", "-z"] + arguments + ["--"], allowFailure: true), output.status == 0
+            else { return ["(unreadable)"] }
+            let paths = output.stdout.split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+            return paths.isEmpty ? nil : paths
+        }
+        if let paths = await differing(["--cached", "\(hash)^2"]) { return ("staged changes", paths) }
+        if let paths = await differing([hash]) { return ("working files", paths) }
+        guard case .some(.some) = try? await revParse("\(hash)^3") else { return nil }
+        guard let listing = try? await git(["ls-tree", "-r", "-z", "\(hash)^3"], allowFailure: true), listing.status == 0 else {
+            return ("untracked files", ["(unreadable)"])
+        }
+        var links: [(path: String, object: String)] = []
+        var files: [(path: String, object: String)] = []
+        var missing: [String] = []
+        for entry in listing.stdout.split(separator: 0) {
+            let text = String(decoding: entry, as: UTF8.self)
+            guard let tab = text.firstIndex(of: "\t") else { continue }
+            let fields = text[..<tab].split(separator: " ")
+            guard fields.count == 3 else { continue }
+            let path = String(text[text.index(after: tab)...])
+            let full = directory + "/" + path
+            if fields[0] == "120000" {
+                if isSymlink(full) { links.append((path, String(fields[2]))) } else { missing.append(path) }
+            } else if FileManager.default.fileExists(atPath: full), !isSymlink(full) {
+                files.append((path, String(fields[2])))
+            } else {
+                missing.append(path)
+            }
+        }
+        if !missing.isEmpty { return ("untracked files", missing) }
+        var differ: [String] = []
+        // A link's content is its target.
+        for link in links {
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: directory + "/" + link.path),
+                  let output = try? await git(["hash-object", "--stdin"], input: Data(target.utf8), allowFailure: true),
+                  output.status == 0, output.text.trimmingCharacters(in: .whitespacesAndNewlines) == link.object
+            else { differ.append(link.path); continue }
+        }
+        var start = 0
+        while start < files.count {
+            let chunk = files[start..<min(start + 200, files.count)]
+            start += chunk.count
+            guard let output = try? await git(["hash-object", "--"] + chunk.map(\.path), allowFailure: true), output.status == 0 else {
+                differ += chunk.map(\.path)
+                continue
+            }
+            let objects = output.text.split(separator: "\n").map(String.init)
+            for (index, entry) in chunk.enumerated() where index >= objects.count || objects[index] != entry.object {
+                differ.append(entry.path)
+            }
+        }
+        return differ.isEmpty ? nil : ("untracked files", differ.sorted())
     }
 
     /// The paths the stash would restore that are in the way or unmerged here (best effort, for the recovery message).

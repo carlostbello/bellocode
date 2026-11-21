@@ -55,6 +55,9 @@ public enum BrowserPhase: Sendable, Equatable {
     case recovering(String)
     case failed(String)
     case sandboxUnavailable
+    /// A stop was asked for but the container could not be confirmed stopped (the runtime request failed and it still
+    /// runs, or its state could not be read). Monitoring continues; Stop retries; tabs are still valid (A19).
+    case stopUnconfirmed(String)
 
     public var title: String {
         switch self {
@@ -66,6 +69,7 @@ public enum BrowserPhase: Sendable, Equatable {
         case .recovering: "Restarting"
         case .failed: "Failed"
         case .sandboxUnavailable: "Sandbox unavailable"
+        case .stopUnconfirmed: "Stop not confirmed"
         }
     }
 
@@ -108,6 +112,8 @@ public actor BrowserSupervisor {
     private var activity: [Activity: Int] = [:]
     private var idleTask: Task<Void, Never>?
     private var monitor: Task<Void, Never>?
+    /// The restart after a crash: owned here (not by the monitor), so a stop cancels and waits for it (N11).
+    private var recovering: Task<Void, Never>?
     private var failures: [ContinuousClock.Instant] = []
     private var stopRequested = false
     private var admissionClosed = false
@@ -210,6 +216,8 @@ public actor BrowserSupervisor {
 
     public func ensureRunning() async throws {
         if let stopping { await stopping.value }
+        // A restart after a crash is already under way: wait for it instead of starting a second one (N11).
+        if let recovering { await recovering.value }
         if phase == .ready { return }
         if case .sandboxUnavailable = phase { throw BrowserStartError.sandboxUnavailable }
         if let starting { return try await starting.value }
@@ -220,6 +228,9 @@ public actor BrowserSupervisor {
     }
 
     private func startNow() async throws {
+        // A container whose stop was not confirmed is reconciled by this start (an unchanged running one is reused).
+        monitor?.cancel()
+        monitor = nil
         stopRequested = false
         admissionClosed = false
         set(.preparingImage("Checking the browser image"))
@@ -310,7 +321,7 @@ public actor BrowserSupervisor {
             _ = try? await starting.value
             if phase != .ready { return }
         }
-        guard phase == .ready || phase == .starting || phase.isRecovering else {
+        guard phase == .ready || phase == .starting || phase.isRecovering || phase.isStopUnconfirmed else {
             if case .failed = phase { set(.stopped) }
             return
         }
@@ -327,6 +338,13 @@ public actor BrowserSupervisor {
         monitor = nil
         idleTask?.cancel()
         idleTask = nil
+        // A restart after a crash is cancelled and waited for: it must not publish Ready after this stop (N11).
+        if let recovering {
+            note("cancel-recovery")
+            recovering.cancel()
+            await recovering.value
+            self.recovering = nil
+        }
         set(.stopping(reason))
         note("close-admission")
         if (activity[.call] ?? 0) > 0 {
@@ -342,7 +360,32 @@ public actor BrowserSupervisor {
             if (activity[.call] ?? 0) > 0 { note("drain-timeout") }
         }
         note("orderly-stop")
-        do { try await runtime.stop(timeout: timing.stopTimeoutSeconds) } catch { note("stop-error") }
+        var stopError: (any Error)?
+        do { try await runtime.stop(timeout: timing.stopTimeoutSeconds) } catch {
+            note("stop-error")
+            stopError = error
+        }
+        // A failed request is not a stop: reconcile with the container's actual state (A19).
+        if let stopError, await !confirmedStopped() {
+            note("stop-unconfirmed")
+            admissionClosed = false
+            set(.stopUnconfirmed("BelloCode could not confirm the shared Chrome stopped (\(Self.describe(stopError))). It may still be running; Stop again to retry."))
+            startStopConfirmation(reason: reason)
+            return
+        }
+        finishStop(reason: reason)
+    }
+
+    /// Whether the container is verifiably not running (absent or exited). Unknown counts as not confirmed.
+    private func confirmedStopped() async -> Bool {
+        guard let state = try? await runtime.inspect() else {
+            // The inspection itself failed: unknown, unless the container is gone.
+            return false
+        }
+        return !state.running
+    }
+
+    private func finishStop(reason: String) {
         // Tabs do not survive a browser stop (sign-ins do): handles from before are stale for every thread.
         advanceGeneration(reason: reason == "idle"
             ? "The shared Chrome was stopped after being idle; its tabs were closed (sign-ins are kept)."
@@ -350,6 +393,29 @@ public actor BrowserSupervisor {
         note("stopped")
         admissionClosed = false
         set(.stopped)
+    }
+
+    /// Keeps watching a container whose stop was not confirmed: once it is seen stopped, the stop completes.
+    private func startStopConfirmation(reason: String) {
+        monitor?.cancel()
+        let interval = timing.pollInterval
+        let sleep = self.sleep
+        monitor = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await sleep(interval) } catch { return }
+                guard let self else { return }
+                if await self.checkStopConfirmed(reason: reason) { return }
+            }
+        }
+    }
+
+    private func checkStopConfirmed(reason: String) async -> Bool {
+        guard phase.isStopUnconfirmed else { return true }
+        guard await confirmedStopped() else { return false }
+        note("stop-confirmed")
+        monitor = nil
+        finishStop(reason: reason)
+        return true
     }
 
     /// Returns when no call is running, or as soon as the waiting task is cancelled.
@@ -416,7 +482,10 @@ public actor BrowserSupervisor {
         guard phase == .ready, !stopRequested else { return false }
         let state = try? await runtime.inspect()
         if state?.running != true {
-            await crashed(exit: state?.exitCode)
+            guard phase == .ready, !stopRequested else { return false }
+            monitor = nil
+            let exit = state?.exitCode
+            recovering = Task { await self.crashed(exit: exit) }
             return false
         }
         if fullStatus, let status = try? await runtime.status() {
@@ -437,8 +506,9 @@ public actor BrowserSupervisor {
         observer?(phase, generation, lastStatus)
     }
 
+    /// Runs as `recovering`: a stop cancels it and waits, and it re-checks for a stop after every suspension.
     private func crashed(exit: Int?) async {
-        monitor = nil
+        defer { recovering = nil }
         if exit == 78 {
             set(.sandboxUnavailable)
             advanceGeneration(reason: "Chromium's sandbox became unavailable, so the browser stopped.")
@@ -456,20 +526,28 @@ public actor BrowserSupervisor {
         set(.recovering("restarting in \(delay.components.seconds) s"))
         note("backoff")
         do { try await sleep(delay) } catch { return }
-        guard !stopRequested else { return }
+        guard !stopRequested, !Task.isCancelled else { return }
+        var touched = false
         do {
             note("restart")
+            touched = true
             try await runtime.start()
             try await waitReady()
             try await runtime.setViewerPassword(viewerPassword)
+            // A stop that arrived while restarting wins: never publish Ready after it (N11).
+            if stopRequested || Task.isCancelled { throw CancellationError() }
             knownChromiumRestarts = lastStatus?.chromiumRestarts ?? 0
             set(.ready)
             startMonitor()
             if total == 0 { armIdle() }
         } catch {
-            // The restarted container is ours: never leave it running behind Failed (R23).
-            try? await runtime.stop(timeout: timing.stopTimeoutSeconds)
-            set(.failed(Self.describe(error)))
+            // The restarted container is ours: never leave it running behind Failed or a stop (R23, N11).
+            if touched { try? await runtime.stop(timeout: timing.stopTimeoutSeconds) }
+            if error is CancellationError || stopRequested || Task.isCancelled {
+                note("recovery-cancelled")
+            } else {
+                set(.failed(Self.describe(error)))
+            }
         }
     }
 
@@ -489,6 +567,7 @@ public actor BrowserSupervisor {
 
 extension BrowserPhase {
     var isRecovering: Bool { if case .recovering = self { true } else { false } }
+    public var isStopUnconfirmed: Bool { if case .stopUnconfirmed = self { true } else { false } }
 }
 
 public enum BrowserStartError: Error, Sendable, Equatable, CustomStringConvertible {

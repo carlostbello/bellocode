@@ -251,6 +251,9 @@ actor EngineCore {
         cancelResyncRetry()
         for task in backgroundTasks.values { task.cancel() }
         backgroundTasks.removeAll()
+        // Policy-transition gates end with the actor's work (rule 9): sends waiting behind one are released (N31).
+        for chain in policyChains.values { chain.cancel() }
+        policyChains.removeAll()
         commit(pipeline.flushDeltas(clock: time.now(), now: .now, force: true))
         pendingWrites.messages += pipeline.state.messages.dirtyMessages
         pipeline.state.messages.markPersisted(pipeline.state.messages.dirtyMessages.map(\.id))
@@ -2051,6 +2054,9 @@ actor EngineCore {
         await previous?.value
         return try await body()
     }
+
+    /// Policy-transition gates open now (tests).
+    var policyChainCount: Int { policyChains.count }
 
     /// Waits for a running policy transition, then refuses if the thread's rules are not confirmed (S2): no prompt is
     /// sent under rules the person did not choose.

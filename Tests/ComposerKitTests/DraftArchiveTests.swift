@@ -55,7 +55,7 @@ import Testing
         #expect(restored.attachments[2].fileURL == dropped, "a dropped file stays where it is")
 
         // Launch clean-up keeps the files a draft still references, however old.
-        let referenced = fixture.archive.referencedFiles()
+        let referenced = await fixture.archive.referencedFiles()
         #expect(referenced.contains(imageURL))
         await fixture.files.cleanUp(now: Date().addingTimeInterval(30 * 24 * 3600), keeping: referenced)
         #expect(FileManager.default.fileExists(atPath: imageURL.path))

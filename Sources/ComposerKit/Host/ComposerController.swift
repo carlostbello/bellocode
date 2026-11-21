@@ -45,7 +45,21 @@ public final class ComposerController {
     /// The user edited while `awaitingDraft`; the stored draft is merged in front of the edit when it arrives.
     private var editedWhileAwaiting = false
 
-    public init() {}
+    /// The live composers of a scope (weak), flushed together at quit (N16).
+    @MainActor
+    public final class Registry {
+        public static let shared = Registry()
+        private let live = NSHashTable<ComposerController>.weakObjects()
+        public init() {}
+        func add(_ controller: ComposerController) { live.add(controller) }
+        /// Hands every registered composer's unsaved edit to its host now.
+        public func flushAll() { for controller in live.allObjects { controller.flushDraft() } }
+    }
+
+    public init(registry: Registry = .shared) { registry.add(self) }
+
+    /// Hands every composer's unsaved edit to its host now (quit: a debounced save still waiting would be lost, N16).
+    public static func flushAllDrafts() { Registry.shared.flushAll() }
 
     isolated deinit {
         saveTask?.cancel()

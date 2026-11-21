@@ -20,6 +20,38 @@ struct BrowserTabGateTests {
         return false
     }
 
+    /// N26: a call refused for the queue limits neither takes nor renews a shared tab's lease.
+    @Test func aRefusedCallDoesNotStealTheLease() async throws {
+        let now = Mutex(ContinuousClock.now)
+        var limits = BrowserTabGate.Limits()
+        limits.maxActive = 1
+        limits.maxQueued = 0
+        let gate = BrowserTabGate(limits: limits, now: { now.withLock { $0 } })
+        // A drives the shared tab, then its lease goes idle; meanwhile another call fills the only active slot.
+        let first = try await gate.acquire(tab: "shared", session: "A", shared: true)
+        await gate.release(first)
+        let busy = try await gate.acquire(tab: "other", session: "C", shared: false)
+        now.withLock { $0 += .seconds(90) }
+        await #expect(throws: BrowserTabGate.Busy.overloaded) { _ = try await gate.acquire(tab: "shared", session: "B", shared: true) }
+        #expect(await gate.driver(of: "shared") != "B", "B was refused: it holds no lease")
+        await gate.release(busy)
+        // A can drive the tab again (B's refused call did not make B the driver).
+        let again = try await gate.acquire(tab: "shared", session: "A", shared: true)
+        await gate.release(again)
+    }
+
+    /// N26: per-tab and per-thread display bookkeeping stays bounded.
+    @Test func displayBookkeepingIsBounded() async throws {
+        let gate = BrowserTabGate()
+        for index in 0..<(BrowserTabGate.maxTracked * 3) {
+            await gate.setName("thread \(index)", for: "ses_\(index)")
+            let ticket = try await gate.acquire(tab: "tab-\(index)", session: "ses_\(index)", shared: false)
+            await gate.release(ticket)
+        }
+        #expect(await gate.activity().count <= BrowserTabGate.maxTracked)
+        #expect(await gate.trackedNames <= BrowserTabGate.maxTracked)
+    }
+
     @Test func callsToOneTabRunOneAtATimeInOrder() async throws {
         let gate = BrowserTabGate()
         let first = try await gate.acquire(tab: "bc-a-main", session: "a", shared: false)

@@ -1,9 +1,15 @@
 import Foundation
 
-/// What sits at a path: a regular file, or a symbolic link (whose `data` is its target path, never followed).
+/// What sits at a path: a regular file, or a symbolic link (whose `data` is its target path, never followed). With
+/// no data, `regular` (or `symlink`) means nothing is there; the other kinds describe an entry whose content a file
+/// operation cannot take: a directory, something else (a FIFO, a socket, a path that goes through a link), or an
+/// entry that could not be read. Missing, unreadable and unsupported entries are kept apart (A14).
 public enum FileEntryKind: Sendable, Hashable {
     case regular
     case symlink
+    case directory
+    case unsupported
+    case unreadable
 }
 
 /// A file's bytes at one moment (nil: the file did not exist), for version checks and Undo.
@@ -22,6 +28,24 @@ public struct FileSnapshot: Sendable, Hashable {
     }
 
     public var exists: Bool { data != nil }
+    /// Something is at the path that has no content a file operation can take (a directory, a special file, a path
+    /// through a link, an unreadable entry).
+    public var isOpaque: Bool { data == nil && (kind == .directory || kind == .unsupported || kind == .unreadable) }
+
+    /// The state compared by the compare-and-swap: content and kind, or what kind of opaque entry, or missing.
+    var state: State {
+        if let data { return .content(data, kind) }
+        switch kind {
+        case .directory, .unsupported, .unreadable: return .opaque(kind)
+        case .regular, .symlink: return .missing
+        }
+    }
+
+    enum State: Hashable {
+        case missing
+        case content(Data, FileEntryKind)
+        case opaque(FileEntryKind)
+    }
     public var text: String? { data.flatMap { String(data: $0, encoding: .utf8) } }
 }
 
@@ -44,7 +68,7 @@ public struct FileChangePlan: Sendable, Hashable {
 
     /// Whether writing this plan changes anything (bytes, entry type, or mode).
     public var changesSomething: Bool {
-        guard let after else { return before.data != nil }
+        guard let after else { return before.data != nil && before.kind != .directory }
         guard let old = before.data else { return true }
         if old != after || before.kind != afterKind { return true }
         if afterKind == .regular, let afterPermissions, let current = before.permissions { return (afterPermissions & 0o7777) != (current & 0o7777) }
@@ -68,6 +92,8 @@ public enum WorkingCopyError: Error, Sendable, Equatable, CustomStringConvertibl
     /// One or more hunks no longer match the file.
     case hunks(path: String, HunkApplyError)
     case writeFailed(String)
+    /// The path goes through a link or holds something that is not a file; nothing was written there (A05).
+    case unsupported(String)
 
     public var description: String { userMessage }
 
@@ -78,6 +104,7 @@ public enum WorkingCopyError: Error, Sendable, Equatable, CustomStringConvertibl
         case .tooLarge(let path): "\(path) is too large to edit here."
         case .hunks(let path, let error): "\(path): \(error.description) Refresh the diff and try again."
         case .writeFailed(let path): "\(path) could not be written."
+        case .unsupported(let path): "\(path) goes through a link or is not a regular file, so BelloCode will not write it."
         }
     }
 }
@@ -101,29 +128,28 @@ public struct WorkingCopy: Sendable {
         self.beforeReplace = beforeReplace
     }
 
-    func url(_ path: String) -> URL { URL(filePath: root, directoryHint: .isDirectory).appending(path: path) }
-
-    /// The entry at `path`, never following a symbolic link (a link's data is its target path).
+    /// The entry at `path`, never following a symbolic link (a link's data is its target path). The path is walked
+    /// from the root one directory at a time without following links: a path through a link snapshots as
+    /// `unsupported`, never as the file the link leads to.
     public func snapshot(_ path: String) -> FileSnapshot {
-        let entry = Self.entry(at: url(path))
-        return FileSnapshot(path: path, data: entry?.data, permissions: entry?.permissions, kind: entry?.kind ?? .regular)
-    }
-
-    static func entry(at url: URL) -> (kind: FileEntryKind, data: Data, permissions: Int?)? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
-        let permissions = attributes[.posixPermissions] as? Int
-        if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
-            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else { return nil }
-            return (.symlink, Data(destination.utf8), nil)
+        switch entry(path) {
+        case .regular(let data, let permissions): FileSnapshot(path: path, data: data, permissions: permissions, kind: .regular)
+        case .symlink(let target): FileSnapshot(path: path, data: Data(target.utf8), permissions: nil, kind: .symlink)
+        case .missing: FileSnapshot(path: path, data: nil, permissions: nil)
+        case .directory: FileSnapshot(path: path, data: nil, permissions: nil, kind: .directory)
+        case .other: FileSnapshot(path: path, data: nil, permissions: nil, kind: .unsupported)
+        case .unreadable: FileSnapshot(path: path, data: nil, permissions: nil, kind: .unreadable)
         }
-        guard attributes[.type] as? FileAttributeType == .typeRegular, let data = try? Data(contentsOf: url) else { return nil }
-        return (.regular, data, permissions)
     }
 
-    /// Whether `url` holds exactly `data` as an entry of `kind` (a link is compared by its target, not followed).
-    private static func holds(_ url: URL, _ data: Data, kind: FileEntryKind) -> Bool {
-        guard let entry = entry(at: url) else { return false }
-        return entry.kind == kind && entry.data == data
+    private func entry(_ path: String) -> ConfinedDirectory.Entry {
+        guard let components = ConfinedDirectory.components(path) else { return .other }
+        switch ConfinedDirectory.open(root: root, components.dropLast(), create: false) {
+        case .success(let parent): return parent.entry(components[components.count - 1])
+        case .failure(.missing): return .missing
+        case .failure(.link): return .other
+        case .failure(.unreadable): return .unreadable
+        }
     }
 
     /// The file's text and its snapshot; throws for non-UTF-8 or oversized files.
@@ -155,15 +181,35 @@ public struct WorkingCopy: Sendable {
     /// made after the preflight check is never overwritten. If a file changed or a write fails, the files already
     /// written are put back with the same check: a file edited again since we wrote it keeps that edit.
     /// Returns the plans that changed something (their `before` is the Undo state).
+    ///
+    /// Deletions run first, deepest path first, then writes, shallowest first, so a file can replace a directory whose
+    /// files are deleted in the same batch (and the other way round), and a rollback undoes them in reverse (N17).
     @discardableResult
     public func apply(_ plans: [FileChangePlan]) throws -> [FileChangePlan] {
-        for plan in plans {
+        let deleted = Set(plans.filter { $0.after == nil && $0.before.data != nil }.map(\.path))
+        var plans = plans
+        for index in plans.indices {
+            let plan = plans[index]
+            // An entry that is not a file (or goes through a link) is never written: refuse before anything changes.
+            if plan.before.kind == .unsupported || plan.before.kind == .unreadable || ConfinedDirectory.components(plan.path) == nil {
+                throw WorkingCopyError.unsupported(plan.path)
+            }
             let now = snapshot(plan.path)
-            if now.data != plan.before.data || (now.data != nil && now.kind != plan.before.kind) { throw WorkingCopyError.changedOnDisk(plan.path) }
+            if now.state == plan.before.state { continue }
+            // A file planned where a directory now is (the Undo of a directory→file restore): accepted when this batch
+            // deletes files below it; the directory is removed only once nothing but empty directories is left.
+            if plan.before.state == .missing, plan.after != nil, now.kind == .directory, deleted.contains(where: { $0.hasPrefix(plan.path + "/") }) {
+                plans[index].before = FileSnapshot(path: plan.path, data: nil, permissions: plan.before.permissions, kind: .directory)
+                continue
+            }
+            throw WorkingCopyError.changedOnDisk(plan.path)
         }
+        let depth = { (plan: FileChangePlan) in plan.path.split(separator: "/").count }
+        let deletions = plans.filter { $0.after == nil }.sorted { depth($0) > depth($1) }
+        let writes = plans.filter { $0.after != nil }.sorted { depth($0) < depth($1) }
         var written: [FileChangePlan] = []
         do {
-            for plan in plans where plan.changesSomething {
+            for plan in deletions + writes where plan.changesSomething {
                 beforeReplace?(plan.path)
                 try replace(plan)
                 written.append(plan)
@@ -189,74 +235,79 @@ public struct WorkingCopy: Sendable {
     /// Every write that completed before the swap is detected. A writer that still holds the old file open and writes
     /// into it after the swap cannot be serialized without its cooperation (editors and agents do not coordinate); the
     /// window is the few microseconds between the swap and the comparison.
+    ///
+    /// Every step acts through a descriptor of the file's parent directory, reached from the root without following
+    /// links (`ConfinedDirectory`), so a directory swapped for a link after planning is refused, never written through
+    /// (A05). A directory planned to be replaced by a file is removed only while it holds nothing but empty
+    /// directories.
     private func replace(_ plan: FileChangePlan) throws {
-        let target = url(plan.path)
-        let directory = target.deletingLastPathComponent()
-        let aside = directory.appending(path: ".\(target.lastPathComponent).bellocode-\(UUID().uuidString)")
+        guard let components = ConfinedDirectory.components(plan.path) else { throw WorkingCopyError.unsupported(plan.path) }
+        let name = components[components.count - 1]
+        let aside = ".\(name).bellocode-\(UUID().uuidString)"
+        let creating = plan.before.data == nil
+        let parent: ConfinedDirectory
+        switch ConfinedDirectory.open(root: root, components.dropLast(), create: creating && plan.after != nil) {
+        case .success(let directory): parent = directory
+        case .failure(.link): throw WorkingCopyError.unsupported(plan.path)
+        case .failure(.missing): if plan.after == nil { return } else { throw WorkingCopyError.changedOnDisk(plan.path) }
+        case .failure(.unreadable): throw WorkingCopyError.writeFailed(plan.path)
+        }
+        func holds(_ entry: String, _ data: Data, kind: FileEntryKind) -> Bool {
+            switch parent.entry(entry) {
+            case .regular(let bytes, _): kind == .regular && bytes == data
+            case .symlink(let target): kind == .symlink && Data(target.utf8) == data
+            default: false
+            }
+        }
+        func writeTemporary(_ data: Data) throws {
+            let link: String?
+            if plan.afterKind == .symlink {
+                guard let target = String(data: data, encoding: .utf8) else { throw WorkingCopyError.writeFailed(plan.path) }
+                link = target
+            } else {
+                link = nil
+            }
+            let permissions = plan.afterPermissions ?? plan.before.permissions ?? 0o644
+            guard parent.create(aside, data: data, permissions: permissions, link: link) else { throw WorkingCopyError.writeFailed(plan.path) }
+        }
         switch (plan.before.data, plan.after) {
         case (nil, nil):
             return
         case (nil, let new?):
-            do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) } catch {
-                throw WorkingCopyError.writeFailed(plan.path)
+            if plan.before.kind == .directory {
+                // Files below it were deleted first; only empty directories may remain.
+                guard parent.removeEmptyTree(name) else { throw WorkingCopyError.changedOnDisk(plan.path) }
             }
-            try writeTemporary(new, kind: plan.afterKind, to: aside, permissions: plan.afterPermissions ?? plan.before.permissions, path: plan.path)
-            if rename(aside, target, flags: UInt32(RENAME_EXCL)) != 0 {
-                let code = errno
-                try? FileManager.default.removeItem(at: aside)
+            try writeTemporary(new)
+            let code = parent.rename(aside, name, flags: UInt32(RENAME_EXCL))
+            if code != 0 {
+                parent.remove(aside)
                 throw code == EEXIST ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
             }
         case (let old?, let new?):
-            try writeTemporary(new, kind: plan.afterKind, to: aside, permissions: plan.afterPermissions ?? plan.before.permissions, path: plan.path)
-            if rename(aside, target, flags: UInt32(RENAME_SWAP)) != 0 {
-                let code = errno
-                try? FileManager.default.removeItem(at: aside)
+            try writeTemporary(new)
+            let code = parent.rename(aside, name, flags: UInt32(RENAME_SWAP))
+            if code != 0 {
+                parent.remove(aside)
                 throw code == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
             }
             // `aside` now holds what was at the path an instant ago.
-            if !Self.holds(aside, old, kind: plan.before.kind) {
-                _ = rename(aside, target, flags: UInt32(RENAME_SWAP))
+            if !holds(aside, old, kind: plan.before.kind) {
+                _ = parent.rename(aside, name, flags: UInt32(RENAME_SWAP))
                 // Drop our bytes only if `aside` really holds them again; otherwise keep it for recovery.
-                if Self.holds(aside, new, kind: plan.afterKind) { try? FileManager.default.removeItem(at: aside) }
+                if holds(aside, new, kind: plan.afterKind) { parent.remove(aside) }
                 throw WorkingCopyError.changedOnDisk(plan.path)
             }
-            try? FileManager.default.removeItem(at: aside)
+            parent.remove(aside)
         case (let old?, nil):
-            if rename(target, aside, flags: UInt32(RENAME_EXCL)) != 0 {
-                throw errno == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path)
-            }
-            if !Self.holds(aside, old, kind: plan.before.kind) {
+            let code = parent.rename(name, aside, flags: UInt32(RENAME_EXCL))
+            if code != 0 { throw code == ENOENT ? WorkingCopyError.changedOnDisk(plan.path) : WorkingCopyError.writeFailed(plan.path) }
+            if !holds(aside, old, kind: plan.before.kind) {
                 // Put it back; if something new appeared at the path meanwhile, both are kept (`aside` stays).
-                _ = rename(aside, target, flags: UInt32(RENAME_EXCL))
+                _ = parent.rename(aside, name, flags: UInt32(RENAME_EXCL))
                 throw WorkingCopyError.changedOnDisk(plan.path)
             }
-            try? FileManager.default.removeItem(at: aside)
-        }
-    }
-
-    private func rename(_ from: URL, _ to: URL, flags: UInt32) -> Int32 {
-        from.withUnsafeFileSystemRepresentation { source in
-            to.withUnsafeFileSystemRepresentation { destination in
-                guard let source, let destination else { errno = EINVAL; return -1 }
-                return renamex_np(source, destination, flags)
-            }
-        }
-    }
-
-    private func writeTemporary(_ data: Data, kind: FileEntryKind, to url: URL, permissions: Int?, path: String) throws {
-        do {
-            if kind == .symlink {
-                guard let destination = String(data: data, encoding: .utf8), !destination.isEmpty, !destination.contains("\0") else {
-                    throw WorkingCopyError.writeFailed(path)
-                }
-                try FileManager.default.createSymbolicLink(atPath: url.path, withDestinationPath: destination)
-                return
-            }
-            try data.write(to: url, options: .withoutOverwriting)
-            if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path) }
-        } catch {
-            try? FileManager.default.removeItem(at: url)
-            throw WorkingCopyError.writeFailed(path)
+            parent.remove(aside)
         }
     }
 }

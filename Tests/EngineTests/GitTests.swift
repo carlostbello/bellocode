@@ -298,6 +298,36 @@ struct GitRepositoryTests {
         #expect(try repo.read("f.txt") == "a\nB\nc\nchanged\ndone\nuser line\n")
     }
 
+    /// A20: a child that ignores SIGTERM after its deadline is killed, and the run completes as timed out.
+    @Test func runnerKillsAChildThatIgnoresTerminate() async throws {
+        let runner = TempRepo.testRunner
+        await #expect(throws: GitError.timedOut(command: "sh")) {
+            try await runner.runProgram(URL(filePath: "/bin/sh"), ["-c", "trap '' TERM; while :; do /bin/sleep 0.2; done"], in: "/tmp", timeout: .milliseconds(200))
+        }
+        // Cancellation escalates the same way.
+        let task = Task { try await runner.runProgram(URL(filePath: "/bin/sh"), ["-c", "trap '' TERM; while :; do /bin/sleep 0.2; done"], in: "/tmp", timeout: .seconds(60)) }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    /// A20: the child exits but a process it left behind keeps stdout open; the run completes with what the child
+    /// wrote instead of waiting for that process.
+    @Test func runnerCompletesWhenALeftoverProcessHoldsThePipe() async throws {
+        let runner = TempRepo.testRunner
+        let base = FileManager.default.temporaryDirectory.appending(path: "bellocode-pipe-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let pidFile = base.appending(path: "pid").path
+        let output = try await runner.runProgram(
+            URL(filePath: "/bin/sh"), ["-c", "/bin/sleep 600 & echo $! > '\(pidFile)'; echo done"], in: base.path, timeout: .seconds(60))
+        #expect(output.status == 0 && output.text == "done\n")
+        // Clean up the leftover we started (only it).
+        if let pid = Int32((try? String(contentsOfFile: pidFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") {
+            kill(pid, SIGKILL)
+        }
+    }
+
     @Test func runnerCancelsTimesOutAndBoundsOutput() async throws {
         let runner = TempRepo.testRunner
         let task = Task { try await runner.runProgram(URL(filePath: "/bin/sleep"), ["20"], in: "/tmp", timeout: .seconds(30)) }
@@ -319,6 +349,29 @@ struct GitRepositoryTests {
 @MainActor
 @Suite("GitService and repository model", .serialized, .timeLimit(.minutes(3)))
 struct GitServiceTests {
+    /// N29: a parked stash whose apply fails stays parked (and in git); a clean restore unparks and drops it.
+    @Test func aFailedStashRestoreKeepsItParked() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let service = GitService(client: { throw CancellationError() }, store: nil, runner: repo.runner)
+        let model = service.repository(for: repo.path)
+        try await waitUntil { model.phase == .ready }
+        try repo.write("a.txt", "parked work\n")
+        let hash = try #require(try await model.stashAndSwitch(to: "other", create: true))
+        model.parkStash(hash, for: "main")
+        try await model.switchBranch("main", create: false)
+        // A local edit to the same file makes the apply fail.
+        try repo.write("a.txt", "in the way\n")
+        await #expect(throws: GitError.self) { try await model.restoreStash(hash) }
+        #expect(model.parkedStashes["main"] == hash)
+        #expect(try await repo.git("stash", "list", "--format=%H").contains(hash))
+        try repo.write("a.txt", "one\n")
+        try await model.restoreStash(hash)
+        #expect(model.parkedStashes.isEmpty)
+        #expect(try repo.read("a.txt") == "parked work\n")
+        #expect(try await repo.git("stash", "list").isEmpty)
+    }
+
     @Test func modelRefreshesOnFileSystemChanges() async throws {
         let repo = try await TempRepo.make()
         defer { repo.remove() }
