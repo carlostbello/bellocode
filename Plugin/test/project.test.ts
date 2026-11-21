@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import * as P from "../src/project.ts"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs"
+import { tmpdir } from "os"
+import { join } from "path"
 
-/** An in-memory file system: paths ending in "/" are folders. */
+/** An in-memory file system without links: paths ending in "/" are folders. */
 function memoryFS(files: Record<string, string>, folders: string[] = []): P.FS {
   const dirs = new Set<string>(folders)
   for (const path of Object.keys(files)) {
@@ -13,12 +16,11 @@ function memoryFS(files: Record<string, string>, folders: string[] = []): P.FS {
     }
   }
   return {
-    exists: (path) => path in files || dirs.has(path),
-    isDirectory: (path) => dirs.has(path),
-    read: (path) => files[path],
+    kind: (path) => (path in files ? "file" : dirs.has(path) ? "directory" : undefined),
+    realpath: (path) => (path in files || dirs.has(path) ? path : undefined),
     list: (path) =>
       [...new Set([...Object.keys(files), ...dirs].filter((p) => p.startsWith(path + "/") && !p.slice(path.length + 1).includes("/")).map((p) => p.slice(path.length + 1)))].sort(),
-    size: (path) => files[path]?.length ?? 0,
+    readRegular: (path, limit) => (path in files ? { text: files[path].slice(0, limit), size: files[path].length } : undefined),
   }
 }
 
@@ -108,7 +110,7 @@ describe("trusted project configuration", () => {
     "/r/app/.opencode/commands/ship.md": "---\ndescription: Ship it\n---\nShip $ARGUMENTS",
     "/r/app/.opencode/skills/deploy/SKILL.md": "---\nname: deploy\ndescription: Deploys\n---\nSteps",
     "/r/app/.agents/skills/lint/SKILL.md": "---\nname: lint\ndescription: Lints\n---\nRun lint",
-  })
+  }, ["/r/app/web"])
 
   test("untrusted projects load nothing", () => {
     expect(P.loadProjectConfig("/r/app", [], fs)).toEqual(P.EMPTY)
@@ -122,5 +124,105 @@ describe("trusted project configuration", () => {
     expect(loaded.skills.map((skill) => skill.id)).toEqual(["deploy", "lint"])
     expect(loaded.skipped.length).toBe(1)
     expect(loaded.skipped[0]).toContain(".opencode/agents/bad.md")
+  })
+})
+
+// Real files, links and FIFOs (A01/N01, A11): the reader must stay inside the repository and never block.
+describe("untrusted repository contents on a real file system", () => {
+  const made: string[] = []
+  const scratch = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "bc-project-")))
+    made.push(dir)
+    return dir
+  }
+  const cleanup = () => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true })
+  }
+
+  test("an AGENTS.md link to a file outside the repository is never read", () => {
+    const base = scratch()
+    writeFileSync(join(base, "private.txt"), "HOST-SECRET-MARKER")
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    symlinkSync(join(base, "private.txt"), join(repo, "AGENTS.md"))
+    const text = P.instructionsText(P.instructionFiles(repo)) ?? ""
+    expect(text).not.toContain("HOST-SECRET-MARKER")
+    expect(P.instructionFiles(repo)).toEqual([])
+    cleanup()
+  })
+
+  test("an AGENTS.md link inside the repository is read (AGENTS.md -> CLAUDE.md)", () => {
+    const repo = scratch()
+    mkdirSync(join(repo, ".git"))
+    writeFileSync(join(repo, "CLAUDE.md"), "repo rules")
+    symlinkSync("CLAUDE.md", join(repo, "AGENTS.md"))
+    expect(P.instructionFiles(repo).map((file) => file.content)).toEqual(["repo rules"])
+    cleanup()
+  })
+
+  test("a FIFO named AGENTS.md is skipped without blocking", () => {
+    const repo = scratch()
+    mkdirSync(join(repo, ".git"))
+    const made = Bun.spawnSync(["mkfifo", join(repo, "AGENTS.md")])
+    expect(made.exitCode).toBe(0)
+    const started = Date.now()
+    expect(P.instructionFiles(repo)).toEqual([])
+    expect(Date.now() - started).toBeLessThan(5_000)
+    cleanup()
+  })
+
+  test("an oversized AGENTS.md is read only up to the limit", () => {
+    const repo = scratch()
+    mkdirSync(join(repo, ".git"))
+    writeFileSync(join(repo, "AGENTS.md"), "a".repeat(P.LIMITS.fileBytes) + "TAIL-MARKER" + "b".repeat(P.LIMITS.fileBytes))
+    let largest = 0
+    const counting: P.FS = {
+      ...P.nodeFS,
+      readRegular: (path, limit) => {
+        const read = P.nodeFS.readRegular(path, limit)
+        largest = Math.max(largest, read?.text.length ?? 0)
+        return read
+      },
+    }
+    const [file] = P.instructionFiles(repo, counting)
+    expect(file.content).not.toContain("TAIL-MARKER")
+    expect(file.content.endsWith("[truncated by BelloCode: file too large]")).toBe(true)
+    expect(largest).toBeLessThanOrEqual(P.LIMITS.fileBytes)
+    cleanup()
+  })
+
+  test("trusted .opencode: a folder link loop and links leaving the repository are refused, not fatal", () => {
+    const base = scratch()
+    writeFileSync(join(base, "outside.md"), "---\ndescription: Outside\n---\nHOST-SECRET-MARKER")
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    mkdirSync(join(repo, ".opencode", "agents"), { recursive: true })
+    writeFileSync(join(repo, ".opencode", "agents", "ok.md"), "---\ndescription: Fine\n---\nFine.")
+    symlinkSync("..", join(repo, ".opencode", "agents", "loop"))
+    symlinkSync(join(base, "outside.md"), join(repo, ".opencode", "agents", "stolen.md"))
+    mkdirSync(join(repo, ".opencode", "skills", "leak"), { recursive: true })
+    symlinkSync("/etc/hosts", join(repo, ".opencode", "skills", "leak", "SKILL.md"))
+    const loaded = P.loadProjectConfig(repo, [repo])
+    expect(loaded.trusted).toBe(true)
+    expect(loaded.agents.map((agent) => agent.id)).toContain("ok")
+    expect(JSON.stringify(loaded)).not.toContain("HOST-SECRET-MARKER")
+    expect(loaded.skills).toEqual([])
+    expect(loaded.skipped.some((line) => line.includes("stolen.md") && line.includes("outside the repository"))).toBe(true)
+    cleanup()
+  })
+
+  test("trust does not cross into an independent repository nested in a trusted one", () => {
+    const outer = scratch()
+    mkdirSync(join(outer, ".git"))
+    mkdirSync(join(outer, ".opencode", "commands"), { recursive: true })
+    writeFileSync(join(outer, ".opencode", "commands", "outer.md"), "Outer $ARGUMENTS")
+    const inner = join(outer, "vendor", "inner")
+    mkdirSync(join(inner, ".git"), { recursive: true })
+    mkdirSync(join(inner, ".opencode", "commands"), { recursive: true })
+    writeFileSync(join(inner, ".opencode", "commands", "inner.md"), "Inner $ARGUMENTS")
+    expect(P.loadProjectConfig(join(outer, "vendor"), [outer]).commands.map((c) => c.name)).toEqual(["outer"])
+    expect(P.loadProjectConfig(inner, [outer])).toEqual(P.EMPTY)
+    expect(P.loadProjectConfig(inner, [outer, inner]).commands.map((c) => c.name)).toEqual(["inner"])
+    cleanup()
   })
 })

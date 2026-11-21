@@ -20,6 +20,11 @@ export type Overrides = {
   sessionCreate?: (input: any, made: FakeSession) => FakeSession
   sessionInterrupt?: (input: any, sessions: Map<string, FakeSession>) => Promise<any>
   sessionList?: (input: any, sessions: Map<string, FakeSession>) => Promise<any>
+  /** The location directory the plugin is set up for (default "/repo"). */
+  location?: string
+  sessionGet?: (input: any, sessions: Map<string, FakeSession>) => Promise<any>
+  /** Transform reloads that reject ("skill", "agent", "command"). */
+  failingReloads?: string[]
 }
 
 export async function makePlugin(overrides: Overrides = {}, options: Record<string, unknown> = {}) {
@@ -33,7 +38,26 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     lists: [] as any[],
     synthetic: [] as any[],
     updates: [] as any[],
+    instructions: [] as Array<{ op: "put" | "remove"; sessionID: string; value?: string }>,
+    transforms: { skill: [] as any[], agent: [] as any[], command: [] as any[] },
   }
+  const rpcHandlers: Record<string, (input: any) => Promise<any>> = {}
+  const transform = (kind: "skill" | "agent" | "command") => ({
+    transform: async (callback: any) => {
+      const editor = {
+        add: (item: any) => calls.transforms[kind].push(item),
+        update: (id: string, edit: any) => {
+          const agent: any = { id }
+          edit(agent)
+          calls.transforms[kind].push(agent)
+        },
+      }
+      callback(editor)
+    },
+    reload: async () => {
+      if (overrides.failingReloads?.includes(kind)) throw new Error(`${kind} reload failed`)
+    },
+  })
   const hooks: Record<string, Array<(event: any) => any>> = {}
   const addHook = (name: string) => async (hook: string, fn: (event: any) => any) => {
     ;(hooks[`${name}.${hook}`] ??= []).push(fn)
@@ -44,9 +68,14 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
   let release: (() => void) | undefined
   const ctx = {
     options,
-    location: { directory: "/repo" },
+    location: { directory: overrides.location ?? "/repo" },
+    skill: transform("skill"),
+    agent: { ...transform("agent"), list: async () => ({ data: [{ id: "general", mode: "subagent" }] }) },
+    command: transform("command"),
     session: {
+      hook: addHook("session"),
       get: async ({ sessionID }: any) => {
+        if (overrides.sessionGet) return overrides.sessionGet({ sessionID }, sessions)
         const found = sessions.get(sessionID)
         if (!found) throw new Error("not found")
         return { data: structuredClone(found) }
@@ -98,7 +127,16 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
         calls.synthetic.push(input)
       },
       context: async () => ({ data: [] }),
-      instructions: { entry: { put: async () => undefined } },
+      instructions: {
+        entry: {
+          put: async (input: any) => {
+            calls.instructions.push({ op: "put", sessionID: input.sessionID, value: input.value })
+          },
+          remove: async (input: any) => {
+            calls.instructions.push({ op: "remove", sessionID: input.sessionID })
+          },
+        },
+      },
     },
     worktree: {
       create: async (input: any) => {
@@ -108,7 +146,6 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
         return { data: { directory: `/worktrees/wt${worktreeCounter}` } }
       },
     },
-    agent: { list: async () => ({ data: [{ id: "general", mode: "subagent" }] }) },
     model: { list: async () => ({ data: [] }) },
     permission: {
       assert: async (input: any) => {
@@ -124,7 +161,12 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
       transform: async (callback: any) => callback({ add: (tool: any) => tools.push(tool), list: () => [] }),
       list: async () => [],
     },
-    rpc: { register: async () => ({ dispose: async () => undefined }) },
+    rpc: {
+      register: async (_spec: any, handlers: Record<string, (input: any) => Promise<any>>) => {
+        Object.assign(rpcHandlers, handlers)
+        return { dispose: async () => undefined }
+      },
+    },
     event: {
       subscribe: () => ({
         [Symbol.asyncIterator]: () => ({
@@ -161,7 +203,8 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     for (const fn of hooks[name] ?? []) await fn(event)
     return event
   }
-  return { sessions, calls, add, run, dispose, fire, hooks }
+  const rpc = (method: string, input: any = {}) => rpcHandlers[method](input)
+  return { sessions, calls, add, run, dispose, fire, hooks, rpc }
 }
 
 export const running = { created: 1, busy: 10, idle: 5 }

@@ -119,69 +119,111 @@ export default {
     const projectConfig = P.projectConfigOptions(ctx.options)
     const locationDirectory: string | undefined = ctx.location?.directory
     let projectLoaded: P.Loaded = P.EMPTY
-    const refreshProjectConfig = () => {
-      projectLoaded = projectConfig?.mode === "bellocode"
-        ? P.loadProjectConfig(locationDirectory, P.readTrust(projectConfig.trustFile))
-        : P.EMPTY
+    /** The trust file revision the last refresh read (acknowledged to the app by `bellocode.projectConfig`). */
+    let trustRevision = 0
+    /** Re-reads the trust file and the repository. Never throws: a hostile or malformed repository must not abort
+     * setup, which would also drop the container guard and Auto hooks installed above and below (N01). */
+    const refreshProjectConfig = (): boolean => {
+      if (projectConfig?.mode !== "bellocode") {
+        projectLoaded = P.EMPTY
+        return true
+      }
+      try {
+        const trust = P.readTrustFile(projectConfig.trustFile)
+        trustRevision = trust.revision
+        projectLoaded = P.loadProjectConfig(locationDirectory, trust.trusted)
+        return true
+      } catch (error) {
+        projectLoaded = { ...P.EMPTY, skipped: [`repository configuration not loaded: ${String((error as any)?.message ?? error).slice(0, 200)}`] }
+        return false
+      }
+    }
+    /** At run time, a project command still needs its repository trusted (a revocation that failed to replay the
+     * transforms must not leave a working command behind). */
+    const stillTrusted = (): boolean => {
+      try {
+        return P.trustedProject(locationDirectory, P.readTrust(projectConfig?.trustFile)) !== undefined
+      } catch {
+        return false
+      }
     }
     if (projectConfig?.mode === "bellocode") {
-      refreshProjectConfig()
-      await ctx.skill?.transform?.((editor: any) => {
-        for (const skill of projectLoaded.skills) {
-          try {
-            editor.add({ id: skill.id, name: skill.name, description: skill.description, path: skill.path, content: skill.content })
-          } catch {}
-        }
-      })
-      await ctx.agent?.transform?.((editor: any) => {
-        for (const spec of projectLoaded.agents) {
-          try {
-            editor.update(spec.id, (agent: any) => {
-              if (!agent.name || agent.name === agent.id) agent.name = spec.id
-              agent.system = spec.system
-              if (spec.description !== undefined) agent.description = spec.description
-              if (spec.mode !== undefined) agent.mode = spec.mode
-              if (spec.hidden !== undefined) agent.hidden = spec.hidden
-              if (spec.color !== undefined) agent.color = spec.color
-              if (spec.steps !== undefined) agent.steps = spec.steps
-              if (spec.model !== undefined) agent.model = spec.model
-            })
-          } catch {}
-        }
-      })
-      await ctx.command?.transform?.((editor: any) => {
-        for (const spec of projectLoaded.commands) {
-          try {
-            editor.add({
-              name: spec.name,
-              description: spec.description,
-              execute: async (invocation: any) => {
-                const prompt = invocation?.prompt ?? {}
-                await ctx.session.prompt({
-                  sessionID: invocation.sessionID,
-                  text: P.expandTemplate(spec.template, String(prompt.text ?? "")),
-                  ...(prompt.files ? { files: prompt.files } : {}),
-                  ...(prompt.agents ? { agents: prompt.agents } : {}),
-                  ...(prompt.skills ? { skills: prompt.skills } : {}),
-                  ...(invocation.delivery ? { delivery: invocation.delivery } : {}),
-                })
-              },
-            })
-          } catch {}
-        }
-      })
+      // Registration failures leave repository configuration off for this location, never the rest of the plugin.
+      try {
+        refreshProjectConfig()
+        await ctx.skill?.transform?.((editor: any) => {
+          for (const skill of projectLoaded.skills) {
+            try {
+              editor.add({ id: skill.id, name: skill.name, description: skill.description, path: skill.path, content: skill.content })
+            } catch {}
+          }
+        })
+        await ctx.agent?.transform?.((editor: any) => {
+          for (const spec of projectLoaded.agents) {
+            try {
+              editor.update(spec.id, (agent: any) => {
+                if (!agent.name || agent.name === agent.id) agent.name = spec.id
+                agent.system = spec.system
+                if (spec.description !== undefined) agent.description = spec.description
+                if (spec.mode !== undefined) agent.mode = spec.mode
+                if (spec.hidden !== undefined) agent.hidden = spec.hidden
+                if (spec.color !== undefined) agent.color = spec.color
+                if (spec.steps !== undefined) agent.steps = spec.steps
+                if (spec.model !== undefined) agent.model = spec.model
+              })
+            } catch {}
+          }
+        })
+        await ctx.command?.transform?.((editor: any) => {
+          for (const spec of projectLoaded.commands) {
+            try {
+              editor.add({
+                name: spec.name,
+                description: spec.description,
+                execute: async (invocation: any) => {
+                  if (!stillTrusted()) throw new Error(`/${spec.name} comes from a repository BelloCode no longer trusts.`)
+                  const prompt = invocation?.prompt ?? {}
+                  await ctx.session.prompt({
+                    sessionID: invocation.sessionID,
+                    text: P.expandTemplate(spec.template, String(prompt.text ?? "")),
+                    ...(prompt.files ? { files: prompt.files } : {}),
+                    ...(prompt.agents ? { agents: prompt.agents } : {}),
+                    ...(prompt.skills ? { skills: prompt.skills } : {}),
+                    ...(invocation.delivery ? { delivery: invocation.delivery } : {}),
+                  })
+                },
+              })
+            } catch {}
+          }
+        })
+      } catch {}
     }
 
     /** Writes (or removes) the session's repository AGENTS.md entry when the text changed. Bounded by a time limit so
      * a slow write never holds up a prompt. */
-    const putProjectInstructions = async (sessionID: string, directory: string | undefined) => {
+    const putProjectInstructions = async (sessionID: string, directory: string) => {
       if (projectConfig?.mode !== "bellocode") return
-      const text = P.instructionsText(P.instructionFiles(directory)) ?? ""
+      let text: string
+      try {
+        text = P.instructionsText(P.instructionFiles(directory)) ?? ""
+      } catch {
+        return
+      }
       if (projectInstructionsWritten.get(sessionID) === text) return
-      const write = text
-        ? ctx.session.instructions.entry.put({ sessionID, key: P.INSTRUCTIONS_KEY, value: text })
-        : ctx.session.instructions.entry.remove({ sessionID, key: P.INSTRUCTIONS_KEY })
-      const done = await Promise.race([write.then(() => true, () => false), sleep(2_000).then(() => false)])
+      const timer = new AbortController()
+      let done = false
+      try {
+        const write = Promise.resolve(
+          text
+            ? ctx.session.instructions.entry.put({ sessionID, key: P.INSTRUCTIONS_KEY, value: text })
+            : ctx.session.instructions.entry.remove({ sessionID, key: P.INSTRUCTIONS_KEY }),
+        )
+        done = await Promise.race([write.then(() => true, () => false), sleep(2_000, timer.signal).then(() => false)])
+      } catch {
+        done = false
+      } finally {
+        timer.abort()
+      }
       if (!done) return
       projectInstructionsWritten.set(sessionID, text)
       if (projectInstructionsWritten.size > 4_000) projectInstructionsWritten.delete(projectInstructionsWritten.keys().next().value as string)
@@ -191,8 +233,13 @@ export default {
       await ctx.session.hook("prompt", async (event: any) => {
         const sessionID = event?.sessionID as string | undefined
         if (!sessionID) return
-        const session = await ctx.session.get({ sessionID }).then((value: any) => value?.data ?? value, () => undefined)
-        await putProjectInstructions(sessionID, session?.location?.directory)
+        // A failed lookup says nothing about the files: keep the entry as it is rather than removing it (N22).
+        const session = await Promise.resolve()
+          .then(() => ctx.session.get({ sessionID }))
+          .then((value: any) => value?.data ?? value, () => undefined)
+        const directory = session?.location?.directory
+        if (typeof directory !== "string" || !directory) return
+        await putProjectInstructions(sessionID, directory)
       })
     }
 
@@ -1025,12 +1072,25 @@ export default {
               skipped: projectLoaded.skipped,
             }
           }
-          refreshProjectConfig()
+          // The app requires `applied` and the trust revision it wrote before it reports a trust change as done (A10).
+          const failures: string[] = []
+          if (!refreshProjectConfig()) failures.push("repository")
           if (projectConfig?.mode === "bellocode") {
-            await Promise.allSettled([ctx.skill?.reload?.(), ctx.agent?.reload?.(), ctx.command?.reload?.()])
+            const kinds = ["skills", "agents", "commands"]
+            const results = await Promise.allSettled([
+              Promise.resolve().then(() => ctx.skill?.reload?.()),
+              Promise.resolve().then(() => ctx.agent?.reload?.()),
+              Promise.resolve().then(() => ctx.command?.reload?.()),
+            ])
+            results.forEach((result, index) => {
+              if (result.status === "rejected") failures.push(kinds[index])
+            })
           }
           return {
             mode: projectConfig?.mode ?? "off",
+            revision: trustRevision,
+            applied: failures.length === 0,
+            failures,
             trusted: projectLoaded.trusted,
             agents: projectLoaded.agents.map((agent) => agent.id),
             commands: projectLoaded.commands.map((command) => command.name),
