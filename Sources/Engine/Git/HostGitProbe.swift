@@ -51,10 +51,13 @@ public struct HostileRepository: Sendable {
     /// Creates the repository with one commit (made with plain git before anything hostile is configured), a bare
     /// `origin` it is pushed to, then writes the hostile configuration straight into `.git/config` (as a process in the
     /// container would).
-    public static func make() throws -> HostileRepository {
+    ///
+    /// N31: the fixture's git processes are awaited (their exit resumes the task), never waited for on a cooperative
+    /// thread.
+    public static func make() async throws -> HostileRepository {
         let base = HostGit.canonical(FileManager.default.temporaryDirectory.appending(path: "bellocode-hostile-\(UUID().uuidString)").path)
         let repository = HostileRepository(base: base, root: base + "/repo", markers: base + "/markers", origin: base + "/origin.git")
-        try repository.build()
+        try await repository.build()
         return repository
     }
 
@@ -67,7 +70,7 @@ public struct HostileRepository: Sendable {
 
     func script(_ name: String) -> String { base + "/bin/\(name)" }
 
-    private func build() throws {
+    private func build() async throws {
         let fileManager = FileManager.default
         for directory in [root, markers, base + "/bin", base + "/hooks"] { try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true) }
         // One executable per vector; each records that it ran, then behaves like `cat` so filters do not lose content.
@@ -76,18 +79,18 @@ public struct HostileRepository: Sendable {
             try Data("#!/bin/sh\n: > '\(markers)/\(name)'\ncat 2>/dev/null\nexit 0\n".utf8).write(to: URL(filePath: path))
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
         }
-        try plain(["init", "-q", "-b", "main"], in: root)
+        try await plain(["init", "-q", "-b", "main"], in: root)
         try Data("hello\n".utf8).write(to: URL(filePath: root + "/README.md"))
         try Data("x\n".utf8).write(to: URL(filePath: root + "/data.bin"))
         try Data("* filter=evil diff=evil merge=evil\n*.bin filter=evilp\n".utf8).write(to: URL(filePath: root + "/.gitattributes"))
-        try plain(["add", "-A"], in: root)
-        try plain(["commit", "-q", "-m", "initial"], in: root)
-        try plain(["init", "-q", "--bare", "-b", "main", origin], in: base)
-        try plain(["remote", "add", "origin", origin], in: root)
-        try plain(["push", "-q", "origin", "main"], in: root)
-        try plain(["remote", "add", "sshremote", "ssh://127.0.0.1:1/x.git"], in: root)
-        try plain(["remote", "add", "gitremote", "git://127.0.0.1:1/x.git"], in: root)
-        try plain(["remote", "add", "extremote", "ext::\(script("ext-vcs")) %S"], in: root)
+        try await plain(["add", "-A"], in: root)
+        try await plain(["commit", "-q", "-m", "initial"], in: root)
+        try await plain(["init", "-q", "--bare", "-b", "main", origin], in: base)
+        try await plain(["remote", "add", "origin", origin], in: root)
+        try await plain(["push", "-q", "origin", "main"], in: root)
+        try await plain(["remote", "add", "sshremote", "ssh://127.0.0.1:1/x.git"], in: root)
+        try await plain(["remote", "add", "gitremote", "git://127.0.0.1:1/x.git"], in: root)
+        try await plain(["remote", "add", "extremote", "ext::\(script("ext-vcs")) %S"], in: root)
 
         // Hooks: in the repository, in the origin, and in a hooksPath folder.
         for hook in Self.hookNames {
@@ -137,7 +140,7 @@ public struct HostileRepository: Sendable {
     }
 
     /// Plain, unconfined git for building the fixture (before anything hostile exists): no user configuration.
-    func plain(_ arguments: [String], in directory: String) throws {
+    func plain(_ arguments: [String], in directory: String) async throws {
         let process = Process()
         process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: HostGit.realGit() ?? "/usr/bin/git")
@@ -149,9 +152,16 @@ public struct HostileRepository: Sendable {
         ]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw GitError.failed(command: arguments.first ?? "git", status: process.terminationStatus, message: "fixture") }
+        let exit = ChildExit()
+        process.terminationHandler = { finished in exit.exited(finished.terminationStatus) }
+        do {
+            try process.run()
+        } catch {
+            process.terminationHandler = nil
+            throw error
+        }
+        let status = await exit.wait()
+        guard status == 0 else { throw GitError.failed(command: arguments.first ?? "git", status: status, message: "fixture") }
     }
 
     /// The environment for confined runs against the fixture: no user configuration, a fixed identity.
@@ -175,7 +185,7 @@ public enum HostGitProbe {
     public static func run(shim: String?) async -> IsolationReport.Outcome {
         let repository: HostileRepository
         do {
-            repository = try HostileRepository.make()
+            repository = try await HostileRepository.make()
         } catch {
             return .skipped("could not build the scratch repository (\(error))")
         }

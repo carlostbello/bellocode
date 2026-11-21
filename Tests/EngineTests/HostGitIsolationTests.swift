@@ -1,6 +1,7 @@
 import BelloCore
 import ContainerKit
 import Foundation
+import Synchronization
 import Testing
 
 @testable import Engine
@@ -83,9 +84,34 @@ struct HostGitIsolationTests {
         return worktreeRoundTrips
     }
 
+    /// N31: building the fixture awaits each git process instead of blocking its thread. On a one-thread executor,
+    /// another task runs while the build is still in progress (a blocking wait would hold the only thread to the end).
+    @Test func buildingTheFixtureNeverBlocksItsThread() async throws {
+        let executor = OneThreadExecutor()
+        let state = Mutex((building: false, observed: false))
+        let build = Task(executorPreference: executor) { () async throws -> HostileRepository in
+            state.withLock { $0.building = true }
+            defer { state.withLock { $0.building = false } }
+            return try await HostileRepository.make()
+        }
+        let probe = Task(executorPreference: executor) {
+            for _ in 0..<100_000 {
+                if state.withLock({ $0.building }) {
+                    state.withLock { $0.observed = true }
+                    return
+                }
+                await Task.yield()
+            }
+        }
+        await probe.value
+        let repository = try await build.value
+        repository.remove()
+        #expect(state.withLock { $0.observed }, "the build held the executor's only thread until it finished")
+    }
+
     @Test func belloCodesHostGitRunsNoRepositoryProgram() async throws {
         for strict in [true, false] {
-            let repository = try HostileRepository.make()
+            let repository = try await HostileRepository.make()
             defer { repository.remove() }
             let roundTrips = await Self.exerciseBelloCode(repository, runner: strict ? Self.strictRunner(repository) : Self.permissiveRunner(repository))
             #expect(roundTrips == 2, "worktree create/remove/restore did not complete under the sandbox")
@@ -98,9 +124,9 @@ struct HostGitIsolationTests {
     /// a repository names may run, and the helper never answers (no grant matches an unreachable host).
     @Test func hostGitRunsNoRepositoryProgramWithTheCredentialHelperPresent() async throws {
         let helper = try #require(Self.helper, "bellocode-exec is not built")
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
-        try repository.plain(["remote", "add", "gitlab", "https://gitlab.example.invalid/group/project.git"], in: repository.root)
+        try await repository.plain(["remote", "add", "gitlab", "https://gitlab.example.invalid/group/project.git"], in: repository.root)
         let vault = InMemorySecretVault()
         try vault.store(account: "https://gitlab.example.invalid", label: "t", value: SecretValue("glpat-never"))
         let broker = try GitCredentialBroker(tokens: vault)
@@ -117,7 +143,7 @@ struct HostGitIsolationTests {
     }
 
     @Test func belloCodesGitStillWorksInAHostileRepository() async throws {
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
         let git = GitRepository(directory: repository.root, runner: Self.permissiveRunner(repository))
         let status = try await git.status()
@@ -130,7 +156,7 @@ struct HostGitIsolationTests {
 
     @Test func opencodesGitThroughTheShimRunsNoRepositoryProgram() async throws {
         let helper = try #require(Self.helper, "bellocode-exec is not built")
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
         let shimDirectory = repository.base + "/shim"
         try FileManager.default.createDirectory(atPath: shimDirectory, withIntermediateDirectories: true)
@@ -179,7 +205,7 @@ struct HostGitIsolationTests {
 
     @Test func aRepositoryCannotRedirectWritesOutsideItself() async throws {
         let helper = try #require(Self.helper, "bellocode-exec is not built")
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
         // Outside every writable root (not under TMPDIR): core.worktree points git's checkout there.
         let outside = "/private/tmp/bellocode-escape-\(UUID().uuidString)"
@@ -187,7 +213,7 @@ struct HostGitIsolationTests {
         defer { try? FileManager.default.removeItem(atPath: outside) }
         let shim = repository.base + "/git"
         try FileManager.default.createSymbolicLink(atPath: shim, withDestinationPath: helper)
-        try repository.plain(["config", "core.worktree", outside], in: repository.root)
+        try await repository.plain(["config", "core.worktree", outside], in: repository.root)
         for arguments in [["reset", "--hard", "HEAD"], ["checkout", "HEAD", "--", "."]] {
             _ = try? await GitRunner(environment: repository.environment).runProgram(
                 URL(filePath: shim), arguments, in: repository.root, environment: repository.environment, timeout: .seconds(30))
@@ -195,21 +221,21 @@ struct HostGitIsolationTests {
         _ = try? await Self.strictRunner(repository).run(["checkout", "HEAD", "--", "."], in: repository.root, allowFailure: true)
         #expect((try FileManager.default.contentsOfDirectory(atPath: outside)).isEmpty)
         // Control: unconfined git does write there.
-        try repository.plain(["checkout", "HEAD", "--", "README.md"], in: repository.root)
+        try await repository.plain(["checkout", "HEAD", "--", "README.md"], in: repository.root)
         #expect(FileManager.default.fileExists(atPath: outside + "/README.md"))
     }
 
     @Test func aSubmoduleConfigurationRunsNothing() async throws {
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
         let sub = repository.root + "/sub"
         try FileManager.default.createDirectory(atPath: sub, withIntermediateDirectories: true)
-        try repository.plain(["init", "-q", "-b", "main"], in: sub)
+        try await repository.plain(["init", "-q", "-b", "main"], in: sub)
         try Data("s\n".utf8).write(to: URL(filePath: sub + "/s.txt"))
-        try repository.plain(["add", "-A"], in: sub)
-        try repository.plain(["commit", "-q", "-m", "sub"], in: sub)
-        try repository.plain(["config", "core.fsmonitor", repository.script("submodule-fsmonitor")], in: sub)
-        try repository.plain(["-c", "core.fsmonitor=false", "add", "sub"], in: repository.root)
+        try await repository.plain(["add", "-A"], in: sub)
+        try await repository.plain(["commit", "-q", "-m", "sub"], in: sub)
+        try await repository.plain(["config", "core.fsmonitor", repository.script("submodule-fsmonitor")], in: sub)
+        try await repository.plain(["-c", "core.fsmonitor=false", "add", "sub"], in: repository.root)
         try Data("s2\n".utf8).write(to: URL(filePath: sub + "/s.txt"))
         // The fixture's own unconfined `add` above ran the hostile filters: start from an empty marker folder.
         for name in repository.fired { try FileManager.default.removeItem(atPath: repository.markers + "/" + name) }
@@ -243,7 +269,7 @@ struct HostGitIsolationTests {
 
     @Test func controlUnconfinedGitRunsTheVectors() async throws {
         // Proves the fixture is live: plain git (no sandbox, no overrides) executes repository programs.
-        let repository = try HostileRepository.make()
+        let repository = try await HostileRepository.make()
         defer { repository.remove() }
         let process = Process()
         process.standardInput = FileHandle.nullDevice
@@ -308,5 +334,16 @@ struct SetupOutputTests {
         #expect(omitted == text.utf8.count - 1_000)
         #expect(kept.contains("[… \(omitted) bytes of output omitted …]"))
         #expect(WorktreeSetupResult.headAndTail("short", limit: 1_000).omitted == 0)
+    }
+}
+
+/// A task executor with exactly one thread (a serial queue).
+final class OneThreadExecutor: TaskExecutor {
+    let queue = DispatchQueue(label: "bellocode.tests.one-thread")
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedTaskExecutor()
+        queue.async { job.runSynchronously(on: executor) }
     }
 }

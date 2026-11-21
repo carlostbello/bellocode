@@ -448,7 +448,7 @@ public final class EnvironmentService {
             checkGlobalImages()
             reconcileStacks()
         } else if !state.isReady {
-            tasks.set("events", Task {})
+            tasks.cancel("events")
             for model in models.values {
                 model.phase = .runtimeUnavailable(state)
                 stopForwards(model)
@@ -608,7 +608,9 @@ public final class EnvironmentService {
                         return
                     }
                 }
-                let unmountable = spec.unmountablePaths()
+                // Worktree folders made, and every mount checked, off the main actor (N30).
+                let unmountable = await Self.prepareMounts(spec)
+                guard self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 guard unmountable.isEmpty else {
                     model.phase = .unmountable(unmountable)
                     self.scheduleConfigWrite()
@@ -670,6 +672,9 @@ public final class EnvironmentService {
         default:
             break
         }
+        // Read before the phase changes (N21): an idle (stopped) container is started again, so "always" pulls first.
+        let wasIdle = model.phase == .idle
+        let wasRunning = model.phase == .ready
         model.phase = .starting
         let generation = nextGeneration(model.directory)
         let runtimeRef = activeRuntime
@@ -678,7 +683,7 @@ public final class EnvironmentService {
         // Pull policy "always": fetch the image again before (re)creating, so a moved tag is followed. Never a tag built
         // here (R15): it exists nowhere to pull from.
         let pullFirst = !devBuild && imagePolicy.pullPolicy == .always
-            && (model.record.containerID == nil || model.outdatedReason != nil || model.phase == .idle)
+            && (model.record.containerID == nil || model.outdatedReason != nil || wasIdle)
         let auth = pullFirst ? registryAuth(for: spec.image) : nil
         let egressPreflight = egress?.preflight
         tasks.set("activate-\(model.projectKey)", Task { [weak self] in
@@ -692,8 +697,9 @@ public final class EnvironmentService {
                     return
                 }
                 if pullFirst { try await runtimeRef.pull(spec.image, auth: auth) { _ in } }
+                if !spec.isShared { await Self.makeFolders(spec.extraMounts) }
                 let previousID = model.record.containerID
-                let wasStopped = model.phase == .starting
+                let wasStopped = !wasRunning
                 let id = try await runtimeRef.ensureRunning(spec)
                 // Enforced egress: the container starts on its internal network (no way out) and the gateway joins it.
                 if let egressPreflight { try await egressPreflight(spec) }
@@ -861,8 +867,8 @@ public final class EnvironmentService {
         stopForwards(model)
         bridges.removeValue(forKey: model.directory)?.stop()
         _ = nextGeneration(model.directory)
-        tasks.set("refresh-\(model.projectKey)", Task {})
-        tasks.set("activate-\(model.projectKey)", Task {})
+        tasks.cancel("refresh-\(model.projectKey)")
+        tasks.cancel("activate-\(model.projectKey)")
         do {
             try await activeRuntime.purge(storage)
         } catch {
@@ -1021,14 +1027,14 @@ public final class EnvironmentService {
     public func stopForward(_ directory: String, port: Int) {
         let model = environment(for: directory)
         forwarders[model.directory]?.removeValue(forKey: port)?.stop()
-        tasks.set("forward-\(model.projectKey)-\(port)", Task {})
+        tasks.cancel("forward-\(model.projectKey)-\(port)")
         model.forwards.removeAll { $0.containerPort == port }
     }
 
     private func stopForwards(_ model: ProjectEnvironment) {
         for (port, forwarder) in forwarders.removeValue(forKey: model.directory) ?? [:] {
             forwarder.stop()
-            tasks.set("forward-\(model.projectKey)-\(port)", Task {})
+            tasks.cancel("forward-\(model.projectKey)-\(port)")
         }
         model.forwards = []
     }
@@ -1188,6 +1194,22 @@ public final class EnvironmentService {
         return unique
     }
 
+    /// Makes the worktree folders a project container mounts and returns the mounts that cannot be used, off the main
+    /// actor (N30).
+    @concurrent
+    nonisolated static func prepareMounts(_ spec: WorkspaceSpec) async -> [String] {
+        if !spec.isShared { await makeFolders(spec.extraMounts) }
+        return spec.unmountablePaths()
+    }
+
+    /// Creates missing folders, off the main actor (N30).
+    @concurrent
+    nonisolated static func makeFolders(_ paths: [String]) async {
+        for path in paths where !FileManager.default.fileExists(atPath: path) {
+            try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        }
+    }
+
     func workspaceSpec(_ model: ProjectEnvironment) -> WorkspaceSpec? {
         switch mode(for: model) {
         case .hostDocker: return nil
@@ -1198,7 +1220,9 @@ public final class EnvironmentService {
         // A dev build without a known content tag yet has no spec (never another image in its place).
         guard let image = dev.map({ $0.image ?? devTags[model.directory] }) ?? model.settings.image ?? defaultImage,
               dev?.build != nil || imageRefusal(image) == nil else { return nil }
-        let roots = workspaceRoots(model, create: true)
+        // N30: no file system writes here (it runs on the main actor for every configuration write); missing worktree
+        // folders are made off it, before the configuration is written and before the container is created.
+        let roots = workspaceRoots(model, create: false)
         var spec = WorkspaceSpec(
             projectRoot: model.directory, extraMounts: Array(roots.dropFirst()), userMounts: model.settings.userMounts,
             image: image, network: model.settings.network, resources: model.settings.resources,
@@ -1315,6 +1339,8 @@ public final class EnvironmentService {
     private func performConfigWrite() async {
         guard let url = configuration?.execConfigURL else { return }
         let body = helperConfig()
+        // The worktree folders project containers mount (the helper may create a container from this configuration).
+        await Self.makeFolders(body.workspaces.compactMap(\.spec).filter { !$0.isShared }.flatMap(\.extraMounts))
         guard body != installedConfig || helperConfigProblem != nil else { return }
         configGeneration += 1
         let generation = configGeneration
