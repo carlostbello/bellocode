@@ -74,7 +74,9 @@ extension TranscriptController {
         let highlighter = self.highlighter
         let ui = self.ui[tail.id] ?? RowUIState()
         let content = rows[index].content
-        let sizes = imageSizes(for: rows[index])
+        // Every known size: the job looks up the sources it finds off the main actor. Finding them here would mean
+        // parsing the whole streaming message on the main actor on every tick (N20).
+        let sizes = imageSizes
         let generation = self.generation
         metrics.tailJobs += 1
         tail.task = Task { [weak self] in
@@ -135,7 +137,7 @@ extension TranscriptController {
         tail.stream = result.stream
         tail.blockLayouts = reused + result.layouts
         tail.keyVersion = version
-        tail.displayedLength = result.stream.displayed.utf8.count
+        tail.displayedLength = result.stream.displayedUTF8Count
         tail.appliedLength = text.utf8.count
         let key = currentKey(row: index)
         let layout = RowLayout(key: key, blocks: tail.blockLayouts, width: contentWidth, topPadding: topPadding(index), theme: theme)

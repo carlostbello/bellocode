@@ -159,9 +159,22 @@ extension TranscriptController {
     /// happen on the main thread per layout request. One entry per row that has images.
     func imageSources(_ row: TranscriptRow) -> [String] {
         if case .markdown(let text, _) = row.content {
+            // A streaming row: the blocks its tail job already parsed off the main actor (N20).
+            if let tail = tails[row.id] {
+                return tail.stream.blocks.compactMap { if case .image(let source, _) = $0.kind { source } else { nil } }
+            }
             guard text.contains("![") else { return [] }
             if let cached = imageSourceCache[row.id], cached.version == row.version { return cached.sources }
-            let sources = Self.imageSources(row)
+            let sources: [String]
+            if let blocks = blockCache.cachedBlocks(for: row) {
+                // Parsed off the main actor already (a finished stream's reconcile, or a background layout).
+                sources = blocks.compactMap { block in
+                    if case .markdown(let markdown, _) = block.kind, case .image(let source, _) = markdown.kind { source } else { nil }
+                }
+            } else {
+                metrics.mainThreadParses += 1
+                sources = Self.imageSources(row)
+            }
             imageSourceCache[row.id] = (row.version, sources)
             return sources
         }

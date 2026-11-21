@@ -13,6 +13,11 @@ import Foundation
 ///
 /// `finish(_:)` parses the remaining tail without holds. Its result equals a one-shot parse of the full text (tested at
 /// every split point of a corpus), so the final reconcile never moves anything.
+///
+/// Work per update is proportional to the new bytes and the open block, not the whole message (A28): the source is
+/// not copied, the line buffer scans from the stable boundary, and "was the source extended or replaced?" is checked on
+/// the newly stable bytes plus fixed-size windows of the old stable prefix while streaming (deltas only append), then
+/// in full once by `finish`. `scannedBytes` counts the bytes each update examined (tests).
 public struct MarkdownStream: Sendable {
     /// Final top-level constructs (source offsets are absolute UTF-8 offsets).
     public private(set) var stable: [TopLevelBlock] = []
@@ -20,13 +25,23 @@ public struct MarkdownStream: Sendable {
     public private(set) var open: [TopLevelBlock] = []
     /// UTF-8 offset where the unstable region starts.
     public private(set) var stableEnd = 0
-    /// The source prefix covered by `stable`, to detect a source that was replaced instead of extended.
-    private var stablePrefix = ""
+    /// The source the stable blocks were parsed from (shared storage, never copied), to detect a source that was
+    /// replaced instead of extended.
+    private var stableSource = ""
+    /// False once the text has a link reference definition (every update then parses the whole prefix).
     private var incremental = true
-    /// The text the current blocks were parsed from (the line-buffered prefix while streaming).
-    public private(set) var displayed = ""
+    /// The latest source and the length of its line-buffered prefix that the current blocks were parsed from.
+    private var source = ""
+    public private(set) var displayedUTF8Count = 0
+    /// Bytes examined by updates so far (prefix checks, line buffering, parsing).
+    public private(set) var scannedBytes = 0
+    /// Bytes compared at each end of the old stable prefix by a streaming update's replacement check.
+    static let checkWindow = 256
 
     public init() {}
+
+    /// The text the current blocks were parsed from (the line-buffered prefix while streaming).
+    public var displayed: String { String(decoding: source.utf8.prefix(displayedUTF8Count), as: UTF8.self) }
 
     public var blocks: [MarkdownBlock] { (stable + open).flatMap(\.blocks) }
     public var stableBlockCount: Int { stable.reduce(0) { $0 + $1.blocks.count } }
@@ -39,27 +54,59 @@ public struct MarkdownStream: Sendable {
     @discardableResult
     public mutating func finish(_ source: String) -> Int { apply(source, finished: true) }
 
-    private mutating func apply(_ source: String, finished: Bool) -> Int {
-        if !source.utf8.starts(with: stablePrefix.utf8) { self = MarkdownStream() }
-        let display = finished ? source : Self.displayPrefix(source, from: stableEnd)
-        displayed = display
-        // Only the unstable region is new; earlier text was checked when it arrived.
-        if incremental {
-            let utf8 = display.utf8
-            let from = utf8.index(utf8.startIndex, offsetBy: min(stableEnd, utf8.count))
-            if MarkdownParser.hasReferenceDefinitions(Substring(display[from...])) { incremental = false }
+    /// Whether `next` still starts with the stable prefix. Finishing compares it all; a streaming update compares the
+    /// windows at both ends of it (a streamed text only grows; a replaced one differs at its start or its end).
+    private mutating func extendsStablePrefix(_ next: String, full: Bool) -> Bool {
+        guard stableEnd > 0 else { return true }
+        let old = stableSource.utf8
+        let new = next.utf8
+        guard new.count >= stableEnd else { return false }
+        if full {
+            scannedBytes += stableEnd
+            return new.prefix(stableEnd).elementsEqual(old.prefix(stableEnd))
         }
+        let window = Self.checkWindow
+        let head = min(window, stableEnd)
+        let tailStart = max(head, stableEnd - window)
+        scannedBytes += head + (stableEnd - tailStart)
+        guard new.prefix(head).elementsEqual(old.prefix(head)) else { return false }
+        let newTail = new[new.index(new.startIndex, offsetBy: tailStart)..<new.index(new.startIndex, offsetBy: stableEnd)]
+        let oldTail = old[old.index(old.startIndex, offsetBy: tailStart)..<old.index(old.startIndex, offsetBy: stableEnd)]
+        return newTail.elementsEqual(oldTail)
+    }
+
+    private mutating func apply(_ source: String, finished: Bool) -> Int {
+        if !extendsStablePrefix(source, full: finished) {
+            let scanned = scannedBytes
+            self = MarkdownStream()
+            scannedBytes = scanned
+        }
+        self.source = source
+        let utf8 = source.utf8
+        let end: Int
+        if finished {
+            end = utf8.count
+        } else {
+            end = Self.displayEnd(source, from: stableEnd)
+            scannedBytes += max(0, utf8.count - stableEnd)
+        }
+        displayedUTF8Count = end
+        // Only the unstable region is new; earlier text was checked when it arrived.
+        let from = utf8.index(utf8.startIndex, offsetBy: min(stableEnd, end))
+        let to = utf8.index(utf8.startIndex, offsetBy: end)
+        if incremental, MarkdownParser.hasReferenceDefinitions(Substring(source[from..<to])) { incremental = false }
         guard incremental else {
             stable = []
             stableEnd = 0
-            stablePrefix = ""
-            open = MarkdownParser.parse(display)
+            stableSource = ""
+            scannedBytes += end
+            open = MarkdownParser.parse(String(decoding: utf8.prefix(end), as: UTF8.self))
             return 0
         }
         let unchanged = stableBlockCount
-        let utf8 = display.utf8
-        guard utf8.count >= stableEnd else { return unchanged }
-        let suffix = String(decoding: utf8[utf8.index(utf8.startIndex, offsetBy: stableEnd)...], as: UTF8.self)
+        guard end >= stableEnd else { return unchanged }
+        let suffix = String(decoding: utf8[from..<to], as: UTF8.self)
+        scannedBytes += end - stableEnd
         var parsed = MarkdownParser.parse(suffix)
         for index in parsed.indices {
             parsed[index].sourceStart += stableEnd
@@ -68,9 +115,8 @@ public struct MarkdownStream: Sendable {
         if parsed.count >= 2 {
             let newStable = parsed[0..<(parsed.count - 1)]
             stable += newStable
-            let newEnd = parsed[parsed.count - 1].sourceStart
-            stablePrefix = String(decoding: utf8.prefix(newEnd), as: UTF8.self)
-            stableEnd = newEnd
+            stableEnd = parsed[parsed.count - 1].sourceStart
+            stableSource = source
             open = [parsed[parsed.count - 1]]
         } else {
             open = parsed
@@ -83,8 +129,21 @@ public struct MarkdownStream: Sendable {
     /// The prefix of `source` that may be shown while it streams. `start` is a top-level block boundary (outside any
     /// fence), so fence state is tracked from there.
     public static func displayPrefix(_ source: String, from start: Int = 0) -> String {
-        let bytes = Array(source.utf8)
-        let begin = min(start, bytes.count)
+        String(decoding: source.utf8.prefix(displayEnd(source, from: start)), as: UTF8.self)
+    }
+
+    /// The UTF-8 length of `displayPrefix(source, from: start)`. Reads only the bytes from `start` on.
+    static func displayEnd(_ source: String, from start: Int) -> Int {
+        let utf8 = source.utf8
+        let begin = min(start, utf8.count)
+        // Offsets below stay absolute: the scanned bytes are indexed from `begin`.
+        let window = Array(utf8[utf8.index(utf8.startIndex, offsetBy: begin)...])
+        return begin + displayEnd(window)
+    }
+
+    /// The line-buffered length of `bytes` (a region starting at a top-level block boundary).
+    private static func displayEnd(_ bytes: [UInt8]) -> Int {
+        let begin = 0
         // Complete lines end at the last newline.
         var completeEnd = begin
         if let last = bytes[begin...].lastIndex(of: 10) { completeEnd = last + 1 }
@@ -133,7 +192,7 @@ public struct MarkdownStream: Sendable {
                 end = space
             }
         }
-        return String(decoding: bytes[..<end], as: UTF8.self)
+        return end
     }
 
     private static func indent(_ bytes: [UInt8], _ line: Range<Int>) -> Int {
