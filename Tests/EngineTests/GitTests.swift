@@ -410,8 +410,12 @@ struct GitServiceTests {
         model.beginWatching()
         try await waitUntil { model.isWatching }
         let revision = model.revision
+        let written = ContinuousClock.now
         try repo.write("edited.txt", "new\n")
-        try await waitUntil(timeout: .seconds(5)) { model.revision > revision && model.status?.files.count == 1 }
+        try await waitUntil("refresh after the write: events \(model.watchEventCount), revision \(model.revision) (was \(revision)), refreshing \(model.isRefreshing), files \(model.status?.files.count ?? -1)", timeout: .seconds(5)) {
+            model.revision > revision && model.status?.files.count == 1
+        }
+        print("watch refresh latency: \(ContinuousClock.now - written), events \(model.watchEventCount)")
         model.endWatching()
         #expect(!model.isWatching)
         model.loadBranches()

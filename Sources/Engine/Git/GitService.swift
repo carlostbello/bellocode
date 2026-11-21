@@ -550,6 +550,9 @@ public final class GitRepositoryModel {
 
     public var isWatching: Bool { watcher?.isRunning ?? false }
 
+    /// File system events the current watcher received (diagnostics and tests).
+    var watchEventCount: Int { watcher?.eventCount ?? 0 }
+
     private func startWatcherWhenLocated() {
         guard watchCount > 0, watcher == nil else { return }
         guard let location else {

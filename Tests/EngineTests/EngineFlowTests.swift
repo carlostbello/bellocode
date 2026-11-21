@@ -33,13 +33,13 @@ func makeEngine(
 
 @MainActor
 func waitUntil(
-    _ message: String = "condition", timeout: Duration = .seconds(15), _ condition: @MainActor () -> Bool
+    _ message: @autoclosure () -> String = "condition", timeout: Duration = .seconds(15), _ condition: @MainActor () -> Bool
 ) async throws {
     let clock = ContinuousClock()
     let deadline = clock.now + timeout
     while !condition() {
         guard clock.now < deadline else {
-            Issue.record("timed out waiting for \(message)")
+            Issue.record("timed out waiting for \(message())")
             throw CancellationError()
         }
         try await Task.sleep(for: .milliseconds(5))
