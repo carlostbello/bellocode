@@ -38,6 +38,9 @@ public enum ServerSupervisorError: Error, Sendable, Hashable, CustomStringConver
     case versionMismatch(expected: String, reported: String)
     /// `awaitReady()` was called while stopped or failed.
     case notRunning(String)
+    /// Another process holds the data root's lease (`OpenCodeDataLock`): a `bellocode-opencode` command running its own
+    /// private server. The supervisor waits for it, without counting a failure.
+    case dataInUse
 
     public var description: String {
         switch self {
@@ -48,6 +51,7 @@ public enum ServerSupervisorError: Error, Sendable, Hashable, CustomStringConver
         case .identityMismatch(let child, let reported): "server info reports pid \(reported), not our child \(child)"
         case .versionMismatch(let expected, let reported): "server version \(reported), expected \(expected)"
         case .notRunning(let state): "server is not running (\(state))"
+        case .dataInUse: "waiting for a bellocode-opencode command that is using opencode's data to finish"
         }
     }
 }
@@ -79,6 +83,10 @@ public actor ServerSupervisor {
     private var previousLog: BoundedLog?
     private var generation = 0
     private var observers: [UInt64: AsyncStream<ServerState>.Continuation] = [:]
+    /// The data root's lease, held from before a launch until that child has exited (A13).
+    private var dataLock: OpenCodeDataLock?
+    /// Hands the current server's password to `bellocode-opencode` (A03); one per launch.
+    private var passwordBroker: CLIPasswordBroker?
     private var nextObserverID: UInt64 = 0
 
     public init(
@@ -185,6 +193,13 @@ public actor ServerSupervisor {
                 (reason, readyAt) = try await runOnce()
             } catch is CancellationError {
                 break
+            } catch ServerSupervisorError.dataInUse {
+                // Not a failure: a private CLI server is running on this data. Try again shortly.
+                if stopping || Task.isCancelled { break }
+                let delay = Duration.seconds(1)
+                publish(.restarting(attempt: failures + 1, delay: delay, reason: ServerSupervisorError.dataInUse.description))
+                do { try await time.sleep(for: delay) } catch { break }
+                continue
             } catch let error as ServerSupervisorError {
                 if case .executableMissing = error {
                     publish(.failed(reason: error.description))
@@ -217,6 +232,15 @@ public actor ServerSupervisor {
             throw ServerSupervisorError.executableMissing(path: path)
         }
         try configuration.prepareDirectories()
+        // One server per data root, whoever starts it: the app or a private `bellocode-opencode` server (A13).
+        if configuration.publishesCLIConnection {
+            guard let lock = try? OpenCodeDataLock.tryAcquire(configuration.directories) else { throw ServerSupervisorError.dataInUse }
+            dataLock = lock
+        }
+        defer {
+            dataLock?.release()
+            dataLock = nil
+        }
         let credentials = ServerCredentials.random()
         let log = BoundedLog(redactions: [credentials.password])
         let spec = LaunchSpec(
@@ -360,20 +384,26 @@ public actor ServerSupervisor {
 
     // MARK: - CLI connection (docs/features/opencode-config.md)
 
-    /// Writes `run/server.json` (0600) so `bellocode-opencode` uses this server; failures only disable the CLI path.
+    /// Starts the password broker, then writes `run/server.json` (0600, no secret) so `bellocode-opencode` uses this
+    /// server; failures only disable the CLI path.
     private func publishCLIConnection(endpoint: ServerEndpoint, credentials: ServerCredentials, pid: Int32) {
         guard configuration.publishesCLIConnection else { return }
-        let file = CLIConnectionFile(url: endpoint.baseURL, pid: pid, version: endpoint.version, password: credentials.password)
+        passwordBroker?.stop()
+        passwordBroker = nil
         do {
-            try file.write(to: configuration.directories.connectionFile)
+            passwordBroker = try CLIPasswordBroker(
+                directories: configuration.directories, pid: pid, password: credentials.password, allowedPeers: configuration.cliPeerExecutables)
+            try CLIConnectionFile(url: endpoint.baseURL, pid: pid, version: endpoint.version).write(to: configuration.directories.connectionFile)
         } catch {
-            Instrumentation.serverLog.error("could not write the CLI connection file: \(String(describing: error), privacy: .public)")
+            Instrumentation.serverLog.error("could not publish the CLI connection: \(String(describing: error), privacy: .public)")
         }
     }
 
     private func withdrawCLIConnection(pid: Int32) {
         guard configuration.publishesCLIConnection else { return }
         CLIConnectionFile.remove(at: configuration.directories.connectionFile, ifPID: pid)
+        passwordBroker?.stop()
+        passwordBroker = nil
     }
 
     // MARK: - Observation

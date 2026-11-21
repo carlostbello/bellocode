@@ -11,14 +11,15 @@ struct OpenCodeConfigTests {
     var directories: OpenCodeDirectories { OpenCodeDirectories(dataRoot: root) }
     let opencode = URL(fileURLWithPath: "/Applications/BelloCode.app/Contents/Helpers/opencode")
     let helpers = URL(fileURLWithPath: "/Applications/BelloCode.app/Contents/Helpers", isDirectory: true)
-    var running: CLIConnectionFile {
-        CLIConnectionFile(url: URL(string: "http://127.0.0.1:50123")!, pid: getpid(), version: "2.3.2", password: "per-launch-secret")
+    var runningFile: CLIConnectionFile {
+        CLIConnectionFile(url: URL(string: "http://127.0.0.1:50123")!, pid: getpid(), version: "2.3.2")
     }
+    let running = OpenCodeCLI.ServerAvailability.running(url: URL(string: "http://127.0.0.1:50123")!, password: "per-launch-secret")
 
     private func plan(_ arguments: [String], caller: [String: String] = ["PATH": "/usr/bin:/bin", "TERM": "xterm-256color"],
-                      connection: CLIConnectionFile?) -> Result<OpenCodeCLI.Invocation, OpenCodeCLI.Refusal> {
+                      connection: OpenCodeCLI.ServerAvailability?) -> Result<OpenCodeCLI.Invocation, OpenCodeCLI.Refusal> {
         OpenCodeCLI.plan(arguments: arguments, callerEnvironment: caller, directories: directories, opencode: opencode,
-                         helpersDirectory: helpers, connection: connection)
+                         helpersDirectory: helpers, server: { .success(connection ?? .offline) })
     }
 
     // MARK: Wrapper environment and routing
@@ -105,20 +106,20 @@ struct OpenCodeConfigTests {
     @Test func connectionFileIsPrivateAndChecked() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let file = directories.connectionFile
-        try running.write(to: file)
+        try runningFile.write(to: file)
         var info = stat()
         #expect(stat(file.path, &info) == 0)
         #expect(info.st_mode & 0o777 == 0o600)
         #expect(stat(directories.runDirectory.path, &info) == 0)
         #expect(info.st_mode & 0o777 == 0o700)
-        #expect(try CLIConnectionFile.read(from: file) == running)
+        #expect(try CLIConnectionFile.read(from: file) == runningFile)
 
         chmod(file.path, 0o644)
         #expect(throws: CLIConnectionFile.ReadError.self) { try CLIConnectionFile.read(from: file) }
         chmod(file.path, 0o600)
 
         // A dead pid: stale. Removal only for the matching pid.
-        var stale = running
+        var stale = runningFile
         stale.pid = 999_999
         try stale.write(to: file)
         #expect(throws: CLIConnectionFile.ReadError.stale(pid: 999_999)) { try CLIConnectionFile.read(from: file) }

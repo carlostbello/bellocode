@@ -137,9 +137,19 @@ with BelloCode's isolated HOME and XDG directories (redirecting variables such a
 | BelloCode not running | Account, model, session, plugin-list and debug commands get `--standalone`. `run`, the interactive interface, `api`, `mcp list`, `reload` are refused: without BelloCode's server there is no container shell, so they would run on the Mac. |
 | Always | `service`, `serve`, `upgrade`, `uninstall`, `pair`, `acp` refused; `--standalone` refused while BelloCode runs; an explicit `--server` never receives BelloCode's password; `mcp add`, `plugin add/remove`, `debug paths`, help run directly. |
 
-The server's address and password are in `<data>/run/server.json`, written by the supervisor when the server is verified
-and removed when it exits. The file is created 0600 (atomic, O_EXCL) in a 0700 folder; readers refuse group or other access,
-another owner or a dead pid. **Install Command Line Tool…** (BelloCode menu and the pane) links the helper into
+The server's address, pid and version are in `<data>/run/server.json`, written by the supervisor when the server is
+verified and removed when it exits; it holds **no secret** (v1.0.0 review A03: the agent's host file tools can read the
+app's support folder). The file is created 0600 (atomic, O_EXCL) in a 0700 folder; readers open it O_NOFOLLOW, check it
+with fstat and refuse group or other access, another owner, a link, a non-loopback or non-HTTP URL, a pid ≤ 0 or a dead
+pid. The per-launch password is handed over by the app (`CLIPasswordBroker`) on a 0600 unix socket in the per-user
+temporary folder (`confstr(_CS_DARWIN_USER_TEMP_DIR)`, name derived from the data root), only to peers with this
+user's uid and, in a bundled build, only to the bundled `bellocode-opencode` (`LOCAL_PEERPID` + `proc_pidpath`); the
+wrapper checks the server's uid and that the answer is for the pid in the file. **One server per data root** (A13): the
+app holds an `flock` lease (`<data>/run/opencode.lock`) from before it launches its server until that server has exited;
+a standalone command takes the same lease and keeps it across `execve` while its private server runs. A command that
+finds the lease held but no published server is refused ("starting or stopping, or another command"), and the app waits
+(state "restarting", reason shown) while a standalone command runs. Release builds ignore `BELLOCODE_OPENCODE_BINARY` and
+`BELLOCODE_OPENCODE_DATA_ROOT`. **Install Command Line Tool…** (BelloCode menu and the pane) links the helper into
 `~/.local/bin` (or a writable `/usr/local/bin`) after confirming. It is idempotent, repairs a link to another BelloCode
 copy, never replaces or removes a file or foreign link, and Uninstall removes only BelloCode's links. **Terminals:**
 BelloCode's terminals run in Linux workspace containers, where a macOS binary cannot run. Putting the server's password
@@ -180,8 +190,8 @@ two windows, 30 sessions.
 
 - Per-project plugins and `opencode.json` need opencode support for per-location project config (or a second server
   per trust level); revisit on upgrades.
-- A standalone CLI server and a BelloCode launch in the same moment would be two writers; the app could take a lock
-  that the wrapper holds while a private server runs.
+- If the app crashes, its lease is released at once while its opencode child exits on stdin EOF a moment later; a
+  standalone command in that window could briefly overlap it.
 - `!`cmd`` interpolation in trusted project commands could run through `bellocode-exec` in the project's container.
 - `opencode.json` schema-level problems (an entry opencode drops) are only in opencode's log ("configuration normalization
   diagnostic"); surfacing them needs a log reader.

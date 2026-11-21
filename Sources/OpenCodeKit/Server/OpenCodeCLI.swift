@@ -6,12 +6,16 @@ import Foundation
 /// opencode 2.3.2's client commands connect to the per-user background service by default and start one when none is
 /// registered: against BelloCode's data that would be a second server on the same database. So the wrapper never lets
 /// a command pick a server itself:
-/// - BelloCode running (a valid `CLIConnectionFile`): `--server <url>` is inserted and the per-launch password is
-///   passed in `OPENCODE_PASSWORD` (environment only, never the command line). Credential writes (`auth login`, …) go
-///   through the running server, the database's one writer.
-/// - BelloCode not running: management commands get `--standalone` (a private server that exits with the command;
-///   BelloCode is not running, so it is the only writer). Commands that run an agent, MCP servers or arbitrary API
-///   calls are refused: a standalone server has no container shell, so they would execute on the Mac.
+/// - BelloCode running (`ServerAvailability.running`: a valid `CLIConnectionFile` and the password from the app's
+///   `CLIPasswordBroker`): `--server <url>` is inserted and the per-launch password is passed in `OPENCODE_PASSWORD`
+///   (environment only, never the command line). Credential writes (`auth login`, …) go through the running server,
+///   the database's one writer.
+/// - BelloCode not running (`.offline`: this process holds the data root's `OpenCodeDataLock`, which it keeps across
+///   `execve`): management commands get `--standalone` (a private server that exits with the command, the only writer
+///   while it holds the lock). Commands that run an agent, MCP servers or arbitrary API calls are refused: a standalone
+///   server has no container shell, so they would execute on the Mac.
+/// - Neither (`.busy`: the lock is held but no server is published: BelloCode starting or stopping, or another
+///   private server): refused, never a second server on the same data (A13).
 /// - File-only commands (`mcp add`, `plugin add|remove`, `debug paths`) run directly. `service`, `serve`, `upgrade`,
 ///   `uninstall`, `pair` and `acp` are refused (they start or replace servers, or modify the bundled binary).
 public enum OpenCodeCLI {
@@ -35,7 +39,20 @@ public enum OpenCodeCLI {
     public struct Refusal: Error, Sendable, Equatable, CustomStringConvertible {
         public var message: String
         public var description: String { message }
+        public init(message: String) { self.message = message }
     }
+
+    /// Whether BelloCode's server can be used, found by `discover` (only when a command needs a server).
+    public enum ServerAvailability: Sendable, Equatable {
+        case running(url: URL, password: String)
+        /// No server, and this process holds the data lock: a private standalone server is the only writer.
+        case offline
+        /// The lock is held by someone else and no server is published (BelloCode starting or stopping, or another
+        /// `bellocode-opencode` with its own private server).
+        case busy
+    }
+
+    static let busyMessage = "BelloCode's opencode server is starting or stopping, or another bellocode-opencode command is using its data. Try again in a moment."
 
     /// Flags taking a value that may appear before the subcommand.
     static let valueFlags: Set<String> = ["--log-level", "--server", "--session", "-s", "--prompt", "--completions"]
@@ -50,7 +67,10 @@ public enum OpenCodeCLI {
         while index < arguments.count {
             let argument = arguments[index]
             if argument == "--" { break }
-            if ["--help", "-h", "--version", "-v"].contains(argument) || argument.hasPrefix("--completions") { help = true }
+            // Help anywhere; the version only as the whole command (`opencode -v`), never next to a subcommand, where
+            // the flag could mean something else and the command would run without BelloCode's routing (N06).
+            if ["--help", "-h"].contains(argument) || argument.hasPrefix("--completions") { help = true }
+            if ["--version", "-v"].contains(argument), arguments.count == 1 { help = true }
             if argument.hasPrefix("-") {
                 if valueFlags.contains(argument) { index += 1 }
                 index += 1
@@ -110,10 +130,10 @@ public enum OpenCodeCLI {
         }
     }
 
-    /// Plans one run. `connection` is the running server's file (nil when BelloCode is not running).
+    /// Plans one run. `server` is asked only when the command needs BelloCode's server (`discover` in the wrapper).
     public static func plan(
         arguments: [String], callerEnvironment: [String: String], directories: OpenCodeDirectories, opencode: URL,
-        helpersDirectory: URL?, connection: CLIConnectionFile?
+        helpersDirectory: URL?, server: () -> Result<ServerAvailability, Refusal>
     ) -> Result<Invocation, Refusal> {
         let (path, end, help) = commandPath(arguments)
         var environment = callerEnvironment.filter { key, _ in
@@ -131,8 +151,9 @@ public enum OpenCodeCLI {
         func invocation(_ args: [String], notice: String? = nil) -> Result<Invocation, Refusal> {
             .success(Invocation(executable: opencode, arguments: args, environment: environment, notice: notice))
         }
-        if help { return invocation(arguments) }
         let kind = kind(of: path)
+        if case .refused(let message) = kind { return .failure(Refusal(message: message)) }
+        if help { return invocation(arguments) }
         switch kind {
         case .refused(let message):
             return .failure(Refusal(message: message))
@@ -141,37 +162,86 @@ public enum OpenCodeCLI {
         case .client(let standaloneAllowed):
             let flags = arguments.prefix { $0 != "--" }
             let explicitServer = flags.contains { $0 == "--server" || $0.hasPrefix("--server=") }
-            let explicitStandalone = flags.contains("--standalone")
+            // `--standalone=true` and friends count too (N06).
+            let explicitStandalone = flags.contains { $0 == "--standalone" || $0.hasPrefix("--standalone=") }
             if explicitServer {
                 // Someone else's server: never send BelloCode's password to it. Their own OPENCODE_PASSWORD is kept.
                 if let password = callerEnvironment["OPENCODE_PASSWORD"] { environment["OPENCODE_PASSWORD"] = password }
                 return invocation(arguments)
             }
-            if let connection {
+            let availability: ServerAvailability
+            switch server() {
+            case .success(let value): availability = value
+            case .failure(let refusal): return .failure(refusal)
+            }
+            switch availability {
+            case .running(let url, let password):
                 if explicitStandalone {
                     return .failure(Refusal(message: "BelloCode is running: --standalone would open a second server on its database. Leave out --standalone to use BelloCode's server."))
                 }
-                environment["OPENCODE_PASSWORD"] = connection.password
+                environment["OPENCODE_PASSWORD"] = password
                 var args = arguments
-                args.insert(contentsOf: ["--server", connection.url.absoluteString], at: end)
+                args.insert(contentsOf: ["--server", url.absoluteString], at: end)
                 return invocation(args)
+            case .busy:
+                return .failure(Refusal(message: busyMessage))
+            case .offline:
+                guard standaloneAllowed else {
+                    let name = path.isEmpty ? "the interactive interface" : "`opencode \(path.joined(separator: " "))`"
+                    return .failure(Refusal(message: "\(name) needs BelloCode's server (its agents and MCP servers run in containers). Open BelloCode, then run it again."))
+                }
+                var args = arguments
+                if !explicitStandalone { args.insert("--standalone", at: end) }
+                return invocation(args, notice: "BelloCode is not running: using a private opencode server on BelloCode's data for this command.")
             }
-            guard standaloneAllowed else {
-                let name = path.isEmpty ? "the interactive interface" : "`opencode \(path.joined(separator: " "))`"
-                return .failure(Refusal(message: "\(name) needs BelloCode's server (its agents and MCP servers run in containers). Open BelloCode, then run it again."))
-            }
-            var args = arguments
-            if !explicitStandalone { args.insert("--standalone", at: end) }
-            return invocation(args, notice: "BelloCode is not running: using a private opencode server on BelloCode's data for this command.")
         }
     }
 
+    /// Finds BelloCode's server for one command. Takes the data lock first: holding it means no BelloCode server
+    /// exists or is starting (`.offline`, and the returned lock must be kept across `execve`). Otherwise the server
+    /// must be published and hand over its password; a lock without a server is `.busy`.
+    public static func discover(_ directories: OpenCodeDirectories) -> (Result<ServerAvailability, Refusal>, OpenCodeDataLock?) {
+        let lock: OpenCodeDataLock?
+        do {
+            lock = try OpenCodeDataLock.tryAcquire(directories)
+        } catch {
+            return (.failure(Refusal(message: error.description)), nil)
+        }
+        if let lock { return (.success(.offline), lock) }
+        let file: CLIConnectionFile
+        do {
+            file = try CLIConnectionFile.read(from: directories.connectionFile)
+        } catch {
+            switch error {
+            case .missing, .stale: return (.success(.busy), nil)
+            default: return (.failure(Refusal(message: error.description)), nil)
+            }
+        }
+        do {
+            let password = try CLIPasswordClient.password(directories: directories, pid: file.pid)
+            return (.success(.running(url: file.url, password: password)), nil)
+        } catch {
+            return (.failure(Refusal(message: error.description)), nil)
+        }
+    }
+
+    /// The opencode binary to run: the one bundled beside this helper. `BELLOCODE_OPENCODE_BINARY` (development and
+    /// tests) is honoured in debug builds only, never in a release build that would hand it the live password (A24, N06).
+    public static func opencodeExecutable(environment: [String: String], helpersDirectory: URL) -> URL {
+        #if DEBUG
+        if let override = environment["BELLOCODE_OPENCODE_BINARY"], !override.isEmpty { return URL(fileURLWithPath: override) }
+        #endif
+        return helpersDirectory.appending(path: "opencode")
+    }
+
     /// The data root the app uses (`~/Library/Application Support/BelloCode/opencode`); `BELLOCODE_OPENCODE_DATA_ROOT`
-    /// overrides it (development and tests).
+    /// overrides it in debug builds only (development and tests; N06).
     public static func defaultDataRoot(environment: [String: String]) -> URL {
+        #if DEBUG
         if let override = environment["BELLOCODE_OPENCODE_DATA_ROOT"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
+        #endif
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Library/Application Support")
         return support.appending(path: "BelloCode/opencode", directoryHint: .isDirectory)

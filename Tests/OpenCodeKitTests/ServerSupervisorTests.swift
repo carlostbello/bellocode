@@ -58,9 +58,11 @@ final class FakeProcess: ServerProcess {
 final class FakeLauncher: ServerProcessLauncher {
     private let state = Mutex<(processes: [FakeProcess], specs: [LaunchSpec])>(([], []))
     private let behaviour: @Sendable (Int) -> FakeProcess.Behaviour
+    private let pidBase: Int32
 
-    init(behaviour: @escaping @Sendable (Int) -> FakeProcess.Behaviour = { _ in .init() }) {
+    init(pidBase: Int32 = 1000, behaviour: @escaping @Sendable (Int) -> FakeProcess.Behaviour = { _ in .init() }) {
         self.behaviour = behaviour
+        self.pidBase = pidBase
     }
 
     var processes: [FakeProcess] { state.withLock { $0.processes } }
@@ -69,7 +71,7 @@ final class FakeLauncher: ServerProcessLauncher {
     func launch(_ spec: LaunchSpec) async throws -> any ServerProcess {
         state.withLock { state in
             let index = state.processes.count
-            let process = FakeProcess(pid: Int32(1000 + index), port: 5000 + index, behaviour: behaviour(index))
+            let process = FakeProcess(pid: pidBase + Int32(index), port: 5000 + index, behaviour: behaviour(index))
             state.processes.append(process)
             state.specs.append(spec)
             return process
