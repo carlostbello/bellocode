@@ -61,6 +61,34 @@ describe("auto mode helpers", () => {
     expect(guard.check("t1", "x")).toBeUndefined()
   })
 
+  test("interrupt guard maps are bounded: checks add nothing, expired entries go, the oldest past the cap (N26)", () => {
+    let now = 1_000
+    const guard = new A.InterruptGuard({ perCaller: 2, perTarget: 2, windowMs: 1_000, cascadeMs: 500, maxThreads: 3 }, () => now)
+    // Checks alone never store anything.
+    for (let i = 0; i < 100; i++) expect(guard.check(`caller${i}`, `target${i}`)).toBeUndefined()
+    expect(guard.sizes).toEqual({ callers: 0, targets: 0, interrupted: 0 })
+
+    // Many distinct threads: each map stays at the cap, and the most recent ones are kept (still limited).
+    for (let i = 0; i < 50; i++) guard.record(`c${i}`, `t${i}`)
+    expect(guard.sizes).toEqual({ callers: 3, targets: 3, interrupted: 3 })
+    guard.record("c49", "t48")
+    expect(guard.check("c49", "x")).toContain("this thread already interrupted")
+    expect(guard.check("y", "t48")).toContain("that thread was already interrupted")
+    expect(guard.check("t49", "x")).toContain("cascade")
+
+    // Expired entries are dropped when they are read and before anything recent is evicted.
+    now += 1_001
+    expect(guard.check("c49", "t48")).toBeUndefined()
+    expect(guard.check("t49", "x")).toBeUndefined()
+    expect(guard.sizes.callers).toBe(2)
+    guard.record("fresh1", "f1")
+    guard.record("fresh2", "f2")
+    guard.record("fresh3", "f3")
+    expect(guard.sizes).toEqual({ callers: 3, targets: 3, interrupted: 3 })
+    guard.record("fresh1", "f1")
+    expect(guard.check("fresh1", "z")).toContain("this thread already interrupted")
+  })
+
   test("reasons are required, one line and bounded", () => {
     expect(A.cleanReason("  ")).toBeUndefined()
     expect(A.cleanReason(42)).toBeUndefined()

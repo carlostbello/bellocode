@@ -128,28 +128,50 @@ export type InterruptLimits = {
   readonly windowMs: number
   /** A thread an agent interrupted cannot interrupt others for this long (caps cascades). */
   readonly cascadeMs: number
+  /** Threads remembered per map (callers, targets, interrupted). Past it, expired entries go first, then the oldest. */
+  readonly maxThreads?: number
 }
 
-export const DEFAULT_INTERRUPT_LIMITS: InterruptLimits = { perCaller: 3, perTarget: 2, windowMs: 5 * 60_000, cascadeMs: 60_000 }
+export const DEFAULT_INTERRUPT_LIMITS: InterruptLimits = { perCaller: 3, perTarget: 2, windowMs: 5 * 60_000, cascadeMs: 60_000, maxThreads: 2_000 }
 
-/** In-memory rate limiter and cascade cap for agent-initiated interrupts (the server process owns it). */
+/** In-memory rate limiter and cascade cap for agent-initiated interrupts (the server process owns it). Bounded (N26):
+ *  a check never adds an entry, an entry whose window passed is dropped, and each map keeps at most `maxThreads`. */
 export class InterruptGuard {
   private byCaller = new Map<string, number[]>()
   private byTarget = new Map<string, number[]>()
   private interruptedAt = new Map<string, number>()
-  constructor(private readonly limits: InterruptLimits = DEFAULT_INTERRUPT_LIMITS, private readonly now = () => Date.now()) {}
+  private readonly maxThreads: number
+  constructor(private readonly limits: InterruptLimits = DEFAULT_INTERRUPT_LIMITS, private readonly now = () => Date.now()) {
+    this.maxThreads = Math.max(1, limits.maxThreads ?? DEFAULT_INTERRUPT_LIMITS.maxThreads ?? 2_000)
+  }
 
+  /** Entries per map, for tests. */
+  get sizes(): { callers: number; targets: number; interrupted: number } {
+    return { callers: this.byCaller.size, targets: this.byTarget.size, interrupted: this.interruptedAt.size }
+  }
+
+  /** The key's interrupts inside the window. An empty list is removed, never stored. */
   private recent(map: Map<string, number[]>, key: string): number[] {
+    const list = map.get(key)
+    if (!list) return []
     const since = this.now() - this.limits.windowMs
-    const list = (map.get(key) ?? []).filter((at) => at > since)
-    map.set(key, list)
-    return list
+    const kept = list.filter((at) => at > since)
+    if (kept.length === 0) map.delete(key)
+    else if (kept.length !== list.length) map.set(key, kept)
+    return kept
+  }
+
+  private cascadeActive(thread: string): boolean {
+    const hit = this.interruptedAt.get(thread)
+    if (hit === undefined) return false
+    if (this.now() - hit < this.limits.cascadeMs) return true
+    this.interruptedAt.delete(thread)
+    return false
   }
 
   /** A refusal message, or undefined when the interrupt may go ahead (then call `record`). */
   check(caller: string, target: string): string | undefined {
-    const hit = this.interruptedAt.get(caller)
-    if (hit !== undefined && this.now() - hit < this.limits.cascadeMs)
+    if (this.cascadeActive(caller))
       return "This thread was itself interrupted by another agent moments ago, so it cannot interrupt other threads yet (cascade limit). Tell the user instead."
     if (this.recent(this.byCaller, caller).length >= this.limits.perCaller)
       return `Rate limit: this thread already interrupted ${this.limits.perCaller} threads in the last ${Math.round(this.limits.windowMs / 60_000)} minutes. Ask the user instead.`
@@ -160,10 +182,32 @@ export class InterruptGuard {
 
   record(caller: string, target: string): void {
     const at = this.now()
-    this.recent(this.byCaller, caller).push(at)
-    this.recent(this.byTarget, target).push(at)
+    this.push(this.byCaller, caller, at)
+    this.push(this.byTarget, target, at)
+    this.interruptedAt.delete(target)
     this.interruptedAt.set(target, at)
-    if (this.interruptedAt.size > 2_000) this.interruptedAt.delete(this.interruptedAt.keys().next().value as string)
+    this.trim()
+  }
+
+  /** Appends `at` and moves the key to the end (most recently used). */
+  private push(map: Map<string, number[]>, key: string, at: number): void {
+    const list = this.recent(map, key)
+    map.delete(key)
+    map.set(key, [...list, at])
+  }
+
+  /** Past the bound: drop every expired entry, then the least recently recorded ones. */
+  private trim(): void {
+    const now = this.now()
+    for (const map of [this.byCaller, this.byTarget]) {
+      if (map.size <= this.maxThreads) continue
+      for (const key of [...map.keys()]) this.recent(map, key)
+      while (map.size > this.maxThreads) map.delete(map.keys().next().value as string)
+    }
+    if (this.interruptedAt.size > this.maxThreads) {
+      for (const [key, hit] of [...this.interruptedAt]) if (now - hit >= this.limits.cascadeMs) this.interruptedAt.delete(key)
+      while (this.interruptedAt.size > this.maxThreads) this.interruptedAt.delete(this.interruptedAt.keys().next().value as string)
+    }
   }
 }
 
