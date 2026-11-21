@@ -149,7 +149,7 @@ public struct EgressGateway: Sendable {
     public func ensure(_ spec: EgressGatewaySpec) async throws {
         try await ensureNetwork(scopeKey: spec.scopeKey, extraLabels: spec.extraLabels)
         let image: String
-        if let other = spec.image { image = other } else { image = try await EgressGatewayImage.ensure(client: client, extraLabels: spec.extraLabels) }
+        if let other = spec.image { image = other } else { image = try await EgressGatewayImage.ensure(client: client) }
         if let existing = try await client.ownedContainer(spec.containerName, required: Self.ownership(spec.scopeKey)) {
             if existing.config.labels?[Self.labelConfig] == spec.configHash, existing.state.running,
                spec.image != nil || existing.image == image,

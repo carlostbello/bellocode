@@ -52,7 +52,7 @@ public enum EgressGatewayImage {
     /// The ID (`sha256:…`) of the gateway image this process built, building it now if it has not (in this launch,
     /// for this daemon, from these inputs). Gateways are created by this ID, never by the mutable tag: an image someone
     /// else put under the tag, or retagged later, is never run as the gateway, whatever its labels claim.
-    public static func ensure(client: EngineClient, extraLabels: [String: String] = [:]) async throws -> String {
+    public static func ensure(client: EngineClient) async throws -> String {
         let hash = inputHash
         let key = client.socketPath + "\n" + hash
         if let id = trusted.withLock({ $0[key] }), let image = try await client.inspectImage(id), image.id == id { return id }
@@ -60,7 +60,7 @@ public enum EgressGatewayImage {
         // same build instead of racing to write the same tag.
         let build = building.withLock { building -> Task<String, any Error> in
             if let running = building[key] { return running }
-            let task = Task { try await buildTrusted(client: client, hash: hash, extraLabels: extraLabels) }
+            let task = Task { try await buildTrusted(client: client, hash: hash) }
             building[key] = task
             return task
         }
@@ -77,7 +77,9 @@ public enum EgressGatewayImage {
 
     private static let building = Mutex<[String: Task<String, any Error>]>([:])
 
-    private static func buildTrusted(client: EngineClient, hash: String, extraLabels: [String: String]) async throws -> String {
+    /// Built with the same labels whoever asks (the app, the helper, tests): the same inputs give the same image ID
+    /// from the build cache, so one caller never moves the tag off another's image.
+    private static func buildTrusted(client: EngineClient, hash: String) async throws -> String {
         var reported: String?
         var lastError: (any Error)?
         // A second attempt covers another process (the helper, a second app instance) writing the same tag meanwhile.
@@ -86,7 +88,7 @@ public enum EgressGatewayImage {
             do {
                 reported = try await client.buildImage(
                     context: context(), tag: tag,
-                    labels: [labelInputs: hash, EgressGateway.labelEgress: "1"].merging(extraLabels) { a, _ in a })
+                    labels: [labelInputs: hash, EgressGateway.labelEgress: "1"])
             } catch {
                 lastError = error
             }
