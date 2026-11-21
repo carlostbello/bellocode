@@ -278,6 +278,7 @@ public struct BrowserImageBuilder: Sendable {
         try ComposeCLI.linkBuildx(beside: docker, into: configDirectory)
         let process = Process()
         process.executableURL = docker
+        process.standardInput = FileHandle.nullDevice  // ChildProcess sets it again (input or /dev/null)
         process.arguments = Self.arguments(context: context, tag: tag, inputHash: hash, extensionID: extensionID, extraLabels: extraLabels)
         process.environment = [
             "PATH": docker.deletingLastPathComponent().path + ":/usr/bin:/bin", "HOME": NSHomeDirectory(),

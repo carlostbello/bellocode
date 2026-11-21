@@ -91,6 +91,7 @@ public struct ComposeCLI: Sendable {
         try Self.linkBuildx(beside: executable, into: configDirectory)
         let process = Process()
         process.executableURL = executable
+        process.standardInput = FileHandle.nullDevice  // ChildProcess sets it again (input or /dev/null)
         process.arguments = Self.arguments(project: project, files: files, workingDirectory: workingDirectory, command: command)
         process.environment = environment()
         process.currentDirectoryURL = workingDirectory ?? configDirectory

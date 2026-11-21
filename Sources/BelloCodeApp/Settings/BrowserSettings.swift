@@ -69,6 +69,7 @@ final class BrowseStatusModel {
     nonisolated static func run(_ path: String, _ arguments: [String]) async -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
+        process.standardInput = FileHandle.nullDevice  // ChildProcess sets it again (input or /dev/null)
         process.arguments = arguments
         process.environment = [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",

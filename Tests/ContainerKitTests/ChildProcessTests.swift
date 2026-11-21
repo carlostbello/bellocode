@@ -9,6 +9,7 @@ import Testing
 struct ChildProcessTests {
     static func shell(_ script: String, in directory: URL? = nil) -> Process {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: "/bin/sh")
         process.arguments = ["-c", script]
         process.environment = ["PATH": "/usr/bin:/bin"]
@@ -60,6 +61,7 @@ struct ChildProcessTests {
 
     @Test func aMissingExecutableFailsToLaunch() async {
         let process = Process()
+        process.standardInput = FileHandle.nullDevice
         process.executableURL = URL(filePath: "/nonexistent/bellocode-child")
         await #expect(throws: ChildProcess.LaunchFailed.self) { _ = try await ChildProcess.run(process, Self.fast) }
     }
