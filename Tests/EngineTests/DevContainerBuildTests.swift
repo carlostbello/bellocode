@@ -102,7 +102,10 @@ struct DevContainerBuildTests {
         let model = service.environment(for: project)
         #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
         let first = try #require(builds.list.withLock { $0.first })
-        #expect(first.arguments.last == CodeRootPaths.canonical(project))
+        // A18: the builder gets a private copy of the context (removed after the build), never the project folder.
+        let staged = try #require(first.arguments.last)
+        #expect(staged != CodeRootPaths.canonical(project) && !staged.hasPrefix(project) && staged.contains("bellocode-devctx-"))
+        #expect(await waitFor { !FileManager.default.fileExists(atPath: staged) }, "the copy is removed after the build")
         #expect(first.arguments.firstIndex(of: "-f").map { first.arguments[$0 + 1] } == "-")
         #expect(first.dockerfile == Data("FROM registry.acme.internal/base:1\nCOPY src /src\n".utf8))
 
@@ -120,6 +123,59 @@ struct DevContainerBuildTests {
         #expect(await waitFor { if case .failed = model.phase { true } else { false } }, "\(model.phase)")
         if case .failed(let message) = model.phase { #expect(message.contains("inside the project")) }
         #expect(builds.count == 1, "nothing outside the project reaches the builder")
+    }
+
+    // MARK: A18, N09
+
+    /// A18: a save while the build runs changes neither what was built nor the tag it got: the builder reads a private
+    /// copy, the tag is that copy's digest, and the next refresh sees the save and builds again under a new tag.
+    @Test func aSaveDuringTheBuildDoesNotChangeWhatTheTagDescribes() async throws {
+        let observed = Mutex<[(tag: String, content: String)]>([])
+        let project = project
+        let runtime = runtime
+        let builds = builds
+        let service = try await makeService(builder: { request in
+            builds.append(request)
+            let tag = Self.tag(request) ?? ""
+            let staged = request.arguments.last ?? ""
+            if builds.count == 1 {
+                // The save lands while the build runs.
+                try? "console.log('saved during the build')\n".write(toFile: project + "/src/main.js", atomically: false, encoding: .utf8)
+            }
+            let content = (try? String(contentsOfFile: staged + "/src/main.js", encoding: .utf8)) ?? "missing"
+            observed.withLock { $0.append((tag, content)) }
+            _ = runtime.state.withLock { $0.images.insert(tag) }
+            return DevImageBuildResult(status: 0, tail: "")
+        })
+        defer { service.stop() }
+        let model = service.environment(for: project)
+        #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
+        let first = try #require(observed.withLock { $0.first })
+        #expect(first.content == "console.log(1)\n", "the builder read the copy, not the saved file")
+        // The tag of the original content (the copy's digest), not of the save.
+        let original = try #require(DevContainerPlan.load(projectRoot: project)?.build)
+        let inputs = try DevContainerBuildInputs.verify(original, projectRoot: project).get()
+        let savedTag = try inputs.tag(projectKey: model.projectKey, build: original, cache: DevContextDigestCache()).get()
+        #expect(first.tag != savedTag)
+        // The next refresh sees the save and builds it under its own tag.
+        await service.retry(project)
+        #expect(await waitFor { builds.count == 2 }, "\(model.phase)")
+        let second = try #require(observed.withLock { $0.last })
+        #expect(second.tag == savedTag && second.content.contains("saved during the build"))
+    }
+
+    /// N09: under enforced egress, the dev container build's `RUN` steps get no network.
+    @Test func underEnforcedEgressTheBuildHasNoNetwork() async throws {
+        let service = try await makeService()
+        defer { service.stop() }
+        service.egress = EgressHooks(
+            attachment: { key, services in (EgressAttachment(network: EgressGateway.networkName(key), caFingerprint: "f", noProxy: services), nil) },
+            preflight: { _ in }, servicesStarted: { _ in })
+        let model = service.environment(for: project)
+        service.rebuild(project)
+        #expect(await waitFor { builds.list.withLock { $0.contains { $0.arguments.contains("--network") } } }, "\(model.phase)")
+        let request = try #require(builds.list.withLock { $0.last })
+        #expect(request.arguments.firstIndex(of: "--network").map { request.arguments[$0 + 1] } == "none")
     }
 
     // MARK: R15

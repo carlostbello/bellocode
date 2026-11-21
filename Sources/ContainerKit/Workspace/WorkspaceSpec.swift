@@ -86,6 +86,12 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     /// one way out is the gateway to BelloCode's proxy. Replaces `network` and `serviceNetwork` when set.
     public var egress: EgressAttachment?
 
+    /// `uid[:gid]` with a nonzero uid (the host user BelloCode sets): never root, whatever the image says.
+    public var userIsNonRootByConstruction: Bool {
+        let uid = user.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        return !uid.isEmpty && uid.allSatisfy(\.isNumber) && (Int(uid) ?? 0) != 0
+    }
+
     public init(projectRoot: String, extraMounts: [String] = [], userMounts: [UserMount] = [], image: String,
                 user: String = "\(getuid()):\(getgid())", network: Network = .bridge, publishedPorts: [Int] = [],
                 resources: ResourceLimits = .standard, environment: [String: String] = [:], caches: [String: String] = [:],

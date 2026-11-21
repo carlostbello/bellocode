@@ -161,20 +161,28 @@ extension EnvironmentService {
         let projectRoot = model.directory
         let projectKey = model.projectKey
         let cache = devDigestCache
+        // Enforced egress (N09): BuildKit's builder cannot join the egress network, so `RUN` steps get none.
+        let offline = egress?.attachment(model.projectKey, []) != nil
         tasks.set("devbuild-\(model.projectKey)", Task { [weak self] in
             // Right before the CLI runs (R16): links resolved, the context and Dockerfile proven inside the project, the
-            // Dockerfile's bytes read once. The CLI gets the canonical context and those bytes on standard input.
-            let verified = await Self.verifyBuildInputs(build, projectRoot: projectRoot, projectKey: projectKey, cache: cache)
-            guard let self, !Task.isCancelled else { return }
+            // Dockerfile's bytes read once. A18: the context is copied to a private folder and the tag is the digest
+            // of that copy; the CLI builds the copy (never the live project folder) with those bytes on standard input.
+            let verified = await Self.stageBuildInputs(build, projectRoot: projectRoot, projectKey: projectKey)
+            guard let self, !Task.isCancelled else {
+                if case .success(let (_, staged, _)) = verified { staged.remove() }
+                return
+            }
             let inputs: DevContainerBuildInputs
+            let staged: DevContainerBuildInputs.StagedContext
             let tag: String
             switch verified {
             case .failure(let problem):
                 model.phase = .failed(problem.description)
                 self.scheduleConfigWrite()
                 return
-            case .success(let value): (inputs, tag) = value
+            case .success(let value): (inputs, staged, tag) = value
             }
+            defer { staged.remove() }
             // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
             let bases = DockerfileBases.images(in: String(decoding: inputs.dockerfile, as: UTF8.self), buildArgs: build.args)
             if let refusal = self.baseImageRefusal(bases) {
@@ -182,7 +190,7 @@ extension EnvironmentService {
                 self.scheduleConfigWrite()
                 return
             }
-            guard let arguments = plan.buildArguments(tag: tag, context: inputs.context) else { return }
+            guard let arguments = plan.buildArguments(tag: tag, context: staged.directory, offline: offline) else { return }
             let request = DevImageBuildRequest(docker: docker, arguments: arguments, dockerfile: inputs.dockerfile, socket: socket, config: config)
             let result = if let builder { await builder(request) } else { await Self.runDocker(request) }
             // Published only for the project as it is now (R31): same mode and build section, not cancelled.
@@ -199,6 +207,19 @@ extension EnvironmentService {
                 self.scheduleConfigWrite()
             }
         })
+    }
+
+    /// The verified inputs, their private staged copy and its content tag, off the main actor (A18).
+    @concurrent
+    nonisolated static func stageBuildInputs(_ build: DevContainerPlan.Build, projectRoot: String, projectKey: String) async
+        -> Result<(DevContainerBuildInputs, DevContainerBuildInputs.StagedContext, String), DevContainerBuildInputs.Problem> {
+        switch DevContainerBuildInputs.verify(build, projectRoot: projectRoot) {
+        case .failure(let problem): return .failure(problem)
+        case .success(let inputs):
+            return inputs.stage(projectRoot: projectRoot).map { staged in
+                (inputs, staged, inputs.tag(projectKey: projectKey, build: build, contextDigest: staged.digest))
+            }
+        }
     }
 
     /// The verified inputs and their content tag, off the main actor.

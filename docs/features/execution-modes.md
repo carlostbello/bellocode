@@ -70,13 +70,17 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
 Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
 Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
-without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
+without following a link, are verified inside the project again; A18: the kept context is then copied (APFS clones, links as
+links) into a private folder, the CLI builds that copy with the Dockerfile on stdin, and the tag is the digest of the copy, so a
+save during the build cannot put new bytes under an old tag; under enforced egress `RUN` steps get `--network none`, because
+BuildKit's builder cannot join the egress network, N09); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
 context file `.dockerignore` keeps, links as links; computed in the background, bounded to 200 000 files / 4 GiB), so a
 changed input rebuilds; Rebuild runs the build again and replaces the container after it succeeded; a built tag is never
 pulled; the build belongs to the project's task: a project or mode change, stopping the service or its 60-minute
 deadline stops docker (TERM, KILL after 10 s) and waits until it is gone, and a result is used only for the plan still
 in force; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
-`forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
+`forwardPorts` (forwarded on start); `remoteUser` that is root (`root`, `0`, `0:…`) is refused, and a named user that is
+uid 0 in the image is refused when the container starts (N09); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;
 `customizations`, `name`, `hostRequirements` listed as ignored.

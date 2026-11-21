@@ -195,4 +195,60 @@ struct DevContainerTests {
         #expect(json?["a"] as? String == "http://x/*y*/")
         #expect((json?["b"] as? [Int]) == [1, 2])
     }
+
+    /// N09: commands never run as root (the container's capabilities exist for BelloCode's own root step).
+    @Test func aRootRemoteUserIsRefused() {
+        for user in ["root", "0", "0:0", "root:wheel", " root ", "00"] {
+            let result = plan(#"{"image": "x", "remoteUser": "\#(user)"}"#)
+            #expect(result.refused.contains { $0.key == "remoteUser" }, "\(user)")
+            #expect(result.remoteUser == nil)
+        }
+        for user in ["node", "vscode", "1000", "1000:1000", "rooted"] {
+            #expect(plan(#"{"image": "x", "remoteUser": "\#(user)"}"#).remoteUser == user, "\(user)")
+        }
+        #expect(WorkspaceSpec(projectRoot: "/p", image: "x", user: "501:20").userIsNonRootByConstruction)
+        #expect(!WorkspaceSpec(projectRoot: "/p", image: "x", user: "node").userIsNonRootByConstruction, "a name is checked in the container")
+        #expect(!WorkspaceSpec(projectRoot: "/p", image: "x", user: "0:0").userIsNonRootByConstruction)
+    }
+
+    /// N09: under enforced egress the build's `RUN` steps get no network (BuildKit's builder cannot join the egress
+    /// network; its default network would bypass the proxy).
+    @Test func offlineBuildsHaveNoNetwork() throws {
+        let result = plan(#"{"build": {"dockerfile": "Dockerfile"}}"#)
+        let argv = try #require(result.buildArguments(tag: "t:1", context: "/c", offline: true))
+        #expect(argv.firstIndex(of: "--network").map { argv[$0 + 1] } == "none")
+        #expect(result.buildArguments(tag: "t:1", context: "/c")?.contains("--network") == false)
+    }
+
+    /// A18: the build gets a private copy of the context, hashed from the copy: saves after it was made change neither
+    /// what is built nor the tag; the copy's digest equals the live context's digest when nothing changed.
+    @Test func theStagedContextIsWhatIsHashedAndBuilt() throws {
+        let (root, _) = try temporaryProject()
+        defer { try? FileManager.default.removeItem(atPath: (root as NSString).deletingLastPathComponent) }
+        try FileManager.default.createDirectory(atPath: root + "/src/node_modules", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: root + "/readonly", withIntermediateDirectories: true)
+        try "a".write(toFile: root + "/src/a.txt", atomically: true, encoding: .utf8)
+        try "x".write(toFile: root + "/src/node_modules/big.js", atomically: true, encoding: .utf8)
+        try "keep".write(toFile: root + "/readonly/k.txt", atomically: true, encoding: .utf8)
+        chmod(root + "/readonly", 0o555)
+        defer { chmod(root + "/readonly", 0o755) }
+        try "**/node_modules\n".write(toFile: root + "/.dockerignore", atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: root + "/src/link", withDestinationPath: "a.txt")
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+        let staged = try inputs.stage(projectRoot: root, parent: (root as NSString).deletingLastPathComponent).get()
+        defer { chmod(staged.directory + "/readonly", 0o755); staged.remove() }
+        #expect(!staged.directory.hasPrefix(root + "/"), "outside the project")
+        let live = try DevContainerBuildInputs.contextDigest(inputs.context, cache: DevContextDigestCache()).get()
+        #expect(staged.digest == live, "the copy hashes as the context")
+        #expect(inputs.tag(projectKey: "k", build: build, contextDigest: staged.digest)
+                == (try inputs.tag(projectKey: "k", build: build, cache: DevContextDigestCache()).get()))
+        #expect(!FileManager.default.fileExists(atPath: staged.directory + "/src/node_modules/big.js"), "ignored files are not copied")
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: staged.directory + "/src/link")) == "a.txt", "links stay links")
+        // A save after staging: the copy (what the builder reads) and its digest are unchanged.
+        try "b-changed".write(toFile: root + "/src/a.txt", atomically: false, encoding: .utf8)
+        #expect((try? String(contentsOfFile: staged.directory + "/src/a.txt", encoding: .utf8)) == "a")
+        #expect(try DevContainerBuildInputs.contextDigest(staged.directory, cache: DevContextDigestCache()).get() == staged.digest)
+        #expect(try DevContainerBuildInputs.contextDigest(inputs.context, cache: DevContextDigestCache()).get() != staged.digest)
+    }
 }
