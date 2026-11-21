@@ -34,6 +34,9 @@ public final class DockerFilterProxy: Sendable {
     public let maxConnections = 128
     /// Request bodies that are read whole (JSON) may be at most this large.
     public static let maxJSONBody = 4 * 1024 * 1024
+    /// Streamed bodies (a build context, a `docker cp` archive) may be at most this large (N07). A build context is
+    /// held back on disk until it was judged, so this also bounds that spool.
+    public static let maxStreamedBody = 4 * 1024 * 1024 * 1024
 
     public struct Refusal: Sendable, Equatable {
         public var scope: String
@@ -309,9 +312,9 @@ public final class DockerFilterProxy: Sendable {
             }
             let route = String(afterSlash[tokenEnd...])
             var request = DockerAPIRequest.parse(method: head.method, target: route.isEmpty ? "/" : route)
-            var reader = try BodyReader(peer: peer, buffered: rest, head: head, limit: Self.maxJSONBody)
             // Routes whose bodies stream are known from the path alone; read the rest whole (bounded) before deciding.
             let streams = Self.streamsBody(request)
+            var reader = try BodyReader(peer: peer, buffered: rest, head: head, limit: streams ? Self.maxStreamedBody : Self.maxJSONBody)
             if !streams { request.body = try await reader.readAll() }
             let decision = await policy.decide(request, scope: scope)
             switch decision {
@@ -385,6 +388,23 @@ public final class DockerFilterProxy: Sendable {
 
     func forward(_ request: DockerAPIRequest, head: RequestHead, reader: inout BodyReader, streamBody: Bool, hijack: Bool,
                  peer: FileStream, after: (String, AfterAction)?, buildCheck: BuildCheck? = nil) async throws {
+        // A build context is read whole and judged before the daemon gets any of it (A08, N04): nothing later in the
+        // archive can replace the Dockerfile that was checked, and the daemon receives exactly the bytes judged.
+        var spool: BodySpool?
+        if streamBody, var check = buildCheck {
+            let file = try BodySpool()
+            while let piece = try await reader.next() {
+                if piece.isEmpty { continue }
+                if case .refused(let reason) = check.scanner.feed(piece) {
+                    return try await refuseBuild(DockerFilterPolicy.prefix + reason, check: check, peer: peer)
+                }
+                try file.append(piece)
+            }
+            if let refusal = await judge(check.scanner.finish(), check) {
+                return try await refuseBuild(refusal, check: check, peer: peer)
+            }
+            spool = file
+        }
         let daemon: FileStream
         do { daemon = try FileStream.connect(unixPath: daemonSocket) } catch {
             return try await respond(peer, 503, "Docker (Rancher Desktop) is not reachable from BelloCode right now.")
@@ -405,30 +425,16 @@ public final class DockerFilterProxy: Sendable {
         if streamBody {
             text += "Transfer-Encoding: chunked\r\n\r\n"
             try await daemon.write(Data(text.utf8))
-            // The daemon may answer (and close) before the whole context is sent, e.g. a refused Dockerfile: its
-            // answer is still relayed below.
-            var check = buildCheck
-            var judged = check == nil
-            var refusal: String?
+            // The daemon may answer (and close) before the whole body is sent: its answer is still relayed below.
+            func chunk(_ piece: Data) -> Data { Data(String(piece.count, radix: 16).utf8) + Data("\r\n".utf8) + piece + Data("\r\n".utf8) }
             do {
-                while let piece = try await reader.next() {
-                    if piece.isEmpty { continue }
-                    if !judged, let outcome = check?.scanner.feed(piece) ?? nil, let current = check {
-                        judged = true
-                        refusal = await judge(outcome, current)
-                        if refusal != nil { break }
+                if let spool {
+                    while let piece = try spool.next(), !piece.isEmpty { try await daemon.write(chunk(piece)) }
+                } else {
+                    while let piece = try await reader.next() {
+                        if piece.isEmpty { continue }
+                        try await daemon.write(chunk(piece))
                     }
-                    try await daemon.write(Data(String(piece.count, radix: 16).utf8) + Data("\r\n".utf8) + piece + Data("\r\n".utf8))
-                }
-                if !judged, let outcome = check?.scanner.finish(), let current = check {
-                    refusal = await judge(outcome, current)
-                }
-                // The context is completed only once its Dockerfile passed: a refused build is cut off unfinished, so the
-                // daemon never builds it.
-                if let refusal, let current = check {
-                    daemon.cancel()
-                    record(scope: current.scope, request: current.request, message: refusal)
-                    return try await respond(peer, 403, refusal)
                 }
                 try await daemon.write(Data("0\r\n\r\n".utf8))
             } catch let error as HTTPParseError {
@@ -467,6 +473,11 @@ public final class DockerFilterProxy: Sendable {
         }
     }
 
+    private func refuseBuild(_ message: String, check: BuildCheck, peer: FileStream) async throws {
+        record(scope: check.scope, request: check.request, message: message)
+        try await respond(peer, 403, message)
+    }
+
     private func recordAfter(_ scope: String, _ action: AfterAction) {
         switch action {
         case .pulled(let reference):
@@ -481,6 +492,33 @@ public final class DockerFilterProxy: Sendable {
         let reason = [400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error", 503: "Service Unavailable"][status] ?? "Error"
         let head = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\nApi-Version: 1.47\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         try await peer.write(Data(head.utf8) + body)
+    }
+}
+
+/// A streamed body held back on disk until it was judged: an unlinked temporary file (nothing is left behind, even
+/// after a crash), read back once in bounded pieces.
+final class BodySpool {
+    private let handle: FileHandle
+    private var reading = false
+    static let piece = 256 * 1024
+
+    init() throws {
+        var template = Array((NSTemporaryDirectory() + "bellocode-build-XXXXXX").utf8CString)
+        let fd = template.withUnsafeMutableBufferPointer { mkstemp($0.baseAddress!) }
+        guard fd >= 0 else { throw SocketError.system(operation: "mkstemp", errno: errno) }
+        template.withUnsafeBufferPointer { _ = unlink($0.baseAddress!) }
+        handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    func append(_ data: Data) throws { try handle.write(contentsOf: data) }
+
+    /// The next piece from the start, nil or empty at the end.
+    func next() throws -> Data? {
+        if !reading {
+            try handle.seek(toOffset: 0)
+            reading = true
+        }
+        return try handle.read(upToCount: Self.piece)
     }
 }
 

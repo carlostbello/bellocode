@@ -82,10 +82,35 @@ final class FakeEngineServer: Sendable {
             guard let colon = line.firstIndex(of: ":") else { continue }
             headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
-        let length = Int(headers["content-length"] ?? "0") ?? 0
-        while body.count < length {
-            guard let data = try? await stream.read(), !data.isEmpty else { break }
-            body.append(data)
+        if headers["transfer-encoding"]?.lowercased() == "chunked" {
+            // Decoded whole (bounded), so tests can see what a streamed body delivered.
+            var raw = body
+            var decoded = Data()
+            body = Data()
+            decoding: while true {
+                while raw.range(of: Data("\r\n".utf8)) == nil {
+                    guard let data = try? await stream.read(), !data.isEmpty else { break decoding }
+                    raw.append(data)
+                }
+                let line = raw.range(of: Data("\r\n".utf8))!
+                guard let size = Int(String(decoding: raw[..<line.lowerBound], as: UTF8.self), radix: 16) else { break }
+                raw = Data(raw[line.upperBound...])
+                if size == 0 { break }
+                while raw.count < size + 2 {
+                    guard let data = try? await stream.read(), !data.isEmpty else { break decoding }
+                    raw.append(data)
+                }
+                decoded.append(raw.prefix(size))
+                raw = Data(raw.dropFirst(size + 2))
+                if decoded.count > 64 << 20 { break }
+            }
+            body = decoded
+        } else {
+            let length = Int(headers["content-length"] ?? "0") ?? 0
+            while body.count < length {
+                guard let data = try? await stream.read(), !data.isEmpty else { break }
+                body.append(data)
+            }
         }
         let request = Request(method: String(requestLine[0]), target: String(requestLine[1]), headers: headers, body: body)
         requests.withLock { $0.append(request) }

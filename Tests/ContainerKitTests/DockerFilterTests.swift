@@ -223,6 +223,9 @@ struct DockerFilterTests {
             ("build overwriting a foreign tag", "POST", "/build?t=registry.acme.internal/base:1", ""),
             ("build with spoofed labels", "POST", "/build?labels=%7B%22app.bellocode.workspace%22%3A%221%22%7D", ""),
             ("BuildKit gRPC", "POST", "/grpc", nil),
+            ("BuildKit session (N04)", "POST", "/session", nil),
+            ("BuildKit build through /build (N04)", "POST", "/build?version=2", ""),
+            ("build reading its context over a session (N04)", "POST", "/build?session=abc&remote=", ""),
             ("network: macvlan", "POST", "/networks/create", #"{"Name":"n","Driver":"macvlan","Options":{"parent":"en0"}}"#),
             ("network: bridge name option", "POST", "/networks/create", #"{"Name":"n","Options":{"com.docker.network.bridge.name":"docker0"}}"#),
             ("network: connect a foreign container", "POST", "/networks/ownnet/connect", #"{"Container":"foreign"}"#),
@@ -381,6 +384,41 @@ struct DockerFilterTests {
         let gzipped = try await sendBuild("/build?t=x:3", dockerfile: nil, context: compressed)
         #expect(gzipped.status == 200, "\(gzipped.body)")
         #expect(forwarded.contains { $0.path == "/v1.47/build" && $0.target.contains("t=x%3A3") || $0.target.contains("t=x:3") })
+    }
+
+    /// A08, N04: a context whose effective Dockerfile differs from the first one (a duplicate entry, a link) is refused
+    /// whole, and the daemon receives none of it.
+    @Test func aContextWithASecondDockerfileNeverReachesTheDaemon() async throws {
+        defer { proxy.stop(); daemon.stop() }
+        typealias Hostile = BuildContextScannerHostileTests
+        let duplicate = Data(Hostile.file("Dockerfile", Hostile.allowed) + Hostile.file("app/x.js", String(repeating: "y", count: 70_000))
+                             + Hostile.file("Dockerfile", Hostile.evil) + Hostile.end)
+        let linked = Data(Hostile.file("Dockerfile", Hostile.allowed) + Hostile.header("d", type: "2", link: ".") + Hostile.file("d/Dockerfile", Hostile.evil) + Hostile.end)
+        for (name, context) in [("duplicate", duplicate), ("duplicate, gzip", try BuildContextScannerTests.gzip(duplicate)), ("through a link", linked)] {
+            let answer = try await sendBuild("/build?t=x:9", dockerfile: nil, context: context)
+            #expect(answer.status == 403, "\(name): \(answer.status) \(answer.body)")
+            #expect(!forwarded.contains { $0.path == "/v1.47/build" }, "\(name): the daemon received a build")
+        }
+    }
+
+    /// N07: streamed bodies (a build context, a `docker cp` archive) are not held to the 4 MiB limit of JSON bodies, and
+    /// the daemon receives every byte of an allowed context.
+    @Test func streamedBodiesLargerThanFourMiBGoThrough() async throws {
+        defer { proxy.stop(); daemon.stop() }
+        var archive = TarArchive()
+        archive.entries.append(TarArchive.Entry(path: "assets/blob.bin", contents: Data((0..<(6 << 20)).map { UInt8(truncatingIfNeeded: $0 &* 31) })))
+        archive.add("Dockerfile", "FROM registry.acme.internal/base:1\n")
+        let context = archive.data()
+        #expect(context.count > DockerFilterProxy.maxJSONBody)
+        let built = try await sendBuild("/build?t=big:1", dockerfile: nil, context: context)
+        #expect(built.status == 200, "\(built.status) \(built.body)")
+        let build = try #require(forwarded.first { $0.path == "/v1.47/build" })
+        #expect(build.body == context, "the daemon got the whole context (\(build.body.count) of \(context.count) bytes)")
+        let head = "PUT /\(token)/v1.47/containers/own1/archive?path=/tmp HTTP/1.1\r\nHost: docker\r\nContent-Type: application/x-tar\r\nContent-Length: \(context.count)\r\n\r\n"
+        let copied = try await send("", "", raw: Data(head.utf8) + context)
+        #expect(copied.status == 200, "\(copied.status) \(copied.body)")
+        let put = try #require(forwarded.first { $0.method == "PUT" && $0.path.hasSuffix("/archive") })
+        #expect(put.body.count == context.count)
     }
 
     func gzipContext(_ dockerfile: String) -> Data {
