@@ -29,8 +29,10 @@ public struct BackgroundModelSettings: Codable, Sendable, Hashable {
 /// Settings ▸ Models below the UI (docs/features/models.md): opencode's default and small model (written to BelloCode's
 /// isolated global `opencode.json`, then the server reloads), and the models of background tasks. `engine.models`.
 ///
-/// Threading: `@MainActor`; file reads and writes and HTTP run off it and hand back values. A write applies only if it
-/// is the newest (generation check).
+/// Threading: `@MainActor`; file reads and writes and HTTP run off it and hand back values. Every read and write of
+/// `opencode.json` and every preference change runs one at a time, in order (`serially`), and what is shown comes from
+/// what was committed: a write re-reads the file before it reports success (A17). Storage and mirror failures are
+/// returned to the caller and kept in `storageProblem`, never only logged (A29).
 @MainActor
 @Observable
 public final class ModelSettingsService {
@@ -45,6 +47,9 @@ public final class ModelSettingsService {
     public private(set) var reloadPending = false
     public private(set) var saving = false
     public private(set) var loaded = false
+    /// A background-task choice that could not be saved, or the plugin's copy that could not be written (retried at
+    /// the next change or load). Nil when everything is stored.
+    public private(set) var storageProblem: String?
 
     /// The global configuration folder, or nil when the server is not BelloCode's own (attached, tests).
     public let folder: GlobalConfigFolder?
@@ -54,28 +59,63 @@ public final class ModelSettingsService {
     @ObservationIgnored weak var engine: Engine?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let log = Logger(subsystem: "app.bellocode", category: "models")
+    /// The last queued operation: the next one starts after it (rule 9: owned by the service, awaited by callers).
+    @ObservationIgnored private var tail: Task<Void, Never>?
+    @ObservationIgnored private let writeDefaults: @Sendable (ModelDefaultsFile, URL) throws -> Void
+    @ObservationIgnored private let savePreference: @Sendable (ProjectionStore, BackgroundModelSettings) async throws -> Void
+    /// The plugin's defaults file does not match the saved choice yet.
+    @ObservationIgnored private var mirrorStale = false
 
     static let key = "models.background"
 
     public init(
-        store: ProjectionStore, folder: GlobalConfigFolder?, modelDefaultsFile: URL?, client: @escaping @Sendable () async throws -> OpenCodeClient
+        store: ProjectionStore, folder: GlobalConfigFolder?, modelDefaultsFile: URL?, client: @escaping @Sendable () async throws -> OpenCodeClient,
+        writeDefaults: @escaping @Sendable (ModelDefaultsFile, URL) throws -> Void = { try $0.write(to: $1) },
+        savePreference: @escaping @Sendable (ProjectionStore, BackgroundModelSettings) async throws -> Void = { store, value in
+            try await store.setPreference("models.background", value)
+        }
     ) {
         self.store = store
         self.folder = folder
         self.modelDefaultsFile = modelDefaultsFile
         self.client = client
+        self.writeDefaults = writeDefaults
+        self.savePreference = savePreference
+    }
+
+    /// Runs `operation` after every operation queued before it.
+    private func serially<T: Sendable>(_ operation: @escaping @MainActor () async -> T) async -> T {
+        let previous = tail
+        let task = Task { @MainActor () -> T in
+            await previous?.value
+            return await operation()
+        }
+        tail = Task { _ = await task.value }
+        return await task.value
     }
 
     /// Reads the preferences and the configured models, and rewrites the plugin's defaults file. Call at start.
     public func load() async {
-        if let saved = try? await store.preference(Self.key, as: BackgroundModelSettings.self) { background = saved }
-        await writeDefaultsFile()
-        await readConfig()
-        loaded = true
+        await serially { [self] in
+            do {
+                if let saved = try await store.preference(Self.key, as: BackgroundModelSettings.self) { background = saved }
+            } catch {
+                storageProblem = "Could not read the saved background-task models (\(error.localizedDescription)); the defaults are shown."
+            }
+            mirrorStale = true
+            _ = await writeDefaultsFile()
+            await performReadConfig()
+            loaded = true
+        }
     }
 
-    /// Re-reads `opencode.json` (the person may have edited it).
+    /// Re-reads `opencode.json` (the person may have edited it). Queued behind any save, so an older read never
+    /// replaces a newer save.
     public func readConfig() async {
+        await serially { [self] in await performReadConfig() }
+    }
+
+    private func performReadConfig() async {
         guard let folder else { return }
         let state = await Self.read(folder)
         configuredDefault = state.model
@@ -85,24 +125,64 @@ public final class ModelSettingsService {
 
     // MARK: Background tasks
 
-    public func setGitText(_ choice: ModelChoice) async {
-        background.gitText = choice
-        try? await store.setPreference(Self.key, background)
+    /// Saves the git-writing choice. Returns a problem to show (the previous choice stays), or nil.
+    @discardableResult
+    public func setGitText(_ choice: ModelChoice) async -> String? {
+        await serially { [self] in
+            var next = background
+            next.gitText = choice
+            return await save(next)
+        }
     }
 
-    public func setDelegated(_ choice: ModelChoice) async {
-        background.delegated = choice
-        try? await store.setPreference(Self.key, background)
-        await writeDefaultsFile()
+    /// Saves the delegated-thread choice and mirrors it to the plugin's file. Returns a problem to show, or nil.
+    @discardableResult
+    public func setDelegated(_ choice: ModelChoice) async -> String? {
+        await serially { [self] in
+            var next = background
+            next.delegated = choice
+            let changed = next.delegated != background.delegated
+            if let problem = await save(next) { return problem }
+            if changed { mirrorStale = true }
+            return await writeDefaultsFile()
+        }
     }
 
-    private func writeDefaultsFile() async {
-        guard let file = modelDefaultsFile else { return }
+    /// Stores `next`; only then is it shown. A failure keeps the confirmed value and is returned.
+    private func save(_ next: BackgroundModelSettings) async -> String? {
+        do {
+            try await savePreference(store, next)
+        } catch {
+            let text = "Could not save the model choice (\(error.localizedDescription)); the previous choice is still in use."
+            storageProblem = text
+            return text
+        }
+        background = next
+        if !mirrorStale { storageProblem = nil }
+        return nil
+    }
+
+    /// Mirrors the delegated choice for the plugin. On failure the plugin keeps the previous choice: said so, and retried
+    /// at the next change or load.
+    private func writeDefaultsFile() async -> String? {
+        guard let file = modelDefaultsFile, mirrorStale else { return nil }
         let value = ModelDefaultsFile(delegated: background.delegated.token)
-        do { try await Self.write(value, to: file) } catch { log.error("model defaults file not written") }
+        do {
+            try await Self.write(value, to: file, with: writeDefaults)
+            mirrorStale = false
+            storageProblem = nil
+            return nil
+        } catch {
+            log.error("model defaults file not written")
+            let text = "Saved, but delegated threads still use the previous model: BelloCode could not update its plugin's copy (\(error.localizedDescription))."
+            storageProblem = text
+            return text
+        }
     }
 
-    private nonisolated static func write(_ value: ModelDefaultsFile, to file: URL) async throws { try value.write(to: file) }
+    private nonisolated static func write(
+        _ value: ModelDefaultsFile, to file: URL, with writer: @Sendable (ModelDefaultsFile, URL) throws -> Void
+    ) async throws { try writer(value, file) }
 
     // MARK: opencode's default and small model
 
@@ -120,21 +200,27 @@ public final class ModelSettingsService {
         await write(selection, at: ["agents", "title", "model"], reload: reload) { self.configuredSmall = selection }
     }
 
-    private func write(_ selection: ModelSelection?, at path: [String], reload: Bool, applied: () -> Void) async -> String? {
+    private func write(_ selection: ModelSelection?, at path: [String], reload: Bool, applied: @escaping @MainActor () -> Void) async -> String? {
         guard let folder else { return "This opencode server is not managed by BelloCode, so its configuration cannot be changed here." }
         generation += 1
         let mine = generation
         saving = true
         defer { if mine == generation { saving = false } }
-        do {
-            try await Self.edit(folder, path: path, value: selection?.token)
-        } catch {
-            let text = (error as? JSONCEditor.EditError)?.description ?? "Could not save opencode.json: \(error.localizedDescription)"
-            configProblem = text
-            return text
+        let saved: String? = await serially { [self] in
+            do {
+                try await Self.edit(folder, path: path, value: selection?.token)
+            } catch {
+                let text = (error as? JSONCEditor.EditError)?.description ?? "Could not save opencode.json: \(error.localizedDescription)"
+                await performReadConfig()
+                configProblem = text
+                return text
+            }
+            // What is shown is what the file now says (another program may have saved too).
+            await performReadConfig()
+            if configProblem == nil { applied() }
+            return nil
         }
-        configProblem = nil
-        applied()
+        if let saved { return saved }
         guard reload else {
             reloadPending = true
             return nil
@@ -182,18 +268,29 @@ public final class ModelSettingsService {
     }
 
     /// Edits one value in place (comments and formatting kept), creating the file from its template when missing. A
-    /// file that does not parse is never rewritten.
-    nonisolated static func edit(_ folder: GlobalConfigFolder, path: [String], value: String?, attempt: Int = 0) async throws {
+    /// file that does not parse is never rewritten. BelloCode's own edits are serialised by the caller; against other
+    /// programs (an editor, the CLI) the file is compared just before the replace, and after it the value is read back:
+    /// if someone else's save replaced ours, the edit is reported as not saved rather than claimed (A17).
+    nonisolated static func edit(
+        _ folder: GlobalConfigFolder, path: [String], value: String?, attempt: Int = 0,
+        beforeReplace: @Sendable () -> Void = {}, afterReplace: @Sendable () -> Void = {}
+    ) async throws {
         let url = try folder.ensure(.config).url
         let original = try String(contentsOf: url, encoding: .utf8)
         let updated = try JSONCEditor.setString(value, at: path, in: original)
         guard updated != original else { return }
-        // Someone else (an editor, the CLI) changed it meanwhile: start again from theirs rather than overwrite it.
+        beforeReplace()
+        // Someone else changed it meanwhile: start again from theirs rather than overwrite it.
         guard try String(contentsOf: url, encoding: .utf8) == original else {
             guard attempt < 3 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "opencode.json keeps changing; try again."]) }
-            return try await edit(folder, path: path, value: value, attempt: attempt + 1)
+            return try await edit(folder, path: path, value: value, attempt: attempt + 1, afterReplace: afterReplace)
         }
         try Data(updated.utf8).write(to: url, options: .atomic)
+        afterReplace()
+        let committed = try String(contentsOf: url, encoding: .utf8)
+        guard JSONCEditor.string(at: path, in: committed) == value else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "another program saved opencode.json at the same moment, so this choice was not saved; choose it again."])
+        }
     }
 }
 

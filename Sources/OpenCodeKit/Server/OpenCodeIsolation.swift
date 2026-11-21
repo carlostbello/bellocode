@@ -73,25 +73,26 @@ public enum RepositoryConfigPolicy: String, Sendable, Hashable, Codable, CaseIte
     case native
 }
 
-/// The private file through which `bellocode-opencode` reaches the running server: its URL, pid, version and
-/// per-launch password. Written by the supervisor once the server is verified, removed when it exits. The password is
-/// never on a command line; the file is created 0600 in a 0700 folder owned by the user, and a reader refuses anything
-/// looser or owned by someone else.
+/// The file through which `bellocode-opencode` finds the running server: its URL, pid and version. Written by the
+/// supervisor once the server is verified, removed when it exits. It holds no secret (A03): the per-launch password is
+/// handed over by the app on request (`CLIPasswordBroker`), never written to a file the agent's host file tools could
+/// read. Still created 0600 in a 0700 folder, and a reader refuses anything looser, another owner, a link, a non-loopback
+/// URL or a pid that is not running (N06).
 public struct CLIConnectionFile: Codable, Sendable, Hashable {
     public var url: URL
     public var pid: Int32
     public var version: String
-    public var password: String
 
-    public init(url: URL, pid: Int32, version: String, password: String) {
+    public init(url: URL, pid: Int32, version: String) {
         self.url = url
         self.pid = pid
         self.version = version
-        self.password = password
     }
 
     public enum ReadError: Error, Sendable, Equatable, CustomStringConvertible {
         case missing
+        /// The file or its folder exists but cannot be examined (permissions, I/O): not the same as "not running".
+        case inaccessible(String)
         case insecure(String)
         case unreadable(String)
         /// The server named in the file is not running (left behind by a crash).
@@ -100,6 +101,7 @@ public struct CLIConnectionFile: Codable, Sendable, Hashable {
         public var description: String {
             switch self {
             case .missing: "BelloCode's opencode server is not running"
+            case .inaccessible(let why): "cannot examine the connection file: \(why)"
             case .insecure(let why): "refusing the connection file: \(why)"
             case .unreadable(let why): "cannot read the connection file: \(why)"
             case .stale(let pid): "BelloCode's opencode server (pid \(pid)) is no longer running"
@@ -117,7 +119,7 @@ public struct CLIConnectionFile: Codable, Sendable, Hashable {
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(self)
         let temporary = folder.appending(path: ".server.\(getpid()).\(UInt32.random(in: 0...UInt32.max)).tmp")
-        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: temporary.path]) }
         let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
         close(fd)
@@ -127,22 +129,43 @@ public struct CLIConnectionFile: Codable, Sendable, Hashable {
         }
     }
 
-    /// Reads and checks the file: owned by the current user, not readable or writable by group or others (nor its
-    /// folder), and naming a live process.
+    /// Hosts a server URL may name: BelloCode's server listens on loopback only.
+    static let loopbackHosts: Set<String> = ["127.0.0.1", "::1", "[::1]", "localhost"]
+
+    /// Reads and checks the file: a regular file (never a link) owned by the current user and private to them, in a
+    /// private folder; a plain-HTTP loopback URL; a positive pid naming a live process.
     public static func read(from file: URL, checkProcess: Bool = true) throws(ReadError) -> CLIConnectionFile {
+        var folder = stat()
+        let folderPath = file.deletingLastPathComponent().path
+        if lstat(folderPath, &folder) != 0 {
+            if errno == ENOENT { throw .missing }
+            throw .inaccessible("its folder: \(String(cString: strerror(errno)))")
+        }
+        guard (folder.st_mode & S_IFMT) == S_IFDIR else { throw .insecure("its folder is not a directory") }
+        guard folder.st_uid == getuid(), (folder.st_mode & 0o077) == 0 else {
+            throw .insecure("its folder is open to other users (mode \(String(folder.st_mode & 0o777, radix: 8)))")
+        }
+        let fd = open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        if fd < 0 {
+            if errno == ENOENT { throw .missing }
+            if errno == ELOOP { throw .insecure("it is a symbolic link") }
+            throw .inaccessible(String(cString: strerror(errno)))
+        }
+        defer { close(fd) }
         var info = stat()
-        guard lstat(file.path, &info) == 0 else { throw .missing }
+        guard fstat(fd, &info) == 0 else { throw .inaccessible(String(cString: strerror(errno))) }
         guard (info.st_mode & S_IFMT) == S_IFREG else { throw .insecure("not a regular file") }
         guard info.st_uid == getuid() else { throw .insecure("owned by another user") }
         guard (info.st_mode & 0o077) == 0 else { throw .insecure("readable by other users (mode \(String(info.st_mode & 0o777, radix: 8)))") }
-        var folder = stat()
-        let folderPath = file.deletingLastPathComponent().path
-        guard stat(folderPath, &folder) == 0, folder.st_uid == getuid(), (folder.st_mode & 0o022) == 0 else {
-            throw .insecure("its folder is writable by other users")
-        }
-        let data: Data
-        do { data = try Data(contentsOf: file) } catch { throw .unreadable(error.localizedDescription) }
+        guard info.st_size <= 64 * 1024 else { throw .unreadable("too large") }
+        var data = Data(count: Int(info.st_size))
+        let count = data.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+        guard count == Int(info.st_size) else { throw .unreadable("short read") }
         guard let value = try? JSONDecoder().decode(CLIConnectionFile.self, from: data) else { throw .unreadable("unexpected contents") }
+        guard value.pid > 0 else { throw .insecure("invalid pid \(value.pid)") }
+        guard value.url.scheme == "http", let host = value.url.host(), loopbackHosts.contains(host) else {
+            throw .insecure("the server address is not on this Mac's loopback")
+        }
         if checkProcess, kill(value.pid, 0) != 0, errno == ESRCH { throw .stale(pid: value.pid) }
         return value
     }
@@ -184,12 +207,23 @@ public struct ModelDefaultsFile: Codable, Sendable, Hashable {
 
 public struct ProjectTrustFile: Codable, Sendable, Hashable {
     public var version: Int
+    /// The app's revision of this list. The plugin reports the revision it applied, so a trust change counts as done
+    /// only when the running plugin acknowledges this exact list (0: a file from before revisions).
+    public var revision: Int
     /// Absolute project directories, sorted.
     public var trusted: [String]
 
-    public init(trusted: [String]) {
+    public init(trusted: [String], revision: Int = 0) {
         version = 1
+        self.revision = revision
         self.trusted = Array(Set(trusted)).sorted()
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+        trusted = try container.decode([String].self, forKey: .trusted)
     }
 
     public func write(to file: URL) throws {

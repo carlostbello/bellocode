@@ -41,10 +41,13 @@ public enum JSONCEditor {
             throw EditError.syntax("opencode.json must contain a JSON object ({ … }).")
         }
         let units = Array(text.utf16)
-        let edit = try plan(object: object, rootRange: root.range, path: path, depth: 1, encoded: encoded, units: units, scanner: &scanner)
-        guard let edit else { return text }
+        let edits = try plan(object: object, rootRange: root.range, path: path, depth: 1, encoded: encoded, units: units, scanner: &scanner)
+        guard !edits.isEmpty else { return text }
         var result = units
-        result.replaceSubrange(edit.range, with: Array(edit.text.utf16))
+        // Non-overlapping ranges, applied from the end so earlier offsets stay valid.
+        for edit in edits.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
+            result.replaceSubrange(edit.range, with: Array(edit.text.utf16))
+        }
         return String(decoding: result, as: UTF16.self)
     }
 
@@ -57,16 +60,16 @@ public enum JSONCEditor {
 
     private static func plan(
         object: [Member], rootRange: Range<Int>, path: [String], depth: Int, encoded: String?, units: [UInt16], scanner: inout Scanner
-    ) throws -> Edit? {
+    ) throws -> [Edit] {
         let key = path[0]
         let rest = Array(path.dropFirst())
         if let member = object.last(where: { $0.key == key }) {
             if rest.isEmpty {
-                if let encoded { return Edit(range: member.value.range, text: encoded) }
+                if let encoded { return [Edit(range: member.value.range, text: encoded)] }
                 return removal(of: member, in: object, objectRange: rootRange, units: units)
             }
             guard case .object(let inner) = member.value.kind else {
-                if encoded == nil { return nil }
+                if encoded == nil { return [] }
                 throw EditError.notAnObject(path.prefix(depth).joined(separator: "."))
             }
             // Removing the only thing an object holds removes the object too (an empty `"title": {}` stays out).
@@ -75,8 +78,9 @@ public enum JSONCEditor {
             }
             return try plan(object: inner, rootRange: member.value.range, path: rest, depth: depth + 1, encoded: encoded, units: units, scanner: &scanner)
         }
-        guard let encoded else { return nil }
+        guard let encoded else { return [] }
         // Missing: insert `"key": value` (wrapping the rest of the path in objects) into this object.
+        let newline = lineBreak(units)
         let indentUnit = "  "
         let memberIndent = object.first.map { indentation(before: $0.keyRange.lowerBound, units: units) } ?? String(repeating: indentUnit, count: depth)
         let closingIndent = indentation(before: rootRange.upperBound - 1, units: units)
@@ -84,19 +88,62 @@ public enum JSONCEditor {
         for (offset, nested) in rest.enumerated().reversed() {
             let inner = memberIndent + String(repeating: indentUnit, count: offset + 1)
             let outer = memberIndent + String(repeating: indentUnit, count: offset)
-            valueText = "{\n\(inner)\(encode(nested)): \(valueText)\n\(outer)}"
+            valueText = "{\(newline)\(inner)\(encode(nested)): \(valueText)\(newline)\(outer)}"
         }
         let memberText = "\(encode(key)): \(valueText)"
         if let last = object.last {
-            return Edit(range: last.value.range.upperBound..<last.value.range.upperBound, text: ",\n\(memberIndent)\(memberText)")
+            // After the last member's own line, so a comment on that line stays with it (N15): its comma (added when
+            // missing) right after its value, the new member after the end of the line.
+            let valueEnd = last.value.range.upperBound
+            let cursor = last.comma.map { $0 + 1 } ?? valueEnd
+            let at = endOfLineAfter(cursor, units: units) ?? cursor
+            let comma = last.comma == nil ? "," : ""
+            if at == valueEnd { return [Edit(range: at..<at, text: "\(comma)\(newline)\(memberIndent)\(memberText)")] }
+            var edits = [Edit(range: at..<at, text: "\(newline)\(memberIndent)\(memberText)")]
+            if !comma.isEmpty { edits.append(Edit(range: valueEnd..<valueEnd, text: comma)) }
+            return edits
         }
         // Empty object: right after `{`, on its own line.
         let open = rootRange.lowerBound + 1
         let between = String(decoding: units[open..<(rootRange.upperBound - 1)], as: UTF16.self)
         if between.allSatisfy(\.isWhitespace) {
-            return Edit(range: open..<(rootRange.upperBound - 1), text: "\n\(memberIndent)\(memberText)\n\(closingIndent)")
+            return [Edit(range: open..<(rootRange.upperBound - 1), text: "\(newline)\(memberIndent)\(memberText)\(newline)\(closingIndent)")]
         }
-        return Edit(range: open..<open, text: "\n\(memberIndent)\(memberText)")
+        return [Edit(range: open..<open, text: "\(newline)\(memberIndent)\(memberText)")]
+    }
+
+    /// The document's line break: CRLF when it uses CRLF, else LF.
+    private static func lineBreak(_ units: [UInt16]) -> String {
+        for index in units.indices where units[index] == 0x0A { return index > 0 && units[index - 1] == 0x0D ? "\r\n" : "\n" }
+        return "\n"
+    }
+
+    private static func isBreak(_ unit: UInt16) -> Bool { unit == 0x0A || unit == 0x0D }
+
+    /// The position of the line break ending the line that contains `index`, when only whitespace and comments
+    /// follow `index` on that line; nil otherwise (something else follows, such as `}` on a one-line object).
+    private static func endOfLineAfter(_ index: Int, units: [UInt16]) -> Int? {
+        var i = index
+        while i < units.count {
+            let c = units[i]
+            if isBreak(c) { return i }
+            if c == 0x20 || c == 0x09 { i += 1; continue }
+            if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2F {
+                while i < units.count, !isBreak(units[i]) { i += 1 }
+                return i < units.count ? i : nil
+            }
+            if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2A {
+                i += 2
+                while i + 1 < units.count, !(units[i] == 0x2A && units[i + 1] == 0x2F) {
+                    if isBreak(units[i]) { return nil }
+                    i += 1
+                }
+                i += 2
+                continue
+            }
+            return nil
+        }
+        return nil
     }
 
     /// True when removing `path` would leave `object` empty (and it holds no comments to keep).
@@ -109,30 +156,35 @@ public enum JSONCEditor {
         return collapses(inner, node: object[0].value, path: Array(path.dropFirst()), units: units)
     }
 
-    /// Removes one member with its separating comma and, when it sits alone on its lines, the whole lines.
-    private static func removal(of member: Member, in object: [Member], objectRange: Range<Int>, units: [UInt16]) -> Edit {
-        guard let index = object.firstIndex(where: { $0.keyRange == member.keyRange }) else { return Edit(range: 0..<0, text: "") }
+    /// Removes one member and the one comma that separates it, and nothing else: comments around it, including one on
+    /// the previous member's line, stay byte for byte (A26, N15). A member alone on its lines takes those lines.
+    private static func removal(of member: Member, in object: [Member], objectRange: Range<Int>, units: [UInt16]) -> [Edit] {
+        guard let index = object.firstIndex(where: { $0.keyRange == member.keyRange }) else { return [] }
         var start = member.keyRange.lowerBound
         var end = member.value.range.upperBound
+        var edits: [Edit] = []
         if let comma = member.comma {
             end = comma + 1
-            // Swallow the rest of the line when it is only whitespace.
-            var cursor = end
-            while cursor < units.count, units[cursor] == 0x20 || units[cursor] == 0x09 { cursor += 1 }
-            if cursor < units.count, units[cursor] == 0x0A { end = cursor + 1 }
-            var back = start
-            while back > 0, units[back - 1] == 0x20 || units[back - 1] == 0x09 { back -= 1 }
-            if back == 0 || units[back - 1] == 0x0A { start = back }
-        } else if index > 0 {
-            // Last member: drop the comma after the previous one (from its value's end).
-            start = object[index - 1].value.range.upperBound
-        } else {
+        } else if index > 0, let previousComma = object[index - 1].comma {
+            // Last member: the comma after the previous one goes, not what follows it.
+            edits.append(Edit(range: previousComma..<(previousComma + 1), text: ""))
+        } else if index == 0 {
             // The only member: everything between the braces that is whitespace around it.
             var back = start
             while back > objectRange.lowerBound + 1, isSpace(units[back - 1]) { back -= 1 }
-            start = back
+            return [Edit(range: back..<end, text: "")]
         }
-        return Edit(range: start..<end, text: "")
+        // Alone on its line(s): take the whole lines, line break included.
+        var back = start
+        while back > 0, units[back - 1] == 0x20 || units[back - 1] == 0x09 { back -= 1 }
+        var forward = end
+        while forward < units.count, units[forward] == 0x20 || units[forward] == 0x09 { forward += 1 }
+        if back == 0 || isBreak(units[back - 1]), forward < units.count, isBreak(units[forward]) {
+            start = back
+            end = forward + (units[forward] == 0x0D && forward + 1 < units.count && units[forward + 1] == 0x0A ? 2 : 1)
+        }
+        edits.append(Edit(range: start..<end, text: ""))
+        return edits
     }
 
     private static func isSpace(_ unit: UInt16) -> Bool { unit == 0x20 || unit == 0x09 || unit == 0x0A || unit == 0x0D }
@@ -141,7 +193,7 @@ public enum JSONCEditor {
     private static func indentation(before index: Int, units: [UInt16]) -> String {
         var cursor = index
         while cursor > 0, units[cursor - 1] == 0x20 || units[cursor - 1] == 0x09 { cursor -= 1 }
-        guard cursor == 0 || units[cursor - 1] == 0x0A else { return "" }
+        guard cursor == 0 || isBreak(units[cursor - 1]) else { return "" }
         return String(decoding: units[cursor..<index], as: UTF16.self)
     }
 
@@ -181,7 +233,7 @@ public enum JSONCEditor {
                 let c = units[i]
                 if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D || c == 0xFEFF { i += 1; continue }
                 if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2F {
-                    while i < units.count, units[i] != 0x0A { i += 1 }
+                    while i < units.count, units[i] != 0x0A, units[i] != 0x0D { i += 1 }
                     continue
                 }
                 if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2A {

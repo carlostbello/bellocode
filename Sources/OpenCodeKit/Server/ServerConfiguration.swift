@@ -38,8 +38,17 @@ public struct ServerConfiguration: Sendable {
     public var repositoryConfigProvider: (@Sendable () -> RepositoryConfigPolicy)?
     /// The policy for the next launch.
     public var effectiveRepositoryConfig: RepositoryConfigPolicy { repositoryConfigProvider?() ?? repositoryConfig }
-    /// Write the running server's address and password for `bellocode-opencode` (`CLIConnectionFile`, 0600).
+    /// Coordinate with `bellocode-opencode`: hold the data root's lease (`OpenCodeDataLock`) while a server runs,
+    /// publish its address (`CLIConnectionFile`, 0600, no secret) and hand its password over `CLIPasswordBroker`.
     public var publishesCLIConnection = true
+    /// The executables allowed to fetch the password: the bundled `bellocode-opencode` when it is next to opencode
+    /// (nil, any process of this user, in development runs without it).
+    public var cliPeerExecutables: Set<String>? {
+        guard let helpers = helpersDirectory else { return nil }
+        let helper = helpers.appending(path: "bellocode-opencode").path
+        guard FileManager.default.isExecutableFile(atPath: helper) else { return nil }
+        return [CLIPasswordBroker.canonical(helper)]
+    }
 
     /// Limit for the ready line plus a verified `GET /api/info`.
     public var startTimeout: Duration

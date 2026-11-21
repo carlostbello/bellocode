@@ -129,3 +129,42 @@ describe("create_threads into worktrees", () => {
     await plugin.dispose()
   })
 })
+
+// N15: the owner's delegated-thread model is used only while the catalog offers it.
+describe("delegate_task and the owner's default model", () => {
+  const { mkdtempSync, writeFileSync, rmSync } = require("fs")
+  const { tmpdir } = require("os")
+  const { join } = require("path")
+  const defaults = (token: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "bc-models-"))
+    const file = join(dir, "bellocode-models.json")
+    writeFileSync(file, JSON.stringify({ version: 1, delegated: token }))
+    return { file, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+  }
+  const input = { task: "Summarise the changes", description: "Summary" }
+
+  test("an unavailable chosen model falls through to the parent's model", async () => {
+    const file = defaults("gone/model")
+    const plugin = await makePlugin({ models: [{ providerID: "openai", id: "gpt-x", enabled: true }] }, { modelDefaultsFile: file.file })
+    plugin.add({ id: "ses_caller", ...({ model: { providerID: "anthropic", id: "claude-sonnet-5" } } as any) })
+    await plugin.run("delegate_task", input)
+    expect(plugin.calls.creates[0].model).toEqual({ providerID: "anthropic", id: "claude-sonnet-5" })
+    await plugin.dispose()
+    file.cleanup()
+  })
+
+  test("a disabled chosen model falls through; an enabled one is used", async () => {
+    const file = defaults("openai/gpt-x")
+    const disabled = await makePlugin({ models: [{ providerID: "openai", id: "gpt-x", enabled: false }] }, { modelDefaultsFile: file.file })
+    disabled.add({ id: "ses_caller" })
+    await disabled.run("delegate_task", input)
+    expect(disabled.calls.creates[0].model).toBeUndefined()
+    await disabled.dispose()
+    const enabled = await makePlugin({ models: [{ providerID: "openai", id: "gpt-x", enabled: true }] }, { modelDefaultsFile: file.file })
+    enabled.add({ id: "ses_caller" })
+    await enabled.run("delegate_task", input)
+    expect(enabled.calls.creates[0].model).toEqual({ providerID: "openai", id: "gpt-x" })
+    await enabled.dispose()
+    file.cleanup()
+  })
+})
