@@ -105,30 +105,59 @@ public actor BrowserTabGate {
         self.now = now
     }
 
-    public func setName(_ name: String, for session: String) { names[session] = name }
+    /// Display bookkeeping kept per tab and per thread (rule 5: bounded; idle entries go first).
+    static let maxTracked = 256
+
+    public func setName(_ name: String, for session: String) {
+        names[session] = name
+        pruneTracking()
+    }
+
+    private func noteUse(tab: String, session: String) {
+        lastUsed[tab] = session
+        pruneTracking()
+    }
+
+    /// Drops "last used" entries of tabs nothing runs, waits or leases on, and names of threads nothing refers to,
+    /// once either map exceeds `maxTracked` (down to half, so pruning is rare).
+    private func pruneTracking() {
+        if lastUsed.count > Self.maxTracked {
+            let active = Set(running.keys).union(waiters.map(\.tab)).union(leases.keys).union(humanTabs)
+            for tab in lastUsed.keys where !active.contains(tab) && lastUsed.count > Self.maxTracked / 2 { lastUsed[tab] = nil }
+        }
+        if names.count > Self.maxTracked {
+            let referenced = Set(running.values.map(\.session)).union(waiters.map(\.session)).union(leases.values.map(\.session))
+                .union(lastUsed.values)
+            for session in names.keys where !referenced.contains(session) && names.count > Self.maxTracked / 2 { names[session] = nil }
+        }
+    }
     private func name(_ session: String) -> String { names[session] ?? session }
 
     /// Waits for the tab, or throws `Busy`. `shared` marks a tab more than one thread may use (lease applies).
     public func acquire(tab: String, session: String, shared: Bool) async throws -> Ticket {
         if humanTabs.contains("*") { throw Busy.humanControl(tab: "*") }
         if humanTabs.contains(tab) { throw Busy.humanControl(tab: tab) }
-        if shared {
-            if let lease = leases[tab], lease.session != session, now() - lease.renewed < limits.leaseIdle {
-                throw Busy.driven(by: name(lease.session), tab: tab)
-            }
-            leases[tab] = Lease(session: session, renewed: now())
+        if shared, let lease = leases[tab], lease.session != session, now() - lease.renewed < limits.leaseIdle {
+            throw Busy.driven(by: name(lease.session), tab: tab)
         }
+        // Every refusal comes before anything changes: a call turned away (queue limits, cancelled) neither takes nor
+        // renews a shared tab's lease (N26).
+        let immediate = running[tab] == nil && running.count < limits.maxActive && !waiters.contains(where: { $0.tab == tab })
+        if !immediate {
+            guard waiters.count < limits.maxQueued else { throw Busy.overloaded }
+            guard waiters.filter({ $0.session == session }).count < limits.maxQueuedPerThread else { throw Busy.threadQueueFull }
+        }
+        if Task.isCancelled { throw Busy.cancelled }
+        if shared { leases[tab] = Lease(session: session, renewed: now()) }
         nextID += 1
         let id = nextID
-        if running[tab] == nil, running.count < limits.maxActive, !waiters.contains(where: { $0.tab == tab }) {
+        if immediate {
             let ticket = Ticket(id: id, tab: tab, session: session, generation: generation)
             running[tab] = ticket
-            lastUsed[tab] = session
+            noteUse(tab: tab, session: session)
             lastGranted = session
             return ticket
         }
-        guard waiters.count < limits.maxQueued else { throw Busy.overloaded }
-        guard waiters.filter({ $0.session == session }).count < limits.maxQueuedPerThread else { throw Busy.threadQueueFull }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 waiters.append(Waiter(id: id, tab: tab, session: session, continuation: continuation))
@@ -192,7 +221,7 @@ public actor BrowserTabGate {
             let waiter = waiters.remove(at: index)
             let ticket = Ticket(id: waiter.id, tab: waiter.tab, session: waiter.session, generation: generation)
             running[waiter.tab] = ticket
-            lastUsed[waiter.tab] = waiter.session
+            noteUse(tab: waiter.tab, session: waiter.session)
             lastGranted = waiter.session
             waiter.continuation.resume(returning: ticket)
         }
@@ -263,4 +292,7 @@ public actor BrowserTabGate {
     }
 
     public var counts: (running: Int, queued: Int) { (running.count, waiters.count) }
+
+    /// Thread names kept for display (tests).
+    var trackedNames: Int { names.count }
 }
