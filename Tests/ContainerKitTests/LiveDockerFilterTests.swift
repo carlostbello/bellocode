@@ -197,6 +197,7 @@ struct LiveDockerFilterTests {
         // BelloCode's own docker configuration (as EnvironmentService prepares it): no credential helpers, Rancher's plugins.
         let config = fixture.base + "/docker-cli"
         try FileManager.default.createDirectory(atPath: config + "/cli-plugins", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: config + "/buildx", withIntermediateDirectories: true)
         try #"{"auths":{}}"#.write(toFile: config + "/config.json", atomically: true, encoding: .utf8)
         for name in ["docker-compose", "docker-buildx"] {
             try? FileManager.default.createSymbolicLink(atPath: config + "/cli-plugins/" + name, withDestinationPath: NSHomeDirectory() + "/.rd/bin/" + name)
@@ -206,7 +207,7 @@ struct LiveDockerFilterTests {
         try "FOO=from-project\n".write(toFile: fixture.repoA + "/ok.env", atomically: true, encoding: .utf8)
         let access = ExecHelperConfig.DockerAccess(host: "tcp://127.0.0.1:\(proxy.port)/\(token)", binary: docker, configDirectory: config)
         let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"].merging(access.environment) { _, new in new }
-        let paths = HostDockerSandbox.Paths(readWrite: [fixture.repoA], readOnly: HostDockerSandbox.installationFolders(docker: docker, configDirectory: config))
+        let paths = HostDockerSandbox.Paths(readWrite: [fixture.repoA, config + "/buildx"], readOnly: HostDockerSandbox.installationFolders(docker: docker, configDirectory: config))
 
         /// Runs a line as bellocode-exec does; with `unchecked`, skips the argument check (the sandbox alone).
         func host(_ line: String, unchecked: Bool = false, directory: String? = nil) throws -> (Int32, String) {
@@ -247,6 +248,10 @@ struct LiveDockerFilterTests {
                 toFile: fixture.repoA + "/compose.host.yaml", atomically: true, encoding: .utf8)
             let (composeCode, composeOut) = try host("docker compose -f compose.host.yaml run --rm -T probe")
             #expect(composeCode == 0 && composeOut.contains("from-project"), "compose inside the project: \(composeOut)")
+
+            // buildx's own state is writable (its folder only).
+            let (lsCode, lsOut) = try host("docker buildx ls")
+            #expect(lsCode == 0, "buildx ls: \(lsOut)")
 
             // Options naming files outside: refused before docker runs.
             for line in ["docker run --rm --env-file \(fixture.base)/elsewhere/secret.env redis:7-alpine printenv",

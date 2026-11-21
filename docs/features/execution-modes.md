@@ -51,11 +51,17 @@ Containers view and Prune. The image needs the CLI and Compose plugin (`docs/fea
 `docker:29-cli`). **Hostile matrix:** 89 requests through the proxy to an in-process fake daemon (`DockerFilterTests`,
 every case named in its source) all refused, none reached the daemon; bad tokens, smuggling and CL/TE conflicts refused.
 Live: 24 hostile CLI commands from inside the shared workspace refused by the real daemon path; compose
-up/exec/run/logs/ps/build and classic build work. **Build base images (R14):** the proxy finds the Dockerfile in the streamed
-classic `/build` context (`BuildContextScanner`; plain tar only) and checks its `FROM`, `COPY --from` and `RUN --mount=from=`
-images (`DockerfileBases`, global `ARG`s and `buildargs` expanded; unresolvable refused) against the image policy unless
-the scope built them; a refused build is cut off before the context completes. Under enforced egress, `RUN` steps get
-the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
+up/exec/run/logs/ps/build and classic build work. **Build base images (R14, A08, N04):** a classic `/build` context is read whole and held back in an unlinked temporary file
+until it is judged, so the daemon only receives an archive whose effective Dockerfile was checked (`BuildContextScanner`, Go
+`archive/tar` semantics: a second entry for the Dockerfile's path in any spelling, a link at or above it, an entry written
+through an earlier link, names leaving the context, sparse files, malformed numbers, PAX records or checksums, and data after
+the end marker are refused; gzip through zlib, concatenated members decoded, trailing bytes refused; bzip2/xz/zstd refused).
+Its `FROM`, `COPY --from`, `RUN --mount=from=` and `# syntax=`/`BUILDKIT_SYNTAX` frontend images (`DockerfileBases`: BuildKit's
+directive rules, heredocs only for unquoted `<<WORD` in RUN/COPY/ADD, an unclosed heredoc refused, and a second no-heredoc
+reading so a parser disagreement cannot hide a FROM; global `ARG`s and `buildargs` expanded; unresolvable refused) are
+checked against the image policy unless the scope built them. BuildKit through the endpoint (`/session`, `/build?version=2` or
+`session=`) is refused. Streamed bodies (build, `docker cp`) may be up to 4 GiB; JSON bodies 4 MiB (N07). Under enforced egress,
+`RUN` steps get the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
 between check and mount (TOCTOU) is followed in the Rancher VM; the agent sees its token.
 
 ## Environment contract

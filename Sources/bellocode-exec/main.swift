@@ -133,7 +133,8 @@ if workspace.mode == .hostDocker {
     hostEnvironment.merge(docker.environment) { _, new in new }
     // The client runs confined to the project's folders and the endpoint (N03, A06): whatever a Compose file or an
     // option names, it cannot read or write elsewhere on this Mac. No sandbox, no command.
-    let paths = HostDockerSandbox.Paths(readWrite: workspace.roots,
+    // buildx keeps its own state in `DOCKER_CONFIG/buildx` (BelloCode's folder, made with the configuration).
+    let paths = HostDockerSandbox.Paths(readWrite: workspace.roots + (docker.configDirectory.map { [$0 + "/buildx"] } ?? []),
                                         readOnly: HostDockerSandbox.installationFolders(docker: binary, configDirectory: docker.configDirectory))
     guard let port = HostDockerSandbox.port(dockerHost: docker.host),
           let confined = HostDockerSandbox.wrap(hostArgv, paths: paths, port: port) else {

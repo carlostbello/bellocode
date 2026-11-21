@@ -160,7 +160,6 @@ extension EnvironmentService {
         let config = configuration.map { Self.prepareHostDockerConfig(next: $0.execConfigURL) } ?? nil
         let projectRoot = model.directory
         let projectKey = model.projectKey
-        let cache = devDigestCache
         // Enforced egress (N09): BuildKit's builder cannot join the egress network, so `RUN` steps get none.
         let offline = egress?.attachment(model.projectKey, []) != nil
         tasks.set("devbuild-\(model.projectKey)", Task { [weak self] in
@@ -219,17 +218,6 @@ extension EnvironmentService {
             return inputs.stage(projectRoot: projectRoot).map { staged in
                 (inputs, staged, inputs.tag(projectKey: projectKey, build: build, contextDigest: staged.digest))
             }
-        }
-    }
-
-    /// The verified inputs and their content tag, off the main actor.
-    @concurrent
-    nonisolated static func verifyBuildInputs(_ build: DevContainerPlan.Build, projectRoot: String, projectKey: String,
-                                              cache: DevContextDigestCache) async
-        -> Result<(DevContainerBuildInputs, String), DevContainerBuildInputs.Problem> {
-        switch DevContainerBuildInputs.verify(build, projectRoot: projectRoot) {
-        case .failure(let problem): return .failure(problem)
-        case .success(let inputs): return inputs.tag(projectKey: projectKey, build: build, cache: cache).map { (inputs, $0) }
         }
     }
 
