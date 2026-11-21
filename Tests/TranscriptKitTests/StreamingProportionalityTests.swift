@@ -7,7 +7,7 @@ import Testing
 
 /// v1.0.0 reviews N20 and A28: streaming one long reply does work proportional to the new bytes, and never parses the
 /// whole message on the main actor per tick (even when it quotes image syntax). Asserted by counters, not time.
-@Suite(.serialized) @MainActor struct StreamingProportionalityTests {
+@Suite struct StreamingProportionalityTests {
     /// Streams `paragraphs` paragraphs in small chunks; returns the bytes the stream examined in all.
     static func scanned(paragraphs: Int, chunk: Int = 16) -> (scanned: Int, bytes: Int) {
         var text = ""
@@ -44,7 +44,7 @@ import Testing
     }
 
     /// N20: a streaming reply that quotes image syntax is never parsed on the main actor while it streams.
-    @Test func aStreamingReplyWithImageSyntaxIsNotParsedOnTheMainActor() async {
+    @MainActor @Test func aStreamingReplyWithImageSyntaxIsNotParsedOnTheMainActor() async {
         let harness = ControllerTests.Harness(messages: ControllerTests.longTranscript(turns: 4))
         defer { harness.close() }
         await harness.settle()
