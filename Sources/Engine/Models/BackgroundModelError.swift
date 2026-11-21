@@ -72,13 +72,31 @@ public struct BackgroundModelError: Error, Sendable, Hashable, CustomStringConve
         "freeusagelimit", "gousagelimit", "creditlimitexceeded", "exceeded your", "out of credits", "payment required",
     ]
 
+    /// Wording for the other refusals, for errors that arrive already translated (`EngineError`, N15). Quota is
+    /// checked first: "rate limit" wording also appears in quota messages.
+    static let rateLimitWords = ["rate limit", "rate_limit", "ratelimit", "too many requests"]
+    static let authenticationWords = ["invalid api key", "invalid_api_key", "authentication", "unauthorized", "not authorized", "invalid x-api-key"]
+    static let unavailableWords = ["model not found", "modelnotfound", "providernotfound", "unsupported model", "unsupportedmodel", "model_not_found", "does not exist"]
+    static let overloadedWords = ["overloaded", "overloaded_error", "capacity", "temporarily unavailable"]
+
+    static func classify(wording text: String) -> Kind? {
+        let lowered = text.lowercased()
+        func mentions(_ words: [String]) -> Bool { words.contains { lowered.contains($0) } }
+        if mentions(quotaWords) { return .quota }
+        if mentions(rateLimitWords) { return .rateLimited }
+        if mentions(authenticationWords) { return .authentication }
+        if mentions(overloadedWords) { return .overloaded }
+        if mentions(unavailableWords) { return .unavailable }
+        return nil
+    }
+
     /// The kind of provider failure in `error`, or nil for anything else (transport, decoding, a server bug).
     public static func classify(_ error: any Error) -> Kind? {
         if let engine = error as? EngineError {
             // Already translated (its text is the server's sanitised message): only the wording is left.
             switch engine {
             case .server(let text), .rejected(let text):
-                return quotaWords.contains { text.lowercased().contains($0) } ? .quota : nil
+                return classify(wording: text)
             default:
                 return nil
             }

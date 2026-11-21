@@ -23,6 +23,8 @@ export type Overrides = {
   /** The location directory the plugin is set up for (default "/repo"). */
   location?: string
   sessionGet?: (input: any, sessions: Map<string, FakeSession>) => Promise<any>
+  /** `ctx.model.list` entries (default: none). */
+  models?: any[]
   /** Transform reloads that reject ("skill", "agent", "command"). */
   failingReloads?: string[]
 }
@@ -146,7 +148,7 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
         return { data: { directory: `/worktrees/wt${worktreeCounter}` } }
       },
     },
-    model: { list: async () => ({ data: [] }) },
+    model: { list: async () => ({ data: overrides.models ?? [] }) },
     permission: {
       assert: async (input: any) => {
         ;(calls as any).asserts = [...((calls as any).asserts ?? []), input]

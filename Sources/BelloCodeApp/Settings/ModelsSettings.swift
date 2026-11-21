@@ -14,8 +14,11 @@ final class ModelsSettingsModel {
     @ObservationIgnored let engine: Engine
     @ObservationIgnored let auth: AuthService?
     @ObservationIgnored var onConnect: @MainActor (String?) -> Void
-    /// Asks before something that cancels pending approvals (title, detail, button). Returns true to go ahead.
-    @ObservationIgnored var confirm: @MainActor (String, String, String) -> Bool
+    /// Asks before something that cancels pending approvals (title, detail, button, other button). Returns true to go
+    /// ahead with the first button.
+    @ObservationIgnored var confirm: @MainActor (String, String, String, String) -> Bool
+    /// Pending approvals and questions now (read right before a reload is dispatched).
+    @ObservationIgnored var attentionCounts: @MainActor () -> AttentionCounts
     private(set) var message: String?
     /// The pane last built (snapshots, menu commands).
     static weak var last: ModelsSettingsModel?
@@ -28,12 +31,13 @@ final class ModelsSettingsModel {
 
     init(
         engine: Engine, auth: AuthService?, onConnect: @escaping @MainActor (String?) -> Void = { _ in },
-        confirm: @escaping @MainActor (String, String, String) -> Bool = ModelsSettingsModel.alert
+        confirm: @escaping @MainActor (String, String, String, String) -> Bool = ModelsSettingsModel.alert
     ) {
         self.engine = engine
         self.auth = auth
         self.onConnect = onConnect
         self.confirm = confirm
+        attentionCounts = { [weak engine] in engine?.root.attention.counts ?? AttentionCounts() }
         let catalog: @MainActor () -> Catalog? = { [weak engine] in engine?.root.catalog.current }
         let integrations: @MainActor () -> [IntegrationItem] = { [weak auth] in auth?.integrations ?? [] }
         let reload: @MainActor () async -> Void = { [weak engine, weak auth] in
@@ -61,11 +65,9 @@ final class ModelsSettingsModel {
         })
         gitText = picker(current: { [weak models] in models?.background.gitText.selection }, apply: { selection in
             await models.setGitText(.specific(selection))
-            return nil
         })
         delegated = picker(current: { [weak models] in models?.background.delegated.selection }, apply: { selection in
             await models.setDelegated(.specific(selection))
-            return nil
         })
 
         // opencode's own choice (removes the key) for the two opencode settings.
@@ -94,7 +96,6 @@ final class ModelsSettingsModel {
         gitText.currentChoice = { [weak models] in Self.choiceID(models?.background.gitText) }
         gitText.applyChoice = { item in
             await models.setGitText(item.id == "small" ? .smallModel : .sameAsThread)
-            return nil
         }
         delegated.choices = { [weak self] in
             [.init(id: "thread", title: "Same as parent", detail: "The thread that starts it"),
@@ -103,20 +104,19 @@ final class ModelsSettingsModel {
         delegated.currentChoice = { [weak models] in Self.choiceID(models?.background.delegated) }
         delegated.applyChoice = { item in
             await models.setDelegated(item.id == "server" ? .serverDefault : .sameAsThread)
-            return nil
         }
 
         // Writing opencode.json reloads opencode, which cancels pending approvals and questions: ask first, or save only.
         apply = { [weak self] selection, write in
             guard let self else { return nil }
-            let counts = engine.root.attention.counts
+            let counts = self.attentionCounts()
             var reloadNow = true
             if counts.approvals + counts.questions > 0 {
                 let waiting = counts.approvals + counts.questions
                 reloadNow = self.confirm(
                     "Apply the model change now?",
                     "opencode reloads its configuration, which cancels \(waiting) pending approval\(waiting == 1 ? "" : "s") or question\(waiting == 1 ? "" : "s"). Choose Save Only to apply it at the next reload (Window ▸ Reload opencode Configuration).",
-                    "Reload Now")
+                    "Reload Now", "Save Only")
             }
             let problem = await write(selection, reloadNow)
             self.message = problem ?? (reloadNow ? nil : "Saved. It applies when opencode next reloads its configuration.")
@@ -174,15 +174,34 @@ final class ModelsSettingsModel {
     }
 
     func reloadNow() {
-        Task { message = await engine.models.reloadServer() }
+        Task { await reloadConfirmed() }
     }
 
-    static func alert(_ title: String, _ detail: String, _ button: String) -> Bool {
+    /// "Reload opencode Now" after Save Only: the counts are read now, not at save time, and a reload that would
+    /// cancel approvals or questions asks first (A23). Cancel keeps the saved choice and the pending status. Returns
+    /// whether the reload was dispatched.
+    @discardableResult
+    func reloadConfirmed(reload: (@MainActor () async -> String?)? = nil) async -> Bool {
+        let counts = attentionCounts()
+        let waiting = counts.approvals + counts.questions
+        if waiting > 0, !confirm(
+            "Reload opencode now?",
+            "Reloading cancels \(waiting) pending approval\(waiting == 1 ? "" : "s") or question\(waiting == 1 ? "" : "s"). The saved model applies at the next reload.",
+            "Reload", "Cancel")
+        {
+            return false
+        }
+        let models = engine.models!
+        message = await (reload ?? { await models.reloadServer() })()
+        return true
+    }
+
+    static func alert(_ title: String, _ detail: String, _ button: String, _ other: String) -> Bool {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = detail
         alert.addButton(withTitle: button)
-        alert.addButton(withTitle: "Save Only")
+        alert.addButton(withTitle: other)
         return alert.runModal() == .alertFirstButtonReturn
     }
 }
@@ -232,6 +251,12 @@ struct ModelsSettingsView: View {
                 }
                 SettingsRow("Delegated threads and scheduled tasks", detail: "When the agent, task or schedule names no model.") {
                     ModelSettingButton(model: model.delegated, label: "Delegated threads and scheduled tasks", problem: model.problem(models.background.delegated.selection))
+                }
+                if let problem = models.storageProblem {
+                    SettingsFieldRow {
+                        Label(problem, systemImage: "exclamationmark.triangle").font(.ds(.meta)).foregroundStyle(Color.ds.dangerText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             SettingsGroup("Providers", footer: "A provider you connect here, in Settings ▸ Accounts or with bellocode-opencode auth login appears in every picker at once.") {

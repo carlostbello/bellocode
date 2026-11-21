@@ -139,6 +139,7 @@ export function parseModel(
 export function childModel(
   owner: string | undefined,
   parent: { readonly providerID?: string; readonly id?: string; readonly variant?: string | null } | null | undefined,
+  usable?: (model: { providerID: string; id: string }) => boolean,
 ): { providerID: string; id: string; variant?: string } | undefined {
   const fromParent =
     parent?.providerID && parent.id
@@ -147,7 +148,17 @@ export function childModel(
   if (!owner || owner === "thread") return fromParent
   if (owner === "server") return undefined
   const parsed = parseModel(owner)
-  return parsed && !("error" in parsed) ? parsed : fromParent
+  if (!parsed || "error" in parsed) return fromParent
+  // A chosen model that is not usable now (provider gone, disabled, deprecated) falls through, as in the app (N15).
+  return usable && !usable(parsed) ? fromParent : parsed
+}
+
+/** Whether the catalog (`ctx.model.list`) offers `model` for chat now. `models` undefined: unknown, assumed usable. */
+export function modelUsable(models: readonly any[] | undefined, model: { providerID: string; id: string }): boolean {
+  if (!models) return true
+  const entry = models.find((item) => item?.providerID === model.providerID && item?.id === model.id)
+  if (!entry) return false
+  return entry.enabled !== false && (entry.type ?? "chat") === "chat" && entry.status !== "deprecated"
 }
 
 /** Reads the defaults file's `delegated` token; undefined when missing or unreadable (the parent's model then). */

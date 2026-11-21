@@ -598,7 +598,13 @@ export default {
           // read at each call, so a change applies without a restart).
           const modelDefaultsFile: string | undefined = typeof ctx.options?.modelDefaultsFile === "string" ? ctx.options.modelDefaultsFile : undefined
           const ownerDefault = modelDefaultsFile ? L.readModelDefaults(() => readFileSync(modelDefaultsFile, "utf8")) : undefined
-          const model = parsed ?? agent.model ?? L.childModel(ownerDefault, caller.model) ?? undefined
+          let catalog: any[] | undefined
+          if (!parsed && !agent.model && ownerDefault && ownerDefault !== "thread" && ownerDefault !== "server") {
+            catalog = await Promise.resolve()
+              .then(() => ctx.model.list({}))
+              .then((value: any) => list<any>(value), () => undefined)
+          }
+          const model = parsed ?? agent.model ?? L.childModel(ownerDefault, caller.model, (item) => L.modelUsable(catalog, item)) ?? undefined
           let directory: string | undefined
           const made = { threads: [] as string[], worktrees: [] as string[] }
           if (input.workspace === "worktree") {

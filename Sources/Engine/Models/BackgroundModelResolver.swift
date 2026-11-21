@@ -152,12 +152,13 @@ public enum BackgroundModelResolver {
 
     /// A delegated child thread or a scheduled run that names no model (its agent has none either). Nil: opencode's
     /// default.
-    public static func child(choice: ModelChoice, parent: ModelSelection?, catalog: Catalog?) -> ModelSelection? {
+    /// `small` is the owner's configured small model (used for `.smallModel`).
+    public static func child(choice: ModelChoice, parent: ModelSelection?, catalog: Catalog?, small configured: ModelSelection? = nil) -> ModelSelection? {
         switch choice {
         case .specific(let selection): return isUsable(selection, catalog) || catalog == nil ? selection : parent
         case .serverDefault: return nil
         case .sameAsThread: return parent
-        case .smallModel: return small(configured: nil, provider: parent?.providerID, catalog: catalog) ?? parent
+        case .smallModel: return small(configured: configured, provider: parent?.providerID, catalog: catalog) ?? parent
         }
     }
 }

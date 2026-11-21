@@ -32,7 +32,7 @@ extension SnapshotRunner {
             ModelsSettingsView(model: model).padding(DS.Space.s24).background(SwiftUI.Color.ds.canvas).environment(\.openCodeSnapshot, true)
         }
 
-        let fresh = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _ in true })
+        let fresh = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _, _ in true })
         written += await renderHosted(pane(fresh), state: "default", title: "Models")
 
         await engine.models.setDefaultModel(ModelSelection(providerID: "mockai", modelID: "mock-large"))
@@ -42,13 +42,13 @@ extension SnapshotRunner {
         await engine.auto.updateSettings(reviewer)
         await engine.models.setGitText(.smallModel)
         await engine.models.setDelegated(.specific(ModelSelection(providerID: "anthropic", modelID: "claude-sonnet-5")))
-        let chosen = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _ in true })
+        let chosen = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _, _ in true })
         written += await renderHosted(pane(chosen), state: "chosen", title: "Models")
 
         // The reviewer row's picker: choices first, then each connected provider's models.
         reviewer.choice = .sameAsThread
         await engine.auto.updateSettings(reviewer)
-        let picking = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _ in true })
+        let picking = ModelsSettingsModel(engine: engine, auth: nil, confirm: { _, _, _, _ in true })
         picking.reviewer.prepareForOpen()
         written += await renderHosted(
             ModelPickerView(model: picking.reviewer) {}.background(SwiftUI.Color.ds.raised).padding(DS.Space.s12).background(SwiftUI.Color.ds.canvas),

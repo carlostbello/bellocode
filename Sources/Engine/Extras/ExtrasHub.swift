@@ -828,7 +828,8 @@ extension ExtrasHub {
         let catalog = engine.root.catalog.catalog(for: task.directory)
         if let agent = task.agent, catalog?.agents.first(where: { $0.id == agent })?.model != nil { return nil }
         let parent: ModelSelection? = if let creator = task.createdBy { await core.knownSession(creator)?.model } else { nil }
-        return BackgroundModelResolver.child(choice: engine.models?.background.delegated ?? .sameAsThread, parent: parent, catalog: catalog)
+        return BackgroundModelResolver.child(
+            choice: engine.models?.background.delegated ?? .sameAsThread, parent: parent, catalog: catalog, small: engine.models?.configuredSmall)
     }
 }
 

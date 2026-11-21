@@ -103,6 +103,8 @@ struct BackgroundModelResolverTests {
         #expect(R.child(choice: .serverDefault, parent: Self.sonnet, catalog: Self.mixed) == nil)
         #expect(R.child(choice: .specific(Self.haiku), parent: Self.sonnet, catalog: Self.mixed) == Self.haiku)
         #expect(R.child(choice: .specific(ModelSelection(providerID: "gone", modelID: "x")), parent: Self.sonnet, catalog: Self.mixed) == Self.sonnet)
+        // N33: the owner's configured small model is used for "Small model".
+        #expect(R.child(choice: .smallModel, parent: Self.sonnet, catalog: Self.mixed, small: Self.pickle) == Self.pickle)
     }
 
     // MARK: Values
@@ -145,6 +147,12 @@ struct BackgroundModelResolverTests {
         let billing = try http(500, #"{"_tag":"UnknownError","message":"insufficient_quota: You exceeded your current quota"}"#)
         #expect(BackgroundModelError.classify(billing) == .quota)
         #expect(BackgroundModelError.classify(EngineError.server("Free usage limit reached")) == .quota)
+        // N15: already-translated errors (session.generate) carry the other refusals too.
+        #expect(BackgroundModelError.classify(EngineError.server("Too many requests, please slow down")) == .rateLimited)
+        #expect(BackgroundModelError.classify(EngineError.rejected("invalid x-api-key")) == .authentication)
+        #expect(BackgroundModelError.classify(EngineError.server("Overloaded")) == .overloaded)
+        #expect(BackgroundModelError.classify(EngineError.rejected("Model not found: a/b")) == .unavailable)
+        #expect(BackgroundModelError.classify(EngineError.server("boom")) == nil)
         #expect(BackgroundModelError.classify(try http(500, #"{"_tag":"UnknownError","message":"boom"}"#)) == nil)
         #expect(BackgroundModelError.classify(OpenCodeError.transport(operation: "x", code: .timedOut)) == nil)
         let message = BackgroundModelError(kind: .quota, model: "OpenCode Zen · Big Pickle", task: "Auto's reviewer").message
