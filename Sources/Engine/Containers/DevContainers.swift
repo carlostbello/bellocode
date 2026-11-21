@@ -57,6 +57,30 @@ final class ChildExit: Sendable {
     }
 }
 
+/// Opened once (pipe EOF, or the drain deadline after the child exited), awaited by at most one caller.
+final class OnceGate: Sendable {
+    private let state = Mutex<(open: Bool, waiter: CheckedContinuation<Void, Never>?)>((false, nil))
+
+    func open() {
+        let waiter = state.withLock { state -> CheckedContinuation<Void, Never>? in
+            state.open = true
+            defer { state.waiter = nil }
+            return state.waiter
+        }
+        waiter?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let open = state.withLock { state -> Bool in
+                if !state.open { state.waiter = continuation }
+                return state.open
+            }
+            if open { continuation.resume() }
+        }
+    }
+}
+
 public struct DevImageBuildResult: Sendable, Equatable {
     public var status: Int32
     /// The last lines of output (bounded).
@@ -235,6 +259,9 @@ extension EnvironmentService {
 
     /// Runs Rancher Desktop's docker with argv (no shell), a minimal environment and the raw socket (BelloCode itself,
     /// never the agent). Returns the exit status and the last lines of output.
+    /// How long the output is still read after docker exited (its last lines, unless a leftover process holds the pipe).
+    nonisolated static let drainGrace: Duration = .seconds(1)
+
     @concurrent
     nonisolated static func runDocker(_ request: DevImageBuildRequest) async -> DevImageBuildResult {
         let process = Process()
@@ -253,11 +280,13 @@ extension EnvironmentService {
         process.standardInput = input ?? FileHandle.nullDevice
         // Drained as it arrives (bounded tail); the exit is awaited without holding a thread.
         let tail = Mutex(Data())
+        let eof = OnceGate()
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             // EOF: an installed handler would re-fire at full CPU until the process exits (N18).
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                eof.open()
                 return
             }
             tail.withLock { buffer in
@@ -311,6 +340,11 @@ extension EnvironmentService {
         if let reason = stopped.withLock({ $0 }) {
             return DevImageBuildResult(status: status == 0 ? 130 : status, tail: reason, stopped: true)
         }
+        // The child exited, but its last output can still be in the pipe: read up to EOF before reporting the tail,
+        // for at most `drainGrace` (a process it left behind may hold the pipe open).
+        let drain = ContinuousDeadline(after: Self.drainGrace) { eof.open() }
+        await eof.wait()
+        drain.cancel()
         let text = String(decoding: tail.withLock { $0 }, as: UTF8.self)
         let lines = text.split(separator: "\n").suffix(4).joined(separator: " · ")
         return DevImageBuildResult(status: status, tail: String(lines.prefix(600)))

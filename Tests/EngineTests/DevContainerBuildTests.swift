@@ -343,4 +343,36 @@ struct DevBuildProcessTests {
         #expect(result.status == 3 && !result.stopped)
         #expect(result.tail.contains("failed"))
     }
+
+    /// The tail is read to the end of the output, not as far as the reader had got when docker exited: the error
+    /// line after a long log is reported.
+    @Test func theTailIsReadToTheEndAfterTheChildExits() async throws {
+        // One burst close to the pipe's capacity right before exiting: most of it is still unread when docker exits.
+        let burst = folder + "/burst.txt"
+        try String(repeating: "#12 exporting layer sha256:0123456789abcdef 0.1s done\n", count: 1_200).write(toFile: burst, atomically: true, encoding: .utf8)
+        let docker = try script("/bin/cat \"\(burst)\"\necho 'ERROR: failed to solve' >&2\nexit 1")
+        for attempt in 0..<20 {
+            let result = await EnvironmentService.runDocker(DevImageBuildRequest(docker: docker, arguments: [folder + "/long\(attempt).pid"],
+                                                                                 dockerfile: nil, socket: "/nonexistent.sock", config: nil))
+            #expect(result.status == 1 && !result.stopped)
+            #expect(result.tail.hasSuffix("ERROR: failed to solve"), "attempt \(attempt): \(result.tail)")
+        }
+    }
+
+    /// A process docker left behind that keeps the output pipe open does not hold the result: the output is drained
+    /// for a bounded grace after docker exited.
+    @Test func aLeftoverProcessHoldingThePipeDoesNotHoldTheResult() async throws {
+        let leftover = folder + "/leftover.pid"
+        let docker = try script("/bin/sleep 60 &\necho $! > \"\(leftover)\"\necho 'built'\nexit 0")
+        defer {
+            if let text = try? String(contentsOfFile: leftover, encoding: .utf8), let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                kill(pid, SIGKILL)
+            }
+        }
+        let result = await EnvironmentService.runDocker(DevImageBuildRequest(docker: docker, arguments: [folder + "/holder.pid"], dockerfile: nil,
+                                                                             socket: "/nonexistent.sock", config: nil))
+        #expect(result.status == 0 && !result.stopped && result.tail.contains("built"))
+        let holder = try #require(await pid(leftover))
+        #expect(!Self.gone(holder), "the leftover still runs (and holds the pipe) when the result is reported")
+    }
 }
