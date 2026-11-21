@@ -228,6 +228,20 @@ struct EgressGatewayLifecycleTests {
         #expect(second.logs.contains("ready") && second.networks.contains("bridge"))
     }
 
+    @Test func concurrentSetupsShareOneBuild() async throws {
+        let daemon = try GatewayDaemon()
+        defer { daemon.stop() }
+        let client = daemon.client
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0..<5 {
+                group.addTask { try await EgressGateway(client: client).ensure(EgressGatewaySpec(scopeKey: "s\(index)", proxyPort: 49_152, token: "t\(index)")) }
+            }
+            try await group.waitForAll()
+        }
+        #expect(daemon.state.withLock { $0.builds } == 1, "concurrent gateway setups raced to build the same tag")
+        #expect(Set(daemon.state.withLock { $0.creates }) == [GatewayDaemon.built])
+    }
+
     @Test func aFailedFirstSetupLeavesNoRunningGateway() async throws {
         let daemon = try GatewayDaemon()
         defer { daemon.stop() }

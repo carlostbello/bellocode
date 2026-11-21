@@ -56,20 +56,49 @@ public enum EgressGatewayImage {
         let hash = inputHash
         let key = client.socketPath + "\n" + hash
         if let id = trusted.withLock({ $0[key] }), let image = try await client.inspectImage(id), image.id == id { return id }
-        let reported: String?
+        // One build per daemon and inputs at a time: concurrent setups (several scopes, the shared browser) wait for the
+        // same build instead of racing to write the same tag.
+        let build = building.withLock { building -> Task<String, any Error> in
+            if let running = building[key] { return running }
+            let task = Task { try await buildTrusted(client: client, hash: hash, extraLabels: extraLabels) }
+            building[key] = task
+            return task
+        }
         do {
-            reported = try await client.buildImage(
-                context: context(), tag: tag,
-                labels: [labelInputs: hash, EgressGateway.labelEgress: "1"].merging(extraLabels) { a, _ in a })
+            let id = try await build.value
+            building.withLock { if $0[key] == build { $0[key] = nil } }
+            trusted.withLock { $0[key] = id }
+            return id
         } catch {
-            throw EgressGatewayError("BelloCode could not build its egress gateway image (it needs \(base.split(separator: "@").first ?? "") from Docker Hub once, pinned by digest): \(error)")
+            building.withLock { if $0[key] == build { $0[key] = nil } }
+            throw error
+        }
+    }
+
+    private static let building = Mutex<[String: Task<String, any Error>]>([:])
+
+    private static func buildTrusted(client: EngineClient, hash: String, extraLabels: [String: String]) async throws -> String {
+        var reported: String?
+        var lastError: (any Error)?
+        // A second attempt covers another process (the helper, a second app instance) writing the same tag meanwhile.
+        for attempt in 0..<2 where reported == nil {
+            if attempt > 0 { try await Task.sleep(for: .milliseconds(300)) }
+            do {
+                reported = try await client.buildImage(
+                    context: context(), tag: tag,
+                    labels: [labelInputs: hash, EgressGateway.labelEgress: "1"].merging(extraLabels) { a, _ in a })
+            } catch {
+                lastError = error
+            }
+        }
+        if reported == nil, let lastError {
+            throw EgressGatewayError("BelloCode could not build its egress gateway image (it needs \(base.split(separator: "@").first ?? "") from Docker Hub once, pinned by digest): \(lastError)")
         }
         // The build's own result names the image; the tag is not consulted (it may already point elsewhere).
         guard let id = reported, id.hasPrefix("sha256:"), let built = try await client.inspectImage(id), built.id == id,
               built.labels?[labelInputs] == hash else {
             throw EgressGatewayError("BelloCode built its egress gateway image, but the daemon did not report that build's image ID, so it is not used.")
         }
-        trusted.withLock { $0[key] = id }
         return id
     }
 }
