@@ -141,6 +141,21 @@ struct LiveSharedBrowserTests {
             #expect((status?.caCount ?? 0) >= 2, "company CA and egress CA imported")
             report["idleAfterStart"] = await Self.stats(names.container)
 
+            // N25: download names with a quote, a backslash and a control character list intact (JSON-escaped).
+            let hostile = ["quote\"d.pdf", "back\\slash.txt", "tab\tname.txt"]
+            for name in hostile {
+                let made = try await ExecSession.run(
+                    client: client, container: names.container, argv: ["sh", "-c", "printf x > \"/data/downloads/$1\"", "sh", name],
+                    wrap: false, limit: 4096, timeout: .seconds(20))
+                #expect(made.exitCode == 0, "creating \(name): \(String(decoding: made.stderr, as: UTF8.self))")
+            }
+            let listed = try await runtime.downloads().map(\.name)
+            for name in hostile { #expect(listed.contains(name), "\(name) listed: \(listed)") }
+            for name in hostile {
+                _ = try await ExecSession.run(
+                    client: client, container: names.container, argv: ["rm", "-f", "/data/downloads/" + name], wrap: false, limit: 4096, timeout: .seconds(20))
+            }
+
             // 3. Two agents at once, each in its own group; a project dev server (loopback only) and a service by name.
             async let a = call("navigate", ["url": .string("https://proj.bc:5173/")], "ses_a")
             async let b = call("navigate", ["url": .string("https://api.proj.bc/")], "ses_b")
