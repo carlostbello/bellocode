@@ -87,6 +87,11 @@ public final class SharedBrowserService {
     public private(set) var humanControl: Set<String> = []
     /// Take Over requested, waiting for already-dispatched agent calls to settle (input not yet accepted).
     public private(set) var takingOver: Set<String> = []
+    /// Whether this service holds one `.human` activity unit (held while any tab is taken over or being taken over).
+    private var humanActivityHeld = false
+    /// Whether this service holds one `.viewer` activity unit, and whether the viewer reconciliation is running.
+    private var viewerActivityHeld = false
+    private var reconcilingViewer = false
     public private(set) var downloads: [BrowserDownload] = []
     public private(set) var imageTag: String?
     public private(set) var lastError: String?
@@ -178,18 +183,26 @@ public final class SharedBrowserService {
                                         certificateDirectory: placement.certificateDirectory, volume: volume, name: name, screen: screen,
                                         extraLabels: extra)
         }
+        await attach(supervisor)
+        // A browser left running by a previous launch: adopt it (start() skips what is already right) only when used.
+    }
+
+    /// Owns `supervisor` and follows its phase and restarts (tests attach one over a fake runtime).
+    func attach(_ supervisor: BrowserSupervisor) async {
         self.supervisor = supervisor
         await supervisor.observe({ [weak self] phase, generation, status in
             Task { @MainActor in self?.apply(phase: phase, generation: generation, status: status) }
         }, onRestart: { [weak self] generation, reason in
             Task { @MainActor in await self?.restarted(generation: generation, reason: reason) }
         })
-        // A browser left running by a previous launch: adopt it (start() skips what is already right) only when used.
     }
 
     /// The packing key from the Keychain, made once (RSA-2048, PKCS#8). Never logged, never in argv or a file.
+    ///
+    /// Only a key that is really absent is generated: a Keychain error (locked, interaction not allowed) is thrown,
+    /// never taken for "no key", which would replace the key and change the extension's ID (N12).
     nonisolated static func packingKey(_ vault: any SecretVault, account: String = keyAccount) async throws -> String {
-        if let stored = try? vault.read(account: account), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
+        if let stored = try vault.read(account: account), !stored.isEmpty, let text = String(data: stored.utf8, encoding: .utf8) {
             return text
         }
         let pem = try BrowserExtensionKey.generatePEM()
@@ -218,7 +231,7 @@ public final class SharedBrowserService {
         if case .failed(let message) = phase { lastError = message }
         if phase.isReady, !wasReady {
             lastError = nil
-            if viewerSubscribers > 0 { openViewerForward() }
+            if viewerSubscribers > 0 { Task { await self.openViewerForward() } }
         }
         if !phase.isReady, wasReady { closeRoutes(); closeViewerForward() }
     }
@@ -228,6 +241,7 @@ public final class SharedBrowserService {
         notices.insert(BrowserNotice(id: noticeCounter, date: .now, text: reason), at: 0)
         if notices.count > 20 { notices.removeLast(notices.count - 20) }
         humanControl = []
+        await releaseHumanActivityIfIdle()
         await broker.browserRestarted(generation: generation, reason: reason)
     }
 
@@ -515,32 +529,53 @@ public final class SharedBrowserService {
         })
     }
 
-    /// A visible live view (Chrome panel or window): connects only while visible (review optimisation 2).
+    /// A visible live view (Chrome panel or window): connects only while visible (review optimisation 2). The
+    /// supervisor's `.viewer` unit follows "any viewer visible" as one edge, reconciled one step at a time, so a
+    /// viewer that disappears while the browser is starting neither leaks the unit nor opens a forward for nobody, and
+    /// a failed start never drives the count below zero (N12).
     public func viewerAppeared() async {
         viewerSubscribers += 1
-        guard viewerSubscribers == 1 else { return }
-        do {
-            try await supervisor?.begin(.viewer)
-            openViewerForward()
-        } catch {
-            lastError = BrowserSupervisor.describe(error)
-            viewerSubscribers -= 1
-        }
+        await reconcileViewer()
     }
 
     public func viewerDisappeared() async {
         guard viewerSubscribers > 0 else { return }
         viewerSubscribers -= 1
-        guard viewerSubscribers == 0 else { return }
-        closeViewerForward()
-        await supervisor?.end(.viewer)
+        await reconcileViewer()
+    }
+
+    private func reconcileViewer() async {
+        guard !reconcilingViewer else { return }  // the running reconciliation picks up the change
+        reconcilingViewer = true
+        defer { reconcilingViewer = false }
+        while true {
+            let wanted = viewerSubscribers > 0
+            if wanted == viewerActivityHeld { break }
+            if wanted {
+                do {
+                    try await supervisor?.begin(.viewer)
+                    viewerActivityHeld = true
+                } catch {
+                    lastError = BrowserSupervisor.describe(error)
+                    break
+                }
+            } else {
+                closeViewerForward()
+                viewerActivityHeld = false
+                await supervisor?.end(.viewer)
+            }
+        }
+        if viewerActivityHeld, viewerSubscribers > 0 { await openViewerForward() }
     }
 
     public var viewerPassword: String? { get async { await supervisor?.password } }
 
-    private func openViewerForward() {
+    /// Forwards the live view's port of the container proven BelloCode's, addressed by its ID (R07).
+    private func openViewerForward() async {
         guard viewerForward == nil, phase.isReady, let runtime else { return }
-        guard let forwarder = try? PortForwarder(client: EngineClient(socketPath: runtime.socketPath), container: runtime.containerName,
+        guard let id = try? await runtime.ownedContainerID() else { return }
+        guard viewerForward == nil, phase.isReady, viewerSubscribers > 0 else { return }
+        guard let forwarder = try? PortForwarder(client: EngineClient(socketPath: runtime.socketPath), container: id,
                                                  containerPort: BrowserContainerSpec.viewerPort, maxConnections: 8) else { return }
         viewerForward = (forwarder, Task { await forwarder.run() })
         viewerURL = URL(string: "http://127.0.0.1:\(forwarder.hostPort)/bellocode.html")
@@ -557,10 +592,21 @@ public final class SharedBrowserService {
     /// ones are refused until Give Back, and calls already sent are cancelled. Control (the live view accepting input)
     /// is acknowledged only once those calls have settled; meanwhile `takingOver` shows it (R22). The browser counts as
     /// active meanwhile.
+    ///
+    /// The supervisor's `.human` unit is held once while any tab is controlled or being taken over, and released when
+    /// the last is given back or the browser restarted (N12).
     public func takeOver(_ tab: String = "*") async {
         guard !humanControl.contains(tab), !takingOver.contains(tab) else { return }
+        let first = humanControl.isEmpty && takingOver.isEmpty && !humanActivityHeld
         takingOver.insert(tab)
-        try? await supervisor?.begin(.human)
+        if first, let supervisor {
+            do {
+                try await supervisor.begin(.human)
+                humanActivityHeld = true
+            } catch {
+                lastError = BrowserSupervisor.describe(error)
+            }
+        }
         let settled = await broker.takeOver(tab)
         takingOver.remove(tab)
         if !settled {
@@ -572,11 +618,17 @@ public final class SharedBrowserService {
 
     public func giveBack(_ tab: String = "*") async {
         guard humanControl.contains(tab) || tab == "*" else { return }
-        let had = !humanControl.isEmpty
         if tab == "*" { humanControl = [] } else { humanControl.remove(tab) }
         await broker.gate.giveBack(tab)
-        if had { await supervisor?.end(.human) }
+        await releaseHumanActivityIfIdle()
         tabActivity = await broker.tabActivity()
+    }
+
+    /// Ends the `.human` unit once no tab is controlled or being taken over.
+    private func releaseHumanActivityIfIdle() async {
+        guard humanActivityHeld, humanControl.isEmpty, takingOver.isEmpty else { return }
+        humanActivityHeld = false
+        await supervisor?.end(.human)
     }
 
     // MARK: Routes (canonical names)
@@ -711,9 +763,11 @@ public final class SharedBrowserService {
         if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: toolsCacheKey) }
     }
 
+    /// browse over exec, only in the container proven BelloCode's, addressed by its ID (R07).
     func makeTransport() async throws -> any BrowseMCPTransport {
         guard let runtime else { throw BrowserStartError.unavailable("The shared Chrome is not set up.") }
-        return try await ExecBrowseTransport(client: EngineClient(socketPath: runtime.socketPath), container: runtime.containerName)
+        guard let id = try await runtime.ownedContainerID() else { throw BrowserStartError.unavailable("The shared Chrome's container is not running.") }
+        return try await ExecBrowseTransport(client: EngineClient(socketPath: runtime.socketPath), container: id)
     }
 }
 

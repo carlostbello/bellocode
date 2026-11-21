@@ -51,6 +51,11 @@ struct BrowserOwnershipTests {
         await #expect(throws: refusal) { try await runtime.stop(timeout: 1) }
         await #expect(throws: refusal) { try await runtime.remove() }
         await #expect(throws: refusal) { try await runtime.start() }
+        // N12: status, downloads and the browse/viewer address resolve the owned container first: no exec by name.
+        await #expect(throws: refusal) { _ = try await runtime.status() }
+        await #expect(throws: refusal) { _ = try await runtime.downloads() }
+        await #expect(throws: refusal) { _ = try await runtime.download("x.pdf") }
+        await #expect(throws: refusal) { _ = try await runtime.ownedContainerID() }
         #expect(Self.mutations(server).isEmpty, "\(Self.mutations(server))")
         #expect(BrowserSupervisor.describe(refusal).contains("not created by BelloCode"), "the browser pane shows why")
     }
