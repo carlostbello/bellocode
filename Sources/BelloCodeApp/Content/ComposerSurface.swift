@@ -407,8 +407,7 @@ final class DraftComposerHost: ComposerHost {
         cache.store(draft, for: draftKey)
         if context.newThreadDraft != draft.text { context.draft = draft.text }
         if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
-            let key = draftKey
-            Task { await archive.save(draft, for: key) }
+            archive.save(draft, for: draftKey)
         }
     }
 
@@ -435,8 +434,7 @@ final class DraftComposerHost: ComposerHost {
         created = host
         cache.store(.empty, for: "draft:" + context.projectDirectory)
         if let archive {
-            let projectKey = "draft:" + context.projectDirectory
-            Task { await archive.save(.empty, for: projectKey) }
+            archive.save(.empty, for: "draft:" + context.projectDirectory)
         }
         let outcome = await host.send(submission)
         afterFirstSend?(model, submission.text)

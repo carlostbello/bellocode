@@ -58,11 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await runtime.engine.start()
                 // After the cache (and the outbox) loaded: files of sends not settled yet are kept.
                 let engine = runtime.engine
-                // Files staged in unsent drafts (R28) are kept too, however old.
-                Task {
-                    let kept = await engine.outboxAttachmentFiles().union(ComposerDraftArchive.shared.referencedFiles())
-                    await AttachmentFileStore.applicationDefault.cleanUp(keeping: kept)
-                }
+                // Files staged in unsent drafts (R28) are kept too, however old: the draft archive pins its records'
+                // files, and the outbox pins its own, for this clean-up and for the budget check of every new paste
+                // (A15). Both are read off the main actor (A27).
+                AttachmentFileStore.applicationDefault.pins.add { [weak engine] in await engine?.outboxAttachmentFiles() ?? [] }
+                _ = ComposerDraftArchive.shared  // registers its pins
+                Task { await AttachmentFileStore.applicationDefault.cleanUp() }
                 Task { await runtime.auth.refresh() }
                 if !settings.hasCompletedOnboarding { await showOnboardingWhenReady() }
             } catch let error as ProjectionStore.OpenError {
@@ -123,6 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let runtime, !runtime.isStopped else { return .terminateNow }
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
+        // Edits still inside the composer's save delay are handed over first, so the flush below writes them (N16).
+        ComposerController.flushAllDrafts()
         windows?.closeAllForTermination()
         Task { @MainActor in
             // Deletes still in their Undo window are sent now, and the engine stops only after their results (M5).
