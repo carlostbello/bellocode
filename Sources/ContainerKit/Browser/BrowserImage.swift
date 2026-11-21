@@ -285,35 +285,23 @@ public struct BrowserImageBuilder: Sendable {
             Self.keyVariable: keyPEM,
         ]
         process.currentDirectoryURL = context.directory
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        process.standardInput = FileHandle.nullDevice
-        let tail = Mutex(Data())
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            tail.withLock { buffer in
-                buffer.append(data)
-                if buffer.count > 32_768 { buffer = buffer.suffix(16_384) }
-            }
-            if let progress { for line in String(decoding: data, as: UTF8.self).split(separator: "\n").suffix(4) { progress(String(line.prefix(300))) } }
-        }
+        // Drained (EOF handled), bounded, TERM→KILL on cancellation, never blocks a thread (N18).
         let start = ContinuousClock.now
-        let status: Int32 = await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-                do { try process.run() } catch {
-                    process.terminationHandler = nil
-                    continuation.resume(returning: 127)
-                }
+        let output: ChildProcess.Result
+        do {
+            output = try await ChildProcess.run(
+                process, ChildProcess.Options(timeout: .seconds(7_200), outputLimit: 16_384, mergeOutput: true, killGrace: .seconds(10))
+            ) { data in
+                if let progress { for line in String(decoding: data, as: UTF8.self).split(separator: "\n").suffix(4) { progress(String(line.prefix(300))) } }
             }
-        } onCancel: {
-            if process.isRunning { process.terminate() }
+        } catch is ChildProcess.LaunchFailed {
+            output = ChildProcess.Result(status: 127, stdout: Data(), stderr: Data(), timedOut: false)
+        } catch {
+            output = ChildProcess.Result(status: 130, stdout: Data("cancelled".utf8), stderr: Data(), timedOut: false)
         }
-        pipe.fileHandleForReading.readabilityHandler = nil
+        let status = output.timedOut && output.status == 0 ? 124 : output.status
         let elapsed = ContinuousClock.now - start
-        let text = String(decoding: tail.withLock { $0 }, as: UTF8.self)
+        let text = String(decoding: output.stdout, as: UTF8.self)
         let lines = text.split(separator: "\n").suffix(6).joined(separator: "\n")
         return Result(tag: tag, status: status, seconds: Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18,
                       tail: String(lines.prefix(1_500)))

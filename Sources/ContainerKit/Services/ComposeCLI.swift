@@ -94,57 +94,15 @@ public struct ComposeCLI: Sendable {
         process.arguments = Self.arguments(project: project, files: files, workingDirectory: workingDirectory, command: command)
         process.environment = environment()
         process.currentDirectoryURL = workingDirectory ?? configDirectory
-        let out = Pipe(), err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        process.standardInput = FileHandle.nullDevice
-        let stdout = Drain(limit: limit), stderr = Drain(limit: limit)
-        out.fileHandleForReading.readabilityHandler = { stdout.append($0.availableData) }
-        err.fileHandleForReading.readabilityHandler = { stderr.append($0.availableData) }
-        let status: Int32 = try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: Int32?.self) { group in
-                group.addTask {
-                    await withCheckedContinuation { continuation in
-                        process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
-                        do { try process.run() } catch {
-                            process.terminationHandler = nil
-                            continuation.resume(returning: -1)
-                        }
-                    }
-                }
-                group.addTask {
-                    try await Task.sleep(for: timeout)
-                    return nil
-                }
-                let first = try await group.next() ?? nil
-                group.cancelAll()
-                if let first { return first }
-                process.terminate()
-                throw ContainerError.timedOut(operation: "docker compose \(command.first ?? "")")
-            }
-        } onCancel: {
-            if process.isRunning { process.terminate() }
+        // Drained, bounded, TERM→KILL on timeout or cancellation, no blocking reads (N18).
+        let result: ChildProcess.Result
+        do {
+            result = try await ChildProcess.run(process, ChildProcess.Options(timeout: timeout, outputLimit: limit))
+        } catch is ChildProcess.LaunchFailed {
+            return Result(status: -1, stdout: Data(), stderr: Data())
         }
-        out.fileHandleForReading.readabilityHandler = nil
-        err.fileHandleForReading.readabilityHandler = nil
-        stdout.append(out.fileHandleForReading.readDataToEndOfFile())
-        stderr.append(err.fileHandleForReading.readDataToEndOfFile())
-        return Result(status: status, stdout: stdout.data, stderr: stderr.data)
-    }
-
-    /// A pipe's output, bounded (newest kept), filled from the pipe's handler thread.
-    final class Drain: Sendable {
-        private let buffer = OSAllocatedUnfairLock(initialState: Data())
-        let limit: Int
-        init(limit: Int) { self.limit = limit }
-        func append(_ data: Data) {
-            guard !data.isEmpty else { return }
-            buffer.withLock { buffer in
-                buffer.append(data)
-                if buffer.count > limit { buffer = Data(buffer.suffix(limit)) }
-            }
-        }
-        var data: Data { buffer.withLock { $0 } }
+        if result.timedOut { throw ContainerError.timedOut(operation: "docker compose \(command.first ?? "")") }
+        return Result(status: result.status, stdout: result.stdout, stderr: result.stderr)
     }
 }
 

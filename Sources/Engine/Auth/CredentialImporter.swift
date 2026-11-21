@@ -187,6 +187,11 @@ enum ProcessRun {
             }
         }
 
+        /// Stops the handler without reading on (a failed or cancelled run; a leftover writer may hold the pipe).
+        func abandon(_ handle: FileHandle) {
+            handle.readabilityHandler = nil
+        }
+
         /// Stops the handler and reads whatever is left. Call after the writer exited (the write end is closed).
         func finish(_ handle: FileHandle) -> Data {
             handle.readabilityHandler = nil
@@ -211,7 +216,13 @@ enum ProcessRun {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         let collector = Collector(out.fileHandleForReading)
-        let status = try await wait(for: [process], timeout: timeout)
+        let status: [Int32]
+        do {
+            status = try await wait(for: [process], timeout: timeout)
+        } catch {
+            collector.abandon(out.fileHandleForReading)
+            throw error
+        }
         return Output(status: status[0], stdout: collector.finish(out.fileHandleForReading))
     }
 
@@ -231,9 +242,19 @@ enum ProcessRun {
         importing.standardError = err
         let stdout = Collector(out.fileHandleForReading, limit: 64 * 1024)
         let stderr = Collector(err.fileHandleForReading, limit: 64 * 1024)
-        let statuses = try await wait(for: [importing, exporter], timeout: timeout) { started in
-            // Both processes hold their pipe ends now; close ours so the importer sees EOF when the exporter exits.
-            if started { try? link.fileHandleForWriting.close() }
+        let statuses: [Int32]
+        do {
+            statuses = try await wait(for: [importing, exporter], timeout: timeout) { started in
+                // Both processes hold their pipe ends now; close ours so the importer sees EOF when the exporter exits.
+                if started { try? link.fileHandleForWriting.close() }
+            }
+        } catch {
+            // Handlers removed and our pipe ends closed on every path (N18).
+            stdout.abandon(out.fileHandleForReading)
+            stderr.abandon(err.fileHandleForReading)
+            try? link.fileHandleForWriting.close()
+            try? link.fileHandleForReading.close()
+            throw error
         }
         try? link.fileHandleForReading.close()
         return PipeOutput(
@@ -266,7 +287,12 @@ enum ProcessRun {
             return statuses
         } catch {
             for process in processes where process.isRunning { process.terminate() }
-            for exit in exits { _ = try? await exit.value(until: ContinuousClock.now + .seconds(3)) }
+            // The grace wait runs in a task of its own: the calling task may be cancelled already, and a wait inside it
+            // would end at once (or, before N18, never), so SIGKILL is always reached after at most the grace.
+            let grace = ContinuousClock.now + .seconds(3)
+            await Task {
+                for exit in exits { _ = try? await exit.value(until: grace) }
+            }.value
             for process in processes where process.isRunning { kill(process.processIdentifier, SIGKILL) }
             if error is DeadlinePassed { throw EngineError.timedOut }
             throw error
@@ -294,12 +320,15 @@ final class OneShotExit: Sendable {
             group.addTask {
                 try await withTaskCancellationHandler {
                     try await withCheckedThrowingContinuation { continuation in
-                        let ready = self.state.withLock { state -> Int32? in
-                            if let status = state.status { return status }
+                        // Cancellation checked under the lock: a cancel that fired before the waiter was stored (its
+                        // handler found nothing to resume) must not leave this continuation waiting forever (N18).
+                        let ready = self.state.withLock { state -> Result<Int32, any Error>? in
+                            if let status = state.status { return .success(status) }
+                            if Task.isCancelled { return .failure(CancellationError()) }
                             state.waiter = continuation
                             return nil
                         }
-                        if let ready { continuation.resume(returning: ready) }
+                        if let ready { continuation.resume(with: ready) }
                     }
                 } onCancel: {
                     let waiter = self.state.withLock { state -> CheckedContinuation<Int32, any Error>? in

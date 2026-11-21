@@ -246,6 +246,11 @@ extension EnvironmentService {
         let tail = Mutex(Data())
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
+            // EOF: an installed handler would re-fire at full CPU until the process exits (N18).
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
             tail.withLock { buffer in
                 buffer.append(data)
                 if buffer.count > 16_384 { buffer = buffer.suffix(8_192) }
