@@ -349,6 +349,29 @@ struct GitRepositoryTests {
 @MainActor
 @Suite("GitService and repository model", .serialized, .timeLimit(.minutes(3)))
 struct GitServiceTests {
+    /// N29: a parked stash whose apply fails stays parked (and in git); a clean restore unparks and drops it.
+    @Test func aFailedStashRestoreKeepsItParked() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let service = GitService(client: { throw CancellationError() }, store: nil, runner: repo.runner)
+        let model = service.repository(for: repo.path)
+        try await waitUntil { model.phase == .ready }
+        try repo.write("a.txt", "parked work\n")
+        let hash = try #require(try await model.stashAndSwitch(to: "other", create: true))
+        model.parkStash(hash, for: "main")
+        try await model.switchBranch("main", create: false)
+        // A local edit to the same file makes the apply fail.
+        try repo.write("a.txt", "in the way\n")
+        await #expect(throws: GitError.self) { try await model.restoreStash(hash) }
+        #expect(model.parkedStashes["main"] == hash)
+        #expect(try await repo.git("stash", "list", "--format=%H").contains(hash))
+        try repo.write("a.txt", "one\n")
+        try await model.restoreStash(hash)
+        #expect(model.parkedStashes.isEmpty)
+        #expect(try repo.read("a.txt") == "parked work\n")
+        #expect(try await repo.git("stash", "list").isEmpty)
+    }
+
     @Test func modelRefreshesOnFileSystemChanges() async throws {
         let repo = try await TempRepo.make()
         defer { repo.remove() }

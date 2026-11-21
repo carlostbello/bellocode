@@ -154,11 +154,13 @@ extension GitRepositoryModel {
     /// The stash parked for the current branch, if any.
     public var parkedStashForCurrentBranch: String? { status?.branch.flatMap { parkedStashes[$0] } }
 
-    /// Re-applies a stash made by `stashAndSwitch` and drops it when it applied cleanly.
+    /// Re-applies a stash made by `stashAndSwitch` and drops it when it applied cleanly. It stays parked (and the
+    /// "Restore stashed changes" affordance stays) when the apply fails; once applied it is unparked even if the
+    /// drop fails, so the same changes are never offered twice (N29).
     public func restoreStash(_ hash: String) async throws {
-        defer { parkedStashes = parkedStashes.filter { $0.value != hash } }
         try await run("Restoring stashed changes…") { repository in
             try await repository.applyStash(hash)
+            await MainActor.run { self.parkedStashes = self.parkedStashes.filter { $0.value != hash } }
             try await repository.dropStash(hash)
         }
     }
