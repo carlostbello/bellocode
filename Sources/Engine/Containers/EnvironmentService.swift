@@ -542,6 +542,7 @@ public final class EnvironmentService {
             bridges.removeValue(forKey: model.directory)?.stop()
             stopForwards(model)
             if let runtime { model.phase = runtime.isReady ? .ready : .runtimeUnavailable(runtime) }
+            if runtime?.isReady == true { ensureHostDockerGateway(model) }
             scheduleConfigWrite()
             return
         }

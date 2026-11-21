@@ -126,3 +126,173 @@ struct HostDockerCommandTests {
         #expect(message.contains("shared workspace"))
     }
 }
+
+/// N03, A06: in host docker-only mode the docker client's own host reads and writes stay inside the project. Options
+/// that name host files are checked against the roots (clear refusals); the client then runs under a sandbox that
+/// enforces the same folders for whatever else it opens (a Compose file's `env_file`, includes, build contexts).
+@Suite("Host docker-only confinement", .timeLimit(.minutes(3)))
+struct HostDockerConfinementTests {
+    let docker = "/Users/me/.rd/bin/docker"
+    let base: String
+    let root: String
+    let outside: String
+
+    init() throws {
+        base = (CodeRootPaths.canonical(NSTemporaryDirectory()) ?? NSTemporaryDirectory()) + "/bc-hostdocker-\(UUID().uuidString.prefix(8))"
+        root = base + "/project"
+        outside = base + "/private"
+        for folder in [root + "/ci", outside] { try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        try "SECRET_VALUE=do-not-read\n".write(toFile: outside + "/secret.env", atomically: true, encoding: .utf8)
+        try "FOO=bar\n".write(toFile: root + "/ok.env", atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: root + "/escape", withDestinationPath: outside)
+    }
+
+    func refusal(_ line: String) -> HostDockerCommand.Refusal? {
+        do {
+            _ = try HostDockerCommand.argv(for: line, docker: docker, roots: [root], cwd: root)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    @Test func optionsNamingHostFilesOutsideTheProjectAreRefused() {
+        let outsideLines = [
+            "docker run --env-file \(outside)/secret.env alpine printenv",
+            "docker run --env-file=\(outside)/secret.env alpine printenv",
+            "docker run --label-file \(outside)/secret.env alpine true",
+            "docker container create --env-file ../private/secret.env alpine",
+            "docker run --env-file escape/secret.env alpine printenv",
+            "docker exec --env-file \(outside)/secret.env web env",
+            "docker build -f \(outside)/secret.env .",
+            "docker build --file=\(outside)/secret.env .",
+            "docker build -f../private/secret.env .",
+            "docker build \(outside)",
+            "docker build -t x:1 escape",
+            "docker image build ..",
+            "docker buildx build -t a \(NSHomeDirectory())/.ssh",
+            "docker compose -f \(outside)/compose.yaml config",
+            "docker compose --file=escape/compose.yaml up",
+            "docker compose --env-file \(outside)/secret.env config",
+            "docker compose --project-directory \(outside) up",
+            "docker compose run --env-from-file \(outside)/secret.env app env",
+        ]
+        for line in outsideLines {
+            guard case .outsidePath = refusal(line) else {
+                Issue.record("not refused as outside the project: \(line) → \(String(describing: refusal(line)))")
+                continue
+            }
+        }
+        let hostInput = [
+            "docker buildx build --secret id=x,src=\(outside)/secret.env .", "docker build --ssh default .",
+            "docker buildx build --build-context x=\(outside) .", "docker buildx build --cache-to type=local,dest=\(outside) .",
+            "docker buildx build --cache-from type=local,src=\(outside) .", "docker buildx build --cache-from=type=local,src=/x .",
+            "docker build https://github.com/acme/repo.git", "docker build git@github.com:acme/repo.git",
+            "docker compose build --ssh default", "docker buildx build --attest type=sbom .",
+        ]
+        for line in hostInput {
+            guard case .hostInput = refusal(line) else {
+                Issue.record("not refused as a host input: \(line) → \(String(describing: refusal(line)))")
+                continue
+            }
+        }
+        // Inside the project: allowed, as are options spelled like file options that mean something else.
+        for line in ["docker run --env-file ok.env alpine env", "docker run --env-file \(root)/ok.env alpine env", "docker build -f ci/Dockerfile .",
+                     "docker build -t app:1 .", "docker build --cache-from app:1 -t app:2 .", "docker compose -f compose.yaml up -d",
+                     "docker logs -f web", "docker rm -f web", "docker inspect -f '{{.Id}}' web", "docker ps -f name=web",
+                     "docker compose logs -f", "docker compose -f compose.yaml run --rm app sh", "docker build -f - .",
+                     "docker run --env-file ci/new.env alpine env"] {
+            #expect(refusal(line) == nil, "\(line) → \(String(describing: refusal(line)))")
+        }
+    }
+
+    /// The profile is real: under it, a client-side read outside the folders fails, a read inside works, writes outside
+    /// fail, and only the endpoint's port is reachable. (`cat` and `curl` stand in for docker's client, which opens
+    /// files and sockets the same way.)
+    @Test func theSandboxConfinesReadsWritesAndTheNetwork() async throws {
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let listener = try LoopbackListener()
+        let other = try LoopbackListener()
+        let paths = HostDockerSandbox.Paths(readWrite: [root], readOnly: [])
+        func run(_ argv: [String]) throws -> (Int32, String) {
+            let wrapped = try #require(HostDockerSandbox.wrap(argv, paths: paths, port: listener.port))
+            let process = Process()
+            process.executableURL = URL(filePath: wrapped[0])
+            process.arguments = Array(wrapped.dropFirst())
+            process.currentDirectoryURL = URL(filePath: root)
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+        }
+        let inside = try run(["/bin/cat", root + "/ok.env"])
+        #expect(inside.0 == 0 && inside.1.contains("FOO=bar"), "\(inside)")
+        for path in [outside + "/secret.env", root + "/escape/secret.env", NSHomeDirectory() + "/.zshrc"] {
+            let read = try run(["/bin/cat", path])
+            #expect(read.0 != 0 && !read.1.contains("do-not-read"), "read \(path): \(read)")
+        }
+        let wrote = try run(["/usr/bin/touch", outside + "/written"])
+        #expect(wrote.0 != 0 && !FileManager.default.fileExists(atPath: outside + "/written"))
+        let wroteInside = try run(["/usr/bin/touch", root + "/written"])
+        #expect(wroteInside.0 == 0 && FileManager.default.fileExists(atPath: root + "/written"))
+        let allowed = try run(["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "http://127.0.0.1:\(listener.port)/"])
+        #expect(allowed.1.contains("200"), "endpoint reachable: \(allowed)")
+        let blocked = try run(["/usr/bin/curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "http://127.0.0.1:\(other.port)/"])
+        #expect(!blocked.1.contains("200"), "another local port: \(blocked)")
+        let raw = try run(["/usr/bin/curl", "-s", "--max-time", "5", "--unix-socket", NSHomeDirectory() + "/.rd/docker.sock", "http://d/_ping"])
+        #expect(raw.0 != 0 && !raw.1.contains("OK"), "Rancher's raw socket: \(raw)")
+        listener.stop()
+        other.stop()
+    }
+
+    @Test func noSandboxMeansNoCommand() {
+        #expect(HostDockerSandbox.wrap(["/bin/echo"], paths: .init(readWrite: [root], readOnly: []), port: 1234, sandbox: "/nonexistent/sandbox-exec") == nil)
+        #expect(HostDockerSandbox.wrap(["/bin/echo"], paths: .init(readWrite: ["/"], readOnly: []), port: 1234) == nil, "never the whole disk")
+        #expect(HostDockerSandbox.wrap(["/bin/echo"], paths: .init(readWrite: [NSHomeDirectory()], readOnly: []), port: 1234) == nil, "never the home folder")
+        #expect(HostDockerSandbox.port(dockerHost: "tcp://127.0.0.1:4567/bctoken") == 4567)
+        #expect(HostDockerSandbox.port(dockerHost: "unix:///var/run/docker.sock") == nil)
+        // Paths are parameters, never profile text.
+        let wrapped = HostDockerSandbox.wrap(["/bin/echo"], paths: .init(readWrite: [root], readOnly: []), port: 1234) ?? []
+        #expect(!(wrapped.first { $0.hasPrefix("(version") } ?? "").contains(root))
+    }
+}
+
+/// A loopback HTTP listener answering every connection with 200 (for the sandbox's network rule).
+final class LoopbackListener: Sendable {
+    let fd: Int32
+    let port: Int
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        _ = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        listen(fd, 8)
+        var actual = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
+        self.fd = fd
+        port = Int(UInt16(bigEndian: actual.sin_port))
+        DispatchQueue(label: "bc.test.loopback").async {
+            while true {
+                let client = accept(fd, nil, nil)
+                if client < 0 { return }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                _ = read(client, &buffer, buffer.count)
+                let answer = Array("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+                _ = write(client, answer, answer.count)
+                close(client)
+            }
+        }
+    }
+
+    func stop() {
+        shutdown(fd, SHUT_RDWR)
+        close(fd)
+    }
+}

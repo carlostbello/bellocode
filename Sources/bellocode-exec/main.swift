@@ -112,9 +112,9 @@ if workspace.mode == .hostDocker {
     let hostArgv: [String]
     do {
         if let command {
-            hostArgv = try HostDockerCommand.argv(for: command, docker: binary)
+            hostArgv = try HostDockerCommand.argv(for: command, docker: binary, roots: workspace.roots, cwd: hostDirectory)
         } else if let stdioArgv, let program = stdioArgv.first, program == "docker" || program == binary {
-            try HostDockerCommand.check(arguments: Array(stdioArgv.dropFirst()))
+            try HostDockerCommand.check(arguments: Array(stdioArgv.dropFirst()), roots: workspace.roots, cwd: hostDirectory)
             hostArgv = [binary] + stdioArgv.dropFirst()
         } else if let stdioArgv {
             throw HostDockerCommand.Refusal.notDocker(stdioArgv.first ?? "")
@@ -131,9 +131,17 @@ if workspace.mode == .hostDocker {
     var hostEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": environment["LANG"] ?? "en_US.UTF-8"]
     if let term = environment["TERM"] { hostEnvironment["TERM"] = term }
     hostEnvironment.merge(docker.environment) { _, new in new }
-    let cArgs = hostArgv.map { strdup($0) } + [nil]
+    // The client runs confined to the project's folders and the endpoint (N03, A06): whatever a Compose file or an
+    // option names, it cannot read or write elsewhere on this Mac. No sandbox, no command.
+    let paths = HostDockerSandbox.Paths(readWrite: workspace.roots,
+                                        readOnly: HostDockerSandbox.installationFolders(docker: binary, configDirectory: docker.configDirectory))
+    guard let port = HostDockerSandbox.port(dockerHost: docker.host),
+          let confined = HostDockerSandbox.wrap(hostArgv, paths: paths, port: port) else {
+        fail(126, HostDockerCommand.Refusal.unconfined.description)
+    }
+    let cArgs = confined.map { strdup($0) } + [nil]
     let cEnv = hostEnvironment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-    execve(binary, cArgs, cEnv)
+    execve(HostDockerSandbox.sandboxExec, cArgs, cEnv)
     fail(125, "could not start docker (\(String(cString: strerror(errno)))).")
 }
 
