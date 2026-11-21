@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// BelloCode's opencode global configuration folder (`<data>/opencode/config/opencode/`): the files Settings ▸ opencode
@@ -43,13 +44,18 @@ public struct GlobalConfigFolder: Sendable, Hashable {
     public func ensure(_ file: File) throws -> (url: URL, created: Bool) {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         let target = path(of: file)
-        if FileManager.default.fileExists(atPath: target.path) { return (target, false) }
-        // O_EXCL semantics: never replace a file created meanwhile (the user's editor, the CLI).
-        let created = FileManager.default.createFile(atPath: target.path, contents: Data(Self.template(for: file).utf8), attributes: [.posixPermissions: 0o644])
-        if !created, !FileManager.default.fileExists(atPath: target.path) {
+        // O_EXCL: never replace a file created meanwhile (the user's editor, the CLI), not even between a check and
+        // the write (N14).
+        let fd = Darwin.open(target.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        if fd < 0 {
+            if errno == EEXIST { return (target, false) }
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: target.path])
         }
-        return (target, created)
+        let data = Data(Self.template(for: file).utf8)
+        let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        close(fd)
+        guard written == data.count else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: target.path]) }
+        return (target, true)
     }
 
     @discardableResult
@@ -68,12 +74,20 @@ public struct GlobalConfigFolder: Sendable, Hashable {
     }
 }
 
-/// A small JSONC check (comments and trailing commas allowed, as opencode accepts) reporting line and column.
+/// A small JSONC check (comments and trailing commas allowed, as opencode accepts) reporting line and column. Works on
+/// UTF-16 code units, so CR, LF and CRLF line endings, a leading byte order mark and any comment placement behave the
+/// same (A25, N14).
 public enum JSONCheck {
     public static func syntaxError(in data: Data) -> String? {
         let text = String(decoding: data, as: UTF8.self)
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "opencode.json is empty: it must contain a JSON object, such as {}." }
-        let stripped = strip(text)
+        if text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{FEFF}"))).isEmpty {
+            return "opencode.json is empty: it must contain a JSON object, such as {}."
+        }
+        let stripped: String
+        switch stripChecked(text) {
+        case .success(let value): stripped = value
+        case .failure(let problem): return "opencode.json, line \(problem.line), column \(problem.column): unterminated /* comment"
+        }
         do {
             let value = try JSONSerialization.jsonObject(with: Data(stripped.utf8), options: [.fragmentsAllowed])
             guard value is [String: Any] else { return "opencode.json must contain a JSON object ({ … })." }
@@ -89,51 +103,102 @@ public enum JSONCheck {
         }
     }
 
-    /// Replaces comments with spaces (keeping offsets and newlines) and drops trailing commas before `}` or `]`.
+    /// The top-level object of a JSONC document (comments, trailing commas, any line ending, a byte order mark), or nil.
+    public static func object(from data: Data) -> [String: Any]? {
+        guard case .success(let stripped) = stripChecked(String(decoding: data, as: UTF8.self)) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: Data(stripped.utf8))) as? [String: Any]
+    }
+
+    struct Unterminated: Error {
+        var line: Int
+        var column: Int
+    }
+
+    /// Comments and a leading byte order mark replaced with spaces (line breaks kept, so offsets and positions stay),
+    /// then commas before `}` or `]` (across whitespace and comments) replaced with a space.
     static func strip(_ text: String) -> String {
-        var out: [Character] = []
-        let chars = Array(text)
+        switch stripChecked(text) {
+        case .success(let value): value
+        case .failure: text
+        }
+    }
+
+    static func stripChecked(_ text: String) -> Result<String, Unterminated> {
+        var units = Array(text.utf16)
+        let space: UInt16 = 0x20
+        func isBreak(_ unit: UInt16) -> Bool { unit == 0x0A || unit == 0x0D }
+        if units.first == 0xFEFF { units[0] = space }
+        // Pass 1: comments.
         var i = 0
         var inString = false
-        while i < chars.count {
-            let c = chars[i]
+        while i < units.count {
+            let c = units[i]
             if inString {
-                out.append(c)
-                if c == "\\", i + 1 < chars.count { out.append(chars[i + 1]); i += 2; continue }
-                if c == "\"" { inString = false }
+                if c == 0x5C { i += 2; continue }
+                if c == 0x22 { inString = false }
                 i += 1
                 continue
             }
-            if c == "\"" { inString = true; out.append(c); i += 1; continue }
-            if c == "/", i + 1 < chars.count, chars[i + 1] == "/" {
-                while i < chars.count, chars[i] != "\n" { out.append(" "); i += 1 }
+            if c == 0x22 { inString = true; i += 1; continue }
+            if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2F {
+                while i < units.count, !isBreak(units[i]) { units[i] = space; i += 1 }
                 continue
             }
-            if c == "/", i + 1 < chars.count, chars[i + 1] == "*" {
-                out.append(" "); out.append(" "); i += 2
-                while i < chars.count, !(chars[i] == "*" && i + 1 < chars.count && chars[i + 1] == "/") {
-                    out.append(chars[i] == "\n" ? "\n" : " "); i += 1
+            if c == 0x2F, i + 1 < units.count, units[i + 1] == 0x2A {
+                let start = i
+                units[i] = space; units[i + 1] = space; i += 2
+                while i < units.count, !(units[i] == 0x2A && i + 1 < units.count && units[i + 1] == 0x2F) {
+                    if !isBreak(units[i]) { units[i] = space }
+                    i += 1
                 }
-                if i < chars.count { out.append(" "); out.append(" "); i += 2 }
+                guard i < units.count else {
+                    let (line, column) = position(of: start, in: String(decoding: Array(text.utf16), as: UTF16.self))
+                    return .failure(Unterminated(line: line, column: column))
+                }
+                units[i] = space; units[i + 1] = space; i += 2
                 continue
             }
-            if c == "," {
-                var j = i + 1
-                while j < chars.count, chars[j].isWhitespace { j += 1 }
-                if j < chars.count, chars[j] == "}" || chars[j] == "]" { out.append(" "); i += 1; continue }
-            }
-            out.append(c)
             i += 1
         }
-        return String(out)
+        // Pass 2: trailing commas (comments are spaces now).
+        i = 0
+        inString = false
+        while i < units.count {
+            let c = units[i]
+            if inString {
+                if c == 0x5C { i += 2; continue }
+                if c == 0x22 { inString = false }
+                i += 1
+                continue
+            }
+            if c == 0x22 { inString = true }
+            if c == 0x2C {
+                var j = i + 1
+                while j < units.count, units[j] == space || units[j] == 0x09 || isBreak(units[j]) { j += 1 }
+                if j < units.count, units[j] == 0x7D || units[j] == 0x5D { units[i] = space }
+            }
+            i += 1
+        }
+        return .success(String(decoding: units, as: UTF16.self))
     }
 
+    /// Line and column (1-based) of a UTF-16 offset; CR, LF and CRLF each end one line.
     static func position(of utf16Index: Int, in text: String) -> (Int, Int) {
         var line = 1
         var column = 1
+        var previous: UInt16 = 0
         for (offset, unit) in text.utf16.enumerated() {
             if offset >= utf16Index { break }
-            if unit == 0x0A { line += 1; column = 1 } else { column += 1 }
+            if unit == 0x0A {
+                if previous != 0x0D { line += 1 }
+                column = 1
+            } else if unit == 0x0D {
+                line += 1
+                column = 1
+            } else {
+                column += 1
+            }
+            previous = unit
         }
         return (line, column)
     }

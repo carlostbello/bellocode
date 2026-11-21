@@ -4,6 +4,7 @@ import Engine
 import Foundation
 import Observation
 import Synchronization
+import OpenCodeKit
 import SwiftUI
 
 /// "Your Chrome": read-only detection of the separate `browse` tool (anomalyco/browse, an MCP server driving the
@@ -57,7 +58,7 @@ final class BrowseStatusModel {
 
     nonisolated static func mentionsBrowse(_ file: URL) -> Bool {
         guard let data = try? Data(contentsOf: file), data.count < 1 << 20,
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+              let object = JSONCheck.object(from: data) else { return false }  // JSONC, as opencode reads it (N28)
         let mcp = (object["mcp"] as? [String: Any]) ?? [:]
         let servers = (mcp["servers"] as? [String: Any]) ?? mcp
         return servers.keys.contains { $0.lowercased().contains("browse") }

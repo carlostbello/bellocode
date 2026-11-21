@@ -50,7 +50,13 @@ struct CommandLineToolInstaller: Sendable {
             if attributes[.type] as? FileAttributeType == .typeSymbolicLink,
                let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)
             {
-                if destination == helper.path { return .installed(link) }
+                if destination == helper.path {
+                    // An earlier folder's file of the same name comes first and hides this link (N33).
+                    if case .conflict(let earlier, let why) = conflict {
+                        return .conflict(earlier, "\(why), and it hides BelloCode's link in \(folder.path)")
+                    }
+                    return .installed(link)
+                }
                 if Self.isOurs(destination) { conflict = conflict ?? .conflict(link, "links to another copy of BelloCode (\(destination))") }
                 else { conflict = conflict ?? .conflict(link, "links to \(destination)") }
             } else {

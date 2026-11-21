@@ -58,6 +58,30 @@ struct OpenCodeSettingsTests {
         #expect(installer.status() == .installed(repaired))
     }
 
+    /// N33: a foreign file in an earlier folder shadows BelloCode's link in a later one.
+    @Test func anEarlierForeignFileShadowsTheInstalledLink() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (_, helper, bin) = try makeInstaller()
+        let later = root.appending(path: "usr/local/bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: later, withIntermediateDirectories: true)
+        try Data("someone else's".utf8).write(to: bin.appending(path: "bellocode-opencode"))
+        try FileManager.default.createSymbolicLink(atPath: later.appending(path: "bellocode-opencode").path, withDestinationPath: helper.path)
+        let installer = CommandLineToolInstaller(helper: helper, candidates: [bin, later])
+        guard case .conflict(let path, let why) = installer.status() else { Issue.record("expected a conflict"); return }
+        #expect(path == bin.appending(path: "bellocode-opencode"))
+        #expect(why.contains("hides"))
+    }
+
+    /// N28: the browse check reads opencode.json as JSONC, as opencode does.
+    @Test func browseDetectionReadsJSONC() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let file = root.appending(path: "opencode.json")
+        try Data("{\r\n  // my servers\r\n  \"mcp\": { \"browse\": { \"type\": \"local\" }, },\r\n}".utf8).write(to: file)
+        #expect(BrowseStatusModel.mentionsBrowse(file))
+    }
+
     @Test func aBuildWithoutTheHelperCannotInstall() {
         let installer = CommandLineToolInstaller(helper: nil, candidates: [root])
         #expect(installer.status() == .unavailable)
