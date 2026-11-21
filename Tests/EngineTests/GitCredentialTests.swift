@@ -111,6 +111,36 @@ struct GitCredentialTests {
         #expect(setup.overrides.contains { $0 == ("credential.https://code.example.com/team-a/p.git.useHttpPath", "true") })
     }
 
+    /// N10: a path a proxy in front of two installations could resolve differently (dot segments, empty segments,
+    /// encoded separators) gets no token, from git's credential request or from a remote URL.
+    @Test func pathTraversalAcrossInstallationsGetsNoToken() throws {
+        let vault = InMemorySecretVault()
+        let a = GitLabInstance(baseURL: "https://code.example.com/team-a")!
+        let b = GitLabInstance(baseURL: "https://code.example.com/team-b")!
+        try vault.store(account: a.baseURL, label: "a", value: SecretValue("glpat-team-a"))
+        try vault.store(account: b.baseURL, label: "b", value: SecretValue("glpat-team-b"))
+        let broker = try GitCredentialBroker(tokens: vault)
+        broker.setInstances([a, b])
+        let grant = broker.grant(instances: [a])
+        broker.bind(grant, pid: getpid())
+        func ask(_ path: String) -> String? {
+            broker.answer(["grant": grant.identifier, "operation": "get", "protocol": "https", "host": "code.example.com", "path": path], peer: getpid())
+                .map(GitCredentialHelper.parse)?["password"]
+        }
+        #expect(ask("team-a/group/project.git") == "glpat-team-a")
+        for hostile in ["team-a/../team-b/repo.git", "team-a/./../team-b/repo.git", "team-a//../team-b/repo.git", "team-a/%2e%2e/team-b/repo.git",
+                        "team-a/%2E%2E%2Fteam-b/repo.git", "team-a%2f..%2fteam-b/repo.git", "team-a/..\\team-b/repo.git", "team-a/x/../../team-b/r.git",
+                        "team-a/group/./project.git", "team-a//group/project.git"] {
+            #expect(ask(hostile) == nil, "\(hostile)")
+        }
+        for url in ["https://code.example.com/team-a/../team-b/repo.git", "https://code.example.com/team-a/%2e%2e/team-b/repo.git",
+                    "https://code.example.com/team-a/%2E%2e%2fteam-b/repo.git", "https://code.example.com/team-a//repo.git"] {
+            #expect(broker.instance(forURL: url) == nil, "\(url)")
+        }
+        #expect(broker.instance(forURL: "https://code.example.com/team-a/group/project.git") == a)
+        #expect(GitRemoteURL.isCanonical(path: "group/sub/project.git") && GitRemoteURL.isCanonical(path: "group/project/"))
+    }
+
     /// R10 end to end: the remote is on the more specific installation; the one configured first on the same host has
     /// a different (wrong) token. Push authenticates only when git sends the path and the broker resolves it.
     @Test func gitSendsTheRepositoryPathAndTheMostSpecificInstallationAnswers() async throws {

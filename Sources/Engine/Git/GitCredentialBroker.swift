@@ -126,8 +126,12 @@ public final class GitCredentialBroker: Sendable {
     public var instances: [GitLabInstance] { state.withLock { $0.instances } }
 
     /// The instance a URL belongs to (HTTPS, same host and port, path under its prefix), if configured.
+    ///
+    /// A path that a server or proxy could resolve differently from the prefix comparison (dot segments, empty
+    /// segments, backslashes, or encoded `.`, `/` or `\`) belongs to no instance (N10): `team-a/../team-b/x` must never
+    /// receive team A's token.
     public func instance(forURL url: String) -> GitLabInstance? {
-        guard let parsed = GitRemoteURL(url), parsed.scheme == "https" else { return nil }
+        guard let parsed = GitRemoteURL(url), parsed.scheme == "https", parsed.hasCanonicalPath else { return nil }
         return instances.filter { instance in
             guard let origin = Origin(instance: instance) else { return false }
             let prefix = instance.pathPrefix
@@ -139,6 +143,9 @@ public final class GitCredentialBroker: Sendable {
     /// path prefix wins, and two configured installations with the same origin and prefix are ambiguous.
     func instance(gitHost: String, path: String?) -> Result<GitLabInstance, Refusal> {
         guard let path, !path.isEmpty else { return .failure(.init("git did not say which repository the request is for")) }
+        guard GitRemoteURL.isCanonical(path: String(path.drop { $0 == "/" })) else {
+            return .failure(.init("the repository path is not in canonical form (dot or empty segments, or encoded separators)"))
+        }
         guard let instance = instance(forURL: "https://\(gitHost)/\(path.drop { $0 == "/" })") else {
             return .failure(.init("host is not a configured GitLab instance"))
         }
@@ -290,6 +297,20 @@ public struct GitRemoteURL: Hashable, Sendable {
     public var port: Int
     /// Without the leading slash (`group/project.git`).
     public var path: String
+    /// The path as written (still percent-encoded) has no dot or empty segments, backslashes or encoded `.`, `/`, `\`
+    /// (N10): what is compared is what a server or proxy in front of it resolves.
+    public var hasCanonicalPath = true
+
+    /// Whether a raw (possibly percent-encoded) repository path is canonical: no `.`/`..` or empty segments, no
+    /// backslash, no percent-encoded `.`, `/` or `\`, no control characters.
+    public static func isCanonical(path raw: String) -> Bool {
+        let lowered = raw.lowercased()
+        if raw.contains("\\") || ["%2e", "%2f", "%5c", "%00"].contains(where: lowered.contains) { return false }
+        if raw.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) { return false }
+        var path = Substring(raw)
+        if path.hasSuffix("/") { path = path.dropLast() }
+        return !path.isEmpty && !path.split(separator: "/", omittingEmptySubsequences: false).contains { $0.isEmpty || $0 == "." || $0 == ".." }
+    }
 
     public init?(_ raw: String) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -301,6 +322,7 @@ public struct GitRemoteURL: Hashable, Sendable {
             self.host = host.lowercased()
             port = components.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : 22)
             path = String(components.path.drop { $0 == "/" })
+            hasCanonicalPath = Self.isCanonical(path: String(components.percentEncodedPath.drop { $0 == "/" }))
         } else {
             // scp-like: [user@]host:path (no slash before the colon).
             guard let colon = text.firstIndex(of: ":"), !text[..<colon].contains("/"), !text[..<colon].isEmpty else { return nil }
@@ -315,6 +337,7 @@ public struct GitRemoteURL: Hashable, Sendable {
             }
             port = 22
             path = String(text[text.index(after: colon)...].drop { $0 == "/" })
+            hasCanonicalPath = Self.isCanonical(path: path)
         }
         guard !path.isEmpty else { return nil }
     }
