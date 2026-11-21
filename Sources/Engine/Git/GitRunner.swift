@@ -234,15 +234,16 @@ public struct GitRunner: Sendable {
         process.standardError = stderr
         process.standardInput = input == nil ? FileHandle.nullDevice : stdin
         let collector = Collector(limit: limit)
+        collector.readers = [stdout.fileHandleForReading, stderr.fileHandleForReading]
         // The timeout sleeps on ContinuousClock (an uptime-clock `asyncAfter` may not fire while the process is idle).
-        defer { collector.deadline.cancel() }
+        defer { collector.finish() }
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<GitOutput, any Error>) in
                 collector.setContinuation(continuation)
                 stdout.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
-                    if collector.append(data, toStdout: true) { process.terminate() }
+                    if collector.append(data, toStdout: true) { collector.stop() }
                     if data.isEmpty { handle.readabilityHandler = nil }
                 }
                 stderr.fileHandleForReading.readabilityHandler = { handle in
@@ -269,7 +270,7 @@ public struct GitRunner: Sendable {
                     }
                 }
                 collector.deadline.schedule(after: timeout) {
-                    if collector.markTimedOut() { process.terminate() }
+                    if collector.markTimedOut() { collector.stop() }
                 }
             }
         } onCancel: {
@@ -278,7 +279,17 @@ public struct GitRunner: Sendable {
     }
 
     /// Accumulates output and resumes the continuation once stdout and stderr reached EOF and the process exited.
-    private final class Collector: Sendable {
+    ///
+    /// Completion is enforced, not hoped for (A20): a stop (timeout, cancellation, output limit) sends SIGTERM, then
+    /// SIGKILL to the child we launched if it has not exited after `killGrace`, and gives up waiting for it after a
+    /// second grace; once the child exited, pipes still held open by a process it left behind (a helper that kept
+    /// stdout) are drained for at most `drainGrace`, then their handlers are removed (the descriptors close with the
+    /// pipes when `execute` returns).
+    /// Only our own child is signalled, and only while it has not been reaped.
+    final class Collector: Sendable {
+        static let killGrace: Duration = .seconds(2)
+        static let drainGrace: Duration = .seconds(1)
+
         struct State {
             var stdout = Data()
             var stderr = Data()
@@ -292,12 +303,23 @@ public struct GitRunner: Sendable {
             var finished = false
             var continuation: CheckedContinuation<GitOutput, any Error>?
             var process: Process?
+            var stopping = false
+            var readers: [FileHandle] = []
         }
 
         let limit: Int
         let state = Mutex(State())
         /// The run's timeout; cancelled when `execute` returns.
         let deadline = ContinuousDeadline()
+        /// SIGKILL escalation, then giving up on an unkillable child.
+        let escalation = ContinuousDeadline()
+        /// The bounded wait for pipe EOF after the child exited.
+        let drain = ContinuousDeadline()
+
+        var readers: [FileHandle] {
+            get { state.withLock { $0.readers } }
+            set { state.withLock { $0.readers = newValue } }
+        }
 
         init(limit: Int) { self.limit = limit }
 
@@ -310,7 +332,64 @@ public struct GitRunner: Sendable {
                 state.process = process
                 return state.cancelled
             }
-            if cancelled { process.terminate() }
+            if cancelled { stop() }
+        }
+
+        /// Stops the child: SIGTERM now, SIGKILL after `killGrace`, and completion without it after another grace.
+        func stop() {
+            let process = state.withLock { state -> Process? in
+                guard !state.stopping, !state.finished, let process = state.process else { return nil }
+                state.stopping = true
+                return process
+            }
+            guard let process else { return }
+            process.terminate()
+            escalation.schedule(after: Self.killGrace) { [self] in
+                let pid = state.withLock { $0.status == nil && process.isRunning ? process.processIdentifier : 0 }
+                if pid > 0 { kill(pid, SIGKILL) }
+                escalation.schedule(after: Self.killGrace) { [self] in abandon() }
+            }
+        }
+
+        /// Completes without the child's exit (it ignored SIGKILL, for example in uninterruptible I/O).
+        private func abandon() {
+            let resume = state.withLock { state in
+                if state.status == nil { state.status = -1 }
+                state.stdoutDone = true
+                state.stderrDone = true
+                return Self.completion(&state)
+            }
+            closeReaders()
+            if let (continuation, result) = resume { continuation.resume(with: result) }
+        }
+
+        /// The child exited but a pipe is still open (held by a process it left behind): stop waiting for EOF.
+        private func drainExpired() {
+            let resume = state.withLock { state in
+                state.stdoutDone = true
+                state.stderrDone = true
+                return Self.completion(&state)
+            }
+            closeReaders()
+            if let (continuation, result) = resume { continuation.resume(with: result) }
+        }
+
+        private func closeReaders() {
+            let readers = state.withLock { state -> [FileHandle] in
+                defer { state.readers = [] }
+                return state.readers
+            }
+            // Clearing the handler cancels its read source; the descriptor closes when the pipe is released (closing
+            // it here could race a handler already inside `availableData`).
+            for reader in readers { reader.readabilityHandler = nil }
+        }
+
+        /// After completion (`execute` returns): timers cancelled and handlers removed.
+        func finish() {
+            deadline.cancel()
+            escalation.cancel()
+            drain.cancel()
+            closeReaders()
         }
 
         /// Returns true when the process must be stopped (output limit).
@@ -336,12 +415,14 @@ public struct GitRunner: Sendable {
         }
 
         func terminated(status: Int32, name: String) {
-            let resume = state.withLock { state in
+            let (resume, waiting) = state.withLock { state in
                 state.status = status
                 state.name = name
-                return Self.completion(&state)
+                let resume = Self.completion(&state)
+                return (resume, resume == nil && !state.finished)
             }
             if let (continuation, result) = resume { continuation.resume(with: result) }
+            if waiting { drain.schedule(after: Self.drainGrace) { [self] in drainExpired() } }
         }
 
         func fail(_ error: any Error) {
@@ -363,11 +444,8 @@ public struct GitRunner: Sendable {
         }
 
         func cancel() {
-            let process = state.withLock { state -> Process? in
-                state.cancelled = true
-                return state.finished ? nil : state.process
-            }
-            process?.terminate()
+            state.withLock { $0.cancelled = true }
+            stop()
         }
 
         private static func completion(_ state: inout State) -> (CheckedContinuation<GitOutput, any Error>, Result<GitOutput, any Error>)? {
