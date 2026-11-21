@@ -130,7 +130,9 @@ struct DevContainerBuildTests {
     // MARK: A18, N09
 
     /// A18: a save while the build runs changes neither what was built nor the tag it got: the builder reads a private
-    /// copy, the tag is that copy's digest, and the next refresh sees the save and builds again under a new tag.
+    /// copy, the tag is that copy's digest. The tag refresh that follows the build sees the save and builds it under a
+    /// new tag on its own (R15: a changed context tag builds the missing image), with no Retry. That second build
+    /// starts within milliseconds of the first finishing, so the test never waits for an intermediate count.
     @Test func aSaveDuringTheBuildDoesNotChangeWhatTheTagDescribes() async throws {
         let observed = Mutex<[(tag: String, content: String)]>([])
         let project = project
@@ -151,19 +153,30 @@ struct DevContainerBuildTests {
         })
         defer { service.stop() }
         let model = service.environment(for: project)
-        #expect(await waitFor { builds.count == 1 }, "\(model.phase)")
-        let first = try #require(observed.withLock { $0.first })
-        #expect(first.content == "console.log(1)\n", "the builder read the copy, not the saved file")
-        // The tag of the original content (the copy's digest), not of the save.
-        let original = try #require(DevContainerPlan.load(projectRoot: project)?.build)
-        let inputs = try DevContainerBuildInputs.verify(original, projectRoot: project).get()
-        let savedTag = try inputs.tag(projectKey: model.projectKey, build: original, cache: DevContextDigestCache()).get()
-        #expect(first.tag != savedTag)
-        // The next refresh sees the save and builds it under its own tag.
-        await service.retry(project)
-        #expect(await waitFor { builds.count == 2 }, "\(model.phase)")
-        let second = try #require(observed.withLock { $0.last })
-        #expect(second.tag == savedTag && second.content.contains("saved during the build"))
+        // The tag of the saved content, computed the way the service does from the live project.
+        let current = try #require(DevContainerPlan.load(projectRoot: project)?.build)
+        func liveTag() throws -> String {
+            let inputs = try DevContainerBuildInputs.verify(current, projectRoot: project).get()
+            return try inputs.tag(projectKey: model.projectKey, build: current, cache: DevContextDigestCache()).get()
+        }
+        let originalTag = try liveTag()
+
+        #expect(await waitFor { builds.count >= 2 }, "the save is built after the first build: \(model.phase)")
+        let all = observed.withLock { $0 }
+        try #require(all.count >= 2)
+        // The first build: the original content under the original content's tag (the copy's digest).
+        #expect(all[0].content == "console.log(1)\n", "the builder read the copy, not the saved file")
+        #expect(all[0].tag == originalTag)
+        // The second: the save, under its own tag.
+        let savedTag = try liveTag()
+        #expect(savedTag != originalTag)
+        #expect(all[1].tag == savedTag && all[1].content.contains("saved during the build"), "\(all[1])")
+        // The environment settles on the saved content's image, and nothing more is built.
+        #expect(await waitFor {
+            if case .pulling = model.phase { return false }
+            return model.image == savedTag
+        }, "\(model.phase) \(String(describing: model.image))")
+        #expect(builds.count == 2)
     }
 
     /// N09: under enforced egress, the dev container build's `RUN` steps get no network.
