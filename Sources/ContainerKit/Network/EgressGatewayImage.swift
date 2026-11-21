@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 /// BelloCode's own egress gateway image (R08, docs/reviews/release-1.0-review.md): the relay that holds a scope's
 /// gateway token and joins the outbound bridge never runs code from a project's image. The image is built locally from
@@ -43,21 +44,32 @@ public enum EgressGatewayImage {
         ]).data()
     }
 
-    /// The image's tag, built first if this installation does not have it (labelled with its inputs' hash; an image of
-    /// that name with another hash, made by someone else, is rebuilt over).
+    /// Image IDs this process built from the inputs above, per Docker daemon socket (app-owned state, v1.0.0 review
+    /// A07). A tag and a label are claims anyone with the daemon can make; an image ID is the content address of what
+    /// BelloCode built.
+    private static let trusted = Mutex<[String: String]>([:])
+
+    /// The ID (`sha256:…`) of the gateway image this process built, building it now if it has not (in this launch,
+    /// for this daemon, from these inputs). Gateways are created by this ID, never by the mutable tag: an image someone
+    /// else put under the tag, or retagged later, is never run as the gateway, whatever its labels claim.
     public static func ensure(client: EngineClient, extraLabels: [String: String] = [:]) async throws -> String {
         let hash = inputHash
-        if let existing = try await client.inspectImage(tag), existing.labels?[labelInputs] == hash { return tag }
+        let key = client.socketPath + "\n" + hash
+        if let id = trusted.withLock({ $0[key] }), let image = try await client.inspectImage(id), image.id == id { return id }
+        let reported: String?
         do {
-            _ = try await client.buildImage(
+            reported = try await client.buildImage(
                 context: context(), tag: tag,
                 labels: [labelInputs: hash, EgressGateway.labelEgress: "1"].merging(extraLabels) { a, _ in a })
         } catch {
             throw EgressGatewayError("BelloCode could not build its egress gateway image (it needs \(base.split(separator: "@").first ?? "") from Docker Hub once, pinned by digest): \(error)")
         }
-        guard let built = try await client.inspectImage(tag), built.labels?[labelInputs] == hash else {
-            throw EgressGatewayError("BelloCode built its egress gateway image, but the image it finds under \(tag) is not that build.")
+        // The build's own result names the image; the tag is not consulted (it may already point elsewhere).
+        guard let id = reported, id.hasPrefix("sha256:"), let built = try await client.inspectImage(id), built.id == id,
+              built.labels?[labelInputs] == hash else {
+            throw EgressGatewayError("BelloCode built its egress gateway image, but the daemon did not report that build's image ID, so it is not used.")
         }
-        return tag
+        trusted.withLock { $0[key] = id }
+        return id
     }
 }
