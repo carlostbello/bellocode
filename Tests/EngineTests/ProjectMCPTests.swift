@@ -143,7 +143,6 @@ struct ProjectMCPRemovalTests {
         settings.mcpServers = [MCPServerSetting(name: "tools", command: ["node", "mcp.js"])]
         await service.update(project, settings: settings)
         let model = service.environment(for: project)
-        service.activate(project)
         // Barrier waits (no wall-clock polling): the condition is re-checked whenever the transport answers a request or
         // a model property it read changes. A watchdog well inside the suite's limit turns a hang into a failure.
         var wakeups = transport.changes.makeAsyncIterator()
@@ -160,6 +159,9 @@ struct ProjectMCPRemovalTests {
                 _ = await wakeups.next(isolation: #isolation)
             }
         }
+        // activate() is a no-op until the runtime is known to be ready (detected in the background after start).
+        #expect(await waitFor { service.runtime?.isReady == true }, "\(String(describing: service.runtime))")
+        service.activate(project)
         #expect(await waitFor { transport.state.withLock { $0.servers["tools"] } == "connected" }, "\(model.phase)")
 
         // opencode refuses the first two removals: the server stays listed, BelloCode keeps it pending and retries.
