@@ -48,11 +48,11 @@ public final class CLIPasswordBroker: Sendable {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0, var address = Self.unixAddress(path) else { throw .socket("cannot create") }
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
-        let previous = umask(0o177)
+        // No umask change: it is process-wide and would race other threads creating files. The folder is the user's
+        // private 0700 temporary folder, and the socket is narrowed to 0600 right after bind.
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        umask(previous)
         guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 16) == 0 else {
             close(fd)
             throw .socket("cannot listen (errno \(errno))")
