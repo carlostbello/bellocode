@@ -60,7 +60,27 @@ public actor AutoReviewer {
         /// What the policy says about it.
         public var policyNote: String
 
+        /// Something security-relevant did not fit (a target dropped or clipped, the command clipped): the reviewer
+        /// would judge less than the operation, so Auto escalates instead (A09). Not part of what the model sees.
+        public var incomplete = false
+
+        enum CodingKeys: String, CodingKey { case action, tool, targets, command, purpose, policyNote }
+
         public static let sample = Input(action: "shell", tool: "shell", targets: ["swift build"], command: "swift build", purpose: "Fix the build", policyNote: "Runs `swift build`")
+
+        public init(action: String, tool: String?, targets: [String], command: String?, purpose: String, policyNote: String, incomplete: Bool = false) {
+            self.action = action
+            self.tool = tool
+            self.targets = targets
+            self.command = command
+            self.purpose = purpose
+            self.policyNote = policyNote
+            self.incomplete = incomplete
+        }
+
+        public static let maxTargets = 16
+        public static let maxTarget = 300
+        public static let maxCommand = 2000
 
         public static func make(action: RiskPolicy.Action, context: RiskPolicy.Context, purpose: String?, note: String) -> Input {
             var targets: [String] = []
@@ -70,10 +90,46 @@ public actor AutoReviewer {
                 else { targets.append(context.label(Paths.canonical(resource, base: context.directory, home: context.home))) }
             }
             targets += action.urls.map(RiskPolicy.host(of:))
+            let command = action.command.map(redact)
+            let incomplete = targets.count > maxTargets || targets.contains { $0.count > maxTarget } || (command?.count ?? 0) > maxCommand
             return Input(
                 action: String(action.action.prefix(80)), tool: action.tool.map { String($0.prefix(80)) },
-                targets: Array(targets.prefix(8)).map { clip($0, 200) }, command: action.command.map { clip(redact($0), 600) },
-                purpose: clip(redact(purpose ?? ""), 80), policyNote: clip(note, 160))
+                targets: Array(targets.prefix(maxTargets)).map { clip($0, maxTarget) }, command: command.map { clip($0, maxCommand) },
+                purpose: clip(redact(purpose ?? ""), 80), policyNote: clip(note, 160), incomplete: incomplete)
+        }
+
+        /// The identity a review's result is reused and applied under (A09): the full operation (every resource, path,
+        /// URL and the whole command, unredacted, never logged or shown), its session and project context, the
+        /// policy version, the exact reviewer model (with its variant) and what the reviewer was shown. Two operations
+        /// that only differ outside the displayed portion never share a decision.
+        public static func authorizationKey(action: RiskPolicy.Action, context: RiskPolicy.Context, session: String,
+                                            model: ModelRef?, input: Input) -> String {
+            struct Identity: Encodable {
+                var action: String
+                var resources: [String]
+                var tool: String?
+                var command: String?
+                var paths: [String]
+                var urls: [String]
+                var session: String
+                var directory: String
+                var roots: [String]
+                var trusted: [String]
+                var protected: [String]
+                var policy: String
+                var provider: String?
+                var model: String?
+                var variant: String?
+                var shown: String
+            }
+            let identity = Identity(
+                action: action.action, resources: action.resources, tool: action.tool, command: action.command, paths: action.paths, urls: action.urls,
+                session: session, directory: context.directory, roots: context.roots, trusted: context.trusted, protected: context.protected,
+                policy: RiskPolicy.version, provider: model?.providerID, model: model?.id, variant: model?.variant, shown: input.hash)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = (try? encoder.encode(identity)) ?? Data(UUID().uuidString.utf8)
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
 
         /// SHA-256 of the canonical encoding: a decision is bound to exactly this input.
@@ -107,8 +163,10 @@ public actor AutoReviewer {
         public var inputHash: String
         public var model: String?
         public var latency: Duration
-        /// Served from the short-lived exact-input cache.
+        /// Served from the short-lived exact-operation cache.
         public var cached: Bool
+        /// The authorization identity the result belongs to (`Input.authorizationKey`), when one was given.
+        public var authorizationKey: String? = nil
     }
 
     private let backend: any Model
@@ -138,14 +196,18 @@ public actor AutoReviewer {
 
     /// Reviews one input with `model`. Never throws: every failure is an escalation with a reason code. `label` names
     /// the model to the owner when its provider refuses ("OpenCode Zen · Big Pickle").
-    public func review(_ input: Input, model: ModelRef?, label modelLabel: String? = nil) async -> Result {
+    ///
+    /// The cache is keyed by `authorization` (the exact operation, A09); without one, by what the reviewer was shown
+    /// and the exact model including its variant.
+    public func review(_ input: Input, model: ModelRef?, label modelLabel: String? = nil, authorization: String? = nil) async -> Result {
         let hash = input.hash
         let label = model.map { "\($0.providerID)/\($0.id)" }
         let started = clock.now
         func result(_ outcome: Outcome, cached: Bool = false) -> Result {
-            Result(outcome: outcome, inputHash: hash, model: label, latency: clock.now - started, cached: cached)
+            Result(outcome: outcome, inputHash: hash, model: label, latency: clock.now - started, cached: cached, authorizationKey: authorization)
         }
-        let cacheKey = hash + "|" + (label ?? "-") + "|" + RiskPolicy.version
+        let cacheKey = authorization.map { "op|" + $0 }
+            ?? (hash + "|" + (label ?? "-") + "|" + (model?.variant ?? "-") + "|" + RiskPolicy.version)
         if let hit = cache[cacheKey], clock.now - hit.at < Self.cacheLifetime { return result(hit.outcome, cached: true) }
         if Task.isCancelled { return result(.escalate(reasonCode: "cancelled", explanation: "The review was cancelled.")) }
         // Budget: a rolling hour across all threads.

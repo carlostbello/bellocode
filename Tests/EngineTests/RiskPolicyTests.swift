@@ -15,6 +15,10 @@ struct RiskPolicyTests {
         try? "x".write(to: url.appending(path: "src/main.swift"), atomically: true, encoding: .utf8)
         // A link inside the project that points outside it.
         try? FileManager.default.createSymbolicLink(atPath: url.appending(path: "escape").path, withDestinationPath: "/etc")
+        // A folder holding a secret-looking file (N05: a recursive grep over it reads it).
+        try? FileManager.default.createDirectory(at: url.appending(path: "config"), withIntermediateDirectories: true)
+        try? "API_KEY=x".write(to: url.appending(path: "config/.env"), atomically: true, encoding: .utf8)
+        try? "{}".write(to: url.appending(path: "config/app.json"), atomically: true, encoding: .utf8)
         return url
     }()
 
@@ -291,5 +295,50 @@ struct RiskPolicyCodeRootTests {
         #expect(RiskPolicy.notices(tool: "read", input: input, evaluated: [], in: plain).map(\.category) == [.outsidePath])
         #expect(RiskPolicy.notices(tool: "read", input: input, evaluated: [], in: rooted).isEmpty)
         #expect(RiskPolicy.notices(tool: "read", input: ["filePath": "/opt/data/x"], evaluated: [], in: rooted).map(\.category) == [.outsidePath])
+    }
+
+}
+
+extension RiskPolicyTests {
+    // MARK: N05: deterministic-allow and mandatory-escalation bypasses
+
+    /// Read-only programs with options that run another program are not deterministically allowed.
+    @Test(arguments: [
+        "rg --pre ./pwn.sh x README.md", "rg --pre=./pwn.sh x src", "rg --pre-glob '*' --pre ./x.sh y", "git grep --open-files-in-pager=./pwn.sh x",
+        "git grep -O./pwn.sh x", "git grep -nO ./pwn.sh x", "git diff --ext-diff", "git log -p --textconv", "sort --compress-program=./x.sh src/main.swift",
+        "tree -o out.txt", "uniq src/main.swift out.txt", "date -s 2020-01-01", "find src -fprint0 out",
+    ])
+    func programRunningOptionsAreNotDeterministicallyAllowed(_ command: String) {
+        #expect(!shell(command).isAllow, "\(command): \(shell(command))")
+    }
+
+    /// Secret and environment reads that used to pass as read-only commands.
+    @Test(arguments: [
+        "jq -n env", "jq -n '$ENV'", "jq -n 'env.ANTHROPIC_API_KEY'", "printenv ANTHROPIC_API_KEY", "printenv GITLAB_TOKEN",
+        "rg -uu password .", "rg --hidden token", "rg --no-ignore secret", "rg -. key src", "ag -u key", "ag --hidden x",
+        "cat .*", "head -n 5 .e*", "grep -r '' .", "grep -rn key config", "grep -R x .", "grep --recursive x config", "grep -d recurse x config",
+        "cd config && grep -r x .", "grep -r x . --include='.env*'",
+    ])
+    func secretAndEnvironmentReadsEscalate(_ command: String) {
+        #expect(categories(shell(command)).contains(.secretRead), "\(command): \(shell(command))")
+    }
+
+    /// A recursive grep over a tree without secret-looking files (or excluding them) stays a routine read.
+    @Test(arguments: ["grep -rn TODO src", "grep -r x . --include='*.swift'", "grep -r x . --exclude-dir=config",
+                      "grep -n x config/app.json", "rg x src", "jq . config/app.json", "cat opencode.json"])
+    func recursiveSearchesWithoutSecretsStayAllowed(_ command: String) {
+        #expect(shell(command).isAllow, "\(command): \(shell(command))")
+    }
+
+    /// Shell writes to policy files need the person, however they are written.
+    @Test(arguments: [
+        ("echo x > .git/hooks/pre-commit", RiskCategory.policyChange), ("echo '{}' > opencode.json", .policyChange),
+        ("printf x >> .devcontainer/devcontainer.json", .policyChange), ("cat a >| .git/config", .policyChange),
+        ("cp a opencode.json", .policyChange), ("mv x .git/config", .policyChange), ("tee .mcp.json", .mcpServer),
+        ("sed -i s/a/b/ opencode.json", .policyChange), ("install -m 755 x .git/hooks/post-checkout", .policyChange),
+        ("ln -sf /x .git/hooks/pre-push", .policyChange), ("touch .opencode/plugin.ts", .policyChange), ("echo x 1> .envrc", .policyChange),
+    ])
+    func shellWritesToPolicyFilesEscalate(_ command: String, _ expected: RiskCategory) {
+        #expect(categories(shell(command)).contains(expected), "\(command): \(shell(command))")
     }
 }

@@ -29,7 +29,7 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
   still ask for everything except saved grants (reviewed only once the plugin loads).
 - Non-waking synthetic input (`resume: false`) is parked in the **inbox** until the next run (probe).
 
-## Policy (`RiskPolicy`, version `bellocode-auto-1`, pure and unit-tested; precedence below, a model can override none)
+## Policy (`RiskPolicy`, version `bellocode-auto-2`, pure and unit-tested; precedence below, a model can override none)
 1. **opencode's configured denies** (never reach BelloCode).
 2. **Hard deny** (reply `reject` with the reason): BelloCode/opencode data and config (`~/.config/opencode`,
    `~/.local/share|state/opencode`, `~/Library/Application Support/BelloCode`, `bellocode-exec.json`), `~/Library/Keychains`,
@@ -37,10 +37,14 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
 3. **Mandatory escalation** (the person decides): secret-looking files (`.env*` except example/sample/template/dist,
    keys and certs, `id_*`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `credentials*`, `secrets*`, `*.tfvars`,
    keychains) and credential dirs (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, gcloud, azure, gh);
-   secret-like env vars (`$*TOKEN*`, `$*SECRET*`, …) and environment dumps; paths outside the project and its worktrees
+   secret-like env vars (`$*TOKEN*`, `$*SECRET*`, …, `printenv NAME`) and environment dumps (`env`, `jq env`/`$ENV`);
+   searches over hidden or ignored files (`rg -u`/`--hidden`/`--no-ignore`, `ag -u`, hidden-file globs such as `cat .*`) and
+   a `grep -r` whose tree holds a secret-looking file (bounded scan honouring `--include`/`--exclude`; over 20 000 entries
+   counts as one; N05); paths outside the project and its worktrees
    after `~`, `..`, `cd` and symlink resolution (`/tmp` exempt for container commands); cross-project
    (`bellocode_other_project`); agent/MCP/isolation config (`opencode.json*`, `.opencode/`, `.mcp.json`, `.devcontainer/`,
-   `.git/hooks`, `.git/config`, `git config`, proxy/TLS env vars, firewall tools); credential-bearing or uploading network
+   `.git/hooks`, `.git/config`, `git config`, proxy/TLS env vars, firewall tools; written by output redirections or by any
+   program that is not read-only, N05); credential-bearing or uploading network
    requests (auth headers, `-u`, userinfo or token query, `-d @file`, `-F file=@`, `scp`/`rsync` to hosts); destructive git
    (reset --hard, clean -f, push --force/delete, branch -D, checkout --/., restore, stash drop/clear, filter-branch, …);
    irreversible deletes (`rm -r/-f`/globs, `find -delete`, shred, dd, mkfs); publish/deploy (`git push`, npm/cargo/gem
@@ -48,7 +52,9 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
    install/add/ci, npx, pip/uv/poetry, cargo/go/gem/brew/apt, …); adding MCP servers (`opencode|claude mcp`); commands it
    cannot analyse (substitution, eval, `sh -c`, inline interpreter scripts, piping into a shell, encoded payloads, parse errors, sudo).
 4. **Deterministic allow** (`once`): in-project non-secret read/list/glob/grep; in-project non-policy edits; read-only
-   commands (ls, cat, grep/rg, find without -exec/-delete, git status/diff/log/show, …) whose every path is inside;
+   commands (ls, cat, grep/rg, find without -exec/-delete, git status/diff/log/show, …) whose every path is inside, and
+   never with an option that runs a program (`rg --pre`, `git grep -O`/`--open-files-in-pager`, `--ext-diff`, `--textconv`,
+   `sort --compress-program`) or writes a file (N05);
    todowrite, question, skill, subagent, BelloCode app tools (they ask themselves).
 5. **Saved grant** (non-mandatory only): a project grant the person saved with "Always" covers it (`once`).
 6. **Reviewer** for everything else (unknown tools, MCP tools, builds/tests, network without credentials, …).
@@ -74,7 +80,10 @@ file contents or output. Fixed policy text first, then one JSON object `{"untrus
 stays a string). Output: exactly `{"decision":"allow_once"|"escalate","reason_code","explanation"}` (one ```json fence
 tolerated); anything else, timeout (default 5 s, ContinuousClock; returns at the deadline even if the backend ignores
 cancellation), cancellation, model error, full queue (2 running, 8 waiting), hourly budget (240) → **escalate** with a
-reason code. Exact-input cache 60 s. **Binding:** applied only if the request is still in triage, the session is still
+reason code. Cache 60 s keyed by the **exact operation** (A09: every resource, path, URL and the whole command, the session, directory and
+roots, the policy version and the reviewer model with its variant, hashed, never logged), not by what the reviewer was shown;
+an input that does not fit (more than 16 targets, a target over 300 or a command over 2 000 characters) is escalated
+(`review_incomplete`), never judged clipped. **Binding:** applied only if the request is still in triage, the session is still
 Auto in the same run (`busySince`), the recomputed input hash matches and the policy version is unchanged; else the
 person decides (`stale_review`). Auto replies `once` or `reject`, never `always`.
 
