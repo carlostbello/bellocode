@@ -120,6 +120,8 @@ public final class SecretManager {
     /// Increases with every proxy snapshot built; an older one finishing late is never applied over a newer one.
     @ObservationIgnored private var snapshotGeneration = 0
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
+    /// Tests: extra TLS roots for the brokered tool's loopback servers (added to the configuration's).
+    @ObservationIgnored var extraBrokerAnchors: [Data] = []
     /// Per-binding use counts shared by the proxy and the brokered tool (R12).
     @ObservationIgnored let useLedger = SecretUseLedger()
     /// The shared browser's routing (docs/features/shared-browser.md): wraps the configured router before the proxy

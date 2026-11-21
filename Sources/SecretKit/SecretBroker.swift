@@ -54,6 +54,10 @@ public struct SecretBroker: Sendable {
     /// Persists reserved uses of limited bindings before the request is sent; false refuses it.
     public var recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)?
     public var responseLimit: Int
+    /// Asked immediately before every outbound hop (the first and each redirect): whether every secret of the request
+    /// is still exactly as it was resolved (not revoked; same scope, mode, bindings and value). False stops the request
+    /// before anything more is sent (v1.0.0 review A12). Nil: no re-check (tests of the rules alone).
+    public var stillAuthorized: (@Sendable () async -> Bool)?
 
     public init(extraAnchors: [Data] = [], timeout: Duration = .seconds(30), ledger: SecretUseLedger = SecretUseLedger(),
                 responseLimit: Int = SecretBroker.defaultResponseLimit, recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)? = nil) {
@@ -144,15 +148,26 @@ public struct SecretBroker: Sendable {
             let limit = { (use: SubstitutionUse) -> Int? in
                 secrets.values.first { $0.0.account == use.account }?.0.bindings.first { $0.id == use.bindingID }?.maxUses
             }
+            let changed = "the secret changed while this request was in progress (revoked, or its scope, mode, destinations or value changed), so nothing more was sent."
+            if let stillAuthorized, !(await stillAuthorized()) {
+                return refuse(changed, account, destination: outbound.auditDestination)
+            }
             guard ledger.reserve(uses, limit: limit) else {
                 let label = secrets.values.first { $0.0.account == uses.first?.account }?.0.label ?? "the secret"
                 return refuse(SecretRefusal.useLimit(label: label).message, uses.first?.account ?? account, destination: outbound.auditDestination)
             }
-            reserved += uses
             if uses.contains(where: { limit($0) != nil }), let recordUses, !(await recordUses(uses)) {
+                // Not sent: the reservation is given back (N13), so a refused request never uses up a limited binding.
+                ledger.release(uses)
                 return refuse("BelloCode could not record this use of a limited secret, so it was not sent.", uses.first?.account ?? account,
                               destination: outbound.auditDestination)
             }
+            // Recording may have waited: the last check is right before the bytes leave.
+            if let stillAuthorized, !(await stillAuthorized()) {
+                ledger.release(uses)
+                return refuse(changed, account, destination: outbound.auditDestination)
+            }
+            reserved += uses
             // Perform on the Mac.
             let response: (HTTPURLResponse, Data)
             do {
