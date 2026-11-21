@@ -153,6 +153,33 @@ struct GitParsingTests {
 
 @Suite("Git repositories and worktrees (throwaway repos)", .serialized, .timeLimit(.minutes(3)))
 struct GitRepositoryTests {
+    /// A status refresh never writes the index (so it never holds .git/index.lock against the user's own git): with a
+    /// stat-only change, porcelain `git diff` refreshes the index under the lock despite GIT_OPTIONAL_LOCKS=0. Same for
+    /// the working-tree patches and the commit message context.
+    @Test func aStatusRefreshNeverWritesTheIndex() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "same\n", "b.txt": "b\n"])
+        defer { repo.remove() }
+        try repo.write("b.txt", "changed\n")
+        let index = repo.path + "/.git/index"
+        let before = try FileManager.default.attributesOfItem(atPath: index)[.modificationDate] as? Date
+        // A stat-only change (same content, new modification time), staged and unstaged diffs, twice.
+        for offset in [5.0, 10.0] {
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(offset)], ofItemAtPath: repo.path + "/a.txt")
+            let status = try await repo.repository.status()
+            #expect(status.files.map(\.path) == ["b.txt"], "a stat-only change is not a change")
+            #expect(status.files.first?.unstagedStats == LineStats(additions: 1, deletions: 1))
+            // The patches that read the working tree, and the generated commit message's context, likewise.
+            for scope in [GitRepository.DiffScope.unstaged, .workingTree(from: "HEAD")] {
+                #expect(Set(UnifiedPatchParser.parse(try await repo.repository.diff(scope)).map(\.path)) == ["b.txt"], "\(scope)")
+            }
+            let context = try await repo.repository.commitContext()
+            #expect(context.stat.contains("b.txt") && !context.stat.contains("a.txt") && context.patch.contains("+changed"))
+        }
+        let after = try FileManager.default.attributesOfItem(atPath: index)[.modificationDate] as? Date
+        #expect(before != nil && before == after, "the index was rewritten by a status refresh")
+        #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/index.lock"))
+    }
+
     @Test func statusStageCommitAndDiffs() async throws {
         let repo = try await TempRepo.make(files: ["a.txt": "1\n2\n3\n", "b.txt": "b\n"])
         defer { repo.remove() }

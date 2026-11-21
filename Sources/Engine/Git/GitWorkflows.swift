@@ -147,8 +147,12 @@ extension GitRepository {
     public func commitContext(patchLimit: Int = 12_000) async throws -> (stat: String, patch: String) {
         let staged = try await git(["diff", "--cached", "--name-only"], allowFailure: true).text
         let cached = staged.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : ["--cached"]
-        let stat = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--stat=120"] + cached + (cached.isEmpty ? ["HEAD"] : []), allowFailure: true).text
-        var patch = try await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U1"] + cached + (cached.isEmpty ? ["HEAD"] : []), limit: 4 << 20, allowFailure: true).text
+        // Everything against HEAD reads the working tree: plumbing `diff-index`, which never takes the index lock
+        // (porcelain `git diff` does after a stat-only change, see GitRepository.status).
+        let command = cached.isEmpty ? ["diff-index"] : ["diff", "--cached"]
+        let target = cached.isEmpty ? ["HEAD"] : []
+        let stat = try await git(command + ["--no-color", "--no-ext-diff", "--no-textconv", "--stat=120"] + target, allowFailure: true).text
+        var patch = try await git(command + ["-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U1"] + target, limit: 4 << 20, allowFailure: true).text
         var summary = stat
         // Untracked files are committed too when nothing is staged (commitAll stages them): list them and quote the
         // start of each small text file.

@@ -104,7 +104,10 @@ public struct GitRepository: Sendable {
     /// Branch, upstream, ahead/behind and changed files with per-side line counts.
     public func status(limit: Int = 10_000) async throws -> GitStatus {
         async let porcelain = git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--find-renames"])
-        async let unstaged = git(["diff", "--numstat", "-z", "-M"], allowFailure: true)
+        // Plumbing for the working tree: porcelain `git diff` ignores GIT_OPTIONAL_LOCKS and, after a stat-only change,
+        // takes .git/index.lock to refresh the index, failing the user's or an agent's concurrent git ("index.lock: File
+        // exists"). `diff-files` never writes the index (and leaves a stat-only change out, as status does).
+        async let unstaged = git(["diff-files", "--numstat", "-z", "-M"], allowFailure: true)
         async let staged = git(["diff", "--cached", "--numstat", "-z", "-M"], allowFailure: true)
         var status = GitStatusParser.parse(try await porcelain.stdout, limit: limit)
         if let gitDirectory = try? await git(["rev-parse", "--path-format=absolute", "--git-dir"], allowFailure: true).text
@@ -203,14 +206,15 @@ public struct GitRepository: Sendable {
     public func diff(_ scope: DiffScope, paths: [String] = [], context: Int = 3, ignoreWhitespace: Bool = false, limit: Int = 64 << 20) async throws
         -> String
     {
-        var arguments = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U\(context)"]
-        if ignoreWhitespace { arguments.append("-w") }
+        let options = ["--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U\(context)"] + (ignoreWhitespace ? ["-w"] : [])
+        var arguments = ["diff"] + options
         switch scope {
-        case .unstaged: break
+        // Scopes that read the working tree use plumbing, which never writes the index (see `status`).
+        case .unstaged: arguments = ["diff-files", "-p"] + options
         case .staged: arguments.append("--cached")
         case .commit(let hash):
             arguments = ["show", "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "-U\(context)"] + (ignoreWhitespace ? ["-w"] : []) + [hash]
-        case .workingTree(let from): arguments.append(from)
+        case .workingTree(let from): arguments = ["diff-index", "-p"] + options + [from]
         case .range(let from, let to): arguments += [from, to]
         }
         var text = try await git(arguments + ["--"] + paths, limit: limit).text
