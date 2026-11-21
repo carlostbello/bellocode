@@ -94,13 +94,29 @@ extension Engine {
     public func rewind(_ plan: RewindPlan) async throws -> AppliedRewind {
         var written: [FileChangePlan] = []
         if let files = plan.files { written = try await GitCheckpoints.apply(files) }
+        var staged = false
         do {
             let client = try await core.currentClient()
             _ = try await client.stageRevert(sessionID: plan.sessionID.rawValue, messageID: plan.messageID.rawValue, files: false)
+            staged = true
             try await client.commitRevert(sessionID: plan.sessionID.rawValue)
         } catch {
-            if !written.isEmpty { try? await GitCheckpoints.undo(written, directory: plan.directory) }
+            // Never leave a half-applied rewind silently: the staged revert is cleared and the files are put back, and
+            // a step of that which fails is part of the error (N17).
+            var revertStillStaged = false
+            if staged {
+                do { try await core.currentClient().clearRevert(sessionID: plan.sessionID.rawValue) } catch { revertStillStaged = true }
+            }
+            var filesKept: String?
+            if !written.isEmpty {
+                do { try await GitCheckpoints.undo(written, directory: plan.directory) } catch {
+                    filesKept = (error as? WorkingCopyError)?.userMessage ?? String(describing: error)
+                }
+            }
             git.refreshAll(under: plan.directory)
+            if revertStillStaged || filesKept != nil {
+                throw RewindRollbackError(reason: String(describing: error), revertStillStaged: revertStillStaged, filesNotRestored: filesKept)
+            }
             throw error
         }
         git.refreshAll(under: plan.directory)
@@ -112,6 +128,25 @@ extension Engine {
         try await GitCheckpoints.undo(applied.written, directory: applied.plan.directory)
         git.refreshAll(under: applied.plan.directory)
     }
+}
+
+/// A rewind that failed and could not be fully rolled back: what is left over is named.
+public struct RewindRollbackError: Error, Sendable, Equatable, CustomStringConvertible, LocalizedError {
+    /// Why the rewind failed.
+    public var reason: String
+    /// opencode still holds the staged revert (clearing it failed; the conversation shows the revert pending).
+    public var revertStillStaged: Bool
+    /// The files were restored but could not be put back (why), so they no longer match the conversation.
+    public var filesNotRestored: String?
+
+    public var description: String {
+        var parts = ["The rewind failed (\(reason))."]
+        if revertStillStaged { parts.append("The revert is still staged in the conversation.") }
+        if let filesNotRestored { parts.append("The restored files were not put back: \(filesNotRestored)") }
+        return parts.joined(separator: " ")
+    }
+
+    public var errorDescription: String? { description }
 }
 
 enum HostGitPaths {

@@ -76,7 +76,8 @@ public enum GitCheckpoints {
     public static let restoreLimit = 5_000
 
     /// Plans restoring `checkpoint`: captures the current state (`undoRef`), lists the entries that differ and reads
-    /// both sides. Nothing in the working tree changes. The plan is complete or it throws (`RestoreError`): every
+    /// both sides. Modes are checked on both sides first, and missing, unreadable and unsupported entries are told
+    /// apart. Nothing in the working tree changes. The plan is complete or it throws (`RestoreError`): every
     /// differing path is planned with the checkpoint's entry type and mode (regular, executable, symlink), and
     /// entries a file restore cannot reproduce (submodules) or more than `restoreLimit` paths are refused, so the
     /// conversation is never rewound over a partial restore (R26).
@@ -90,11 +91,30 @@ public enum GitCheckpoints {
         let raw = try await repository.git(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", checkpoint, current]).stdout
         let entries = try RawDiffEntry.parse(raw)
         guard entries.count <= limit else { throw RestoreError.tooManyFiles(count: entries.count, limit: limit) }
+        // Both sides are checked before anything is read: an entry a file restore cannot reproduce or remove (a
+        // submodule added since the checkpoint as much as one deleted) refuses the whole plan (A14, N17).
+        for entry in entries {
+            for mode in [entry.targetMode, entry.currentMode] where !Self.fileModes.contains(mode) {
+                throw RestoreError.unsupportedEntry(path: entry.path, mode: mode)
+            }
+        }
         let copy = WorkingCopy(root: root)
         var changes: [FileChangePlan] = []
         for entry in entries {
             try Task.checkCancellation()
             let before = copy.snapshot(entry.path)
+            switch before.kind {
+            case .unreadable:
+                throw RestoreError.unreadable(entry.path)
+            case .unsupported:
+                throw RestoreError.notAFile(entry.path)
+            case .directory where entry.currentMode != "000000" || entry.targetMode == "000000":
+                throw RestoreError.notAFile(entry.path)
+            default:
+                // A directory here is a file↔directory change: its files are other entries of this plan, deleted
+                // before the file is written (`WorkingCopy.apply`).
+                break
+            }
             switch entry.targetMode {
             case "000000":
                 changes.append(FileChangePlan(before: before, after: nil))
@@ -116,6 +136,9 @@ public enum GitCheckpoints {
         }
         return RestorePlan(directory: root, checkpoint: checkpoint, undoCheckpoint: current, changes: changes)
     }
+
+    /// The entry modes a file restore reproduces: none, regular, executable, symlink.
+    static let fileModes: Set<String> = ["000000", "100644", "100755", "120000"]
 
     /// Git records only the executable bit: keep the file's other bits, add or remove execute where it is readable.
     static func permissions(executable: Bool, current: Int?) -> Int {
@@ -151,6 +174,8 @@ public enum GitCheckpoints {
         case tooManyFiles(count: Int, limit: Int)
         case unsupportedEntry(path: String, mode: String)
         case unreadable(String)
+        /// The path holds something that is not a file, or goes through a link.
+        case notAFile(String)
 
         public var description: String { userMessage }
 
@@ -162,6 +187,8 @@ public enum GitCheckpoints {
                 "\(path) is a \(mode == "160000" ? "submodule" : "Git entry of mode \(mode)") that a file restore cannot reproduce. Nothing was changed; rewind without restoring files."
             case .unreadable(let path):
                 "\(path) could not be read from the checkpoint. Nothing was changed."
+            case .notAFile(let path):
+                "\(path) is not a regular file or goes through a link, so a file restore cannot reproduce it. Nothing was changed; rewind without restoring files."
             }
         }
     }
