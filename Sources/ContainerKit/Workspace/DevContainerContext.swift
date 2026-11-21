@@ -144,6 +144,126 @@ extension DevContainerBuildInputs {
         }
     }
 
+    /// The image tag for a context digest already computed (of a staged copy, A18).
+    public func tag(projectKey: String, build: DevContainerPlan.Build, contextDigest context: Data) -> String {
+        var hasher = SHA256()
+        hasher.update(data: dockerfile)
+        hasher.update(data: Data("\n\(build.args.sorted { $0.key < $1.key })\n\(build.target ?? "")\n".utf8))
+        hasher.update(data: context)
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined().prefix(12)
+        return "bellocode-dev-\(projectKey):\(digest)"
+    }
+
+    /// A private copy of what the context sends (A18), the folder the build is given: saves in the project after it
+    /// was made cannot change what is built, and its digest (hence the tag) is computed from the copy itself.
+    public struct StagedContext: Sendable, Equatable {
+        public var directory: String
+        public var digest: Data
+
+        /// Removes the copy (best effort).
+        public func remove() { try? FileManager.default.removeItem(atPath: directory) }
+    }
+
+    /// Copies the context's kept files (`.dockerignore` respected, links copied as links, never followed; APFS clones
+    /// where possible) into a new private folder under `parent`, then hashes that folder. The context folder must be
+    /// the same folder (device and inode) before and after copying, and still inside the project.
+    public func stage(projectRoot: String, parent: String = NSTemporaryDirectory()) -> Result<StagedContext, Problem> {
+        var before = stat()
+        guard lstat(context, &before) == 0, before.st_mode & S_IFMT == S_IFDIR else {
+            return .failure(Problem("The dev container was not built: its build context \(context) is not a folder."))
+        }
+        let directory = (parent as NSString).appendingPathComponent("bellocode-devctx-\(UUID().uuidString)")
+        guard mkdir(directory, 0o700) == 0 else {
+            return .failure(Problem("The dev container was not built: a private copy of its context could not be made (\(String(cString: strerror(errno))))."))
+        }
+        let staged = StagedContext(directory: directory, digest: Data())
+        if case .failure(let problem) = Self.copyContext(context, into: directory) {
+            staged.remove()
+            return .failure(problem)
+        }
+        var after = stat()
+        guard lstat(context, &after) == 0, after.st_dev == before.st_dev, after.st_ino == before.st_ino,
+              Self.containmentProblem(context: context, dockerfile: projectRoot, projectRoot: projectRoot) == nil,
+              CodeRootPaths.canonical(context) == context else {
+            staged.remove()
+            return .failure(Problem("The dev container was not built: its build context folder was replaced while it was being read."))
+        }
+        // The digest of the copy, with the copy's own `.dockerignore` (what the builder applies to it).
+        switch Self.contextDigest(directory, cache: DevContextDigestCache(limit: 1)) {
+        case .failure(let problem):
+            staged.remove()
+            return .failure(problem)
+        case .success(let digest):
+            return .success(StagedContext(directory: directory, digest: digest))
+        }
+    }
+
+    /// The kept entries of `root` copied into `destination` (which exists), as `contextDigest` walks them.
+    static func copyContext(_ root: String, into destination: String) -> Result<Void, Problem> {
+        let ignore = (FileManager.default.contents(atPath: root + "/.dockerignore")?.prefix(1 << 20))
+            .map { DockerIgnore(String(decoding: $0, as: UTF8.self)) } ?? DockerIgnore("")
+        var files = 0
+        var bytes: Int64 = 0
+        var pending = [""]
+        let tooLarge = Problem("The dev container's build context sends more than 200 000 files or 4 GiB; add a .dockerignore so only what the image needs is sent.")
+        while let relative = pending.popLast() {
+            let folder = relative.isEmpty ? root : root + "/" + relative
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { continue }
+            for name in names.sorted() {
+                let path = relative.isEmpty ? name : relative + "/" + name
+                let source = root + "/" + path
+                let target = destination + "/" + path
+                let ignored = ignore.ignores(path)
+                var info = stat()
+                guard lstat(source, &info) == 0 else { continue }
+                let type = info.st_mode & S_IFMT
+                if type == S_IFDIR {
+                    if !ignored || ignore.hasExclusions {
+                        guard mkdir(target, 0o700) == 0 else { return .failure(Problem("The dev container was not built: copying its context failed.")) }
+                        pending.append(path)
+                    }
+                    continue
+                }
+                if ignored { continue }
+                files += 1
+                bytes += Int64(info.st_size)
+                guard files <= maxContextFiles, bytes <= maxContextBytes else { return .failure(tooLarge) }
+                if type == S_IFLNK {
+                    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+                    let count = readlink(source, &buffer, Int(PATH_MAX))
+                    guard count >= 0 else { continue }
+                    buffer[count] = 0
+                    guard symlink(buffer, target) == 0 else { return .failure(Problem("The dev container was not built: copying its context failed.")) }
+                } else if type == S_IFREG {
+                    // A clone shares blocks until either side changes; never follows a link swapped in meanwhile.
+                    if clonefile(source, target, UInt32(CLONE_NOFOLLOW)) != 0 {
+                        guard copyfile(source, target, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_NOFOLLOW)) == 0 else {
+                            return .failure(Problem("The dev container was not built: copying \(path) from its context failed."))
+                        }
+                    }
+                }
+            }
+        }
+        // Folder permissions as in the context (set last: a read-only folder must be filled first).
+        return setFolderModes(root, destination)
+    }
+
+    static func setFolderModes(_ root: String, _ destination: String) -> Result<Void, Problem> {
+        guard let enumerator = FileManager.default.enumerator(atPath: destination) else { return .success(()) }
+        var folders: [String] = []
+        while let relative = enumerator.nextObject() as? String {
+            var info = stat()
+            if lstat(destination + "/" + relative, &info) == 0, info.st_mode & S_IFMT == S_IFDIR { folders.append(relative) }
+        }
+        for relative in folders.reversed() {
+            var info = stat()
+            if lstat(root + "/" + relative, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
+                chmod(destination + "/" + relative, info.st_mode & 0o7777)
+            }
+        }
+        return .success(())
+    }
+
     /// The digest of what a build context sends: paths in order, each with its type, permissions and contents.
     public static func contextDigest(_ root: String, cache: DevContextDigestCache) -> Result<Data, Problem> {
         let ignore = (FileManager.default.contents(atPath: root + "/.dockerignore")?.prefix(1 << 20))

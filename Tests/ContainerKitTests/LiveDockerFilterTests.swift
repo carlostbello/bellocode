@@ -177,4 +177,123 @@ struct LiveDockerFilterTests {
         #expect(try await client.listContainers(labels: ["\(DockerAgentLabels.scope)=\(sharedScope)"]).isEmpty)
         #expect(try await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(shared.projectKey)"]).isEmpty)
     }
+
+    /// N03, A06, N07 (live): host docker-only mode runs Rancher's real docker client confined to the project, as
+    /// `bellocode-exec` does (argument checks, then `sandbox-exec`). Client-only operations that read or write outside
+    /// the project fail on the Mac before any request (a mock daemon seeing no request would prove nothing); work inside
+    /// the project (env files, compose, a classic build with a context above 4 MiB) goes through the filtered endpoint.
+    @Test func hostDockerClientIsConfinedToTheProject() async throws {
+        let docker = NSHomeDirectory() + "/.rd/bin/docker"
+        guard FileManager.default.isExecutableFile(atPath: docker), try await client.inspectImage("redis:7-alpine") != nil else {
+            Issue.record("needs Rancher Desktop's docker and redis:7-alpine present")
+            return
+        }
+        let fixture = try makeFixture()
+        let proxy = try DockerFilterProxy(daemonSocket: socket)
+        let run = Task { await proxy.run() }
+        let scope = "test-host-\(UUID().uuidString.prefix(6).lowercased())"
+        defer { run.cancel(); proxy.stop() }
+        let token = proxy.register(DockerScope(key: scope, roots: [fixture.repoA]))
+        // BelloCode's own docker configuration (as EnvironmentService prepares it): no credential helpers, Rancher's plugins.
+        let config = fixture.base + "/docker-cli"
+        try FileManager.default.createDirectory(atPath: config + "/cli-plugins", withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: config + "/buildx", withIntermediateDirectories: true)
+        try #"{"auths":{}}"#.write(toFile: config + "/config.json", atomically: true, encoding: .utf8)
+        for name in ["docker-compose", "docker-buildx"] {
+            try? FileManager.default.createSymbolicLink(atPath: config + "/cli-plugins/" + name, withDestinationPath: NSHomeDirectory() + "/.rd/bin/" + name)
+        }
+        let secretText = "SECRET_VALUE=host-file-\(UUID().uuidString.prefix(6))"
+        try "\(secretText)\n".write(toFile: fixture.base + "/elsewhere/secret.env", atomically: true, encoding: .utf8)
+        try "FOO=from-project\n".write(toFile: fixture.repoA + "/ok.env", atomically: true, encoding: .utf8)
+        let access = ExecHelperConfig.DockerAccess(host: "tcp://127.0.0.1:\(proxy.port)/\(token)", binary: docker, configDirectory: config)
+        let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8"].merging(access.environment) { _, new in new }
+        let paths = HostDockerSandbox.Paths(readWrite: [fixture.repoA, config + "/buildx"], readOnly: HostDockerSandbox.installationFolders(docker: docker, configDirectory: config))
+
+        /// Runs a line as bellocode-exec does; with `unchecked`, skips the argument check (the sandbox alone).
+        func host(_ line: String, unchecked: Bool = false, directory: String? = nil) throws -> (Int32, String) {
+            let argv: [String]
+            if unchecked {
+                argv = [docker] + (try HostDockerCommand.words(line).dropFirst())
+            } else {
+                do { argv = try HostDockerCommand.argv(for: line, docker: docker, roots: [fixture.repoA], cwd: directory ?? fixture.repoA) } catch {
+                    return (126, "refused: \(error.description)")
+                }
+            }
+            let wrapped = try #require(HostDockerSandbox.wrap(argv, paths: paths, port: proxy.port))
+            let process = Process()
+            process.executableURL = URL(filePath: wrapped[0])
+            process.arguments = Array(wrapped.dropFirst())
+            process.environment = environment
+            process.currentDirectoryURL = URL(filePath: directory ?? fixture.repoA)
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+        }
+        do {
+            // Inside the project: env file, a run, compose, and a classic build whose context is above 4 MiB (N07).
+            let (envCode, envOut) = try host("docker run --rm --env-file ok.env redis:7-alpine sh -c 'echo $FOO'")
+            #expect(envCode == 0 && envOut.contains("from-project"), "\(envOut)")
+            try Data((0..<(6 << 20)).map { UInt8(truncatingIfNeeded: $0 &* 7) }).write(to: URL(filePath: fixture.repoA + "/blob.bin"))
+            let (buildCode, buildOut) = try host("docker build -q -t bctest-built-host:1 .")
+            #expect(buildCode == 0, "a 6 MiB context builds through the filter: \(buildOut)")
+            let (sizeCode, sizeOut) = try host("docker run --rm bctest-built-host:1 cat /built.txt")
+            #expect(sizeCode == 0 && sizeOut.contains("built"), "\(sizeOut)")
+            _ = try host("docker rmi bctest-built-host:1")
+            try "services:\n  probe:\n    image: redis:7-alpine\n    env_file: [ok.env]\n    command: [\"sh\", \"-c\", \"echo $$FOO\"]\n".write(
+                toFile: fixture.repoA + "/compose.host.yaml", atomically: true, encoding: .utf8)
+            let (composeCode, composeOut) = try host("docker compose -f compose.host.yaml run --rm -T probe")
+            #expect(composeCode == 0 && composeOut.contains("from-project"), "compose inside the project: \(composeOut)")
+
+            // buildx's own state is writable (its folder only).
+            let (lsCode, lsOut) = try host("docker buildx ls")
+            #expect(lsCode == 0, "buildx ls: \(lsOut)")
+
+            // Options naming files outside: refused before docker runs.
+            for line in ["docker run --rm --env-file \(fixture.base)/elsewhere/secret.env redis:7-alpine printenv",
+                         "docker run --rm --env-file escape/secret.env redis:7-alpine printenv",
+                         "docker build -f \(fixture.base)/elsewhere/secret.env .", "docker compose --env-file escape/secret.env config"] {
+                let (code, out) = try host(line)
+                #expect(code == 126 && out.contains("outside this project"), "\(line): \(out)")
+            }
+            // The sandbox alone (argument check skipped): docker's own reads outside fail on the Mac.
+            for line in ["docker run --rm --env-file \(fixture.base)/elsewhere/secret.env redis:7-alpine printenv",
+                         "docker run --rm --label-file escape/secret.env redis:7-alpine true",
+                         "docker build -f \(fixture.base)/elsewhere/secret.env ."] {
+                let (code, out) = try host(line, unchecked: true)
+                #expect(code != 0 && !out.contains(secretText), "\(line): \(out)")
+                #expect(out.contains("operation not permitted"), "\(line): \(out)")
+            }
+            // A Compose file inside the project naming a host file outside (client-only: `config` sends no request).
+            try "services:\n  leak:\n    image: redis:7-alpine\n    env_file: [\(fixture.base)/elsewhere/secret.env]\n".write(
+                toFile: fixture.repoA + "/compose.leak.yaml", atomically: true, encoding: .utf8)
+            let (leakCode, leakOut) = try host("docker compose -f compose.leak.yaml config")
+            #expect(leakCode != 0 && !leakOut.contains(secretText), "compose env_file outside: \(leakOut)")
+            try "services:\n  inc:\n    image: redis:7-alpine\n    build: \(NSHomeDirectory())/.ssh\n".write(
+                toFile: fixture.repoA + "/compose.ctx.yaml", atomically: true, encoding: .utf8)
+            let (ctxCode, ctxOut) = try host("docker compose -f compose.ctx.yaml build")
+            #expect(ctxCode != 0, "a compose build context outside the project: \(ctxOut)")
+            // Writes outside (argument check skipped): nothing appears.
+            let (_, writeOut) = try host("docker compose -f compose.host.yaml config -o \(fixture.base)/elsewhere/written.yaml", unchecked: true)
+            #expect(!FileManager.default.fileExists(atPath: fixture.base + "/elsewhere/written.yaml"), "\(writeOut)")
+            // Another daemon: Rancher's raw socket cannot be reached even if the endpoint is overridden.
+            let (rawCode, rawOut) = try host("docker -H unix://\(socket) ps", unchecked: true)
+            #expect(rawCode != 0, "raw socket from the sandbox: \(rawOut)")
+            try "DOCKER_HOST=unix://\(socket)\n".write(toFile: fixture.repoA + "/.env", atomically: true, encoding: .utf8)
+            let (dotCode, dotOut) = try host("docker compose -f compose.host.yaml ps -a --format '{{.Name}}'")
+            #expect(dotCode != 0 || !dotOut.contains("bellocode-"), "a .env DOCKER_HOST reaches nothing else: \(dotOut)")
+            try? FileManager.default.removeItem(atPath: fixture.repoA + "/.env")
+        } catch {
+            await cleanUp(scopes: [scope], specs: [], fixture: fixture)
+            throw error
+        }
+        await cleanUp(scopes: [scope], specs: [], fixture: fixture)
+        for image in ((try? await client.listImages()) ?? []) where image.repoTags.contains("bctest-built-host:1") {
+            try? await client.removeImage(image.id, force: true)
+        }
+    }
 }

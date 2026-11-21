@@ -216,6 +216,60 @@ struct ContainerEnvironmentTests {
         await #expect(throws: (any Error).self) { _ = try await service.readyContainer(project) }
     }
 
+    /// N21: with pull policy "always", starting an idle (stopped) container again pulls its image first, so a moved
+    /// tag is followed; the phase is read before activation changes it.
+    @Test func pullPolicyAlwaysPullsWhenAnIdleContainerStartsAgain() async throws {
+        runtime.state.withLock { $0.images = ["img:1"] }
+        var configuration = ContainerConfiguration(
+            helperURL: URL(filePath: "/Applications/BelloCode.app/Contents/Helpers/bellocode-exec"),
+            execConfigURL: root.appending(path: "exec.json"), opencodeDataDirectory: nil, runtime: runtime,
+            registryVault: InMemorySecretVault()).projectContainerDefault()
+        configuration.managedPolicy = { .init(policy: ImagePolicy(pullPolicy: .always), source: "test") }
+        let service = EnvironmentService(configuration: configuration, store: try ProjectionStore(location: .inMemory))
+        service.worktreeParent = { [root] directory in root.appending(path: "worktrees/\((directory as NSString).lastPathComponent)").path }
+        await service.start()
+        defer { service.stop() }
+        #expect(await waitFor { service.runtime?.isReady == true })
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "img:1"
+        await service.update(project, settings: settings)
+        let model = service.environment(for: project)
+        #expect(await waitFor { model.phase == .idle })
+        service.activate(project)
+        #expect(await waitFor { model.phase == .ready && model.record.containerID != nil })
+        // Stopped when idle; the next activation starts the same container again.
+        runtime.state.withLock { $0.pulled.removeAll() }
+        model.phase = .idle
+        service.activate(project)
+        #expect(await waitFor { model.phase == .ready })
+        #expect(runtime.state.withLock { $0.pulled }.contains("img:1"), "the moved tag is pulled before starting again")
+    }
+
+    /// N30: computing the container setting (main actor, every configuration write) creates nothing; the worktree
+    /// folders it mounts are made off the main actor before the configuration is written and before a container starts.
+    @Test func workspaceFoldersAreMadeOffTheSettingComputation() async throws {
+        runtime.state.withLock { $0.images = ["img:1"] }
+        let service = try await makeService()
+        defer { service.stop() }
+        #expect(await waitFor { service.runtime?.isReady == true })
+        var settings = ProjectEnvironmentSettings()
+        settings.image = "img:1"
+        await service.update(project, settings: settings)
+        let model = service.environment(for: project)
+        #expect(await waitFor { model.phase == .idle })
+        let worktrees = root.appending(path: "worktrees/project").path
+        try? FileManager.default.removeItem(atPath: worktrees)
+        let spec = try #require(service.workspaceSpec(model))
+        #expect(spec.extraMounts.contains(worktrees))
+        #expect(!FileManager.default.fileExists(atPath: worktrees), "computing the setting wrote nothing")
+        service.scheduleConfigWrite()
+        await service.writeConfigNow()
+        #expect(await waitFor { FileManager.default.fileExists(atPath: worktrees) }, "made with the configuration write")
+        // Stopping forwards leaves no placeholder tasks behind.
+        service.stopForward(project, port: 3000)
+        #expect(service.tasks.take("forward-\(model.projectKey)-3000") == nil)
+    }
+
     @Test func imageSettingRunsAndASettingChangeRecreates() async throws {
         runtime.state.withLock { $0.images = ["img:1", "img:2"] }
         let service = try await makeService()

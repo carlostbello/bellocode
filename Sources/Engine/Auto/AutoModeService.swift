@@ -158,7 +158,7 @@ public final class AutoModeService {
         let started = clock.now
         let policyContext = Self.policyContext(context)
         let action = Self.action(context)
-        let verdict = RiskPolicy.decide(action, in: policyContext)
+        let verdict = await Self.verdict(action, policyContext)
         switch verdict {
         case .deny(let finding):
             let text = "BelloCode Auto refused this: \(finding.askingText). It targets BelloCode's isolation or credential stores."
@@ -178,14 +178,25 @@ public final class AutoModeService {
                 return
             }
             let input = AutoReviewer.Input.make(action: action, context: policyContext, purpose: context.threadTitle, note: note)
+            // What does not fit in the reviewer's bounded input is not judged by a model (A09).
+            if input.incomplete {
+                await escalate(id, context, escalation(source: .reviewer, code: "review_incomplete", text: "This request is too long for Auto's reviewer to see whole, so you decide."), started)
+                return
+            }
             let resolution = reviewerResolution(for: session)
-            let result = await reviewer.review(input, model: AutoReviewer.modelRef(resolution.selection), label: reviewerLabel(for: session))
-            // Binding: the same request, still waiting, same input, same policy, same run of a session still in Auto.
+            let modelRef = AutoReviewer.modelRef(resolution.selection)
+            let authorization = AutoReviewer.Input.authorizationKey(action: action, context: policyContext, session: session.id.rawValue, model: modelRef, input: input)
+            let result = await reviewer.review(input, model: modelRef, label: reviewerLabel(for: session), authorization: authorization)
+            // Binding: the same request, still waiting, same operation, same policy, same run of a session still in Auto.
             guard !Task.isCancelled else { return }
             guard await core.isInAutoTriage(id), let now = await core.autoContext(for: id) else { return }
             let current = AutoReviewer.Input.make(action: Self.action(now), context: Self.policyContext(now), purpose: now.threadTitle, note: note)
+            let currentAuthorization = AutoReviewer.Input.authorizationKey(
+                action: Self.action(now), context: Self.policyContext(now), session: now.session.id.rawValue,
+                model: AutoReviewer.modelRef(reviewerResolution(for: now.session).selection), input: current)
             let fresh = now.session.permissionMode == .auto && now.session.busySince == session.busySince
-                && current.hash == result.inputHash && RiskPolicy.version == Self.policyVersionAtStart
+                && current.hash == result.inputHash && currentAuthorization == result.authorizationKey
+                && RiskPolicy.version == Self.policyVersionAtStart
             guard fresh else {
                 await escalate(id, now, escalation(source: .reviewer, code: "stale_review", text: "The request changed while it was reviewed, so you decide."), started)
                 return
@@ -196,6 +207,12 @@ public final class AutoModeService {
                 await escalate(id, now, escalation(source: .reviewer, code: result.outcome.reasonCode, text: result.outcome.explanation), started, model: result.model)
             }
         }
+    }
+
+    /// The policy's verdict, off the main actor (it resolves paths and may read the tree a recursive search covers).
+    @concurrent
+    nonisolated static func verdict(_ action: RiskPolicy.Action, _ context: RiskPolicy.Context) async -> RiskPolicy.Verdict {
+        RiskPolicy.decide(action, in: context)
     }
 
     /// The policy version this process started with: a decision is never applied under another.

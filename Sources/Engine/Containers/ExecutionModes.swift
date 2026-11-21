@@ -282,10 +282,44 @@ extension EnvironmentService {
 
     /// Host docker-only mode: Rancher Desktop's docker by absolute path, BelloCode's own docker configuration, the
     /// endpoint on the Mac's loopback.
+    ///
+    /// Enforced egress (N03): the scope gets the project's egress boundary as in the other modes, so containers,
+    /// networks and builds it creates have no way out but BelloCode's proxy.
     func hostDockerAccess(_ model: ProjectEnvironment) -> ExecHelperConfig.DockerAccess? {
-        guard let endpoint = dockerEndpoint, let token = endpoint.token(scope: model.projectKey, roots: workspaceRoots(model, create: false)) else { return nil }
+        let egress = hostDockerEgress(model).map {
+            DockerEgress(network: $0.attachment.network, environment: $0.attachment.environment, certificateDirectory: $0.corporate?.certificateDirectory)
+        }
+        guard let endpoint = dockerEndpoint,
+              let token = endpoint.token(scope: model.projectKey, roots: workspaceRoots(model, create: false), egress: egress) else { return nil }
         return ExecHelperConfig.DockerAccess(host: "tcp://127.0.0.1:\(endpoint.port)/\(token)", binary: endpoint.hostDockerBinary,
                                              configDirectory: endpoint.hostDockerConfig)
+    }
+}
+
+extension EnvironmentService {
+    /// The project's egress attachment in host docker-only mode, when egress is enforced.
+    func hostDockerEgress(_ model: ProjectEnvironment) -> (attachment: EgressAttachment, corporate: CorporateNetwork?)? {
+        guard let egress, let (attachment, corporate) = egress.attachment(model.projectKey, []) else { return nil }
+        return (attachment, corporate)
+    }
+
+    /// Host docker-only mode under enforced egress: the project's gateway (and its internal network) is made before
+    /// anything uses the endpoint. Until it exists, containers the scope creates cannot start (their network is
+    /// missing): the boundary fails closed.
+    func ensureHostDockerGateway(_ model: ProjectEnvironment) {
+        guard let preflight = egress?.preflight, let (attachment, corporate) = hostDockerEgress(model) else { return }
+        let roots = workspaceRoots(model, create: false)
+        var spec = WorkspaceSpec(projectRoot: model.directory, extraMounts: Array(roots.dropFirst()), image: "")
+        spec.egress = attachment
+        spec.corporateNetwork = corporate
+        tasks.set("egress-host-\(model.projectKey)", Task {
+            do {
+                try await preflight(spec)
+            } catch {
+                guard !Task.isCancelled else { return }
+                model.lastError = "Enforced egress: the project's gateway could not be started (\(error)). Docker commands from this project cannot reach the network until it runs."
+            }
+        })
     }
 }
 

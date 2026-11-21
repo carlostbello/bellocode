@@ -109,6 +109,49 @@ struct AutoReviewerTests {
         #expect(other.hash != input.hash)
     }
 
+    /// A09: two different operations that look the same to the reviewer (the difference redacted or clipped away)
+    /// never share a cached decision; the cache is keyed by the exact operation, session and model variant.
+    @Test func operationsWithIdenticalPresentationsDoNotShareADecision() async {
+        let model = FakeModel(.reply(Self.allow))
+        let reviewer = AutoReviewer(backend: model, settings: .standard)
+        let context = RiskPolicy.Context(directory: "/repo", roots: ["/repo"], home: "/Users/t")
+        func operation(_ argument: String) -> (RiskPolicy.Action, AutoReviewer.Input) {
+            let command = "./deploy.sh --target \(argument)"
+            let action = RiskPolicy.Action(action: "shell", resources: [command], tool: "shell", command: command)
+            return (action, AutoReviewer.Input.make(action: action, context: context, purpose: "Ship", note: "Runs a script"))
+        }
+        let (first, firstInput) = operation("sk_staging_0123456789abcdefghijklmnopqrstuv")
+        let (second, secondInput) = operation("sk_prod_zyxwvutsrqponmlkjihgfedcba9876543210")
+        #expect(firstInput == secondInput, "the reviewer sees the same thing: \(firstInput.command ?? "")")
+        let model1 = ModelRef(id: "m", providerID: "p", variant: nil)
+        let key1 = AutoReviewer.Input.authorizationKey(action: first, context: context, session: "s1", model: model1, input: firstInput)
+        let key2 = AutoReviewer.Input.authorizationKey(action: second, context: context, session: "s1", model: model1, input: secondInput)
+        #expect(key1 != key2)
+        _ = await reviewer.review(firstInput, model: model1, authorization: key1)
+        let other = await reviewer.review(secondInput, model: model1, authorization: key2)
+        #expect(!other.cached, "a different operation is reviewed again")
+        #expect(await model.prompts.count == 2)
+        // The same operation in another session, or with another model variant, is not the same authorization.
+        #expect(AutoReviewer.Input.authorizationKey(action: first, context: context, session: "s2", model: model1, input: firstInput) != key1)
+        let variant = ModelRef(id: "m", providerID: "p", variant: "high")
+        #expect(AutoReviewer.Input.authorizationKey(action: first, context: context, session: "s1", model: variant, input: firstInput) != key1)
+        // Without an authorization key the variant still separates entries.
+        let plain = AutoReviewer(backend: model, settings: .standard)
+        _ = await plain.review(.sample, model: model1)
+        #expect(await plain.review(.sample, model: variant).cached == false)
+        // The exact same operation is served from the cache.
+        #expect(await reviewer.review(firstInput, model: model1, authorization: key1).cached)
+    }
+
+    @Test func aClippedInputIsMarkedIncomplete() {
+        let context = RiskPolicy.Context(directory: "/repo", roots: ["/repo"], home: "/Users/t")
+        let many = RiskPolicy.Action(action: "edit", resources: (0..<20).map { "src/file\($0).swift" })
+        #expect(AutoReviewer.Input.make(action: many, context: context, purpose: nil, note: "").incomplete)
+        let long = RiskPolicy.Action(action: "shell", command: "make " + (0..<500).map { "target\($0)" }.joined(separator: " "))
+        #expect(AutoReviewer.Input.make(action: long, context: context, purpose: nil, note: "").incomplete)
+        #expect(!AutoReviewer.Input.make(action: RiskPolicy.Action(action: "shell", command: "swift build"), context: context, purpose: nil, note: "").incomplete)
+    }
+
     @Test func inputIsBoundedAndRedacted() {
         let context = RiskPolicy.Context(directory: "/repo", roots: ["/repo"], home: "/Users/t")
         let action = RiskPolicy.Action(
@@ -119,7 +162,7 @@ struct AutoReviewerTests {
         for secret in ["abc123", "s3cr3t", "hunter2", "sk-live-abcdefghijklmnopqrstuvwxyz0123456789", "abcd"] {
             #expect(!prompt.contains(secret), "\(secret) leaked")
         }
-        #expect((input.command ?? "").count <= 600)
+        #expect((input.command ?? "").count <= AutoReviewer.Input.maxCommand)
         #expect(input.purpose.count <= 80)
     }
 

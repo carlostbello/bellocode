@@ -231,4 +231,69 @@ struct LiveWorkspaceTests {
         #expect(out.contains("bytes of output omitted") && err.contains("bytes of output omitted"))
         }
     }
+
+    /// N09 (live): a container whose user is root in its image (a dev container's remoteUser) is refused and removed,
+    /// whatever the name says; the host user and a named non-root user run.
+    @Test func aUserThatIsRootInTheImageIsRefused() async throws {
+        guard try await client.inspectImage(Self.image) != nil else { Issue.record("needs \(Self.image) present"); return }
+        try await withProject { _, original in
+            var spec = original
+            spec.user = "root"
+            await #expect(throws: WorkspaceError.rootUser("root")) { try await manager.ensureRunning(spec) }
+            #expect(try await manager.status(spec).containerID == nil, "the container was removed")
+            // `node` is uid 1000 in node:22: allowed.
+            spec.user = "node"
+            let id = try await manager.ensureRunning(spec)
+            let (code, out, _) = try await sh(id, "id -u", spec: spec)
+            #expect(code == 0 && out.trimmingCharacters(in: .whitespacesAndNewlines) == "1000")
+        }
+    }
+
+    /// A18, N09 (live): the dev container build gets a private copy of the context with Rancher's real buildx: a save
+    /// after staging does not reach the image; offline (enforced egress) `RUN` steps have no network.
+    @Test func devContainerBuildsTheStagedCopy() async throws {
+        let docker = NSHomeDirectory() + "/.rd/bin/docker"
+        guard FileManager.default.isExecutableFile(atPath: docker), try await client.inspectImage("redis:7-alpine") != nil else {
+            Issue.record("needs Rancher's docker and redis:7-alpine present")
+            return
+        }
+        try await withProject { root, _ in
+            try FileManager.default.createDirectory(atPath: root + "/.devcontainer", withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(atPath: root + "/src", withIntermediateDirectories: true)
+            try "staged\n".write(toFile: root + "/src/a.txt", atomically: true, encoding: .utf8)
+            let dockerfile = "FROM redis:7-alpine\nCOPY src /src\nRUN (wget -q -T 3 -O /dev/null http://example.com && echo online || echo offline) > /net.txt\n"
+            try dockerfile.write(toFile: root + "/.devcontainer/Dockerfile", atomically: true, encoding: .utf8)
+            let plan = DevContainerPlan.parse(Data(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#.utf8),
+                                              file: root + "/.devcontainer/devcontainer.json", projectRoot: root)
+            let build = try #require(plan.build)
+            let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+            let staged = try inputs.stage(projectRoot: root).get()
+            defer { staged.remove() }
+            try "saved later\n".write(toFile: root + "/src/a.txt", atomically: false, encoding: .utf8)
+            let tag = "bctest-devctx:\(UUID().uuidString.prefix(6).lowercased())"
+            let argv = try #require(plan.buildArguments(tag: tag, context: staged.directory, offline: true))
+            let process = Process()
+            process.executableURL = URL(filePath: docker)
+            process.arguments = argv
+            process.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "DOCKER_HOST": "unix://" + NSHomeDirectory() + "/.rd/docker.sock"]
+            let input = Pipe()
+            let output = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            try input.fileHandleForWriting.write(contentsOf: inputs.dockerfile)
+            try input.fileHandleForWriting.close()
+            let log = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0, "\(log.suffix(800))")
+            var spec = WorkspaceSpec(projectRoot: root, image: tag, extraLabels: ["app.bellocode.test": "1"])
+            spec.user = "\(getuid()):\(getgid())"
+            let id = try await manager.ensureRunning(spec)
+            let (code, out, _) = try await sh(id, "cat /src/a.txt /net.txt", spec: spec)
+            #expect(code == 0 && out == "staged\noffline\n", "\(out)")
+            if let storage = try? await manager.storage(projectKey: spec.projectKey) { try? await manager.purge(storage) }
+            try? await client.removeImage(tag, force: true)
+        }
+    }
 }

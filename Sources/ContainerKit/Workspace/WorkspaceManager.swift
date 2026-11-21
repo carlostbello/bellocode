@@ -57,9 +57,12 @@ public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible 
     /// A volume or network with one of the project's names exists without BelloCode's labels (R07).
     case foreign(ForeignResourceError)
     case engine(ContainerError)
+    /// The container's user resolves to root (N09): its commands would hold the container's capabilities.
+    case rootUser(String)
 
     public var description: String {
         switch self {
+        case .rootUser(let user): "The container's user “\(user)” is root in its image; BelloCode never runs commands as root. Use the image's non-root user (remoteUser), or leave it out to use your Mac user." 
         case .imageMissing(let image): "The image \(image) is not on this Mac yet. Pull it in Project Settings ▸ Environment."
         case .unmountable(let paths):
             "These folders cannot be mounted (missing, or not shared with Rancher Desktop): \(paths.joined(separator: ", "))"
@@ -214,6 +217,15 @@ public struct WorkspaceManager: Sendable {
             throw WorkspaceError.nameTaken(spec.containerName)
         }
         try await client.startContainer(id)
+        // N09: a named user (a dev container's remoteUser) may still be uid 0 in the image; never run commands as root.
+        if !spec.userIsNonRootByConstruction {
+            let probe = try await ExecSession.run(client: client, container: id, argv: ["id", "-u"], user: spec.user, wrap: false, limit: 64)
+            let uid = String(decoding: probe.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard probe.exitCode == 0, let value = Int(uid), value != 0 else {
+                try? await client.removeContainer(id, force: true)
+                throw WorkspaceError.rootUser(spec.user)
+            }
+        }
         try await prepareHome(id, spec: spec)
         if spec.corporateNetwork?.certificateDirectory != nil {
             // Best effort: images without the tool (or a writable store) still trust the roots through the variables.

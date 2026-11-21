@@ -152,6 +152,22 @@ struct AutoModeTests {
 
     func reviewerReply(_ reviewer: ScriptedReviewer, _ text: String) async { await reviewer.setReply(text) }
 
+    /// A09: a request too large for the reviewer to see whole is never judged by it: the person decides.
+    @Test func aRequestTheReviewerCannotSeeWholeEscalates() async throws {
+        let reviewer = ScriptedReviewer(Self.allow)
+        let (harness, engine) = try await start(reviewer)
+        defer { Task { await engine.stop(); await harness.stop() } }
+        let session = try await engine.createThread(in: Self.project, title: "long", permissionMode: .auto)
+        let thread = engine.openThread(session.id)
+        defer { thread.close() }
+        let long = "swift build " + (0..<400).map { "--flag-\($0)" }.joined(separator: " ")
+        _ = try await ask(harness, session.id, "shell", [long])
+        try await waitUntil("escalated") { thread.pendingRequests.count == 1 }
+        guard case .permission(let request)? = thread.pendingRequests.first else { throw CancellationError() }
+        #expect(request.autoEscalation?.reasonCode == "review_incomplete")
+        #expect(await reviewer.calls == 0, "the reviewer never saw a clipped request")
+    }
+
     @Test func aReviewThatOutlivesItsSessionModeIsDiscarded() async throws {
         let reviewer = ScriptedReviewer(Self.allow)
         await reviewer.set(hold: true)

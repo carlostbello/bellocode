@@ -303,7 +303,7 @@ extension EnvironmentService {
         guard isEnabled, !model.services.isEmpty else { return }
         for (id, forwarder) in serviceForwarders.removeValue(forKey: model.directory) ?? [:] {
             forwarder.stop()
-            tasks.set("svcforward-\(model.projectKey)-\(id)", Task {})
+            tasks.cancel("svcforward-\(model.projectKey)-\(id)")
         }
         model.serviceForwards = []
         let runtimeRef = activeRuntime
@@ -366,7 +366,7 @@ extension EnvironmentService {
         let model = environment(for: directory)
         let forwardID = "\(name):\(port)"
         serviceForwarders[model.directory]?.removeValue(forKey: forwardID)?.stop()
-        tasks.set("svcforward-\(model.projectKey)-\(forwardID)", Task {})
+        tasks.cancel("svcforward-\(model.projectKey)-\(forwardID)")
         model.serviceForwards.removeAll { $0.id == forwardID }
     }
 }

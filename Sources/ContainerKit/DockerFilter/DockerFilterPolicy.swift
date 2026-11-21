@@ -206,10 +206,10 @@ public struct DockerFilterPolicy: Sendable {
         case (_, "exec"): return await exec(request, segments: segments, scope: scope)
         case (_, "images"): return await images(request, segments: segments, scope: scope)
         case ("POST", "build"): return await build(request, segments: segments, scope: scope)
-        case ("POST", "session"):
-            // BuildKit's file-sync session for a `/build` (the daemon asks the client for its context): no daemon
-            // control flows this way.
-            return segments.count == 1 ? .forward(request, streamBody: false, hijack: true, after: nil) : unknown(request)
+        case (_, "session"):
+            // BuildKit's session (N04): a BuildKit build reads its Dockerfile, context and frontend over this stream,
+            // never through the checked `/build` body, so it cannot be filtered. Only the classic builder is offered.
+            return Self.refuse("BuildKit sessions cannot be filtered, so they are not available here. Plain docker build works: the environment sets DOCKER_BUILDKIT=0, which uses the classic builder through the filtered /build route.")
         case (_, "grpc"):
             return Self.refuse("BuildKit's gRPC API (docker buildx, BuildKit builds) cannot be filtered, so it is not available here. Plain docker build works: the environment sets DOCKER_BUILDKIT=0, which uses the classic builder through the filtered /build route.")
         case (_, "networks"): return await networks(request, segments: segments, scope: scope)
@@ -692,6 +692,13 @@ public struct DockerFilterPolicy: Sendable {
     func build(_ request: DockerAPIRequest, segments: [String], scope: DockerScope) async -> DockerDecision {
         if segments.count == 2, segments[1] == "prune" { return Self.refuse("pruning the build cache is not allowed.") }
         guard segments.count == 1 else { return unknown(request) }
+        // BuildKit through `/build` (`version=2`, a `session`): the body is not what gets built (N04).
+        if let version = request.value("version"), !["", "1"].contains(version) {
+            return Self.refuse("BuildKit builds (version \(version)) cannot be filtered; the classic builder (DOCKER_BUILDKIT=0) is used here.")
+        }
+        if !(request.value("session") ?? "").isEmpty {
+            return Self.refuse("builds that read their context over a BuildKit session cannot be filtered; the classic builder (DOCKER_BUILDKIT=0) is used here.")
+        }
         if let remote = request.value("remote"), !remote.isEmpty {
             return Self.refuse("building from a remote context (\(remote)) is not allowed; build from a folder in the project.")
         }

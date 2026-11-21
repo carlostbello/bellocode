@@ -13,7 +13,7 @@ context line, terminal strip and pane; a switch applies at once with Undo ([pick
 | --- | --- |
 | **Shared workspace** (default) | One container per developer (label `app.bellocode.shared`) mounting every code root and BelloCode's and opencode's worktree folders read-write at the same paths; default image, host uid:gid, one home volume. Any working directory inside the roots runs there (cwd = the thread's project; other repositories visible, so multi-repo needs no approval); outside is refused; a shared-mode project outside the roots is blocked with the fix. Idle stop only when no project using it is active. BelloCode's own services are not started (use `docker compose`). |
 | **Project container** | Unchanged (own image, services, caches, MCP servers); optionally from a dev container file. |
-| **Host shell, docker only** (weaker) | One plain `docker …` line per call (`HostDockerCommand`): quoted words only; shell syntax, line breaks, backslashes, `VAR=`, `-H/--host/--context/--config`, `context`, `login`, `cp`, `save`, `export`, `load`, `push`, buildx builder changes and `-o/--output/--iidfile/--cidfile` are refused, not interpreted. Rancher's `~/.rd/bin/docker` by absolute path via `execve`, `PATH=/usr/bin:/bin`, BelloCode's `DOCKER_CONFIG` (no credential helpers), the endpoint on `127.0.0.1`, binds limited to the project. No terminals. |
+| **Host shell, docker only** (weaker) | One plain `docker …` line per call (`HostDockerCommand`): quoted words only; shell syntax, line breaks, backslashes, `VAR=`, `-H/--host/--context/--config`, `context`, `login`, `cp`, `save`, `export`, `load`, `push`, buildx builder changes and `-o/--output/--iidfile/--cidfile` are refused, not interpreted. Rancher's `~/.rd/bin/docker` by absolute path via `execve`, `PATH=/usr/bin:/bin`, BelloCode's `DOCKER_CONFIG` (no credential helpers), the endpoint on `127.0.0.1`, binds limited to the project. **Client confinement (N03/A06):** options naming host files (`--env-file`, `--label-file`, `--env-from-file`, build `-f`/context, compose `-f`/`--env-file`/`--project-directory`) must resolve inside the project's roots; `--secret`, `--ssh`, `--build-context`, `--cache-to`, local `--cache-from`, `--attest`/`--sbom` and remote contexts are refused; and the client runs under `sandbox-exec` (`HostDockerSandbox`): no reads or writes under `/Users`, `/Volumes` or temporary folders except the roots (read-write), docker's installation and BelloCode's `DOCKER_CONFIG` (read-only), no other writes, outbound network only to the endpoint's port (so a Compose file's `env_file`/`build` outside, Rancher's raw socket or a `.env` `DOCKER_HOST` reach nothing). No sandbox, no command. Under enforced egress the scope gets the project's egress network and gateway like the other modes. No terminals. |
 
 **Code roots** ([settings](../snapshots/exec-code-roots-dark.png)): first run suggests the folder holding the projects
 (`~/Documents/Repos` for its owner; a project directly in `~` or `~/Documents` suggests itself). `CodeRoots` validation:
@@ -51,11 +51,17 @@ Containers view and Prune. The image needs the CLI and Compose plugin (`docs/fea
 `docker:29-cli`). **Hostile matrix:** 89 requests through the proxy to an in-process fake daemon (`DockerFilterTests`,
 every case named in its source) all refused, none reached the daemon; bad tokens, smuggling and CL/TE conflicts refused.
 Live: 24 hostile CLI commands from inside the shared workspace refused by the real daemon path; compose
-up/exec/run/logs/ps/build and classic build work. **Build base images (R14):** the proxy finds the Dockerfile in the streamed
-classic `/build` context (`BuildContextScanner`; plain tar only) and checks its `FROM`, `COPY --from` and `RUN --mount=from=`
-images (`DockerfileBases`, global `ARG`s and `buildargs` expanded; unresolvable refused) against the image policy unless
-the scope built them; a refused build is cut off before the context completes. Under enforced egress, `RUN` steps get
-the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
+up/exec/run/logs/ps/build and classic build work. **Build base images (R14, A08, N04):** a classic `/build` context is read whole and held back in an unlinked temporary file
+until it is judged, so the daemon only receives an archive whose effective Dockerfile was checked (`BuildContextScanner`, Go
+`archive/tar` semantics: a second entry for the Dockerfile's path in any spelling, a link at or above it, an entry written
+through an earlier link, names leaving the context, sparse files, malformed numbers, PAX records or checksums, and data after
+the end marker are refused; gzip through zlib, concatenated members decoded, trailing bytes refused; bzip2/xz/zstd refused).
+Its `FROM`, `COPY --from`, `RUN --mount=from=` and `# syntax=`/`BUILDKIT_SYNTAX` frontend images (`DockerfileBases`: BuildKit's
+directive rules, heredocs only for unquoted `<<WORD` in RUN/COPY/ADD, an unclosed heredoc refused, and a second no-heredoc
+reading so a parser disagreement cannot hide a FROM; global `ARG`s and `buildargs` expanded; unresolvable refused) are
+checked against the image policy unless the scope built them. BuildKit through the endpoint (`/session`, `/build?version=2` or
+`session=`) is refused. Streamed bodies (build, `docker cp`) may be up to 4 GiB; JSON bodies 4 MiB (N07). Under enforced egress,
+`RUN` steps get the egress network and the proxy as predefined build arguments. **Residual risk:** a symlink swapped inside a root
 between check and mount (TOCTOU) is followed in the Rancher VM; the agent sees its token.
 
 ## Environment contract
@@ -70,13 +76,17 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
 Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
 Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
-without following a link, are verified inside the project again; the CLI gets that context and the Dockerfile on stdin); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
+without following a link, are verified inside the project again; A18: the kept context is then copied (APFS clones, links as
+links) into a private folder, the CLI builds that copy with the Dockerfile on stdin, and the tag is the digest of the copy, so a
+save during the build cannot put new bytes under an old tag; under enforced egress `RUN` steps get `--network none`, because
+BuildKit's builder cannot join the egress network, N09); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
 context file `.dockerignore` keeps, links as links; computed in the background, bounded to 200 000 files / 4 GiB), so a
 changed input rebuilds; Rebuild runs the build again and replaces the container after it succeeded; a built tag is never
 pulled; the build belongs to the project's task: a project or mode change, stopping the service or its 60-minute
 deadline stops docker (TERM, KILL after 10 s) and waits until it is gone, and a result is used only for the plan still
 in force; same-path workspace; `containerEnv`/`remoteEnv` (plain values); `remoteUser`;
-`forwardPorts` (forwarded on start); `postCreateCommand`/`postStartCommand`, run only after the person approves their
+`forwardPorts` (forwarded on start); `remoteUser` that is root (`root`, `0`, `0:…`) is refused, and a named user that is
+uid 0 in the image is refused when the container starts (N09); `postCreateCommand`/`postStartCommand`, run only after the person approves their
 digest. Refused with the reason (file unused, project image kept): `initializeCommand`, `features`, `privileged`,
 `capAdd`, `securityOpt`, `runArgs`, `mounts`, other workspace folders, Compose, other lifecycle forms, `${localEnv:…}`;
 `customizations`, `name`, `hostRequirements` listed as ignored.

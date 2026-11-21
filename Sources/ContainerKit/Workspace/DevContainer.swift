@@ -49,10 +49,15 @@ public struct DevContainerPlan: Sendable, Equatable {
     /// `docker buildx build` arguments (argv after the docker binary). No secrets, no shell. The Dockerfile comes on
     /// standard input (`-f -`, the bytes `DevContainerBuildInputs` verified) and `context` is the verified canonical
     /// folder, so the CLI never opens a project path BelloCode did not just check (R16).
-    public func buildArguments(tag: String, context: String) -> [String]? {
+    ///
+    /// `offline` (enforced egress, N09): `RUN` steps get no network. BuildKit's builder in the daemon cannot join
+    /// BelloCode's egress network (it accepts only `default`, `host` and `none`), and its default network would bypass
+    /// the proxy, so the build fails closed rather than reaching the internet directly.
+    public func buildArguments(tag: String, context: String, offline: Bool = false) -> [String]? {
         guard let build else { return nil }
         var argv = ["buildx", "build", "--load", "--progress", "plain", "-t", tag, "-f", "-",
                     "--label", "\(WorkspaceSpec.labelWorkspace)=1", "--label", "app.bellocode.devcontainer=1"]
+        if offline { argv += ["--network", "none"] }
         for (key, value) in build.args.sorted(by: { $0.key < $1.key }) { argv += ["--build-arg", "\(key)=\(value)"] }
         if let target = build.target { argv += ["--target", target] }
         argv.append(context)
@@ -152,7 +157,12 @@ public struct DevContainerPlan: Sendable, Equatable {
                 }
                 if key == "containerEnv" { plan.containerEnv = values } else { plan.remoteEnv = values }
             case "remoteUser":
-                plan.remoteUser = value as? String
+                // N09: the container's capabilities exist for BelloCode's own root step only; commands never run as root.
+                if let user = value as? String, Self.isRoot(user) {
+                    plan.refused.append(Refusal(key: key, reason: "commands never run as root in BelloCode's containers; use the image's non-root user, or leave remoteUser out to use your Mac user"))
+                } else {
+                    plan.remoteUser = value as? String
+                }
             case "forwardPorts":
                 for entry in (value as? [Any]) ?? [] {
                     if let port = (entry as? NSNumber)?.intValue, (1...65535).contains(port) {
@@ -200,6 +210,12 @@ public struct DevContainerPlan: Sendable, Equatable {
         plan.refused.sort { $0.key < $1.key }
         plan.ignored.sort()
         return plan
+    }
+
+    /// `root`, `0`, or either with a group (`0:0`, `root:wheel`).
+    public static func isRoot(_ user: String) -> Bool {
+        let name = user.trimmingCharacters(in: .whitespaces).split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        return name == "root" || (!name.isEmpty && name.allSatisfy(\.isNumber) && Int(name) == 0)
     }
 
     struct LifecycleRefusal: Error { var reason: String }

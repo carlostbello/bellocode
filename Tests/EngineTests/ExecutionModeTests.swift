@@ -1,6 +1,7 @@
 import BelloCore
 import ContainerKit
 import Foundation
+import Synchronization
 import Testing
 
 @testable import Engine
@@ -155,6 +156,33 @@ struct ExecutionModeTests {
         // Another repository under the root is not this project's: it goes to the shared workspace only if one is in use.
         #expect(config.resolve(directory: repoB)?.workspace.mode != .hostDocker)
         #expect(runtime.state.withLock { $0.ensureCount } == 0, "nothing is created")
+    }
+
+    /// N03: under enforced egress, host docker-only mode's Docker scope carries the project's egress boundary (its
+    /// containers, networks and builds join the internal network), and the project's gateway is made for it.
+    @Test func hostDockerModeAppliesEnforcedEgress() async throws {
+        let service = try await makeService()
+        defer { service.stop() }
+        let registered = Mutex<[DockerScope]>([])
+        service.dockerEndpoint = DockerEndpoint(port: 4321, hostDockerBinary: "/x/docker", hostDockerConfig: nil, register: { scope in
+            registered.withLock { $0.append(scope) }
+            return "bctoken-\(scope.key)"
+        })
+        let preflights = Mutex<[WorkspaceSpec]>([])
+        service.egress = EgressHooks(
+            attachment: { key, services in (EgressAttachment(network: EgressGateway.networkName(key), caFingerprint: "f", noProxy: services), nil) },
+            preflight: { spec in preflights.withLock { $0.append(spec) } },
+            servicesStarted: { _ in })
+        await service.setCodeRoots([codeRoot])
+        await service.setMode(.hostDocker, for: repoA)
+        let model = service.environment(for: repoA)
+        #expect(await waitFor { model.mode == .hostDocker && model.phase == .ready })
+        let access = try #require(service.hostDockerAccess(model))
+        #expect(access.host == "tcp://127.0.0.1:4321/bctoken-\(model.projectKey)")
+        let scope = try #require(registered.withLock { $0.last { $0.key == model.projectKey } })
+        #expect(scope.egress?.network == EgressGateway.networkName(model.projectKey), "the scope's containers join the egress network")
+        #expect(scope.egress?.environment["HTTPS_PROXY"] == EgressAttachment.proxyURL)
+        #expect(await waitFor { preflights.withLock { $0.contains { $0.egress?.scopeKey == model.projectKey } } }, "the gateway is made")
     }
 
     @Test func migrationKeepsProjectsWithAContainerOnProjectContainer() async throws {

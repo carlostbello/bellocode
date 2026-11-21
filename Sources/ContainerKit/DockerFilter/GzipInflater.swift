@@ -1,11 +1,13 @@
-import Compression
 import Foundation
+import zlib
 
 /// Streaming gzip (RFC 1952) decoder for a build context passing through the filter (R14): Compose's classic builder
-/// and `docker build --compress` send the context gzip-compressed. The header is parsed here (FEXTRA, FNAME, FCOMMENT
-/// and FHCRC skipped, at any byte boundary); the DEFLATE body goes through the Compression framework's raw-DEFLATE
-/// decoder (`COMPRESSION_ZLIB`). Output is handed out in bounded pieces and never kept, so a highly compressed context
-/// costs time, not memory. The trailer's CRC is left to the daemon, which receives the original bytes.
+/// and `docker build --compress` send the context gzip-compressed. zlib decodes each member (header with FEXTRA, FNAME,
+/// FCOMMENT and FHCRC, DEFLATE body, CRC-checked trailer) and says exactly where it ended, so concatenated members are
+/// decoded one after another, as Go's `compress/gzip` (the daemon's reader) does (N04); bytes after a member that are
+/// not another gzip member fail. (The Compression framework reads past the end of a DEFLATE stream, so it cannot find
+/// member boundaries.) Output is handed out in bounded pieces and never kept, so a highly compressed context costs
+/// time, not memory.
 final class GzipInflater {
     enum Failure: Error, Equatable {
         case notGzip
@@ -15,64 +17,74 @@ final class GzipInflater {
 
     static let chunk = 64 * 1024
 
-    private let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+    private let stream = UnsafeMutablePointer<z_stream>.allocate(capacity: 1)
     private var initialised = false
-    private var header = Data()
-    private var headerDone = false
-    private(set) var finished = false
+    /// Inside a member (its header started and its trailer not yet read).
+    private var inMember = false
+    private var members = 0
+    /// The sink asked to stop: nothing more is decoded.
+    private(set) var stopped = false
+
+    init() {
+        stream.initialize(to: z_stream())
+    }
 
     deinit {
-        if initialised { compression_stream_destroy(stream) }
+        if initialised { inflateEnd(stream) }
+        stream.deinitialize(count: 1)
         stream.deallocate()
     }
 
+    /// At least one whole member was decoded and the input ends between members (a clean end of the stream).
+    var atMemberBoundary: Bool { members > 0 && !inMember }
+
     /// Decodes the next compressed bytes; `sink` receives each decompressed piece (at most `chunk` bytes) and returns
-    /// false to stop early. Bytes after the end of the DEFLATE stream (the trailer, further members) are ignored.
+    /// false to stop early.
     func feed(_ data: Data, sink: (Data) -> Bool) throws {
-        guard !finished, !data.isEmpty else { return }
-        var input = data
-        if !headerDone {
-            header.append(input)
-            guard let length = try Self.headerLength(header) else {
-                guard header.count <= 1 << 20 else { throw Failure.corrupt }
-                return
-            }
-            headerDone = true
-            input = header.subdata(in: header.startIndex.advanced(by: length)..<header.endIndex)
-            header = Data()
-            guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
-                throw Failure.corrupt
-            }
+        guard !stopped, !data.isEmpty else { return }
+        if !initialised {
+            // A first byte that is not gzip's magic is not a member at all.
+            guard inflateInit2_(stream, 15 + 16, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw Failure.corrupt }
             initialised = true
-            if input.isEmpty { return }
         }
         var output = [UInt8](repeating: 0, count: Self.chunk)
-        try input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
-            stream.pointee.src_ptr = base
-            stream.pointee.src_size = raw.count
-            repeat {
-                let pending = stream.pointee.src_size
-                let status = output.withUnsafeMutableBufferPointer { buffer -> compression_status in
-                    stream.pointee.dst_ptr = buffer.baseAddress!
-                    stream.pointee.dst_size = buffer.count
-                    return compression_stream_process(stream, 0)
+            stream.pointee.next_in = UnsafeMutablePointer(mutating: base)
+            stream.pointee.avail_in = uInt(raw.count)
+            while !stopped {
+                if !inMember {
+                    guard stream.pointee.avail_in > 0 else { return }
+                    // The next member starts: zlib checks its header (a byte that is not gzip's magic fails).
+                    if members > 0, inflateReset(stream) != Z_OK { throw Failure.corrupt }
+                    if stream.pointee.next_in.pointee != 0x1f { throw Failure.notGzip }
+                    inMember = true
                 }
-                let produced = Self.chunk - stream.pointee.dst_size
-                if status == COMPRESSION_STATUS_ERROR { throw Failure.corrupt }
+                let status = output.withUnsafeMutableBufferPointer { buffer -> Int32 in
+                    stream.pointee.next_out = buffer.baseAddress!
+                    stream.pointee.avail_out = uInt(buffer.count)
+                    return inflate(stream, Z_NO_FLUSH)
+                }
+                let produced = Self.chunk - Int(stream.pointee.avail_out)
+                switch status {
+                case Z_OK, Z_STREAM_END, Z_BUF_ERROR:
+                    break
+                default:
+                    throw Failure.corrupt
+                }
                 if produced > 0, !sink(Data(output[0..<produced])) {
-                    finished = true
+                    stopped = true
                     return
                 }
-                if status == COMPRESSION_STATUS_END {
-                    finished = true
-                    return
+                if status == Z_STREAM_END {
+                    inMember = false
+                    members += 1
+                    continue
                 }
-                // More output may be pending while the destination was filled; otherwise all input was consumed.
-                if produced < Self.chunk, stream.pointee.src_size == 0 { return }
-                // Neither consumed nor produced anything: never spin on input the decoder will not take.
-                if produced == 0, stream.pointee.src_size == pending { throw Failure.corrupt }
-            } while true
+                // All input used and nothing more to hand out: wait for more bytes.
+                if stream.pointee.avail_in == 0, produced < Self.chunk { return }
+                if status == Z_BUF_ERROR, produced == 0 { return }
+            }
         }
     }
 

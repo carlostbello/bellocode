@@ -82,6 +82,8 @@ extension EnvironmentService {
         let plugins = directory.appending(path: "cli-plugins")
         do {
             try FileManager.default.createDirectory(at: plugins, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            // buildx's state: the only folder of this configuration the confined client may write (HostDockerSandbox).
+            try FileManager.default.createDirectory(at: directory.appending(path: "buildx"), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try Data(#"{"auths":{}}"#.utf8).write(to: directory.appending(path: "config.json"), options: .atomic)
             for name in ["docker-compose", "docker-buildx"] {
                 let link = plugins.appending(path: name).path
