@@ -159,6 +159,7 @@ extension ProjectionStore {
     }
 
     public func saveSecretLabel(_ label: StoredSecretLabel) async throws {
+        try await runWriteHook()
         try await writer.write { db in
             try db.execute(
                 sql: "INSERT OR REPLACE INTO app_secret (account, label, created, last_used) VALUES (?, ?, ?, ?)",
@@ -169,6 +170,7 @@ extension ProjectionStore {
     }
 
     public func deleteSecretLabel(account: String) async throws {
+        try await runWriteHook()
         try await writer.write { db in try db.execute(sql: "DELETE FROM app_secret WHERE account = ?", arguments: [account]) }
     }
 }

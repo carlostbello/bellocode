@@ -343,6 +343,8 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
     public var execIDs: [String]?
     /// The host configuration as created (mounts, limits, network): what `inspect` reveals to anyone with the socket.
     public var hostConfig: HostConfig?
+    /// The networks the container is attached to now (`NetworkSettings.Networks`), by name.
+    public var networks: [String]?
 
     public struct State: Decodable, Sendable, Equatable {
         public var status: String
@@ -368,7 +370,7 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
         case id = "Id", name = "Name", image = "Image", state = "State", config = "Config"
         case networkSettings = "NetworkSettings", execIDs = "ExecIDs", hostConfig = "HostConfig"
     }
-    enum NetworkKeys: String, CodingKey { case ports = "Ports" }
+    enum NetworkKeys: String, CodingKey { case ports = "Ports", networks = "Networks" }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -381,6 +383,7 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
         hostConfig = try? c.decodeIfPresent(HostConfig.self, forKey: .hostConfig)
         if let network = try? c.nestedContainer(keyedBy: NetworkKeys.self, forKey: .networkSettings) {
             ports = try? network.decodeIfPresent([String: [PortBinding]?].self, forKey: .ports)
+            networks = (try? network.decodeIfPresent([String: EmptyObject].self, forKey: .networks))?.map { $0.key }.sorted()
         }
     }
 }

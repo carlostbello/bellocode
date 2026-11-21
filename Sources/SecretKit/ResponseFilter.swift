@@ -67,7 +67,12 @@ public enum ContentDecoding {
         try stream(data, algorithm: algorithm, limit: limit).0
     }
 
-    private static func stream(_ data: Data, algorithm: compression_algorithm, limit: Int) throws -> (Data, Int) {
+    /// One decoder step (`compression_stream_process`); a parameter so tests can stand in a decoder that stalls.
+    typealias Process = (UnsafeMutablePointer<compression_stream>, Int32) -> compression_status
+
+    static func stream(
+        _ data: Data, algorithm: compression_algorithm, limit: Int, process: Process = { compression_stream_process($0, $1) }
+    ) throws -> (Data, Int) {
         guard !data.isEmpty else { return (Data(), 0) }
         let streamPointer = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
         defer { streamPointer.deallocate() }
@@ -83,12 +88,17 @@ public enum ContentDecoding {
             while true {
                 streamPointer.pointee.dst_ptr = destination
                 streamPointer.pointee.dst_size = chunk
-                let status = compression_stream_process(streamPointer, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                let pending = streamPointer.pointee.src_size
+                let status = process(streamPointer, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
                 output.append(destination, count: chunk - streamPointer.pointee.dst_size)
                 if output.count > limit { throw TooLarge() }
                 switch status {
                 case COMPRESSION_STATUS_OK:
-                    if streamPointer.pointee.src_size == 0, streamPointer.pointee.dst_size == chunk { throw Corrupt() }
+                    // Neither consumed nor produced anything (input exhausted, or input the decoder will not take, as
+                    // in GzipInflater 2652885): a malformed body, never a reason to spin (N08).
+                    if streamPointer.pointee.dst_size == chunk, streamPointer.pointee.src_size == 0 || streamPointer.pointee.src_size == pending {
+                        throw Corrupt()
+                    }
                     continue
                 case COMPRESSION_STATUS_END:
                     return (output, source.count - streamPointer.pointee.src_size)

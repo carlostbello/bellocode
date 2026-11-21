@@ -12,26 +12,43 @@ public protocol SecretVault: Sendable {
     func delete(account: String) throws
 }
 
+/// The Security framework calls a vault makes (tests stand in a Keychain that refuses a step).
+struct KeychainCalls: Sendable {
+    var add: @Sendable (CFDictionary) -> OSStatus = { SecItemAdd($0, nil) }
+    var update: @Sendable (CFDictionary, CFDictionary) -> OSStatus = { SecItemUpdate($0, $1) }
+    var copy: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>) -> OSStatus = { SecItemCopyMatching($0, $1) }
+    var delete: @Sendable (CFDictionary) -> OSStatus = { SecItemDelete($0) }
+}
+
 /// The macOS Keychain, generic passwords under BelloCode's own service, readable only while the Mac is unlocked and
 /// never synced (`…ThisDeviceOnly`).
 public struct KeychainSecretVault: SecretVault {
     /// Secrets agents asked for.
     public static let service = "app.bellocode.agent-secrets"
     public let service: String
+    let calls: KeychainCalls
 
-    public init(service: String = KeychainSecretVault.service) { self.service = service }
+    public init(service: String = KeychainSecretVault.service) { self.init(service: service, calls: KeychainCalls()) }
+
+    init(service: String, calls: KeychainCalls) {
+        self.service = service
+        self.calls = calls
+    }
 
     private func base(_ account: String) -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
     }
 
+    /// Adds the item, or replaces an existing item's value in place. Never deletes first: if the Keychain refuses the
+    /// new value (locked, access control, disk), the previous value is still there (N23).
     public func store(account: String, label: String, value: SecretValue) throws {
-        SecItemDelete(base(account) as CFDictionary)
-        var item = base(account)
-        item[kSecValueData] = value.utf8
-        item[kSecAttrLabel] = "BelloCode: \(label)"
-        item[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = SecItemAdd(item as CFDictionary, nil)
+        let attributes: [CFString: Any] = [
+            kSecValueData: value.utf8, kSecAttrLabel: "BelloCode: \(label)", kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
+        var status = calls.add(base(account).merging(attributes) { _, new in new } as CFDictionary)
+        if status == errSecDuplicateItem {
+            status = calls.update(base(account) as CFDictionary, attributes as CFDictionary)
+        }
         guard status == errSecSuccess else { throw ExtrasError("The Keychain refused to save it (status \(status)).") }
     }
 
@@ -40,7 +57,7 @@ public struct KeychainSecretVault: SecretVault {
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = calls.copy(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
             throw ExtrasError("The Keychain refused to read it (status \(status)).")
@@ -49,7 +66,7 @@ public struct KeychainSecretVault: SecretVault {
     }
 
     public func delete(account: String) throws {
-        let status = SecItemDelete(base(account) as CFDictionary)
+        let status = calls.delete(base(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw ExtrasError("The Keychain refused to delete it (status \(status)).")
         }
@@ -197,22 +214,46 @@ public final class SecretService {
     }
 
     /// Exchanges a reference (once) for a one-read pipe path. Only the session it was issued to may use it, and only
-    /// while `currentRevision` (the secret's command policy now; nil: not usable by commands) still equals the
-    /// revision it was issued under (R03).
-    func redeem(_ reference: String, by sessionID: SessionID, currentRevision: ((String) -> String?)? = nil) throws -> (path: String, label: String) {
+    /// while `authorize(account, revision)` still allows it: the secret's command policy is still the revision it was
+    /// issued under (R03). It returns the Keychain account holding the value of that policy (A02: never a newer value
+    /// saved under another policy); nil refuses. Without `authorize` (the legacy path alone) the account itself is read.
+    func redeem(
+        _ reference: String, by sessionID: SessionID, authorize: ((_ account: String, _ revision: String) -> String?)? = nil
+    ) throws -> (path: String, label: String) {
         guard let entry = references[reference], entry.expires > clock.now() else {
             references[reference] = nil
             throw ExtrasError("That secretRef is unknown, used or expired. Ask again with request_secret.")
         }
         guard entry.sessionID == sessionID else { throw ExtrasError("That secretRef belongs to another thread.") }
         references[reference] = nil
-        if let currentRevision, currentRevision(entry.account) != entry.revision {
-            throw ExtrasError("“\(entry.label)” changed since this secretRef was issued (its protection, scope or value). Nothing was delivered; ask again with request_secret.")
+        var valueAccount = entry.account
+        if let authorize {
+            guard let authorized = authorize(entry.account, entry.revision) else {
+                throw ExtrasError("“\(entry.label)” changed since this secretRef was issued (its protection, scope or value). Nothing was delivered; ask again with request_secret.")
+            }
+            valueAccount = authorized
         }
-        return (try deliverFile(account: entry.account), entry.label)
+        return (try deliverFile(account: valueAccount), entry.label)
     }
 
-    /// Creates the one-read pipe for `account` and starts filling it. Returns its path.
+    /// Records (or renames) the label row of a value the secret manager stores itself (no Keychain write here).
+    func recordLabel(account: String, label: String) async throws {
+        let existing = labels.first { $0.account == account }
+        let row = StoredSecretLabel(account: account, label: label, created: existing?.created ?? clock.now(), lastUsed: existing?.lastUsed ?? clock.now())
+        try await store.saveSecretLabel(row)
+        labels.removeAll { $0.account == account }
+        labels.append(row)
+        labels.sort { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+
+    /// Removes a label row (an unfinished first save, or a deleted secret) without touching the Keychain.
+    func forgetLabel(account: String) async throws {
+        try await store.deleteSecretLabel(account: account)
+        labels.removeAll { $0.account == account }
+        references = references.filter { $0.value.account != account }
+    }
+
+    /// Creates the one-read pipe for the Keychain item `account` and starts filling it. Returns its path.
     func deliverFile(account: String) throws -> String {
         pipes = pipes.filter { !$0.value.isFinished }
         guard pipes.count < Self.maxPipes else { throw ExtrasError("Too many secret files are waiting to be read. Use or let them expire first.") }

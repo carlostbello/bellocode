@@ -155,6 +155,8 @@ public final class Engine {
     /// Re-reads `codeRootsProvider` (call when its roots change).
     public func refreshCodeRoots() {
         if let provider = codeRootsProvider { codeRoots = provider.codeRoots }
+        // Secrets scoped to code roots, the shared workspace's egress scope and the proxy follow at once (N13).
+        secretManager?.codeRootsDidChange()
     }
     /// Scheduled tasks, PR linking and watching, secret requests, HTML visuals (docs/features/orchestration-extras.md).
     public private(set) var extras: ExtrasHub!

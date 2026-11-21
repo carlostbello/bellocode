@@ -108,19 +108,50 @@ extension SecretManager {
             guard secret.scope.admits(projectDirectory: caller.projectDirectory, codeRoots: codeRoots()) else {
                 return ClientMCPResult(text: "“\(secret.label)” is not available to this project.", isError: true)
             }
-            guard let value = await Self.read(vault, account: secret.account) else {
+            guard let value = await Self.read(vault, account: secret.activeValueAccount) else {
                 return ClientMCPResult(text: "“\(secret.label)” is not in the Keychain any more.", isError: true)
             }
             resolved[name] = (secret, value)
         }
-        // Uses count against the binding in the ledger the proxy shares, reserved before each hop is sent (R12).
-        let broker = SecretBroker(extraAnchors: engine?.configuration.brokerAnchors ?? [], ledger: useLedger) { [weak self] uses in
+        // Uses count against the binding in the ledger the proxy shares, reserved before each hop is sent (R12). Every
+        // hop is re-authorized against the secrets as they are then (A12).
+        let resolvedState = resolved.mapValues { (secret, _) in BrokerAuthorization(secret) }
+        let project = caller.projectDirectory
+        var broker = SecretBroker(extraAnchors: (engine?.configuration.brokerAnchors ?? []) + extraBrokerAnchors, ledger: useLedger) { [weak self] uses in
             await self?.recordUses(uses) ?? false
         }
+        broker.stillAuthorized = { [weak self] in await self?.brokerStillAuthorized(resolvedState, projectDirectory: project) ?? false }
         let outcome = await broker.perform(request, secrets: resolved, sessionID: caller.sessionID.rawValue, projectDirectory: caller.projectDirectory)
         for entry in outcome.audit { await record(entry) }
         _ = await recordUses(outcome.reserved)
         return ClientMCPResult(text: outcome.text, isError: outcome.text.hasPrefix("BelloCode refused"))
+    }
+
+    /// What a brokered request was authorized with, per handle: the secret's policy revision (mode, scope, revocation,
+    /// value) and its bindings.
+    struct BrokerAuthorization: Sendable {
+        var account: String
+        var revision: String
+        var bindings: [SecretBinding]
+
+        init(_ secret: ManagedSecret) {
+            account = secret.account
+            revision = SecretManager.policyRevision(secret)
+            bindings = secret.bindings
+        }
+    }
+
+    /// True while every handle still names the same secret with the same policy and bindings, usable by the brokered
+    /// tool in `projectDirectory`.
+    func brokerStillAuthorized(_ authorized: [String: BrokerAuthorization], projectDirectory: String) -> Bool {
+        let roots = codeRoots()
+        for (name, before) in authorized {
+            guard let now = secret(named: name), now.account == before.account, !now.revoked,
+                  now.mode == .brokered || now.mode == .placeholder,
+                  Self.policyRevision(now) == before.revision, now.bindings == before.bindings,
+                  now.scope.admits(projectDirectory: projectDirectory, codeRoots: roots) else { return false }
+        }
+        return true
     }
 
     func listSecrets(caller: ExtrasCaller) -> ClientMCPResult {

@@ -139,21 +139,48 @@ public struct EgressGateway: Sendable {
     }
 
     /// Makes sure the gateway runs with this configuration: the network exists, the container is (re)created when its
-    /// configuration changed, started, its relay listening on the internal network, and then joined to the default
-    /// bridge (its only way out, to the Mac).
+    /// configuration or image changed, started, its relay listening on the internal network, and then joined to the
+    /// default bridge (its only way out, to the Mac).
+    ///
+    /// A running gateway is reused only if the setup that made it usable still holds (v1.0.0 review A21): it runs the
+    /// image this launch built (by ID, A07), its relay reported ready, and it is on the internal network; a missing
+    /// bridge attachment (a previous setup failed at that last step) is repaired. A setup that fails after the
+    /// container started removes it, so a retry starts clean.
     public func ensure(_ spec: EgressGatewaySpec) async throws {
         try await ensureNetwork(scopeKey: spec.scopeKey, extraLabels: spec.extraLabels)
-        if spec.image == nil { _ = try await EgressGatewayImage.ensure(client: client, extraLabels: spec.extraLabels) }
+        let image: String
+        if let other = spec.image { image = other } else { image = try await EgressGatewayImage.ensure(client: client) }
         if let existing = try await client.ownedContainer(spec.containerName, required: Self.ownership(spec.scopeKey)) {
-            if existing.config.labels?[Self.labelConfig] == spec.configHash, existing.state.running { return }
+            if existing.config.labels?[Self.labelConfig] == spec.configHash, existing.state.running,
+               spec.image != nil || existing.image == image,
+               existing.networks?.contains(spec.networkName) ?? false,
+               (try? await relayReported(existing.id)) == true {
+                if !(existing.networks?.contains("bridge") ?? false) {
+                    try await client.connectNetwork("bridge", container: existing.id)
+                }
+                return
+            }
             try? await client.removeContainer(existing.id, force: true)
         }
-        let id = try await client.createContainer(name: spec.containerName, Self.createBody(spec))
-        try await client.startContainer(id)
-        // The relay binds only the internal network's address, chosen at start while that is its only interface; it
-        // retries its upstream dial for a few seconds, so a connection that arrives before the bridge joins still works.
-        try await waitForRelay(id)
-        try await client.connectNetwork("bridge", container: id)
+        var body = Self.createBody(spec)
+        body.image = image
+        let id = try await client.createContainer(name: spec.containerName, body)
+        do {
+            try await client.startContainer(id)
+            // The relay binds only the internal network's address, chosen at start while that is its only interface; it
+            // retries its upstream dial for a few seconds, so a connection that arrives before the bridge joins still works.
+            try await waitForRelay(id)
+            try await client.connectNetwork("bridge", container: id)
+        } catch {
+            // Never leave a half-set-up gateway behind for a later call to mistake for a working one.
+            try? await client.removeContainer(id, force: true)
+            throw error
+        }
+    }
+
+    /// Whether the container's relay printed `ready` (it prints nothing else after that, and exits if it stops listening).
+    func relayReported(_ id: String) async throws -> Bool {
+        try await logText(id).contains("bellocode-relay ready")
     }
 
     /// The gateway container: BelloCode's relay (its own image's entrypoint, or the launcher in another BelloCode

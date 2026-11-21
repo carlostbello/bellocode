@@ -400,6 +400,8 @@ public final class EgressProxy: Sendable {
             try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode's proxy could not open its inspection endpoint."))
             return
         }
+        // Every way out (an error, cancellation, the client gone) closes the inspection connection (N19).
+        defer { inner.cancel() }
         // The path (and so the local port) can lag `.ready` by a moment.
         var port: NWEndpoint.Port?
         for _ in 0..<50 {
@@ -407,12 +409,13 @@ public final class EgressProxy: Sendable {
             try await Task.sleep(for: .milliseconds(5))
         }
         guard let localPort = port else {
-            inner.cancel()
             try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode's proxy could not open its inspection endpoint."))
             return
         }
         state.withLock { $0.pendingTunnels[localPort.rawValue] = TunnelContext(scope: scope, destination: destination) }
+        defer { _ = state.withLock { $0.pendingTunnels.removeValue(forKey: localPort.rawValue) } }
         do {
+            if faults.withLock({ $0.failTunnelEstablished }) { throw WireError.closed }
             try await client.send(Data("HTTP/1.1 200 Connection established\r\n\r\n".utf8))
             let early = await client.takeBuffer()
             if !early.isEmpty { try await inner.send(early) }
@@ -420,8 +423,18 @@ public final class EgressProxy: Sendable {
             throw TunnelOpened(underlying: error)
         }
         await splice(client, inner)
-        _ = state.withLock { $0.pendingTunnels.removeValue(forKey: localPort.rawValue) }
     }
+
+    /// Tests: faults injected at points a real network reaches only by timing.
+    struct Faults: Sendable {
+        /// The client is gone just as the tunnel's `200` is sent.
+        var failTunnelEstablished = false
+    }
+
+    let faults = Mutex(Faults())
+
+    /// Tunnels waiting for (or using) their inspection connection (tests: none may be left behind).
+    var pendingTunnelCount: Int { state.withLock { $0.pendingTunnels.count } }
 
     /// Relays both directions until each has ended. A half-close is passed on (`docker run` closes its side of an
     /// attach stream right away and then reads the container's output), so one direction ending never cuts the other;
@@ -736,7 +749,7 @@ public final class EgressProxy: Sendable {
             upstream = nil
             let reason = error is TimeLimitExceeded
                 ? "The response did not finish within \(configuration.inspectedResponseTime) (streaming responses from a destination that receives secrets cannot be inspected)."
-                : (error as? WireError) == nil ? "The response could not be read." : "The response was too large to inspect."
+                : (error as? WireError) == WireError.tooLarge ? "The response was too large to inspect." : "The response could not be read."
             emit(.responseBlocked(accounts: bound.map(\.account), destination: request.auditDestination, method: method, reason: reason, sessionID: session))
             try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: " + reason))
             return false

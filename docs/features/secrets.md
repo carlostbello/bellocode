@@ -30,6 +30,15 @@ to detect in responses). Secrets saved before modes appear as "Commands only". `
 handles and this thread's placeholders. Rotate replaces the value and keeps placeholders; Revoke stops every use at
 once (placeholders become unknown to the proxy); Delete removes the Keychain item and every record (confirmed).
 
+**A value is bound to its policy (v1.0.0 review A02).** Every new value (save under an existing label, rotation, the
+legacy card) goes to a fresh Keychain account (`<account>.v…`), never over the current one. Order: a durable pending
+marker (for a first save, an unusable row, so a crash never leaves a label to adopt as commands-only), the value, the
+label, then one row write that activates value account and policy together; the old value is removed afterwards. Policy
+revisions include the value account, and every reader (approved commands, references, one-read paths, the session
+environment, the proxy snapshot, the brokered tool) reads the account of the revision it was authorized at. At launch,
+an unfinished first save is discarded (shown), orphaned new or retired values are removed, and grants that no longer
+fit their secret are dropped. Settings edits patch only the editable fields onto the current record.
+
 **Built-in brokered uses (unchanged guarantees).** The GitLab token and git's HTTPS credentials already never reach the
 agent: GitLab REST from the app, git through `bellocode-exec --git-credential` answering only BelloCode's git. They are
 listed read-only under "Used only by BelloCode" with the same claim; they stay managed in Settings ▸ GitLab.
@@ -52,7 +61,10 @@ workspace (internal network only) ──▶ gateway "bellocode-proxy:3128" ─�
 - The gateway also answers `bellocode-proxy:2375` for the workspace's `docker` (execution modes): those bytes go through
   the proxy front (`BCEGRESS <token> docker`) to the filtered Docker endpoint, which authenticates and filters them;
   `DOCKER_HOST` points there when egress is enforced.
-- The gateway (`EgressGateway`): BelloCode's own image `bellocode-egress-gateway:<inputs hash>` (`EgressGatewayImage`),
+- The gateway (`EgressGateway`): BelloCode's own image `bellocode-egress-gateway:<inputs hash>` (`EgressGatewayImage`;
+  built once per launch and daemon, and run **by the image ID that build reported**, never by the tag or its labels:
+  v1.0.0 review A07; a running gateway is reused only if it runs that ID, is on its internal network and its relay
+  reported ready, a missing bridge attachment is repaired, and a setup that fails after start removes the container, A21),
   built locally from source compiled into the app (a Dockerfile with no `RUN` step and the Python relay) on
   `node:22-bookworm-slim` pinned by digest (the shared browser's base, so no extra pull); never the project's image, so no project-controlled code holds the token or
   joins the bridge (release review R08), in every execution mode with a workspace. Read-only root, user 65534, no
@@ -105,7 +117,8 @@ the client; its next request is judged on its own (a placeholder sent on to anot
 percent-encoded, hex, base64 (every alignment, URL-safe, line-wrapped) and in percent-decoded and JSON-unescaped views
 (partial or nested escaping). Raw, JSON- and URL-encoded copies are replaced with the thread's placeholder; any other
 form blocks the response (502). Streaming responses from such destinations are cut at the bound (502, stated). Other
-destinations stream through unbuffered. The brokered tool applies the same request rules on the Mac, follows a
+destinations stream through unbuffered. The brokered tool applies the same request rules on the Mac (re-authorizing every hop against the secret as it is
+then: a revocation or a change of scope, mode, destinations or value stops the next request, A12), follows a
 redirect only if the new URL passes them, returns status, allowlisted headers and ≤ 64 KB, and withholds the whole
 response if any form of the value appears.
 

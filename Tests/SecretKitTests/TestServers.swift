@@ -133,6 +133,11 @@ final class EchoServer: Sendable {
         }
         // Metadata reflection (R02): the submitted Authorization value comes back outside headers and body.
         let auth = head.fields.first("Authorization") ?? ""
+        if path.hasSuffix("/truncated") {
+            // Announces 100 bytes, sends 10, closes: a response that ends early (not one that is too large).
+            try await wire.send(Data("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789".utf8))
+            return false
+        }
         if path.hasSuffix("/reflect-reason") {
             try await wire.send(Data("HTTP/1.1 200 \(auth)\r\nContent-Length: 2\r\n\r\nok".utf8))
             return true

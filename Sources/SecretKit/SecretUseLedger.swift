@@ -3,8 +3,8 @@ import Synchronization
 
 /// Use counts per binding (R12, docs/reviews/release-1.0-review.md), shared by the egress proxy and the brokered HTTP
 /// tool so one binding's `maxUses` holds across both. A use is reserved, atomically and all-or-nothing, before the
-/// request is dispatched; a reserved use is never given back (a request that then fails still counts: the value may
-/// have left). Seeded from the persisted counts; the owner persists reservations (for limited bindings, before
+/// request is dispatched; once dispatch starts a use is never given back (a request that then fails still counts: the
+/// value may have left). Only a request refused before anything was sent releases its reservation. Seeded from the persisted counts; the owner persists reservations (for limited bindings, before
 /// dispatch).
 public final class SecretUseLedger: Sendable {
     private struct Key: Hashable {
@@ -30,6 +30,16 @@ public final class SecretUseLedger: Sendable {
 
     public func count(account: String, bindingID: String) -> Int {
         counts.withLock { $0[Key(account: account, binding: bindingID)] ?? 0 }
+    }
+
+    /// Gives back uses reserved for a request that was refused before it was sent.
+    public func release(_ uses: [SubstitutionUse]) {
+        counts.withLock { counts in
+            for use in uses {
+                let key = Key(account: use.account, binding: use.bindingID)
+                if let used = counts[key] { counts[key] = max(0, used - 1) }
+            }
+        }
     }
 
     /// Reserves every use or none: each binding must stay within `limit(use)` (nil: unlimited) counting the uses

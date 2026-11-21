@@ -97,7 +97,7 @@ struct SecretManagerTests {
         // The store never holds the value.
         let raw = try await f.store.writer.read { db in try Data.fetchAll(db, sql: "SELECT json FROM app_managed_secret") }
         #expect(!raw.contains { ByteSearch.contains($0, Self.value.utf8) })
-        #expect(try f.vault.read(account: brokered.account)?.utf8 == Self.value.utf8)
+        #expect(try f.vault.read(account: brokered.activeValueAccount)?.utf8 == Self.value.utf8)
     }
 
     @Test func rotateKeepsPlaceholdersAndRevokeDropsThem() async throws {
@@ -112,7 +112,9 @@ struct SecretManagerTests {
         }
         try await f.manager.rotate(account: secret.account, value: SecretValue("sk_test_rotated_value_42"))
         #expect(f.manager.placeholder(account: secret.account, sessionID: SessionID("ses_1")) == grant.placeholder)
-        #expect(try f.vault.read(account: secret.account)?.utf8 == Data("sk_test_rotated_value_42".utf8))
+        let rotated = try #require(f.manager.secret(secret.account))
+        #expect(try f.vault.read(account: rotated.activeValueAccount)?.utf8 == Data("sk_test_rotated_value_42".utf8))
+        #expect(f.vault.count == 1, "the previous value is removed once the new one is active")
         try await f.manager.revoke(account: secret.account)
         #expect(f.manager.placeholder(account: secret.account, sessionID: SessionID("ses_1")) == nil)
         #expect(f.manager.secret(secret.account)?.revoked == true)
@@ -121,6 +123,7 @@ struct SecretManagerTests {
         await f.manager.delete(account: secret.account)
         #expect(f.manager.secret(secret.account) == nil)
         #expect(try f.vault.read(account: secret.account) == nil)
+        #expect(f.vault.count == 0, "every value of the secret is gone")
     }
 
     @Test func legacySecretsAreAdoptedForApprovedCommandsOnly() async throws {
