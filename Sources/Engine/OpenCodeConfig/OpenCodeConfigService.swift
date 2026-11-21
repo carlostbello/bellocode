@@ -1,4 +1,5 @@
 import BelloCore
+import Darwin
 import Foundation
 import Observation
 import OpenCodeKit
@@ -89,24 +90,36 @@ public final class OpenCodeConfigService {
     public private(set) var refreshError: String?
     /// A syntax problem in the global `opencode.json`, or opencode ignoring it.
     public private(set) var configProblem: String?
-    /// A trust change saved but not yet applied by the server (offline): applied at the next refresh or restart.
+    /// A trust change saved but not yet acknowledged by the server's plugin (offline, a failed reload): retried at the
+    /// next refresh, applied at the latest when the server restarts.
     public private(set) var trustPending = false
+    /// The plugin's trust file could not be written (then it is removed, so no project's configuration loads).
+    public private(set) var trustProblem: String?
 
     @ObservationIgnored private let store: ProjectionStore
     @ObservationIgnored private let client: @Sendable () async throws -> OpenCodeClient
     @ObservationIgnored private let restartServer: (@MainActor () async -> Bool)?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var loaded = false
+    @ObservationIgnored private let writeTrust: @Sendable (ProjectTrustFile, URL) throws -> Void
+    /// The revision of the trust file last written (the plugin must acknowledge it).
+    @ObservationIgnored private(set) var trustRevision = 0
+    /// Projects whose trust change the plugin has not acknowledged yet.
+    @ObservationIgnored private var unacknowledged: Set<String> = []
+    /// Trust changes run one at a time, in order (rapid toggles must not interleave their writes or rollbacks).
+    @ObservationIgnored private var trustTail: Task<Void, Never>?
 
     public init(
         store: ProjectionStore, directories: OpenCodeDirectories?, runningPolicy: RepositoryConfigPolicy,
-        client: @escaping @Sendable () async throws -> OpenCodeClient, restartServer: (@MainActor () async -> Bool)?
+        client: @escaping @Sendable () async throws -> OpenCodeClient, restartServer: (@MainActor () async -> Bool)?,
+        writeTrust: @escaping @Sendable (ProjectTrustFile, URL) throws -> Void = { try $0.write(to: $1) }
     ) {
         self.store = store
         self.directories = directories
         self.runningPolicy = runningPolicy
         self.client = client
         self.restartServer = restartServer
+        self.writeTrust = writeTrust
     }
 
     // MARK: Trust
@@ -115,46 +128,117 @@ public final class OpenCodeConfigService {
     public func load() async {
         guard !loaded else { return }
         loaded = true
-        trusted = (try? await store.openCodeTrust()) ?? [:]
-        await writeTrustFile()
+        if let file = directories?.trustFile { trustRevision = await Self.revision(of: file) }
+        do {
+            trusted = try await store.openCodeTrust()
+        } catch {
+            // Unknown trust: nothing is trusted (the file is written empty), and the reason is shown.
+            trusted = [:]
+            trustProblem = "Could not read the trusted projects: \(error.localizedDescription)"
+        }
+        _ = await writeTrustFile()
     }
 
     public func isTrusted(_ directory: String) -> Bool { trusted[directory] != nil }
 
     /// Saves the choice, rewrites the trust file and asks the plugin at that project to reload (no restart). Returns
-    /// a problem to show, or nil.
+    /// a problem to show, or nil. A change counts as applied only when the plugin acknowledges the trust file's revision
+    /// and every transform reload (A10); otherwise `trustPending` stays set and the problem says so. Calls are
+    /// serialised in order.
     @discardableResult
     public func setTrusted(_ directory: String, _ value: Bool) async -> String? {
+        let previous = trustTail
+        let task = Task { @MainActor [weak self] () -> String? in
+            await previous?.value
+            guard let self else { return nil }
+            return await self.performSetTrusted(directory, value)
+        }
+        trustTail = Task { _ = await task.value }
+        return await task.value
+    }
+
+    private func performSetTrusted(_ directory: String, _ value: Bool) async -> String? {
         await load()
-        let previous = trusted
-        if value { trusted[directory] = Date() } else { trusted[directory] = nil }
+        let before = trusted[directory]
+        trusted[directory] = value ? (before ?? Date()) : nil
         do {
             try await store.setOpenCodeTrust(directory: directory, trusted: value)
         } catch {
-            trusted = previous
+            trusted[directory] = before
             return "Could not save the setting: \(error.localizedDescription)"
         }
-        await writeTrustFile()
-        guard runningPolicy == .bellocode else { return nil }
+        let fileProblem = await writeTrustFile()
+        guard runningPolicy == .bellocode else { return fileProblem }
+        unacknowledged.insert(directory)
+        let applyProblem = await applyTrust(directory)
+        await refresh(directory: directory, retryTrust: false)
+        return fileProblem ?? applyProblem
+    }
+
+    /// Asks the plugin at `directory` to re-read the trust file; nil when it acknowledged this revision. Offline (no
+    /// client) is not a problem: the server reads the file when it starts.
+    private func applyTrust(_ directory: String) async -> String? {
+        let connection: OpenCodeClient
         do {
-            _ = try await client().reloadProjectConfig(directory: directory)
-            trustPending = false
+            connection = try await client()
         } catch {
-            // Applied at the location's next setup (server restart or a location reload).
             trustPending = true
+            return nil
         }
-        await refresh(directory: directory)
-        return nil
+        do {
+            let status = try await connection.reloadProjectConfig(directory: directory)
+            if let failures = status.failures, status.applied == false {
+                trustPending = true
+                return "Saved, but opencode did not apply it (\(failures.joined(separator: ", ")) did not reload). It applies at the next reload or restart."
+            }
+            if let revision = status.revision, revision != trustRevision {
+                trustPending = true
+                return "Saved, but opencode applied an older trust list. It applies at the next reload or restart."
+            }
+            unacknowledged.remove(directory)
+            trustPending = !unacknowledged.isEmpty || trustProblem != nil
+            return nil
+        } catch {
+            trustPending = true
+            return "Saved, but opencode has not applied it yet (\(error)). It applies at the next reload or restart."
+        }
     }
 
-    private func writeTrustFile() async {
-        guard let file = directories?.trustFile else { return }
-        let value = ProjectTrustFile(trusted: Array(trusted.keys))
-        await Task.yield()
-        try? await Self.write(value, to: file)
+    /// Writes the plugin's trust file with a new revision. On failure the file is removed, so the plugin trusts no
+    /// project rather than keep an older list (fail closed), and the problem is returned and kept in `trustProblem`.
+    private func writeTrustFile() async -> String? {
+        guard let file = directories?.trustFile else { return nil }
+        trustRevision = max(trustRevision + 1, Int(Date().timeIntervalSince1970 * 1000))
+        let value = ProjectTrustFile(trusted: Array(trusted.keys), revision: trustRevision)
+        do {
+            try await Self.write(value, to: file, with: writeTrust)
+            trustProblem = nil
+            return nil
+        } catch {
+            let removed = await Self.remove(file)
+            let text = "Could not write BelloCode's trust file (\(error.localizedDescription))"
+                + (removed ? ". Until it can be written, no project's repository configuration loads." : ", and the old one could not be removed.")
+            trustProblem = text
+            trustPending = true
+            return text
+        }
     }
 
-    private nonisolated static func write(_ value: ProjectTrustFile, to file: URL) async throws { try value.write(to: file) }
+    private nonisolated static func write(
+        _ value: ProjectTrustFile, to file: URL, with writer: @Sendable (ProjectTrustFile, URL) throws -> Void
+    ) async throws { try writer(value, file) }
+
+    private nonisolated static func remove(_ file: URL) async -> Bool { unlink(file.path) == 0 || errno == ENOENT }
+
+    private nonisolated static func revision(of file: URL) async -> Int { ProjectTrustFile.read(from: file).revision }
+
+    /// Retries what the plugin has not acknowledged (a failed write first).
+    private func retryPendingTrust() async {
+        guard runningPolicy == .bellocode, trustPending else { return }
+        if trustProblem != nil, await writeTrustFile() != nil { return }
+        for directory in unacknowledged.sorted() { _ = await applyTrust(directory) }
+        if unacknowledged.isEmpty, trustProblem == nil { trustPending = false }
+    }
 
     // MARK: Files
 
@@ -182,7 +266,12 @@ public final class OpenCodeConfigService {
     /// Lists what the server reports for `directory` (the selected project, or nil for the global view), classifies
     /// sources and checks the configuration.
     public func refresh(directory: String?) async {
+        await refresh(directory: directory, retryTrust: true)
+    }
+
+    private func refresh(directory: String?, retryTrust: Bool) async {
         await load()
+        if retryTrust { await retryPendingTrust() }
         generation += 1
         let mine = generation
         refreshing = true
@@ -221,10 +310,11 @@ public final class OpenCodeConfigService {
         async let skills = client.skills(directory: location)
         async let entries = client.configEntries(directory: location)
         async let plugins = client.plugins(directory: location ?? folder?.url.path ?? "/")
-        let (agentList, commandList, skillList, entryList) = try await (agents, commands, skills, entries)
-        let pluginList = (try? await plugins) ?? []
+        // A failed plugin listing is a failed refresh (shown as stale), never "BelloCode's plugin is off" (N14).
+        let (agentList, commandList, skillList, entryList, pluginList) = try await (agents, commands, skills, entries, plugins)
 
-        let globalFolder = folder?.url.standardizedFileURL.path ?? "\u{0}"
+        // With its trailing slash, so a sibling such as `opencode-extra/` is not taken for the global folder (N33).
+        let globalFolder = folder.map { Self.folderPrefix($0.url.standardizedFileURL.path) } ?? "\u{0}"
         let globalConfigPath = folder?.path(of: .config).standardizedFileURL.path
         var globalAgents = Set<String>(), globalCommands = Set<String>(), projectAgents = Set<String>(), projectCommands = Set<String>()
         var userPlugins: [String] = []
@@ -319,6 +409,9 @@ public final class OpenCodeConfigService {
         )
     }
 
+    /// `path` with exactly one trailing slash, for containment checks by prefix.
+    nonisolated static func folderPrefix(_ path: String) -> String { path.hasSuffix("/") ? path : path + "/" }
+
     /// Snapshots and demos only: shows fixed values without a server.
     public func presentForSnapshots(inventory: OpenCodeInventory?, configProblem: String?, refreshError: String? = nil, trusted: [String] = [],
                                     runningPolicy: RepositoryConfigPolicy = .bellocode) {
@@ -350,7 +443,11 @@ public final class OpenCodeConfigService {
         guard let restartServer else { return "This server is not managed by BelloCode, so it cannot be restarted from here." }
         guard await restartServer() else { return "The server could not be restarted." }
         runningPolicy = policy
-        trustPending = false
+        // A new server reads the trust file at setup: what was written is now applied.
+        if trustProblem == nil {
+            unacknowledged = []
+            trustPending = false
+        }
         await refresh(directory: directory)
         return nil
     }

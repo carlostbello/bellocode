@@ -184,12 +184,23 @@ public struct ModelDefaultsFile: Codable, Sendable, Hashable {
 
 public struct ProjectTrustFile: Codable, Sendable, Hashable {
     public var version: Int
+    /// The app's revision of this list. The plugin reports the revision it applied, so a trust change counts as done
+    /// only when the running plugin acknowledges this exact list (0: a file from before revisions).
+    public var revision: Int
     /// Absolute project directories, sorted.
     public var trusted: [String]
 
-    public init(trusted: [String]) {
+    public init(trusted: [String], revision: Int = 0) {
         version = 1
+        self.revision = revision
         self.trusted = Array(Set(trusted)).sorted()
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+        trusted = try container.decode([String].self, forKey: .trusted)
     }
 
     public func write(to file: URL) throws {

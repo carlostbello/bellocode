@@ -140,6 +140,12 @@ extension OrchestrationContract {
     /// `bellocode.projectConfig` output for one location.
     public struct ProjectConfigStatus: Sendable, Equatable, Decodable {
         public var mode: String
+        /// The trust file revision the plugin read (nil: a plugin from before revisions).
+        public var revision: Int?
+        /// Whether every transform reload succeeded (nil: a plugin from before acknowledgements).
+        public var applied: Bool?
+        /// The transforms that failed to reload ("skills", "agents", "commands", "repository").
+        public var failures: [String]?
         public var trusted: Bool
         public var agents: [String]
         public var commands: [String]

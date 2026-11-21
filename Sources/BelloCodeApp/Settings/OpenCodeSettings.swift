@@ -381,7 +381,7 @@ struct OpenCodeSettingsView: View {
                 }
                 SettingsToggleRow(
                     "Trust this project's opencode config",
-                    detail: service.trustPending ? "Saved; applied when opencode is back." : "Applies at once, without restarting opencode.",
+                    detail: service.trustProblem ?? (service.trustPending ? "Saved; not applied yet. Applied when opencode reloads or restarts." : "Applies at once, without restarting opencode."),
                     isOn: Binding(get: { model.isSelectedTrusted }, set: { model.setTrusted($0) }))
             }
         }
