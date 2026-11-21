@@ -237,11 +237,11 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
     }
 
     nonisolated func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let event = body["event"] as? String else { return }
-        let ms = body["ms"] as? Int
-        let text = body["text"] as? String
-        let reason = body["reason"] as? String
-        MainActor.assumeIsolated { handle(event: event, ms: ms, text: text, reason: reason) }
+        // WebKit delivers script messages on the main thread; `body` is main-actor isolated, so it is read inside.
+        MainActor.assumeIsolated {
+            guard let body = message.body as? [String: Any], let event = body["event"] as? String else { return }
+            handle(event: event, ms: body["ms"] as? Int, text: body["text"] as? String, reason: body["reason"] as? String)
+        }
     }
 
     private func handle(event: String, ms: Int?, text: String?, reason: String?) {

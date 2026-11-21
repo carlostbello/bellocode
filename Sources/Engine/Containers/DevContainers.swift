@@ -328,7 +328,7 @@ extension EnvironmentService {
             for command in commands {
                 let result = try? await runtimeRef.run(container: container, argv: [shell, "-c", command], workingDir: directory,
                                                        environment: environment, user: user, timeout: .seconds(900))
-                guard let self else { return }
+                guard self != nil else { return }
                 if result?.exitCode != 0 {
                     model.lastError = "The dev container command “\(command.prefix(80))” failed (exit \(result.map { String($0.exitCode) } ?? "unknown"))."
                     return

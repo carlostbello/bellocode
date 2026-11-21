@@ -128,7 +128,7 @@ public actor ComposerDraftArchive {
                 do { try await Task.sleep(for: debounce) } catch { return }
             }
             guard !Task.isCancelled else { return }
-            await self.enqueueCommit(key)
+            self.enqueueCommit(key)
         }
     }
 
@@ -143,7 +143,7 @@ public actor ComposerDraftArchive {
         let task = Task {
             await previous?.value
             await self.commit(key)
-            await self.chainFinished(key, id)
+            self.chainFinished(key, id)
         }
         chains[key] = (id, task)
         return task

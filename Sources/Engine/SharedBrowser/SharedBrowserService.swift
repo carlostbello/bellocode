@@ -167,7 +167,7 @@ public final class SharedBrowserService {
         await loadState()
         guard let configuration, let environments, environments.isEnabled else { return }
         let runtime = DockerBrowserRuntime(
-            socketPath: environments.activeRuntime.socketPath ?? (NSHomeDirectory() + "/.rd/docker.sock"),
+            socketPath: environments.activeRuntime.socketPath,
             docker: configuration.docker, contextDirectory: configuration.contextDirectory, configDirectory: configuration.dockerConfigDirectory,
             key: { [vault = configuration.keyVault, account = configuration.keyAccount] in try await Self.packingKey(vault, account: account) },
             network: { [weak self] image in

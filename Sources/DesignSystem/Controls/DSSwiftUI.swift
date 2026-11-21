@@ -108,6 +108,9 @@ private struct DSTextFieldChrome: ViewModifier {
     @FocusState private var focused: Bool
     @Environment(\.isEnabled) private var isEnabled
 
+    /// Made from `TextFieldStyle._body`, which is not main-actor isolated (N32).
+    nonisolated init() {}
+
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
         return content
