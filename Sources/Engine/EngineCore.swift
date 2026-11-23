@@ -1392,6 +1392,11 @@ actor EngineCore {
         serverClockOffset = milliseconds - Timestamp.now.milliseconds
     }
 
+    /// A moment on this Mac's clock as the server's clock reads it (estimated), for comparing with session times.
+    func serverTime(of date: Date) -> Timestamp {
+        Timestamp(milliseconds: (Timestamp(date).milliseconds + serverClockOffset).rounded())
+    }
+
     /// The current time on the server's clock (estimated).
     private func serverNow() -> Timestamp {
         Timestamp(milliseconds: (Timestamp.now.milliseconds + serverClockOffset).rounded())

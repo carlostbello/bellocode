@@ -65,7 +65,10 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
 - **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
   the closed form.
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
-  sibling directory of the same checkout blocks a file restore), re-checked just before files are written; worktree
+  sibling directory of the same checkout blocks a file restore), re-checked just before files are written. It checks
+  every unarchived session the engine knows, delegated children included (not only sidebar rows); the rewound
+  thread's own children are exempt only when settled and created after the checkpoint, i.e. by the turns the rewind
+  removes (second round of AF19). Worktree
   cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
   rewind Undo is shown with the affected path.
 - **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.
