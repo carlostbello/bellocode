@@ -29,7 +29,7 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
   still ask for everything except saved grants (reviewed only once the plugin loads).
 - Non-waking synthetic input (`resume: false`) is parked in the **inbox** until the next run (probe).
 
-## Policy (`RiskPolicy`, version `bellocode-auto-3`, pure and unit-tested; precedence below, a model can override none)
+## Policy (`RiskPolicy`, version `bellocode-auto-4`, pure and unit-tested; precedence below, a model can override none)
 1. **opencode's configured denies** (never reach BelloCode).
 2. **Hard deny** (reply `reject` with the reason): BelloCode/opencode data and config (`~/.config/opencode`,
    `~/.local/share|state/opencode`, `~/Library/Application Support/BelloCode`, `bellocode-exec.json`), `~/Library/Keychains`,
@@ -40,8 +40,11 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
    secret-like env vars (`$*TOKEN*`, `$*SECRET*`, …, `printenv NAME`) and environment dumps (`env`, `jq env`/`$ENV`);
    searches over hidden or ignored files (`rg -u`/`--hidden`/`--no-ignore`, `ag -u`, hidden-file globs such as `cat .*`) and
    a `grep -r` whose tree holds a secret-looking file (bounded scan of every folder grep enters, `.git` and
-   `node_modules` included, honouring `--include`/`--exclude`/`--exclude-dir`, following links as `-r`/`-R` do, glob
-   operands expanded; a shell variable in the command, or over 20 000 entries, counts as one; N05, AF14); paths outside the project and its worktrees
+   `node_modules` included; `--include`/`--exclude`/`--exclude-dir`/`--include-dir` applied in order, the last matching
+   rule winning and a file counting as read when GNU or BSD grep would read it (BSD also matches the whole path);
+   following links as `-r`/`-R` do; glob operands expanded as the shell does, hidden names included; a shell variable, a
+   brace expansion, a glob the shell would expand in an option or the pattern, an operand or folder that cannot be
+   examined, or over 20 000 entries, counts as one; N05, AF14, GV03); paths outside the project and its worktrees
    after `~`, `..`, `cd` and symlink resolution (`/tmp` exempt for container commands); cross-project
    (`bellocode_other_project`); agent/MCP/isolation config (`opencode.json*`, `.opencode/`, `.mcp.json`, `.devcontainer/`,
    `.git/hooks`, `.git/config`, `git config`, proxy/TLS env vars, firewall tools; written by output redirections or by any

@@ -15,8 +15,10 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 
 - **Auto asks more often about recursive searches.** The preflight for `grep -r` / `-R` now walks every folder grep
   would enter, `.git` and `node_modules` included, follows links as grep does and expands globs; a search whose tree
-  holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. The risk policy version
-  is `bellocode-auto-3` (AF14).
+  holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. `--include`/`--exclude`
+  rules apply in order with the last match winning, as grep applies them, and a brace expansion, a glob the shell
+  would expand in an option or the pattern, or an operand that cannot be examined also asks. The risk policy version
+  is `bellocode-auto-4` (AF14, GV03).
 - **Workspace containers run as a verified numeric user.** The image's user is resolved from its own account files
   without running it, root and unknown names are refused before anything starts, and every exec (commands,
   terminals, MCP servers, probes, port relays, secret commands) uses the numeric `uid:gid`. An existing workspace that

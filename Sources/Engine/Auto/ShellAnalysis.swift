@@ -24,6 +24,12 @@ public struct ShellAnalysis: Sendable, Equatable {
         public var expandsVariables: Bool
         /// Unquoted glob characters in an argument.
         public var hasGlob: Bool
+        /// Indices into `words` of the words with unquoted glob characters (`*`, `?`, `[`): the shell replaces each with
+        /// the paths it matches.
+        public var globWords: Set<Int> = []
+        /// Indices into `words` of the words with an unquoted brace expansion (`{a,b}`, `{1..3}`): the shell turns each
+        /// into several words, so what the command receives is not what was written.
+        public var braceWords: Set<Int> = []
 
         public var program: String? { words.first.map { ($0 as NSString).lastPathComponent } }
         public var arguments: [String] { Array(words.dropFirst()) }
@@ -110,6 +116,10 @@ public struct ShellAnalysis: Sendable, Equatable {
         var current = Command(words: [], assignments: [], redirects: [], joiner: "", expandsVariables: false, hasGlob: false)
         var word = ""
         var wordStarted = false
+        /// The current word has an unquoted glob character.
+        var wordGlob = false
+        /// Brace expansion in the current word: an unquoted `{` (1), then an unquoted `,` or `..` (2), then `}` (3).
+        var wordBrace = 0
         var pendingRedirect: String?
         var nextJoiner = ""
 
@@ -125,10 +135,14 @@ public struct ShellAnalysis: Sendable, Equatable {
             } else if current.words.isEmpty, isAssignment(word) {
                 current.assignments.append(word)
             } else {
+                if wordGlob { current.globWords.insert(current.words.count) }
+                if wordBrace == 3 { current.braceWords.insert(current.words.count) }
                 current.words.append(word)
             }
             word = ""
             wordStarted = false
+            wordGlob = false
+            wordBrace = 0
         }
 
         func isAssignment(_ value: String) -> Bool {
@@ -318,15 +332,19 @@ public struct ShellAnalysis: Sendable, Equatable {
                     }
                 case "*", "?", "[":
                     current.hasGlob = true
+                    wordGlob = true
                     word.append(c)
                     wordStarted = true
                     index += 1
                 case "{":
                     if !wordStarted, peek(1) == " " || peek(1) == "\n" { flag("command group") }
+                    if wordBrace == 0 { wordBrace = 1 }
                     word.append(c)
                     wordStarted = true
                     index += 1
                 default:
+                    if wordBrace == 1, c == "," || (c == "." && peek(1) == ".") { wordBrace = 2 }
+                    if wordBrace == 2, c == "}" { wordBrace = 3 }
                     word.append(c)
                     wordStarted = true
                     index += 1
