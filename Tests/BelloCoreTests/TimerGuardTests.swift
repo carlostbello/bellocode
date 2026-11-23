@@ -1,12 +1,14 @@
 import Foundation
 import Testing
 
-/// Fails when code under `Sources/` uses a timer on the system's uptime clock. On macOS 27 (Darwin 27.0) such timers
+/// Fails when code under `Sources/` or `Tests/` uses a timer on the system's uptime clock. On macOS 27 (Darwin 27.0) such timers
 /// were seen not to fire while the process is otherwise idle, which hung timeouts and froze periodic UI. Use
 /// BelloCore's `ContinuousDeadline` / `ContinuousTicker`, DesignSystem's `ContinuousTimeline`, a `Task.sleep(for:)`
 /// (ContinuousClock) in an owned task, or `asyncAfter(wallDeadline:)` where a dispatch callback is required.
 ///
-/// A use that is genuinely fine goes in `allowlist` with a one-line reason. Comment lines are not scanned.
+/// A use that is genuinely fine goes in `allowlist` with a one-line reason. Comment lines are not scanned, nor is this
+/// file (its samples are the banned shapes). A test that hangs on a timer that never fires hangs the whole run, so
+/// `Tests/` follows the same rule (a semaphore waits with `wait(wallTimeout:)` or an async gate).
 @Suite("Uptime-clock timer guard")
 struct TimerGuardTests {
     /// Banned API shapes. Each is a regular expression matched against one line of Swift (comments stripped).
@@ -46,13 +48,19 @@ struct TimerGuardTests {
         var description: String { "\(path):\(line): \(rule): \(text)" }
     }
 
+    /// The folders scanned, relative to the package root.
+    static let scanned = ["Sources", "Tests"]
+
     static func scan() throws -> [Hit] {
         let root = packageRoot
-        let sources = root.appending(path: "Sources")
         let rules = try banned.map { (name: $0.name, regex: try Regex($0.pattern)) }
         var hits: [Hit] = []
-        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else { return [] }
-        for case let url as URL in walker where url.pathExtension == "swift" {
+        let me = URL(filePath: #filePath).standardizedFileURL.path(percentEncoded: false)
+        let urls = scanned.flatMap { folder -> [URL] in
+            let walker = FileManager.default.enumerator(at: root.appending(path: folder), includingPropertiesForKeys: nil)
+            return (walker?.allObjects as? [URL]) ?? []
+        }
+        for url in urls where url.pathExtension == "swift" && url.standardizedFileURL.path(percentEncoded: false) != me {
             let relative = String(url.path(percentEncoded: false).dropFirst(root.path(percentEncoded: false).count))
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             let text = try String(contentsOf: url, encoding: .utf8)
@@ -81,10 +89,11 @@ struct TimerGuardTests {
         return code.trimmingCharacters(in: .whitespaces)
     }
 
-    @Test func productionCodeUsesNoUptimeClockTimers() throws {
+    @Test func codeAndTestsUseNoUptimeClockTimers() throws {
         let hits = try Self.scan()
-        #expect(!hits.isEmpty || FileManager.default.fileExists(atPath: Self.packageRoot.appending(path: "Sources").path),
-                "Sources/ not found from \(#filePath)")
+        for folder in Self.scanned {
+            #expect(FileManager.default.fileExists(atPath: Self.packageRoot.appending(path: folder).path), "\(folder)/ not found from \(#filePath)")
+        }
         let unexpected = hits.filter { hit in
             !Self.allowlist.contains { hit.path == $0.path && hit.text.contains($0.contains) }
         }

@@ -54,7 +54,11 @@ final class HTTPSGitServer: Sendable {
             handler.serve(connection) { request in log.entries.withLock { $0.append(request) } }
         }
         listener.start(queue: queue)
-        _ = ready.wait(timeout: .now() + 10)
+        // Wall clock: an uptime-clock timeout may not fire in an idle process (macOS 27).
+        guard ready.wait(wallTimeout: .now() + 10) == .success else {
+            listener.cancel()
+            throw CocoaError(.featureUnsupported)
+        }
         port = portBox.withLock { $0 }
         if port == 0 { throw CocoaError(.featureUnsupported) }
     }
