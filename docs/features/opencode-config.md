@@ -110,8 +110,10 @@ two layers:
    - Trust is stored in `app_opencode_trust` (migration `v14-opencode-trust`), mirrored to `<data>/bellocode-trust.json`
      for the plugin, and applied by RPC `bellocode.projectConfig`, which re-reads the file and replays the transforms.
      It applies at once with no restart, and untrusting removes the items again (verified). A change reloads every
-     active location at or below the changed entry (projects and their threads' folders, up to 64), not only the folder
-     chosen, and stays pending until each acknowledges; a location no entry covers any more that still reports the
+     location the server has loaded at or below the changed entry (`GET /api/debug/location`, however many, child
+     threads' folders included), not only the folder chosen, and stays pending until each acknowledges; when that list
+     cannot be read, the app's known locations reload and the change stays pending with a problem until a retry can
+     list them (v1.0.1 AF17, GV07); a location no entry covers any more that still reports the
      repository configuration keeps it pending with a problem naming it (v1.0.1 AF17). Offline, the choice is
      saved and applied at the next location setup ("Saved; applied when opencode is back").
 2. **"Load every repository's opencode.json and plugins" (`.native`, server-wide, off by default).** opencode loads every

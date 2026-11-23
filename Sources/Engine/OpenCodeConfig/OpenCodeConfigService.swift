@@ -106,9 +106,13 @@ public final class OpenCodeConfigService {
     @ObservationIgnored private(set) var trustRevision = 0
     /// Locations whose trust change the plugin has not acknowledged yet.
     @ObservationIgnored private var unacknowledged: Set<String> = []
+    /// Trust entries whose covered locations could not be listed (the server's list failed): the change stays pending
+    /// and is applied again, with a fresh list, at the next retry (AF17, GV07).
+    @ObservationIgnored private var unlisted: Set<String> = []
     /// The directories opencode may hold as locations (projects and their threads; set by the engine). A trust entry
     /// covers the folders below it, and each location keeps its own loaded agents and skills, so a change reloads
-    /// every one of these it covers, not only the folder chosen in Settings (AF17).
+    /// every location it covers, not only the folder chosen in Settings (AF17). The server's own list of loaded
+    /// locations is used when it can be read; this one only when it cannot (the change then stays pending).
     @ObservationIgnored public var activeLocations: @MainActor () -> [String] = { [] }
     /// Trust changes run one at a time, in order (rapid toggles must not interleave their writes or rollbacks).
     @ObservationIgnored private var trustTail: Task<Void, Never>?
@@ -173,24 +177,58 @@ public final class OpenCodeConfigService {
         }
         let fileProblem = await writeTrustFile()
         guard runningPolicy == .bellocode else { return fileProblem }
-        // Every location the entry covers reloads and must acknowledge, not only `directory` (AF17).
-        let locations = Self.covered(by: directory, among: activeLocations())
+        let applyProblem = await reloadCovered(by: directory)
+        await refresh(directory: directory, retryTrust: false)
+        return fileProblem ?? applyProblem
+    }
+
+    /// Reloads every location the trust entry at `directory` covers, not only `directory` (AF17), and returns the first
+    /// problem. The locations come from the server's list of what it has loaded, so none is left out, however many
+    /// there are and whether or not the sidebar shows them (a child thread's own folder; GV07). When that list cannot
+    /// be read, the app's own locations are reloaded and the change stays pending with a problem saying so, until a
+    /// retry can list them. Offline is not a problem: a location reads the trust file when it is set up.
+    private func reloadCovered(by directory: String) async -> String? {
+        let connection: OpenCodeClient
+        do {
+            connection = try await client()
+        } catch {
+            trustPending = true
+            return nil
+        }
+        var listProblem: String?
+        let candidates: [String]
+        do {
+            candidates = try await connection.loadedLocations()
+            unlisted.remove(directory)
+        } catch {
+            unlisted.insert(directory)
+            candidates = activeLocations()
+            listProblem = "Saved, but BelloCode could not list the folders opencode has loaded (\(error)), so some may still "
+                + "use the previous setting. It applies at the next retry, reload or restart."
+        }
+        let locations = Self.covered(by: directory, among: candidates)
         unacknowledged.formUnion(locations)
         var applyProblem: String?
         for location in locations {
             let problem = await applyTrust(location)
             if applyProblem == nil { applyProblem = problem }
         }
-        await refresh(directory: directory, retryTrust: false)
-        return fileProblem ?? applyProblem
+        updatePending()
+        return listProblem ?? applyProblem
     }
 
-    /// `directory` and the locations at or below it (canonical comparison), `directory` first. Bounded.
+    private func updatePending() {
+        trustPending = !unacknowledged.isEmpty || !unlisted.isEmpty || trustProblem != nil
+    }
+
+    /// `directory` and the locations at or below it (canonical comparison), `directory` first, each once. Not capped:
+    /// a location left out would keep the old setting while Settings reported the change applied (GV07); the input is
+    /// bounded by what the server has loaded.
     nonisolated static func covered(by directory: String, among locations: [String]) -> [String] {
         let base = canonical(directory)
         var seen: Set<String> = [directory]
         var result = [directory]
-        for location in locations where result.count < 64 && seen.insert(location).inserted && contains(base, canonical(location)) {
+        for location in locations where seen.insert(location).inserted && contains(base, canonical(location)) {
             result.append(location)
         }
         return result
@@ -236,7 +274,7 @@ public final class OpenCodeConfigService {
                 return "Saved, but opencode still uses the repository configuration at \((directory as NSString).abbreviatingWithTildeInPath). It applies at the next reload or restart."
             }
             unacknowledged.remove(directory)
-            trustPending = !unacknowledged.isEmpty || trustProblem != nil
+            updatePending()
             return nil
         } catch {
             trustPending = true
@@ -276,8 +314,9 @@ public final class OpenCodeConfigService {
     private func retryPendingTrust() async {
         guard runningPolicy == .bellocode, trustPending else { return }
         if trustProblem != nil, await writeTrustFile() != nil { return }
+        for directory in unlisted.sorted() { _ = await reloadCovered(by: directory) }
         for directory in unacknowledged.sorted() { _ = await applyTrust(directory) }
-        if unacknowledged.isEmpty, trustProblem == nil { trustPending = false }
+        if unacknowledged.isEmpty, unlisted.isEmpty, trustProblem == nil { trustPending = false }
     }
 
     // MARK: Files
@@ -486,6 +525,7 @@ public final class OpenCodeConfigService {
         // A new server reads the trust file at setup: what was written is now applied.
         if trustProblem == nil {
             unacknowledged = []
+            unlisted = []
             trustPending = false
         }
         await refresh(directory: directory)

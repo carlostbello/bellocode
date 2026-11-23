@@ -43,7 +43,7 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   revision it protects (AF06, AF21). Commit and Push reports a failed push (NF05). Rewind is scoped to the thread's
   worktree root, and rollback and Undo act there; a failed Undo is reported (AF19, AF20, NF12).
 - **Project boundary and opencode config (P7, P8):** repository instruction reads open no path through a link, atomically with the lookup, and re-check every folder's identity after the read; hard-linked instruction files are refused (AF08);
-  a trust change reloads every active location it covers (AF17); a Settings save never overwrites an external
+  a trust change reloads every location the server has loaded below it, however many, and stays pending with a problem when that list cannot be read (AF17, GV07); a Settings save never overwrites an external
   editor's save to `opencode.json` (AF24); Restart Server waits for the server before refreshing (NF06); Reload opencode
   Configuration reports its result when Settings is closed (NF16).
 - **Secrets and the CLI (P5):** the CLI takes the server address and password from one authority and the password

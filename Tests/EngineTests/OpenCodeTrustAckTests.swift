@@ -23,6 +23,8 @@ struct OpenCodeTrustAckTests {
             var stillTrusted: Set<String> = []
             /// The location of each reload, in order.
             var reloaded: [String] = []
+            /// What `GET /api/debug/location` lists (nil: the listing fails).
+            var loaded: [String]? = ["/r/a"]
         }
         let state = Mutex(State())
         let trustFile: URL
@@ -36,6 +38,12 @@ struct OpenCodeTrustAckTests {
             var body = #"{\#(location),"data":[]}"#
             switch path {
             case "/api/config": body = "[]"
+            case "/api/debug/location":
+                if let loaded = state.loaded {
+                    body = "[" + loaded.map { #"{"directory":"\#($0)"}"# }.joined(separator: ",") + "]"
+                } else {
+                    status = 503; body = #"{"_tag":"ServiceUnavailableError","message":"busy"}"#
+                }
             case "/api/skill": body = #"{\#(location),"data":[{"id":"s","name":"s","path":"\#(state.skillPath)"}]}"#
             case "/api/plugin":
                 if state.pluginsFail { status = 503; body = #"{"_tag":"Unavailable","message":"busy"}"# }
@@ -104,7 +112,7 @@ struct OpenCodeTrustAckTests {
         let root = Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let (service, transport, _) = try await make(root)
-        service.activeLocations = { ["/r/a", "/r/a/web", "/r/b", "/r/ab"] }
+        transport.state.withLock { $0.loaded = ["/r/a", "/r/a/web", "/r/b", "/r/ab"] }
         #expect(await service.setTrusted("/r/a", false) == nil)
         #expect(transport.state.withLock { $0.reloaded } == ["/r/a", "/r/a/web"])
         #expect(!service.trustPending)
@@ -118,6 +126,40 @@ struct OpenCodeTrustAckTests {
         // Retried at the next refresh; acknowledged once the location applied it.
         transport.state.withLock { $0.stillTrusted = [] }
         await service.refresh(directory: "/r/a")
+        #expect(!service.trustPending)
+    }
+
+    /// GV07: more than 64 covered locations (a monorepo opened folder by folder), and a child thread's own folder the
+    /// sidebar never lists: every location the server has loaded below the entry reloads; none is left out.
+    @Test func everyLoadedLocationReloadsHoweverMany() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (service, transport, _) = try await make(root)
+        let folders = (0..<150).map { "/r/a/pkg\($0)" }
+        transport.state.withLock { $0.loaded = ["/r/a"] + folders + ["/r/a/child-only", "/r/b"] }
+        service.activeLocations = { ["/r/a", "/r/a/pkg0"] }  // what the sidebar knows
+        #expect(await service.setTrusted("/r/a", false) == nil)
+        let reloaded = transport.state.withLock { $0.reloaded }
+        #expect(Set(reloaded) == Set(["/r/a"] + folders + ["/r/a/child-only"]))
+        #expect(reloaded.count == 152)
+        #expect(!service.trustPending)
+    }
+
+    /// AF17/GV07: when the server's list cannot be read, the change is not reported done: the known locations reload,
+    /// the change stays pending with a problem, and a retry with a working list reloads what was missed.
+    @Test func anUnlistableServerKeepsTheChangePending() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (service, transport, _) = try await make(root)
+        transport.state.withLock { $0.loaded = nil }
+        service.activeLocations = { ["/r/a"] }
+        let problem = await service.setTrusted("/r/a", false)
+        #expect(problem?.contains("could not list") == true)
+        #expect(service.trustPending)
+        #expect(transport.state.withLock { $0.reloaded } == ["/r/a"])
+        transport.state.withLock { $0.loaded = ["/r/a", "/r/a/web"]; $0.reloaded = [] }
+        await service.refresh(directory: "/r/a")
+        #expect(transport.state.withLock { $0.reloaded }.contains("/r/a/web"))
         #expect(!service.trustPending)
     }
 
