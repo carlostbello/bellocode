@@ -820,4 +820,50 @@ struct ForgeGateTests {
         try await gate.acquire("i")
         #expect(await gate.inFlight("i") == 1)
     }
+
+    /// A transport that holds every request until the test answers it.
+    final class HeldTransport: ForgeTransport {
+        private let held = Mutex<[CheckedContinuation<ForgeResponse, Never>]>([])
+        private let sent = Mutex(0)
+        var count: Int { sent.withLock { $0 } }
+        var waiting: Int { held.withLock { $0.count } }
+        func send(_ request: ForgeRequest) async throws -> ForgeResponse {
+            sent.withLock { $0 += 1 }
+            return await withCheckedContinuation { continuation in held.withLock { $0.append(continuation) } }
+        }
+        func answer(_ response: ForgeResponse) {
+            let next = held.withLock { $0.isEmpty ? nil : $0.removeFirst() }
+            next?.resume(returning: response)
+        }
+    }
+
+    /// AV14, GV02: through the provider, in production order. Four requests hold every slot and a fifth waits; the
+    /// first answer is a 429. The waiter it frees is refused inside the window and never sent.
+    @Test func aQueuedRequestIsNotSentAfterA429() async throws {
+        let transport = HeldTransport()
+        let vault = InMemorySecretVault()
+        let instance = try #require(GitLabInstance(baseURL: "https://gitlab.example.com"))
+        try vault.store(account: instance.baseURL, label: "t", value: SecretValue("zz-SENTINEL-token"))
+        let provider = GitLabProvider(transport: transport, tokens: vault)
+        let inFlight = (0..<4).map { _ in Task { try await provider.currentUser(instance) } }
+        #expect(await Self.waitUntil { transport.waiting == 4 })
+        let handOffs = Mutex<[Bool]>([])
+        await provider.gate.observeHandOffs { throttled in handOffs.withLock { $0.append(throttled) } }
+        let queued = Task { try await provider.currentUser(instance) }
+        #expect(await Self.waitUntil { await provider.gate.waiting(instance.baseURL) == 1 })
+        transport.answer(ForgeResponse(status: 429, headers: ["Retry-After": "60"]))
+        do {
+            _ = try await queued.value
+            Issue.record("the queued request was sent inside the window")
+        } catch let error as ForgeError {
+            if case .rateLimited = error {} else { Issue.record("\(error)") }
+        }
+        #expect(transport.count == 4, "nothing more was sent")
+        #expect(handOffs.withLock { $0 } == [true], "the 429 was recorded before its slot went to the waiter")
+        for _ in 0..<3 { transport.answer(ForgeResponse(status: 200, body: Data(#"{"username":"me"}"#.utf8))) }
+        var outcomes = 0
+        for task in inFlight { if (try? await task.value) != nil { outcomes += 1 } }
+        #expect(outcomes == 3)
+        #expect(await provider.gate.inFlight(instance.baseURL) == 0)
+    }
 }
