@@ -38,11 +38,19 @@ public final class GitLabSettingsModel {
         }
     }
 
+    /// Saves a new token for `instance`, then tests it. A save that fails is shown on the instance and the typed token
+    /// is kept in the field to retry; the old token is not tested as if it were the new one (NV12).
     public func replaceToken(_ instance: GitLabInstance) async {
         guard !token.isEmpty else { return }
-        let secret = SecretValue(token)
+        let typed = token
         token = ""
-        _ = try? await service.saveInstance(baseURL: instance.baseURL, token: secret)
+        do {
+            _ = try await service.saveInstance(baseURL: instance.baseURL, token: SecretValue(typed))
+        } catch {
+            if token.isEmpty { token = typed }
+            results[instance.baseURL] = "The new token was not saved: \(ExtrasError.message(error))"
+            return
+        }
         await test(instance)
     }
 
