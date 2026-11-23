@@ -350,6 +350,8 @@ public final class SharedBrowserService {
         approvedSessions = approvedSessions.filter { $0.value != directory }
         pendingRevocations.insert(directory)
         defaults.set(pendingRevocations.sorted(), forKey: Self.pendingRevocationsKey)
+        // Calls already admitted for the project are cancelled; none reaches the browser or returns a result (AV05).
+        await broker.revoke(directory: directory)
         await hosts[directory]?.toolsChanged()
         return await finishRevocation(directory)
     }
