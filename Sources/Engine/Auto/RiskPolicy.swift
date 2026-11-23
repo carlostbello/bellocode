@@ -1007,13 +1007,22 @@ public enum RiskPolicy {
             target = args.first { !$0.hasPrefix("-") && $0.contains("@") }.map { String($0.split(separator: ":").first ?? "") } ?? name
         }
         let lower = args.map { $0.lowercased() }
+        // `--head` is curl's own option (-I), not an abbreviation of `--header`.
+        let header = { (flag: String) in flag == "-h" || OptionSyntax.abbreviates(flag, ["header"], exact: ["head"]) }
         let credentialHeader = zip(lower, lower.dropFirst()).contains { flag, value in
-            (flag == "-h" || flag == "--header") && ["authorization", "token", "api-key", "apikey", "x-api-key", "cookie", "private-token", "x-auth"].contains { value.contains($0) }
-        } || lower.contains { $0.hasPrefix("--header=") && ["authorization", "token", "api-key", "cookie"].contains(where: $0.contains) }
+            header(flag) && !flag.contains("=") && ["authorization", "token", "api-key", "apikey", "x-api-key", "cookie", "private-token", "x-auth"].contains { value.contains($0) }
+        } || lower.contains { header($0) && $0.contains("=") && ["authorization", "token", "api-key", "cookie"].contains(where: $0.contains) }
         // curl before 8 and wget take unique abbreviations of long options (GW02).
         let userFlag = args.contains { ["-u", "-b", "--header=Authorization"].contains($0) || OptionSyntax.abbreviates($0, ["user", "oauth2-bearer", "netrc", "netrc-file", "cookie", "http-user", "http-password", "password"]) }
+        let fileFlag = { (flag: String) in flag == "-T" || OptionSyntax.abbreviates(flag, ["upload-file", "post-file", "body-file"]) }
+        let dataFlag = { (flag: String) in
+            ["-d", "-F"].contains(flag) || OptionSyntax.abbreviates(flag, ["data", "data-ascii", "data-binary", "data-raw", "data-urlencode", "form"])
+        }
         let upload = zip(args, args.dropFirst()).contains { flag, value in
-            (["-d", "--data", "--data-binary", "--data-raw", "--data-urlencode", "-F", "--form", "-T", "--upload-file", "--post-file", "--body-file"].contains(flag)) && (value.hasPrefix("@") || value.contains("=@") || flag == "-T" || flag == "--upload-file" || flag == "--post-file" || flag == "--body-file")
+            !flag.contains("=") && ((dataFlag(flag) && (value.hasPrefix("@") || value.contains("=@"))) || fileFlag(flag))
+        } || args.contains { flag in
+            guard flag.contains("="), let value = flag.split(separator: "=", maxSplits: 1).last.map(String.init) else { return false }
+            return fileFlag(flag) || (dataFlag(flag) && (value.hasPrefix("@") || value.contains("=@")))
         }
         let urlCredential = args.contains { $0.contains("://") && urlCarriesCredentials($0) }
         if credentialHeader || userFlag || urlCredential { found.append(RiskFinding(.credentialNetwork, target)) }
