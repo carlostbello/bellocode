@@ -123,6 +123,50 @@ struct ModelSettingsServiceTests {
         #expect(!files.contains { $0.contains("bellocode-") })
     }
 
+    /// AF24 (second round): when the displaced save cannot be moved to a conflict name, it is not deleted with the
+    /// staged file: it stays there and the error names it.
+    @Test func aSaveThatCannotBeMovedAsideStaysInTheStagedFile() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (_, folder, _) = try make(root)
+        let url = try folder.ensure(.config).url
+        var message = ""
+        do {
+            try await ModelSettingsService.edit(folder, path: ["model"], value: "p/mine", beforeSwap: {
+                try? Data("{\n  \"theme\": \"first\"\n}\n".utf8).write(to: url, options: .atomic)
+            }, afterSwap: {
+                try? Data("{\n  \"theme\": \"second\"\n}\n".utf8).write(to: url, options: .atomic)
+            }, preserve: { _, _ in throw CocoaError(.fileWriteFileExists) })
+            Issue.record("the edit must fail")
+        } catch let error as CocoaError {
+            message = error.userInfo[NSLocalizedDescriptionKey] as? String ?? ""
+        }
+        let folderPath = url.deletingLastPathComponent().path
+        let staged = try #require(try FileManager.default.contentsOfDirectory(atPath: folderPath).first { $0.contains("bellocode-") }, "the save was deleted")
+        #expect(message.contains(staged), "\(message)")
+        let kept = try String(contentsOfFile: folderPath + "/" + staged, encoding: .utf8)
+        #expect(JSONCEditor.string(at: ["theme"], in: kept) == "second")
+        #expect(JSONCEditor.string(at: ["theme"], in: try text(folder)) == "first")
+    }
+
+    /// AF24 (second round): a conflict copy never replaces a file already under its name; it takes the next one.
+    @Test func aConflictCopyNeverReplacesAnExistingFile() throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appending(path: "opencode.json")
+        for name in ["opencode.json.conflict-T", "opencode.json.conflict-T-2"] {
+            try Data(name.utf8).write(to: root.appending(path: name))
+        }
+        let save = root.appending(path: "staged")
+        try Data("theirs".utf8).write(to: save)
+        let copy = try ModelSettingsService.keepConflictCopy(save, beside: url, stamp: "T")
+        #expect(copy.lastPathComponent == "opencode.json.conflict-T-3")
+        #expect(try String(contentsOf: copy, encoding: .utf8) == "theirs")
+        #expect(try String(contentsOf: root.appending(path: "opencode.json.conflict-T"), encoding: .utf8) == "opencode.json.conflict-T")
+        #expect(try String(contentsOf: root.appending(path: "opencode.json.conflict-T-2"), encoding: .utf8) == "opencode.json.conflict-T-2")
+    }
+
     @Test func aFailedPreferenceSaveKeepsThePreviousChoiceAndSaysSo() async throws {
         let root = Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

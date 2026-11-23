@@ -311,11 +311,14 @@ public final class ModelSettingsService {
     /// file that was in place is checked against the one the edit was made from. A save that landed between the
     /// comparison and the swap is put back and the edit starts again from it; if yet another save landed meanwhile,
     /// that one is kept beside the file as `opencode.json.conflict-<time>` and the edit fails saying so. Another
-    /// program's save is never silently replaced.
+    /// program's save is never silently replaced, and never deleted: the staged file is removed only while it holds
+    /// BelloCode's own text or the version the edit was made from; if a displaced save cannot be moved to its conflict
+    /// name, it stays in the staged file and the error names that file (AF24). `preserve` is the move (tests).
     nonisolated static func edit(
         _ folder: GlobalConfigFolder, path: [String], value: String?, attempt: Int = 0,
         beforeReplace: @Sendable () -> Void = {}, beforeSwap: @Sendable () -> Void = {}, afterSwap: @Sendable () -> Void = {},
-        afterReplace: @Sendable () -> Void = {}
+        afterReplace: @Sendable () -> Void = {},
+        preserve: @Sendable (URL, URL) throws -> URL = { try keepConflictCopy($0, beside: $1) }
     ) async throws {
         let url = try folder.ensure(.config).url
         let original = try String(contentsOf: url, encoding: .utf8)
@@ -323,7 +326,7 @@ public final class ModelSettingsService {
         guard updated != original else { return }
         func again() async throws {
             guard attempt < 3 else { throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "opencode.json keeps changing; try again."]) }
-            try await edit(folder, path: path, value: value, attempt: attempt + 1, afterReplace: afterReplace)
+            try await edit(folder, path: path, value: value, attempt: attempt + 1, afterReplace: afterReplace, preserve: preserve)
         }
         beforeReplace()
         // Someone else changed it meanwhile: start again from theirs rather than overwrite it.
@@ -333,7 +336,17 @@ public final class ModelSettingsService {
         guard FileManager.default.createFile(atPath: staged.path, contents: Data(updated.utf8), attributes: [.posixPermissions: permissions]) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Could not save opencode.json."])
         }
-        defer { try? FileManager.default.removeItem(at: staged) }
+        // Removed on the way out only while it holds nothing but our own text or the version the edit started from.
+        var stagedIsDisposable = true
+        defer { if stagedIsDisposable { try? FileManager.default.removeItem(at: staged) } }
+        /// `staged` holds another program's save: move it to a conflict name, or leave it where it is and say so.
+        func keep(_ message: (String) -> String) -> CocoaError {
+            stagedIsDisposable = false
+            guard let copy = try? preserve(staged, url) else {
+                return CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: message(staged.lastPathComponent)])
+            }
+            return CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: message(copy.lastPathComponent)])
+        }
         beforeSwap()
         guard renamex_np(url.path, staged.path, UInt32(RENAME_SWAP)) == 0 else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Could not save opencode.json (\(String(cString: strerror(errno))))."])
@@ -343,15 +356,11 @@ public final class ModelSettingsService {
         guard (try? String(contentsOf: staged, encoding: .utf8)) == original else {
             // A save landed between the comparison and the swap: put it back, then edit it.
             guard renamex_np(url.path, staged.path, UInt32(RENAME_SWAP)) == 0 else {
-                let copy = try keepConflictCopy(staged, beside: url)
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey:
-                    "another program saved opencode.json at the same moment and it could not be put back; its version is in \(copy.lastPathComponent)."])
+                throw keep { "another program saved opencode.json at the same moment and it could not be put back; its version is in \($0)." }
             }
             // What the swap back displaced should be our own text; anything else is a further save, kept aside.
             if (try? String(contentsOf: staged, encoding: .utf8)) != updated {
-                let copy = try keepConflictCopy(staged, beside: url)
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey:
-                    "other programs saved opencode.json at the same moment, so this choice was not saved; one of their versions is in \(copy.lastPathComponent)."])
+                throw keep { "other programs saved opencode.json at the same moment, so this choice was not saved; one of their versions is in \($0)." }
             }
             return try await again()
         }
@@ -362,17 +371,18 @@ public final class ModelSettingsService {
         }
     }
 
-    /// Moves `file` to `opencode.json.conflict-<time>` beside `url` (never over an existing file); returns its URL.
-    nonisolated static func keepConflictCopy(_ file: URL, beside url: URL) throws -> URL {
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
-        var copy = url.deletingLastPathComponent().appending(path: "\(url.lastPathComponent).conflict-\(stamp)")
-        var suffix = 1
-        while FileManager.default.fileExists(atPath: copy.path) {
-            suffix += 1
-            copy = url.deletingLastPathComponent().appending(path: "\(url.lastPathComponent).conflict-\(stamp)-\(suffix)")
+    /// Moves `file` to `opencode.json.conflict-<time>` beside `url`, never over an existing file: each name is taken with
+    /// an exclusive rename (`RENAME_EXCL`), so a file that appears under that name meanwhile makes it try the next one
+    /// instead of being replaced. Returns the new URL; throws (leaving `file` in place) when no name can be taken.
+    nonisolated static func keepConflictCopy(_ file: URL, beside url: URL, stamp: String? = nil) throws -> URL {
+        let stamp = stamp ?? ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let folder = url.deletingLastPathComponent()
+        for suffix in 1...100 {
+            let copy = folder.appending(path: "\(url.lastPathComponent).conflict-\(stamp)" + (suffix == 1 ? "" : "-\(suffix)"))
+            if renamex_np(file.path, copy.path, UInt32(RENAME_EXCL)) == 0 { return copy }
+            guard errno == EEXIST else { break }
         }
-        try FileManager.default.moveItem(at: file, to: copy)
-        return copy
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "Could not keep a conflict copy of opencode.json."])
     }
 }
 
