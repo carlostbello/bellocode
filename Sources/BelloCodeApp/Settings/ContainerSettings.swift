@@ -103,10 +103,25 @@ enum EnvironmentFixes {
                 ContainersSettingsModel.focusDefaultImagePending = true
                 NotificationCenter.default.post(name: ContainersSettingsModel.focusDefaultImage, object: nil)
             }
-        case .signIn, .openSettings:
-            openSettings(directory == nil ? "containers" : "environment")
+        case .signIn:
+            // NF08: registry sign-in lives only in Settings ▸ Containers, whichever pane or banner offered the fix.
+            openSettings(pane(for: fix, directory: directory) ?? "containers")
+            ContainersSettingsModel.focusRegistryPending = true
+            NotificationCenter.default.post(name: ContainersSettingsModel.focusRegistry, object: nil)
+        case .openSettings:
+            openSettings(pane(for: fix, directory: directory) ?? "containers")
         case .retry:
             if let directory { Task { await engine.environments.retry(directory) } } else { Task { await engine.environments.recheckRuntime() } }
+        }
+    }
+
+    /// The Settings pane a fix opens, for the fixes that open one: the registry sign-in form is in Settings ▸
+    /// Containers only (NF08); "Open Settings" opens the project's Environment pane when there is a project.
+    nonisolated static func pane(for fix: EnvironmentFix, directory: String?) -> String? {
+        switch fix {
+        case .signIn: "containers"
+        case .openSettings: directory == nil ? "containers" : "environment"
+        case .startRancher, .switchEngine, .installRancher, .updateRuntime, .chooseImage, .retry: nil
         }
     }
 }
@@ -137,6 +152,10 @@ final class ContainersSettingsModel: ObservableObject {
     static let focusDefaultImage = Notification.Name("app.bellocode.focusDefaultImage")
     /// Set until the pane has focused the field (it may open after the notification).
     static var focusDefaultImagePending = false
+    /// Posted by "Sign in to the registry" (NF08): the pane focuses the registry host field.
+    static let focusRegistry = Notification.Name("app.bellocode.focusRegistry")
+    /// Set until the pane has focused the registry host field.
+    static var focusRegistryPending = false
     /// Corporate network and diagnostics (Containers 3).
     let network: NetworkSettingsModel
 
@@ -266,6 +285,7 @@ struct ContainersSettingsView: View {
     let service: EnvironmentService
     let confirmRemove: (ManagedContainer) -> Bool
     @FocusState private var defaultImageFocused: Bool
+    @FocusState private var registryFocused: Bool
 
     var body: some View {
         SettingsPaneBody {
@@ -335,6 +355,17 @@ struct ContainersSettingsView: View {
             SettingsGroup("Registry sign-in", footer: "The password or token is kept in your Keychain.") {
                 SettingsFieldRow(divided: false) {
                     TextField("", text: $model.registry, prompt: Text("registry.example.com")).textFieldStyle(DSTextFieldStyle()).accessibilityLabel("Registry host")
+                        .focused($registryFocused)
+                        .onAppear {
+                            if ContainersSettingsModel.focusRegistryPending {
+                                ContainersSettingsModel.focusRegistryPending = false
+                                registryFocused = true
+                            }
+                        }
+                        .onReceive(NotificationCenter.default.publisher(for: ContainersSettingsModel.focusRegistry)) { _ in
+                            ContainersSettingsModel.focusRegistryPending = false
+                            registryFocused = true
+                        }
                     TextField("", text: $model.username, prompt: Text("User")).textFieldStyle(DSTextFieldStyle()).frame(width: 96).accessibilityLabel("Registry user")
                     SecureField("", text: $model.password, prompt: Text("Password or token")).textFieldStyle(DSTextFieldStyle()).frame(width: 128)
                         .accessibilityLabel("Registry password")
