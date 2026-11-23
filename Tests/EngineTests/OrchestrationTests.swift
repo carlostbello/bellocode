@@ -258,6 +258,63 @@ struct OrchestrationServiceTests {
         try await waitUntil("approval resolved") { thread.pendingRequests.isEmpty }
     }
 
+    /// A child's state changes re-decorate its card (bumping the shown revision past the server's); the parent message's
+    /// next server update must still apply (NF02: it was compared against the decorated revision and dropped).
+    @Test func parentUpdatesApplyAfterTheCardFollowedItsChild() async throws {
+        let fixture = try await Fixture.start()
+        defer { Task { await fixture.stop() } }
+        let engine = fixture.engine
+        let parent = try await engine.createThread(in: "/tmp/mock-orch", title: "parent")
+        let thread = engine.openThread(parent.id)
+        defer { thread.close() }
+        try await waitUntil("thread ready") { thread.phase == .ready }
+
+        let childID = SessionID("ses_child_nf02")
+        let messageID = MessageID("msg_parent_nf02")
+        func card(_ status: ToolStatus, revision: Int) -> Message {
+            let call = ToolCall(callID: "call_1", name: "task", status: status)
+            return Message(
+                id: messageID, sessionID: parent.id, kind: .assistant(AssistantInfo(isOpen: status != .completed)),
+                created: Timestamp(milliseconds: 9_999_999_999_000),
+                parts: [Part(id: Part.makeID(message: messageID, .tool(callID: "call_1")), index: 0,
+                             content: .subagent(SubagentReference(call: call, childSessionID: childID)))],
+                revision: revision)
+        }
+        func child(idle: Bool) -> Session {
+            Session(
+                id: childID, projectID: parent.projectID, parentID: parent.id, title: "child", directory: parent.directory,
+                created: Timestamp(milliseconds: 1), updated: Timestamp(milliseconds: idle ? 3 : 2),
+                busySince: Timestamp(milliseconds: 2), idleAt: idle ? Timestamp(milliseconds: 3) : nil,
+                outcome: idle ? .succeeded : nil)
+        }
+        func liveStatus(_ model: MessageModel) -> ChildTaskStatus? {
+            guard case .subagent(let reference) = model.message.parts.first?.content else { return nil }
+            return reference.liveStatus
+        }
+        var change = ChangeSet()
+        change.messages[messageID] = card(.running, revision: 1)
+        thread.apply(change)
+        let model = try #require(thread.message(messageID))
+
+        // The child runs, then finishes: two decoration bumps on the parent's card.
+        for idle in [false, true] {
+            var childChange = ChangeSet()
+            childChange.sessions[childID] = child(idle: idle)
+            engine.orchestration!.apply(childChange)
+        }
+        #expect(liveStatus(model) == .done)
+        let decorated = model.revision
+
+        // The server's next revision of the parent message: the call completed.
+        var next = ChangeSet()
+        next.messages[messageID] = card(.completed, revision: 2)
+        thread.apply(next)
+        #expect(model.message.parts.first?.content.toolCall?.status == .completed)
+        #expect(model.revision > decorated)
+        // The decoration survives the server update.
+        #expect(liveStatus(model) == .done)
+    }
+
     @Test func pluginStatusComesFromBellocodeInfo() async throws {
         let fixture = try await Fixture.start()
         defer { Task { await fixture.stop() } }
