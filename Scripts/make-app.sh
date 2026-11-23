@@ -123,6 +123,8 @@ notice "swift-argument-parser" "$CHECKOUTS/swift-argument-parser/LICENSE.txt"
 notice "swift-png" "$CHECKOUTS/swift-png/LICENSE" "$CHECKOUTS/swift-png/NOTICE"
 notice "h" "$CHECKOUTS/h/LICENSE" "$CHECKOUTS/h/NOTICE"
 notice "opencode" "$ROOT/Scripts/notices/opencode.txt"
+# Containers/browser/seccomp-chromium.json (bundled below) derives from moby/profiles (Apache-2.0).
+notice "moby-profiles-seccomp" "$ROOT/Scripts/notices/moby-seccomp.txt"
 RG_LICENCES="$ROOT/Vendor/ripgrep/licences"
 notice "ripgrep" "$RG_LICENCES/COPYING" "$RG_LICENCES/LICENSE-MIT" "$RG_LICENCES/UNLICENSE"
 # Every entry Settings ▸ Acknowledgements lists (except T3 Code, whose notice is embedded) has its text in the bundle.
