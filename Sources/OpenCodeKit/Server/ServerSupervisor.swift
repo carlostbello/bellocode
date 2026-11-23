@@ -105,9 +105,11 @@ public actor ServerSupervisor {
 
     // MARK: - Public API
 
-    /// Starts the server if it is stopped or failed. Idempotent.
+    /// Starts the server if it is stopped or failed. Idempotent. The state is `.starting` when this returns, so an
+    /// `awaitReady()` right after it (or after `restart()`) waits for the new child instead of seeing `.stopped`.
     public func start() {
         guard runTask == nil, !stopping else { return }
+        publish(.starting(attempt: 1))
         runTask = Task { await self.run() }
     }
 
@@ -128,7 +130,8 @@ public actor ServerSupervisor {
     }
 
     /// Stops the child (stdin lease, then signals) and starts a fresh one with a new password and the configuration's
-    /// current launch values (`repositoryConfigProvider`, `launchEnvironment`). Clients reconnect and resync.
+    /// current launch values (`repositoryConfigProvider`, `launchEnvironment`). Clients reconnect and resync. Returns
+    /// once the new child is starting; `awaitReady()` then waits for it.
     public func restart() async {
         await stop()
         start()

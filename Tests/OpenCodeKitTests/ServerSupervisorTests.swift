@@ -204,6 +204,23 @@ struct ServerSupervisorTests {
         await supervisor.stop()
     }
 
+    /// NF06: a caller that restarts and then waits gets the new server, not `.stopped` from between the two children.
+    @Test func awaitReadyAfterRestartWaitsForTheNewChild() async throws {
+        defer { cleanUp() }
+        let launcher = FakeLauncher()
+        let supervisor = ServerSupervisor(
+            configuration: configuration(), launcher: launcher, probe: FakeProbe(launcher: launcher), time: ManualTimeSource(),
+            random: { 0.5 })
+        await supervisor.start()
+        let first = try await within(.seconds(5)) { try await supervisor.awaitReady() }
+        await supervisor.restart()
+        #expect(await supervisor.state == .starting(attempt: 1))
+        let second = try await within(.seconds(5)) { try await supervisor.awaitReady() }
+        #expect(second.generation == first.generation + 1)
+        #expect(second.connection.credentials != first.connection.credentials)
+        await supervisor.stop()
+    }
+
     @Test func identityMismatchKillsTheChildAndRetries() async throws {
         defer { cleanUp() }
         let launcher = FakeLauncher()
