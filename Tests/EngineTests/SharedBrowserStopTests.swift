@@ -156,6 +156,57 @@ struct SharedBrowserStopTests {
         #expect(runtime.state.withLock { $0.running })
     }
 
+    /// v1.0.1 AF23 residual: an adopted browser whose readiness times out is stopped by the failed start, so the
+    /// Failed phase never hides a running signed-in browser.
+    @Test func anAdoptedBrowserWhoseReadinessTimesOutIsStopped() async throws {
+        let runtime = FakeBrowserRuntime()
+        adoptRunningBrowser(runtime)
+        var timing = BrowserSupervisor.Timing(idle: .seconds(600))
+        timing.readyTimeout = .zero
+        let supervisor = BrowserSupervisor(runtime: runtime, timing: timing, viewerPassword: "pw", spec: { image, placement, seccomp in
+            BrowserContainerSpec(image: image, seccompProfile: seccomp, network: placement.network, proxy: placement.proxy)
+        }, sleep: { try await ManualSleeper().sleep($0) })
+        await #expect(throws: BrowserStartError.timedOut) { try await supervisor.begin(.call) }
+        #expect(runtime.entries.contains("stop(30)"), "\(runtime.entries)")
+        #expect(!runtime.state.withLock { $0.running })
+        guard case .failed = await supervisor.phase else { Issue.record("expected Failed"); return }
+        // Stop in Failed reconciles: the container is verifiably stopped.
+        await supervisor.stop(reason: "test")
+        #expect(await supervisor.phase == .stopped)
+    }
+
+    /// AF23 residual: setting the viewer password fails on an adopted, ready browser: the failed start stops it.
+    @Test func anAdoptedBrowserWhoseViewerPasswordFailsIsStopped() async throws {
+        let runtime = FakeBrowserRuntime()
+        let supervisor = make(runtime, ManualSleeper())
+        adoptRunningBrowser(runtime)
+        runtime.state.withLock { $0.statusReady = true; $0.viewerPasswordFails = true }
+        await #expect(throws: FakeBrowserRuntime.ViewerPasswordFailed.self) { try await supervisor.begin(.call) }
+        #expect(!runtime.entries.contains("createAndStart") && !runtime.entries.contains("start"), "adopted, not started")
+        #expect(runtime.entries.contains("stop(30)"), "\(runtime.entries)")
+        #expect(!runtime.state.withLock { $0.running })
+    }
+
+    /// AF23 residual: Stop in Failed while the container still runs (a cleanup stop that failed, or one started behind
+    /// BelloCode's back) runs the orderly stop instead of publishing Stopped; when that stop fails it is unconfirmed.
+    @Test func aStopInFailedWhileTheContainerRunsStopsIt() async throws {
+        let runtime = FakeBrowserRuntime()
+        adoptRunningBrowser(runtime)
+        runtime.state.withLock { $0.statusReady = true; $0.viewerPasswordFails = true }
+        let supervisor = make(runtime, ManualSleeper())
+        _ = try? await supervisor.begin(.call)
+        guard case .failed = await supervisor.phase else { Issue.record("expected Failed"); return }
+        // Something runs it again (or the cleanup stop never took): Failed must not become Stopped while it runs.
+        runtime.state.withLock { $0.running = true; $0.stopFails = true }
+        await supervisor.stop(reason: "test")
+        let afterFirstStop = await supervisor.phase
+        #expect(afterFirstStop.isStopUnconfirmed, "\(afterFirstStop)")
+        runtime.state.withLock { $0.stopFails = false }
+        await supervisor.stop(reason: "test")
+        #expect(await supervisor.phase == .stopped)
+        #expect(!runtime.state.withLock { $0.running })
+    }
+
     /// The container a previous launch left running, with the configuration this start wants, not yet ready.
     private func adoptRunningBrowser(_ runtime: FakeBrowserRuntime) {
         let wanted = BrowserContainerSpec(image: "bellocode-browser:test", seccompProfile: "{}", network: "bellocode-egress-browser",

@@ -80,6 +80,8 @@ final class FakeBrowserRuntime: BrowserRuntime {
         var creates = 0
         /// The stop request fails and the container keeps running (a daemon disconnection).
         var stopFails = false
+        /// Setting the viewer password fails (the container's VNC helper refused it).
+        var viewerPasswordFails = false
     }
     let state = Mutex(State())
     /// When set, image preparation parks on it (an image build in progress) until fired or cancelled.
@@ -130,7 +132,11 @@ final class FakeBrowserRuntime: BrowserRuntime {
                                  paired: $0.statusReady, chromiumRestarts: $0.chromiumRestarts)
         }
     }
-    func setViewerPassword(_ password: String) async throws { log("viewer-password") }
+    struct ViewerPasswordFailed: Error {}
+    func setViewerPassword(_ password: String) async throws {
+        log("viewer-password")
+        if state.withLock({ $0.viewerPasswordFails }) { throw ViewerPasswordFailed() }
+    }
     func seccompProfile() throws -> String { "{}" }
 }
 
