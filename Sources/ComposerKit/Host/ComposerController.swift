@@ -44,24 +44,33 @@ public final class ComposerController {
     public private(set) var awaitingDraft = false
     /// The user edited while `awaitingDraft`; the stored draft is merged in front of the edit when it arrives.
     private var editedWhileAwaiting = false
+    /// Failed submissions this composer already took back (bounded; most recent last).
+    private var restoredSubmissions: [Int] = []
 
     /// The live composers of a scope (weak), flushed together at quit (N16).
     @MainActor
     public final class Registry {
         public static let shared = Registry()
         private let live = NSHashTable<ComposerController>.weakObjects()
+        private var nextSubmission = 0
         public init() {}
         func add(_ controller: ComposerController) { live.add(controller) }
+        /// A fresh identity for one submission: a composer restores a given failed send at most once (AV12).
+        func makeSubmissionID() -> Int {
+            nextSubmission += 1
+            return nextSubmission
+        }
         /// Hands every registered composer's unsaved edit to its host now.
         public func flushAll() { for controller in live.allObjects { controller.flushDraft() } }
 
         /// A send for `key` failed after its composer stopped showing it (NF04: a new-thread draft's first send switched
         /// to the thread it created, whose composer mounted with an empty draft): every other live composer of that
         /// draft takes the text back, merged with what was typed there since.
-        func restoreFailedSend(_ draft: ComposerDraft, owner: ObjectIdentifier?, message: String, except sender: ComposerController?) {
+        func restoreFailedSend(_ draft: ComposerDraft, submission: Int, owner: ObjectIdentifier?, message: String,
+                               except sender: ComposerController?) {
             guard let owner else { return }
             for controller in live.allObjects where controller !== sender {
-                controller.adoptFailedSend(draft, owner: owner, message: message)
+                controller.adoptFailedSend(draft, submission: submission, owner: owner, message: message)
             }
         }
     }
@@ -219,6 +228,7 @@ public final class ComposerController {
         pendingSends += 1
         onStateChange()
         let registry = self.registry
+        let submissionID = registry.makeSubmissionID()
         Task { [weak self] in
             let outcome = await host.send(submission)
             if case .failed(let message) = outcome {
@@ -232,7 +242,8 @@ public final class ComposerController {
                     host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft()))
                 }
                 // The draft's owner may have changed with the send (a new thread was created): read it now.
-                registry.restoreFailedSend(draft, owner: host.draftOwner, message: message, except: self?.host === host ? self : nil)
+                registry.restoreFailedSend(draft, submission: submissionID, owner: host.draftOwner, message: message,
+                                           except: self?.host === host ? self : nil)
             }
             guard let self else { return }
             self.pendingSends -= 1
@@ -253,18 +264,26 @@ public final class ComposerController {
 
     /// Another composer's send of this draft failed (see `Registry.restoreFailedSend`): show the text again, merged
     /// in front of the current edit, and save it through this composer's host.
-    func adoptFailedSend(_ draft: ComposerDraft, owner: ObjectIdentifier, message: String) {
+    func adoptFailedSend(_ draft: ComposerDraft, submission: Int, owner: ObjectIdentifier, message: String) {
         guard let host, host.draftOwner == owner else { return }
         // Still loading: the stored draft (which the failed send restored) is what it will show.
         guard !awaitingDraft else { return }
+        // Restored once per submission, by identity: matching text is never taken as proof (AV12).
+        guard !restoredSubmissions.contains(submission) else { return }
+        restoredSubmissions.append(submission)
+        if restoredSubmissions.count > 32 { restoredSubmissions.removeFirst(restoredSubmissions.count - 32) }
         saveTask?.cancel()
         saveTask = nil
         let current = currentDraft()
-        // Already shown (idempotent when the text came back by another path).
-        if !draft.text.isEmpty, current.text.hasPrefix(draft.text) { return }
-        let merged = ComposerDraft.merging(failed: draft, current: current)
-        applyDraft(merged)
-        host.saveDraft(merged)
+        // Shown only when all of it is already there: its text in front, its tokens in place and its attachments.
+        // Otherwise it is merged in front (a longer edit that merely starts with the same words gets it back too).
+        if !current.containsRestored(draft) {
+            let merged = ComposerDraft.merging(failed: draft, current: current)
+            applyDraft(merged)
+            host.saveDraft(merged)
+        } else {
+            host.saveDraft(current)
+        }
         sendError = message
         announce("Not sent. \(message)")
         onStateChange()
