@@ -601,6 +601,7 @@ public final class EgressProxy: Sendable {
         if !body.isEmpty || ["POST", "PUT", "PATCH"].contains(method) { fields.append(HTTPField("Content-Length", String(body.count))) }
         var request = OutboundRequest(method: method, scheme: scheme, host: destination.host, port: destination.port,
                                       target: originTarget, headers: fields, body: body)
+        let original = request
         let snapshot = state.withLock { $0.snapshot }
         let bound = snapshot.secretsBound(to: scheme, host: destination.host, port: destination.port)
         let ledger = self.ledger
@@ -658,6 +659,22 @@ public final class EgressProxy: Sendable {
                 }
             }
             guard let wire = upstream?.wire else { break }
+            // AF15: the substitution was decided before the use was recorded and the connection opened, both of which can
+            // take a while. Re-authorized against the snapshot as it is now, at the handoff to the send: a revocation,
+            // narrower scope or binding change published meanwhile refuses the request (nothing was sent), and a rotation
+            // sends the current value.
+            if !uses.isEmpty {
+                switch reauthorize(original, uses: uses, scope: scope) {
+                case .success(let current):
+                    request = current
+                case .failure(let refusal):
+                    ledger.release(uses)
+                    emit(.refused(refusal.reason, account: refusal.account ?? uses.first?.account, sessionID: refusal.session ?? uses.first?.sessionID,
+                                  destination: request.auditDestination, method: method))
+                    try await client.send(Self.refusal(refusal.reason, status: 403))
+                    return !clientCloses
+                }
+            }
             do {
                 try await wire.send(HTTPHead(startLine: [method, request.target, "HTTP/1.1"], fields: request.headers).serialized + request.body)
                 guard let data = try await wire.readHead(limit: 128 * 1024), let parsed = HTTPHead(data) else { throw WireError.closed }
@@ -780,6 +797,34 @@ public final class EgressProxy: Sendable {
     }
 
     /// The thread whose placeholder appears in a request that was not substituted (for the audit only).
+    private struct Reauthorization: Error {
+        var reason: SecretRefusal
+        var account: String?
+        var session: String?
+    }
+
+    /// `original` substituted under the current snapshot: the request to send when it makes exactly the same uses
+    /// (secrets, bindings, placeholders) as were reserved, else why not. This request's own reservations are already in
+    /// the ledger and are discounted, so its use limits are judged as when it was admitted.
+    private func reauthorize(_ original: OutboundRequest, uses: [SubstitutionUse], scope: EgressScope) -> Result<OutboundRequest, Reauthorization> {
+        let snapshot = state.withLock { $0.snapshot }
+        let ledger = self.ledger
+        var own: [String: Int] = [:]
+        for use in uses { own[use.account + "\u{1F}" + use.bindingID, default: 0] += 1 }
+        let reserved = own
+        let rewriter = RequestRewriter(admitsProject: scope.admitsProject, useCount: { account, binding in
+            ledger.count(account: account, bindingID: binding) - (reserved[account + "\u{1F}" + binding] ?? 0)
+        })
+        switch rewriter.rewrite(original, resolve: { snapshot.resolve($0) }) {
+        case .substituted(let current, let made) where Set(made) == Set(uses) && made.allSatisfy({ snapshot.secrets[$0.account] != nil }):
+            return .success(current)
+        case .refused(let reason, let account, let session):
+            return .failure(Reauthorization(reason: reason, account: account, session: session))
+        default:
+            return .failure(Reauthorization(reason: .unknownPlaceholder, account: nil, session: nil))
+        }
+    }
+
     private static func sessionOfPlaceholders(in head: HTTPHead, body: Data, snapshot: EgressSnapshot) -> String? {
         let text = Data((head.startLine.joined(separator: " ") + head.fields.map { $0.value }.joined()).utf8)
         return (Placeholder.find(in: text).placeholders + Placeholder.find(in: body).placeholders).lazy.compactMap { snapshot.grants[$0]?.sessionID }.first
