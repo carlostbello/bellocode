@@ -155,9 +155,17 @@ Notes, descriptions, diffs and logs reach models only inside `----- BEGIN UNTRUS
 markers and CR overprints are stripped; GitLab/GitHub/Slack/AWS/JWT/bearer/URL-credential/`*TOKEN=` shapes and the
 instance token are redacted (best effort, counted). Excerpts: first error-looking block (≤ 16 lines) + last 60 lines,
 ≤ 8 KB, lines ≤ 400 chars. "Send to Agent" puts the same block, fenced, into the composer for the person to send.
+The panel keeps excerpts (at most 32) and in-flight loads by installation, project and job ID, never the job number
+alone: two configured instances number their jobs independently, so one's excerpt is never sent as the other's
+(v1.0.1 AV2-01).
 Short header fields outside the block (titles, branches, labels, user, job, stage and rule names, file lists, issue
 titles) go through `UntrustedText.field`: controls stripped, line breaks collapsed (a job name cannot forge a line),
-secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). The token to redact with is read
+secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). That includes what the composer
+actions interpolate: the note author, path and discussion ID of Add to Agent Context, the job name, stage and SHA of
+Send to Agent, and the issue title, reference and URL of Start Thread from Issue. Two final passes remove the exact
+token from the whole text whatever a caller forgot: `UntrustedText.composerQuote` requires the token and redacts its
+entire result, and every GitLab tool's result and error text is redacted with each configured instance's token
+(`redactingGitLabTokens`) (v1.0.1 AV2-05). The token to redact with is read
 from the Keychain off the main actor, once per tool result, wake or excerpt (GF12). If it cannot be read (a locked or
 busy Keychain, no token), nothing from GitLab reaches a model: tools return an error naming the Keychain, Add to Agent
 Context, Send to Agent and Start Thread from Issue say so and insert nothing, and a babysit wake is held (the watch shows

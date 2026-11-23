@@ -459,7 +459,7 @@ struct TriageBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s4) {
-            if let excerpt = model.excerpts[job.id] {
+            if let excerpt = model.excerpt(snapshot.ref, job) {
                 ScrollView([.horizontal, .vertical]) {
                     Text(excerpt.text).font(.ds(.codeSmall)).foregroundStyle(SwiftUI.Color.ds.text2).textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: true).padding(DS.Space.s6)
@@ -471,11 +471,11 @@ struct TriageBox: View {
                 .accessibilityLabel("Log excerpt of \(job.name)")
                 Text("Excerpt of the log (secret-looking values redacted; \(excerpt.linesRead) lines read\(excerpt.headOmitted ? ", end of the log only" : "")).")
                     .foregroundStyle(SwiftUI.Color.ds.text3)
-            } else if model.excerptLoading.contains(job.id) {
+            } else if model.isLoadingExcerpt(snapshot.ref, job) {
                 Text("Reading the log…").foregroundStyle(SwiftUI.Color.ds.text3)
             }
             HStack(spacing: DS.Space.s6) {
-                if model.excerpts[job.id] == nil {
+                if model.excerpt(snapshot.ref, job) == nil {
                     Button("Show Excerpt") { Task { await model.loadExcerpt(snapshot.ref, job) } }
                 }
                 Button("Send to Agent") { Task { await model.sendToAgent(snapshot.ref, job) } }

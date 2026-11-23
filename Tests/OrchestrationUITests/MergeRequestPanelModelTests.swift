@@ -79,6 +79,80 @@ struct MergeRequestPanelModelTests {
         #expect(text.contains("unit"))
     }
 
+    /// Two GitLab installations behind one transport, routed by API base.
+    struct TwoInstances: ForgeTransport {
+        let servers: [FakeGitLabServer]
+        func send(_ request: ForgeRequest) async throws -> ForgeResponse {
+            guard let server = servers.first(where: { request.url.absoluteString.hasPrefix($0.instance.apiBase + "/") }) else {
+                throw ForgeError.network("no such instance")
+            }
+            return try await server.send(request)
+        }
+    }
+
+    /// AV2-01 and AV2-05: job 701 exists on two installations (job IDs are numbered per installation). After the
+    /// excerpt of A's private failure was shown, Send to Agent for B's job 701 reads and redacts B's log and inserts
+    /// that, never A's. And a job name and stage chosen in a contributor's `.gitlab-ci.yml` that carry the instance's
+    /// token reach the composer redacted, as the log does.
+    @Test func excerptsAreKeyedByInstallationAndEveryFieldIsRedacted() async throws {
+        let other = GitLabInstance(baseURL: "https://gitlab.other.test")!
+        let otherToken = "corp9-OTHER-INSTALLATION-TOKEN-7654321"
+        func server(_ instance: GitLabInstance, _ token: String, job: FakeGitLabServer.Job, trace: String) -> FakeGitLabServer {
+            let server = FakeGitLabServer(instance: instance, token: token)
+            var project = FakeGitLabServer.Project(id: 3, path: "team/app")
+            var mr = FakeGitLabServer.MR(iid: 5, title: "Parser", source: "feat/parser")
+            mr.pipelineID = 70
+            mr.pipelineStatus = "failed"
+            project.mrs[5] = mr
+            project.jobs[70] = [job]
+            project.traces[701] = trace
+            server.put(project)
+            return server
+        }
+        let a = server(Self.instance, Self.token, job: .init(id: 701, name: "unit \(Self.token)", stage: "test-\(Self.token)", status: "failed"),
+                       trace: "error: A-PRIVATE-FAILURE\nfinal line")
+        let b = server(other, otherToken, job: .init(id: 701, name: "unit", stage: "test", status: "failed"), trace: "error: B-FAILURE\nfinal line")
+        let vault = InMemorySecretVault()
+        try vault.store(account: Self.instance.baseURL, label: "a", value: SecretValue(Self.token))
+        try vault.store(account: other.baseURL, label: "b", value: SecretValue(otherToken))
+        let service = MergeRequestService(
+            store: try ProjectionStore(location: .inMemory), clock: ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000)),
+            transport: TwoInstances(servers: [a, b]), tokens: vault, autoPoll: false)
+        let host = PanelHost()
+        service.host = host
+        await service.start()
+        _ = try await service.saveInstance(baseURL: Self.instance.baseURL, token: nil)
+        _ = try await service.saveInstance(baseURL: other.baseURL, token: nil)
+        let refB = MergeRequestRef(instance: other.baseURL, projectPath: "team/app", iid: 5)
+        let threadB = SessionID("ses_panel_b")
+        try await service.link([Self.ref], to: thread, source: .user)
+        try await service.link([refB], to: threadB, source: .user)
+        await service.waitForFetches()
+        let model = MergeRequestPanelModel(service: service)
+        var inserted: String?
+        model.composerTarget = { ComposerTarget { inserted = $0; return true } }
+
+        model.display(thread)
+        let jobA = try #require(service.snapshots[Self.ref.url]?.pipeline?.failedJobs.first)
+        await model.loadExcerpt(Self.ref, jobA)
+        #expect(model.excerpt(Self.ref, jobA)?.text.contains("A-PRIVATE-FAILURE") == true)
+        await model.sendToAgent(Self.ref, jobA)
+        let textA = try #require(inserted)
+        #expect(!textA.contains(Self.token), "the job name and stage are redacted too")
+        #expect(textA.contains("A-PRIVATE-FAILURE"))
+
+        model.display(threadB)
+        let jobB = try #require(service.snapshots[refB.url]?.pipeline?.failedJobs.first)
+        #expect(jobB.id == jobA.id)
+        #expect(model.excerpt(refB, jobB) == nil, "A's excerpt is not B's")
+        inserted = nil
+        await model.sendToAgent(refB, jobB)
+        let textB = try #require(inserted)
+        #expect(textB.contains("B-FAILURE"))
+        #expect(!textB.contains("A-PRIVATE-FAILURE"), "never the other installation's log")
+        #expect(b.requests.contains { $0.path.contains("jobs/701/trace") }, "B's log was read")
+    }
+
     @Test func writesAreOffByDefaultAndManualJobsAskFirst() async throws {
         let (model, server, _) = try await make()
         let snapshot = try #require(model.service.snapshots[Self.ref.url])

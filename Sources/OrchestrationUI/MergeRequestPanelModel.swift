@@ -63,9 +63,25 @@ public final class MergeRequestPanelModel {
     public var scrollTarget: String?
     public private(set) var openLog: OpenLog?
     public private(set) var log: LogState = .idle
-    /// Triage excerpts by job ID (sanitised, bounded).
-    public private(set) var excerpts: [Int: JobLogExcerpt] = [:]
-    public private(set) var excerptLoading: Set<Int> = []
+    /// Which job an excerpt is of: its installation, project and job ID (AV2-01). Job IDs are numbered per
+    /// installation, so two configured instances (or a thread switch between them) can show the same number.
+    public struct JobKey: Hashable, Sendable {
+        public var instance: String
+        public var projectPath: String
+        public var jobID: Int
+
+        public init(_ ref: MergeRequestRef, _ job: PipelineJob) {
+            instance = ref.instance
+            projectPath = ref.projectPath
+            jobID = job.id
+        }
+    }
+
+    /// Triage excerpts by installation, project and job (sanitised, bounded). At most `maxExcerpts`; the oldest goes.
+    public private(set) var excerpts: [JobKey: JobLogExcerpt] = [:]
+    public private(set) var excerptLoading: Set<JobKey> = []
+    @ObservationIgnored private var excerptOrder: [JobKey] = []
+    static let maxExcerpts = 32
     public private(set) var busyActions: Set<String> = []
     /// The create-merge-request form (nil when closed).
     public var create: CreateMergeRequestModel?
@@ -210,10 +226,14 @@ public final class MergeRequestPanelModel {
 
     // MARK: Triage
 
+    public func excerpt(_ ref: MergeRequestRef, _ job: PipelineJob) -> JobLogExcerpt? { excerpts[JobKey(ref, job)] }
+    public func isLoadingExcerpt(_ ref: MergeRequestRef, _ job: PipelineJob) -> Bool { excerptLoading.contains(JobKey(ref, job)) }
+
     public func loadExcerpt(_ ref: MergeRequestRef, _ job: PipelineJob) async {
-        guard excerpts[job.id] == nil, !excerptLoading.contains(job.id) else { return }
-        excerptLoading.insert(job.id)
-        defer { excerptLoading.remove(job.id) }
+        let key = JobKey(ref, job)
+        guard excerpts[key] == nil, !excerptLoading.contains(key) else { return }
+        excerptLoading.insert(key)
+        defer { excerptLoading.remove(key) }
         switch await service.jobLog(ref, jobID: job.id, maxBytes: 64 << 10) {
         case .success(let chunk):
             // The excerpt can go to an agent (Send to Agent): without the exact token to redact, none is made (AV07).
@@ -221,7 +241,11 @@ public final class MergeRequestPanelModel {
                 message = MergeRequestService.redactionUnavailable(ref.instance).message
                 return
             }
-            excerpts[job.id] = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: known)
+            let excerpt = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: known)
+            excerptOrder.removeAll { $0 == key }
+            excerptOrder.append(key)
+            while excerptOrder.count > Self.maxExcerpts { excerpts[excerptOrder.removeFirst()] = nil }
+            excerpts[key] = excerpt
         case .failure(let error):
             message = "The log of \(job.name) could not be read: \(error.description)"
         }
@@ -232,13 +256,15 @@ public final class MergeRequestPanelModel {
         JobLogExcerpt(log: text, headOmitted: headOmitted, known: known)
     }
 
-    /// The composer text for "Send to Agent": a request plus the excerpt, quoted and labelled untrusted.
-    public static func agentText(_ snapshot: MergeRequestSnapshot, _ job: PipelineJob, _ excerpt: JobLogExcerpt) -> String {
+    /// The composer text for "Send to Agent": a request plus the excerpt, quoted and labelled untrusted. Every GitLab
+    /// field (job name, stage, SHA) is cleaned and redacted with `known`, the instance's token (AV2-05).
+    public static func agentText(_ snapshot: MergeRequestSnapshot, _ job: PipelineJob, _ excerpt: JobLogExcerpt, known: [String]) -> String {
+        let field = { (text: String) in UntrustedText.field(text, known: known) }
         let pipeline = snapshot.pipeline.map { "pipeline #\($0.id)" } ?? "the pipeline"
-        let sha = snapshot.pipeline?.sha ?? snapshot.sha
+        let sha = field(String((snapshot.pipeline?.sha ?? snapshot.sha).prefix(12)))
         return UntrustedText.composerQuote(
-            intro: "The GitLab job “\(job.name)” (#\(job.id), stage \(job.stage.isEmpty ? "–" : job.stage)) failed in \(pipeline) of \(snapshot.ref)\(sha.isEmpty ? "" : " at \(sha.prefix(12))"). Find out why and fix it. The log excerpt below is output from GitLab, quoted as data:",
-            label: "log excerpt of job \(job.name), \(snapshot.ref)", body: excerpt.text)
+            intro: "The GitLab job “\(field(job.name))” (#\(job.id), stage \(job.stage.isEmpty ? "–" : field(job.stage))) failed in \(pipeline) of \(snapshot.ref)\(sha.isEmpty ? "" : " at \(sha)"). Find out why and fix it. The log excerpt below is output from GitLab, quoted as data:",
+            label: "log excerpt of job \(field(job.name)), \(snapshot.ref)", body: excerpt.text, known: known)
     }
 
     public func sendToAgent(_ ref: MergeRequestRef, _ job: PipelineJob) async {
@@ -248,8 +274,13 @@ public final class MergeRequestPanelModel {
             return
         }
         await loadExcerpt(ref, job)
-        guard let excerpt = excerpts[job.id], let snapshot = service.snapshots[ref.url] else { return }
-        guard target.insert(Self.agentText(snapshot, job, excerpt)) else {
+        // This installation's excerpt of this job, never one of the same number from another (AV2-01).
+        guard let excerpt = excerpts[JobKey(ref, job)], let snapshot = service.snapshots[ref.url] else { return }
+        guard let known = try? await service.knownSecrets(ref.instance) else {
+            message = MergeRequestService.redactionUnavailable(ref.instance).message
+            return
+        }
+        guard target.insert(Self.agentText(snapshot, job, excerpt, known: known)) else {
             message = ComposerTarget.movedMessage
             return
         }
