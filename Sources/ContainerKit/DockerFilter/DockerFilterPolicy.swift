@@ -763,7 +763,7 @@ public struct DockerFilterPolicy: Sendable {
     /// image policy like any pull, unless the scope built them itself. Called by the proxy once it found the Dockerfile
     /// in the streamed context, before the context is completed (so nothing is built when it refuses).
     public func buildBaseRefusal(dockerfile: Data, request: DockerAPIRequest, scope: DockerScope) async -> String? {
-        switch DockerfileBases.images(in: String(decoding: dockerfile, as: UTF8.self), buildArgs: Self.buildArguments(request)) {
+        switch DockerfileBases.images(in: dockerfile, buildArgs: Self.buildArguments(request)) {
         case .failure(let refusal):
             return Self.prefix + refusal.reason + "."
         case .success(let images):
