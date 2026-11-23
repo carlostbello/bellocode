@@ -25,7 +25,7 @@ an in-place JSONC edit that keeps comments and formatting and refuses a file tha
 `POST /api/location/reload`. The edited text is swapped in atomically (`RENAME_SWAP`) and the displaced file is
 checked against the one edited: a save that landed in between is put back and edited again, and a further one is kept
 as `opencode.json.conflict-<time>` with the edit failing to say so; another program's save is never silently replaced
-(v1.0.1 AF24, `ModelSettingsService`). A reload cancels pending approvals and questions: the pane asks first ("Reload Now" or
+(v1.0.1 AF24, `ModelSettingsService`). A conflict copy takes a free name with an exclusive rename, and a save that cannot be moved aside stays in the hidden staged file `.opencode.json.bellocode-<id>`, which the error names, rather than being deleted. A reload cancels pending approvals and questions: the pane asks first ("Reload Now" or
 "Save Only"; saved-only shows "Saved; not applied yet" with Reload opencode Now). Compaction ("summaries") keeps the
 thread's model: a smaller model's context window can be too small for it.
 

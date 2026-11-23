@@ -55,24 +55,55 @@ extension Engine {
     /// sibling directories of one checkout share every checkpoint (AF19). A thread in a directory that contains the
     /// root counts too, and so does one whose root cannot be read (fail closed); a thread in a nested repository or
     /// worktree below the root does not. Outside a repository the directory itself stands for the root.
-    public func threadsSharingWorktree(of directory: String, except id: SessionID) async -> [Session] {
+    ///
+    /// Every unarchived session the engine knows is checked, in any project, not only the sidebar's top-level rows: a
+    /// delegated child (sub-agent) whose parent is listed is not a row of its own but edits the same files (AF19). The
+    /// rewound thread's own descendants are the one exception, and only when their work is part of what is rewound:
+    /// created after the checkpoint (`rewoundSince`, by turns the rewind removes) and settled (idle, finished or
+    /// failed). A descendant still working, waiting on the person, of unknown status, or that already existed before
+    /// the checkpoint counts like any other thread, and so do the thread's ancestors.
+    public func threadsSharingWorktree(of directory: String, except id: SessionID, rewoundSince: Timestamp? = nil) async -> [Session] {
         let runner = git.runner
         let real = HostGitPaths.real(await Self.worktreeRoot(of: directory, runner: runner) ?? directory)
+        let (sessions, statuses) = await core.allSessions()
+        let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let status = Dictionary(statuses.map { ($0.sessionID, $0.status) }, uniquingKeysWith: { first, _ in first })
+        func descends(_ session: Session) -> Bool {
+            var parent = session.parentID
+            var seen: Set<SessionID> = []
+            while let current = parent, seen.insert(current).inserted {
+                if current == id { return true }
+                parent = byID[current]?.parentID
+            }
+            return false
+        }
+        func partOfTheRewind(_ session: Session) -> Bool {
+            guard let rewoundSince, session.created >= rewoundSince, descends(session) else { return false }
+            return [.idle, .finishedUnread, .failed].contains(status[session.id])
+        }
         var result: [Session] = []
-        for project in root.loadedProjects {
-            for sessionID in project.sessionIDs where sessionID != id {
-                guard let session = project.row(sessionID)?.session else { continue }
-                let other = HostGitPaths.real(session.directory)
-                if other == real || real.hasPrefix(other + "/") {
-                    result.append(session)
-                } else if other.hasPrefix(real + "/") {
-                    // Below the root: the same working tree unless it is a nested repository or worktree of its own.
-                    let otherRoot = await Self.worktreeRoot(of: session.directory, runner: runner)
-                    if otherRoot.map(HostGitPaths.real) ?? real == real { result.append(session) }
-                }
+        for session in sessions.sorted(by: { $0.id.rawValue < $1.id.rawValue })
+        where session.id != id && !session.isArchived && !partOfTheRewind(session) {
+            let other = HostGitPaths.real(session.directory)
+            if other == real || real.hasPrefix(other + "/") {
+                result.append(session)
+            } else if other.hasPrefix(real + "/") {
+                // Below the root: the same working tree unless it is a nested repository or worktree of its own.
+                let otherRoot = await Self.worktreeRoot(of: session.directory, runner: runner)
+                if otherRoot.map(HostGitPaths.real) ?? real == real { result.append(session) }
             }
         }
         return result
+    }
+
+    /// When `checkpoint` was captured, on the server's clock (sessions carry the server's times), rounded up to the
+    /// next whole second (git records seconds): a session created in the capture's own second is treated as older
+    /// than the checkpoint (fail closed). Nil when it cannot be read.
+    func checkpointTime(_ checkpoint: String, directory: String) async -> Timestamp? {
+        guard let output = try? await GitRepository(directory: directory, runner: git.runner).git(["log", "-1", "--format=%ct", checkpoint, "--"], allowFailure: true),
+              output.status == 0, let seconds = Double(output.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return await core.serverTime(of: Date(timeIntervalSince1970: seconds + 1))
     }
 
     /// The working tree root of `directory` (nil outside a repository or when it cannot be read).
@@ -89,14 +120,16 @@ extension Engine {
     public func planRewind(_ id: SessionID, to messageID: MessageID, directory: String, revertFiles: Bool) async throws -> RewindPlan {
         var plan = RewindPlan(sessionID: id, messageID: messageID, directory: directory)
         guard revertFiles else { return plan }
-        let shared = await threadsSharingWorktree(of: directory, except: id)
+        let runner = git.runner
+        let ref = GitCheckpoints.ref(session: id, message: messageID)
+        let checkpoint = await GitCheckpoints.resolve(ref, directory: directory, runner: runner)
+        let since = if let checkpoint { await checkpointTime(checkpoint, directory: directory) } else { Timestamp?.none }
+        let shared = await threadsSharingWorktree(of: directory, except: id, rewoundSince: since)
         if !shared.isEmpty {
             plan.filesUnavailable = Self.sharedWorktreeMessage(shared.count)
             return plan
         }
-        let runner = git.runner
-        let ref = GitCheckpoints.ref(session: id, message: messageID)
-        guard let checkpoint = await GitCheckpoints.resolve(ref, directory: directory, runner: runner) else {
+        guard let checkpoint else {
             plan.filesUnavailable = "No checkpoint was saved before this message, so files cannot be restored."
             return plan
         }
@@ -119,7 +152,8 @@ extension Engine {
         var written: [FileChangePlan] = []
         let root = plan.files?.directory ?? plan.directory
         if let files = plan.files {
-            let shared = await threadsSharingWorktree(of: files.directory, except: plan.sessionID)
+            let since = await checkpointTime(files.checkpoint, directory: files.directory)
+            let shared = await threadsSharingWorktree(of: files.directory, except: plan.sessionID, rewoundSince: since)
             guard shared.isEmpty else {
                 throw GitError.failed(command: "rewind", status: 1, message: Self.sharedWorktreeMessage(shared.count) + " Nothing was rewound.")
             }

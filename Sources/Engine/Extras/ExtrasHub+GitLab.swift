@@ -55,13 +55,14 @@ extension ExtrasHub {
     func handleGitLab(_ call: ClientMCPCall, caller: ExtrasCaller) async throws -> ClientMCPResult {
         let arguments = call.arguments
         // The instance's token, read once per call off the main actor (GF12), never per note or file.
-        func known(_ ref: MergeRequestRef) async -> [String] { await mergeRequests.knownSecrets(ref.instance) }
+        // Fails closed when it cannot be read (AV07): the tool reports it and returns no GitLab content.
+        func known(_ ref: MergeRequestRef) async throws -> [String] { try await mergeRequests.knownSecrets(ref.instance) }
         switch call.tool {
         case GitLabTools.readMergeRequest:
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             let description = (try? await mergeRequests.provider.mergeRequestDescription(ref)) ?? ""
-            let known = await known(ref)
+            let known = try await known(ref)
             // Header fields come from GitLab too: cleaned, on one line, redacted (GF13).
             let field = { (text: String) in UntrustedText.field(text, known: known) }
             var lines = [sourceLine(snapshot)]
@@ -78,7 +79,7 @@ extension ExtrasHub {
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             var changes = try await mergeRequests.provider.changes(ref)
-            let known = await known(ref)
+            let known = try await known(ref)
             if let filter = arguments["path"]?.stringValue, !filter.isEmpty {
                 changes.files = changes.files.filter { $0.newPath.contains(filter) || $0.oldPath.contains(filter) }
             }
@@ -96,7 +97,7 @@ extension ExtrasHub {
             let unresolvedOnly = arguments["unresolvedOnly"]?.boolValue ?? true
             let list = (snapshot.discussions ?? []).filter { !$0.isSystem && (!unresolvedOnly || $0.isUnresolved) }
             let shown = list.suffix(30)
-            let known = await known(ref)
+            let known = try await known(ref)
             let body: String = shown.map { discussion -> String in
                 let head = "discussion \(UntrustedText.field(discussion.id)) [\(discussion.isUnresolved ? "unresolved" : discussion.isResolvable ? "resolved" : "comment")]\(discussion.position.map { " on \(UntrustedText.field($0, known: known))" } ?? "")"
                 let notes: [String] = discussion.notes.filter { !$0.system }.map { note in
@@ -113,7 +114,7 @@ extension ExtrasHub {
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             guard let pipeline = snapshot.pipeline else { return ClientMCPResult(text: sourceLine(snapshot) + "\nNo pipeline for the head commit.") }
-            let known = await known(ref)
+            let known = try await known(ref)
             let field = { (text: String) in UntrustedText.field(text, known: known) }
             var lines = [sourceLine(snapshot), "Pipeline #\(pipeline.id): \(snapshot.pipelineSummary.text)\(pipeline.sha.map { " at \(field(String($0.prefix(12))))" } ?? ""). \(field(pipeline.webURL ?? ""))"]
             for stage in pipeline.stages {
@@ -138,7 +139,7 @@ extension ExtrasHub {
             }
             switch await mergeRequests.jobLog(ref, jobID: jobID, maxBytes: 64 << 10) {
             case .success(let chunk):
-                let known = await known(ref)
+                let known = try await known(ref)
                 let field = { (text: String) in UntrustedText.field(text, known: known) }
                 let excerpt = JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: known)
                 return ClientMCPResult(
@@ -153,7 +154,7 @@ extension ExtrasHub {
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             await mergeRequests.loadApprovalRules(ref)
-            let known = await known(ref)
+            let known = try await known(ref)
             let field = { (text: String) in UntrustedText.field(text, known: known) }
             var lines = [sourceLine(snapshot), "Approvals: \(field(snapshot.approvals.label))."]
             if !snapshot.approvals.approvedBy.isEmpty { lines.append("Approved by: \(snapshot.approvals.approvedBy.map { "@\(field($0))" }.joined(separator: ", "))") }

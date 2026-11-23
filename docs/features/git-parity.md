@@ -15,7 +15,7 @@ project-settings.md, composer.md; `GitActionsControl.logic.ts`, `BranchToolbar*`
 | 4 | Worktree location; submodules recursive / top / skip | folder: `WorkspacePreferences.worktreeParent`; submodules never fetched | adapt: always skip (submodule URLs come from the repository and would make host git fetch any host) | adapted |
 | 5 | Setup script on creation, setup card | runs in the project container (`setupRunner`) | keep | done (M6) |
 | 6 | APFS copy-on-write checkout | `WorktreeService.cloneCheckout` (main checkout is the cache) | keep | done |
-| 7 | Worktree handoff (local work → new worktree/branch) | `WorktreeService.handoff` (stash by hash, rolled back on failure); Git ▸ Move Changes to New Worktree… opens a thread there | build | done |
+| 7 | Worktree handoff (local work → new worktree/branch) | `WorktreeService.handoff` (stash by hash, rolled back on failure); Git ▸ Move Changes to New Worktree… creates a thread in the new worktree and shows it (v1.0.1 NV01: a draft there had no project and showed nothing) | build | done |
 | 8 | Cleanup after settle / archive / merge, keep local changes | `WorktreeLifecycle.swift` `cleanupVerdict`; Git ▸ Remove Clean Worktrees When Settled/Archived; Undo toast | build | done (no "inactive days" timer) |
 | 9 | Checkpoint per turn (hidden ref, untracked included) | `GitCheckpoints`: `refs/bellocode/checkpoints/<session>/<message>` via a temporary index, captured before each turn | build | done |
 | 10 | Edit from here; "Revert files too" only when isolated | `Engine.planRewind/rewind`: files by compare-and-swap with Undo, then opencode `revert.stage files:false` + `revert.commit`; refused when another thread shares the folder | adapt | partial: Git ▸ Edit Last Prompt from Here… (no per-message button in the transcript) |
@@ -51,14 +51,24 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   (`ConfinedDirectory`): a link is quoted as its text, as git commits it, and a file's size is checked on the open
   descriptor before any byte is read.
 - **Pushes bound to their plan (AF06, AF21):** `GitPushPlan` carries the local commit and the remote head it showed.
-  `push(_:force:)` re-checks branch, HEAD and the remote's push URL, then pushes the plan's commit to the plan's
-  resolved URL (so the destination and the credentials git asks for are the approved ones); a force push leases on the
-  plan's remote head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation
-  both use it; there is no unbound force push.
+  `push(_:force:)` re-checks branch, HEAD and the remote's push URL, then pushes the plan's commit to the remote by
+  name with its push URL pinned for that one git process to the URL the plan showed (`GitRepository.pinnedPush`: the
+  remote's URLs are reset and replaced by an unguessable placeholder that BelloCode's own `insteadOf` rule maps to the
+  approved URL). The destination and the credentials git asks for are the approved ones even if the remote or an
+  `insteadOf` rule changes meanwhile, and the URL is rewritten once, as `git remote get-url --push` showed it (v1.0.1
+  AF06: re-passing the shown URL as a repository argument let a second rule redirect it). Settings scoped to the remote
+  name (`remote.<name>.sslVerify`, `.proxy`, `.receivepack`) apply as in a terminal (GV10); for a GitLab remote the
+  app's credential overrides still reset its proxy. Only the shown branch is updated: no tags (`--no-follow-tags`,
+  `push.followTags` ignored), no configured push options, no mirror (AV08). A force push leases on the plan's remote
+  head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation both use it;
+  there is no unbound force push.
 - **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
   the closed form.
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
-  sibling directory of the same checkout blocks a file restore), re-checked just before files are written; worktree
+  sibling directory of the same checkout blocks a file restore), re-checked just before files are written. It checks
+  every unarchived session the engine knows, delegated children included (not only sidebar rows); the rewound
+  thread's own children are exempt only when settled and created after the checkpoint, i.e. by the turns the rewind
+  removes (second round of AF19). Worktree
   cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
   rewind Undo is shown with the affected path.
 - **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.

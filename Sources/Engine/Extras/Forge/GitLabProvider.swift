@@ -50,10 +50,25 @@ actor ForgeGate {
         throttledUntil[instance] = nil
     }
 
+    /// A 429 on the request holding a slot: the throttle is recorded and the slot handed on in one actor step, so the
+    /// waiter it goes to re-checks against the new window (AV14, GV02); recording it after the release let that waiter
+    /// through first.
+    @discardableResult
+    func release(_ instance: String, throttledFor after: TimeInterval?) -> TimeInterval {
+        let wait = throttle(instance, after: after)
+        release(instance)
+        return wait
+    }
+
+    /// Called at each hand-off to a waiter with whether the instance is throttled at that moment (tests).
+    private var handOffObserver: (@Sendable (Bool) -> Void)?
+    func observeHandOffs(_ observer: @escaping @Sendable (_ throttled: Bool) -> Void) { handOffObserver = observer }
+
     func release(_ instance: String) {
         if var queue = waiters[instance], !queue.isEmpty {
             let next = queue.removeFirst()
             waiters[instance] = queue.isEmpty ? nil : queue
+            handOffObserver?(throttledUntil[instance].map { $0 > now() } ?? false)
             next.resume()
         } else {
             active[instance] = max(0, active[instance, default: 0] - 1)
@@ -245,12 +260,19 @@ public struct GitLabProvider: ForgeProvider {
         try await gate.acquire(instance.baseURL)
         let response: ForgeResponse
         do {
-            response = try await transport.send(ForgeRequest(url: url, headers: headers, method: method, body: body, tailLimit: tailLimit))
-            await gate.release(instance.baseURL)
+            response = try await transport.send(
+                ForgeRequest(url: url, headers: headers, method: method, body: body, tailLimit: tailLimit, redirectScope: URL(string: instance.apiBase)))
         } catch {
             await gate.release(instance.baseURL)
             throw error
         }
+        if response.status == 429 {
+            // Recorded before the slot is handed on (one actor step): no queued request is sent inside the window.
+            let after = Self.retryAfter(response.headers)
+            await gate.release(instance.baseURL, throttledFor: after)
+            throw ForgeError.rateLimited(retryAfter: after)
+        }
+        await gate.release(instance.baseURL)
         switch response.status {
         case 200..<300:
             await gate.succeeded(instance.baseURL)
@@ -270,10 +292,6 @@ public struct GitLabProvider: ForgeProvider {
             throw ForgeError.conflict(Self.message(response.body) ?? "HTTP \(response.status).")
         case 416:
             return response
-        case 429:
-            let after = Self.retryAfter(response.headers)
-            await gate.throttle(instance.baseURL, after: after)
-            throw ForgeError.rateLimited(retryAfter: after)
         default: throw ForgeError.unexpected("GitLab answered HTTP \(response.status).")
         }
     }

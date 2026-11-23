@@ -96,6 +96,18 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **GitLab (P9):** the request gate re-checks the 429 hold for queued requests and never exceeds its limit (GF11);
   the token used for redaction is read off the main actor once per result (GF12); titles, branch, job and stage names
   and other header fields are cleaned and redacted (GF13).
+- **Git, rewind and GitLab, second round (Q3,** [Astra](reviews/v1.0.1-astra-verification.md),
+  [Neon](reviews/v1.0.1-neon-verification.md), [GLM](reviews/v1.0.1-glm-verification.md)**):** an approved push goes to
+  the remote by name with its URL pinned to the one shown, so an `insteadOf` rule can no longer redirect it and
+  remote-scoped settings (`sslVerify`, `proxy`) apply again; it publishes only the shown branch, no tags or push options
+  (AF06, GV10, AV08). A `.git` that is a link is never a sandbox write root (AV03). Generate Message never reads a file
+  swapped in for a link (AF01). Rewind counts delegated children as threads sharing the worktree (AF19). A Settings save
+  never deletes another program's `opencode.json` save when its conflict copy fails (AF24). GitLab: a redirect never
+  takes the token outside the instance's API base path (AV04); a 429 holds queued requests too (AV14, GV02); when the
+  Keychain cannot give the token to redact with, no GitLab content reaches a model (tools error, babysit wakes are held
+  and shown as "Updates held") (AV07); Add to Agent Context and Send to Agent never land in a thread you switched to
+  meanwhile (AV10). Move Changes to New Worktree opens a thread there instead of "No Thread Selected" (NV01); a
+  cancelled push after Commit and Push still refreshes the actions (NV16).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,

@@ -17,8 +17,9 @@ public final class MergeRequestReviewModel {
     public private(set) var message: String?
     public private(set) var isError = false
     @ObservationIgnored public var now: () -> Date = Date.init
-    /// Inserts text into the thread's composer (the person sends it). Nil when no composer is shown.
-    @ObservationIgnored public var insertIntoComposer: ((String) -> Void)?
+    /// The composer shown now, bound to it (the person sends what is inserted); nil when no composer is shown. Bound
+    /// when an action starts, so text that is ready only after an await never lands in another thread's composer (AV10).
+    @ObservationIgnored public var composerTarget: () -> ComposerTarget? = { nil }
     @ObservationIgnored public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// Asks to confirm (title, detail, button) → true to go on.
     @ObservationIgnored public var confirm: (String, String, String) -> Bool = { _, _, _ in true }
@@ -158,7 +159,7 @@ public final class MergeRequestReviewModel {
         if drafts.contains(where: { $0.discussionID == discussion.id }) {
             list.append(DiffAnnotationAction(id: "discardReply", title: "Discard Draft Reply"))
         }
-        list.append(DiffAnnotationAction(id: "agent", title: "Add to Agent Context", isEnabled: insertIntoComposer != nil))
+        list.append(DiffAnnotationAction(id: "agent", title: "Add to Agent Context", isEnabled: composerTarget() != nil))
         list.append(DiffAnnotationAction(id: "open", title: "Open in GitLab"))
         return list
     }
@@ -184,8 +185,14 @@ public final class MergeRequestReviewModel {
             show("Discarded the draft reply. Undo with ⌘Z.", error: false)
         case "agent":
             guard let discussion = state?.discussions.first(where: { $0.id == annotation.id }) else { return }
-            guard let insert = insertIntoComposer else { return show("Open the thread's composer to add the thread as context.", error: true) }
-            insert(await service.agentContext(discussion, ref: ref))
+            guard let target = composerTarget() else { return show("Open the thread's composer to add the thread as context.", error: true) }
+            let text: String
+            do {
+                text = try await service.agentContext(discussion, ref: ref)
+            } catch {
+                return show(ExtrasError.message(error), error: true)
+            }
+            guard target.insert(text) else { return show(ComposerTarget.movedMessage, error: true) }
             show("The thread is in the composer, quoted as GitLab content: review it and send.", error: false)
         case "open":
             if let url = URL(string: ref.url + (state?.discussions.contains { $0.id == annotation.id } == true ? "#note_\(firstNoteID(annotation.id) ?? 0)" : "")) { openURL(url) }

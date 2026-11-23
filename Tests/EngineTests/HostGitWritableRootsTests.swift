@@ -108,4 +108,31 @@ struct HostGitWritableRootsTests {
         #expect(HostGit.writableRoots(directory: project + "/lib", environment: [:], extra: [], mode: .local)
             .contains(HostGit.canonical(project + "/.git/modules/lib")))
     }
+    /// AV03: a link named `.git` to another checkout's real `.git` directory is not that metadata's owner. git follows
+    /// the link, but the sandbox does not let it write there: staging in the project leaves the other index unchanged.
+    /// A link to another checkout's `.git` file (a linked worktree pointer) is refused the same way.
+    @Test func aLinkNamedDotGitNeverReachesTheOtherCheckout() async throws {
+        defer { remove() }
+        let victim = try repository("victim")
+        let index = try Data(contentsOf: URL(filePath: victim + "/.git/index"))
+        let project = base + "/project"
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: project + "/.git", withDestinationPath: victim + "/.git")
+        try "planted\n".write(toFile: project + "/new.txt", atomically: true, encoding: .utf8)
+        let roots = HostGit.writableRoots(directory: project, environment: [:], extra: [], mode: .local)
+        #expect(!roots.contains { $0.hasPrefix(HostGit.canonical(victim)) }, "\(roots)")
+        _ = try? await runner.run(["add", "new.txt"], in: project, allowFailure: true)
+        _ = try? await runner.run(["update-ref", "refs/heads/pwned", "HEAD"], in: project, allowFailure: true)
+        #expect(try Data(contentsOf: URL(filePath: victim + "/.git/index")) == index, "the other checkout's index is unchanged")
+        #expect(!FileManager.default.fileExists(atPath: victim + "/.git/refs/heads/pwned"))
+        // A link to another checkout's linked-worktree `.git` file.
+        let victimWorktree = base + "/victim-wt"
+        try plain(["worktree", "add", "-q", "-b", "vfeature", victimWorktree], in: victim)
+        let other = base + "/other"
+        try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: other + "/.git", withDestinationPath: victimWorktree + "/.git")
+        #expect(!HostGit.writableRoots(directory: other, environment: [:], extra: [], mode: .local).contains { $0.hasPrefix(HostGit.canonical(victim)) })
+        // The checkout's own `.git` directory is still a root.
+        #expect(HostGit.writableRoots(directory: victim, environment: [:], extra: [], mode: .local).contains(HostGit.canonical(victim + "/.git")))
+    }
 }

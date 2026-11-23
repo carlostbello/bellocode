@@ -17,6 +17,8 @@ import Testing
     @MainActor struct Shell {
         let server: MockOpenCodeServer
         let engine: Engine
+        /// GitLab tokens (in memory: the shell tests never read the Keychain); holds one for `gitLabInstance`.
+        let forgeTokens: InMemorySecretVault
         let controller: MainWindowController
         let driver: ShellDriver
         let attachments: URL
@@ -26,7 +28,11 @@ import Testing
             let server = MockOpenCodeServer(scenario: privateScenario(), options: MockServerOptions(clock: .realTime))
             let endpoint = try await server.start()
             let connection = ServerConnection(baseURL: endpoint.url, credentials: ServerCredentials(password: endpoint.password ?? ""))
-            let engine = try Engine(configuration: EngineConfiguration(server: .fixed(connection), store: .inMemory))
+            var configuration = EngineConfiguration(server: .fixed(connection), store: .inMemory)
+            let forgeTokens = InMemorySecretVault()
+            try forgeTokens.store(account: gitLabInstance, label: "test", value: SecretValue("glpat-shell-test-0000000000"))
+            configuration.forgeTokens = forgeTokens
+            let engine = try Engine(configuration: configuration)
             await engine.start()
             let attachments = FileManager.default.temporaryDirectory.appending(path: "shell-attachments-\(UUID().uuidString)")
             let services = AppServices(
@@ -41,13 +47,15 @@ import Testing
                     && engine.root.projects.allSatisfy { workspace.projectModel($0).map { !$0.sessionIDs.isEmpty } ?? false }
             }
             #expect(live)
-            return Shell(server: server, engine: engine, controller: controller, driver: ShellDriver(controller: controller), attachments: attachments)
+            return Shell(server: server, engine: engine, forgeTokens: forgeTokens, controller: controller, driver: ShellDriver(controller: controller), attachments: attachments)
         }
 
         /// The demo workspace under a folder of its own that never exists. The fixture's folders
         /// (`/tmp/mock-workspace/project-N`) are shared by every run on the machine; while another process has them on
         /// disk (the app's `--snapshot` modes use the same fixture), the mock's file search lists their real contents
         /// instead of the fixture's files, and `@Pars` completion lost "Parser.swift" under a full run.
+        static let gitLabInstance = "https://gitlab.corp.test"
+
         static func privateScenario() -> Scenario {
             var scenario = Scenario.demo()
             let shared = "/tmp/mock-workspace"

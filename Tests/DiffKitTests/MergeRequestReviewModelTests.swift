@@ -16,7 +16,7 @@ import Testing
     static let v1 = FakeGitLabServer.Version(id: 1, base: "base1", start: "start1", head: "head1", diffs: [("A.swift", "A.swift", "@@ -1,2 +1,2 @@\n import Foundation\n-let a = 1\n+let a = 0\n")])
     static let v2 = FakeGitLabServer.Version(id: 2, base: "base1", start: "start1", head: "head2", diffs: [("A.swift", "A.swift", diff)])
 
-    func make(writes: Bool = true) async throws -> (MergeRequestReviewModel, FakeGitLabServer) {
+    func make(writes: Bool = true, vault: InMemorySecretVault = InMemorySecretVault()) async throws -> (MergeRequestReviewModel, FakeGitLabServer) {
         let server = FakeGitLabServer(instance: Self.instance, token: "glpat-test-token-0000000000")
         var project = FakeGitLabServer.Project(id: 3, path: "platform/rocket")
         var mr = FakeGitLabServer.MR(iid: 7, title: "Parser", source: "feat/parser")
@@ -32,7 +32,6 @@ import Testing
         mr.discussions = [.init(id: "cur", notes: [current]), .init(id: "old", notes: [old]), .init(id: "gen", notes: [FakeGitLabServer.Note(id: 3, author: "lee", body: "Nice", resolvable: false)])]
         project.mrs[7] = mr
         server.put(project)
-        let vault = InMemorySecretVault()
         try vault.store(account: Self.instance.baseURL, label: "t", value: SecretValue("glpat-test-token-0000000000"))
         let store = try ProjectionStore(location: .inMemory)
         let service = MergeRequestService(store: store, clock: ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000)), transport: server, tokens: vault, autoPoll: false)
@@ -102,10 +101,16 @@ import Testing
     @Test func addToAgentContextQuotesTheThread() async throws {
         let (model, _) = try await make()
         var inserted: [String] = []
-        model.insertIntoComposer = { inserted.append($0) }
+        model.composerTarget = { ComposerTarget { inserted.append($0); return true } }
         let thread = try #require(model.annotations.first { $0.id == "cur" })
         await model.perform(DiffAnnotationAction(id: "agent", title: ""), on: thread)
         #expect(inserted.count == 1 && inserted[0].contains(UntrustedText.beginMarker) && inserted[0].contains("A.swift:3"))
+        // AV10: the composer the action started with is no longer shown when the text is ready: nothing is inserted
+        // anywhere, and the person is told.
+        model.composerTarget = { ComposerTarget { _ in false } }
+        await model.perform(DiffAnnotationAction(id: "agent", title: ""), on: thread)
+        #expect(inserted.count == 1)
+        #expect(model.isError && model.message == ComposerTarget.movedMessage)
         // Discard and Undo of a draft.
         await model.comment(DiffReviewComment(path: "A.swift", side: .new, startLine: 1, endLine: 1, quoted: "", text: "Hm."))
         let draft = try #require(model.annotations.first { $0.state.primary == .draft })
@@ -113,5 +118,18 @@ import Testing
         #expect(model.drafts.isEmpty)
         await model.undoDiscard()
         #expect(model.drafts.count == 1)
+    }
+
+    /// AV07: when the instance's token cannot be read to redact the notes, nothing goes to the composer.
+    @Test func addToAgentContextNeedsTheTokenToRedactWith() async throws {
+        let vault = InMemorySecretVault()
+        let (model, _) = try await make(vault: vault)
+        try vault.delete(account: Self.instance.baseURL)
+        var inserted: [String] = []
+        model.composerTarget = { ComposerTarget { inserted.append($0); return true } }
+        let thread = try #require(model.annotations.first { $0.id == "cur" })
+        await model.perform(DiffAnnotationAction(id: "agent", title: ""), on: thread)
+        #expect(inserted.isEmpty)
+        #expect(model.isError && model.message?.contains("Keychain") == true, "\(model.message ?? "")")
     }
 }

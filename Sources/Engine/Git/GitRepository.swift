@@ -81,10 +81,13 @@ public struct GitRepository: Sendable {
         self.writableRoots = writableRoots
     }
 
-    public func git(_ arguments: [String], input: Data? = nil, timeout: Duration? = nil, limit: Int? = nil, allowFailure: Bool = false) async throws
-        -> GitOutput
-    {
-        try await runner.run(arguments, in: directory, input: input, timeout: timeout, outputLimit: limit, allowFailure: allowFailure, writableRoots: writableRoots)
+    public func git(
+        _ arguments: [String], input: Data? = nil, timeout: Duration? = nil, limit: Int? = nil, allowFailure: Bool = false,
+        configuration: [GitRunner.Setting] = [], destinations: [String] = []
+    ) async throws -> GitOutput {
+        try await runner.run(
+            arguments, in: directory, input: input, timeout: timeout, outputLimit: limit, allowFailure: allowFailure, writableRoots: writableRoots,
+            configuration: configuration, destinations: destinations)
     }
 
     // MARK: Location and status

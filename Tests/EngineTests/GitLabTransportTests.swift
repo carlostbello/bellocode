@@ -94,14 +94,59 @@ struct GitLabTransportTests {
             _ = try await transport.send(ForgeRequest(url: URL(string: "http://127.0.0.1:\(origin.port)/api/v4/user")!, headers: headers))
         }
         #expect(elsewhere.requests.isEmpty, "the redirect target was never contacted")
-        // A same-origin redirect is followed.
-        let followed = try await transport.send(ForgeRequest(url: URL(string: "http://127.0.0.1:\(origin.port)/hop")!, headers: headers))
+        // A same-origin redirect within the request's scope is followed.
+        let followed = try await transport.send(ForgeRequest(
+            url: URL(string: "http://127.0.0.1:\(origin.port)/hop")!, headers: headers, redirectScope: URL(string: "http://127.0.0.1:\(origin.port)")))
         #expect(followed.status == 200)
         #expect(origin.requests.contains { $0.path == "/same" })
         // Host spelling counts as another origin too (localhost vs 127.0.0.1), as does a scheme change.
         #expect(!URLSessionForgeTransport.sameOrigin(URL(string: "https://h/x")!, URL(string: "http://h/x")!))
         #expect(!URLSessionForgeTransport.sameOrigin(URL(string: "https://h/x")!, URL(string: "https://h:8443/x")!))
         #expect(URLSessionForgeTransport.sameOrigin(URL(string: "https://H:443/x")!, URL(string: "https://h/y")!))
+    }
+
+    /// AV04: two applications behind one origin under different path prefixes. The token is the first one's; a redirect
+    /// (first hop or a later one) to the other prefix is refused before it is followed, and nothing reaches it. A
+    /// redirect within the instance's API base is still followed.
+    @Test func redirectsStayUnderTheInstancesAPIBase() async throws {
+        let server = try RedirectFixtureServer { path in
+            path.hasPrefix("/team-a/api/v4/user") ? RedirectFixtureServer.json(#"{"username":"me"}"#)
+                : path.hasPrefix("/team-a/api/v4/moved") ? RedirectFixtureServer.redirect(to: "/team-a/api/v4/user")
+                : path.hasPrefix("/team-a/api/v4/hop") ? RedirectFixtureServer.redirect(to: "/team-a/api/v4/away")
+                : path.hasPrefix("/team-a/api/v4/away") ? RedirectFixtureServer.redirect(to: "/team-b/api/v4/user")
+                : path.hasPrefix("/team-a/api/v4/dots") ? RedirectFixtureServer.redirect(to: "/team-a/api/v4/%2e%2e/%2e%2e/../team-b/api/v4/user")
+                : path.hasPrefix("/team-b") ? RedirectFixtureServer.json(#"{"username":"someone else"}"#)
+                : RedirectFixtureServer.redirect(to: "/team-b/api/v4/user")
+        }
+        defer { server.stop() }
+        let instance = try #require(GitLabInstance(baseURL: "http://127.0.0.1:\(server.port)/team-a"))
+        let vault = InMemorySecretVault()
+        try vault.store(account: instance.baseURL, label: "t", value: SecretValue("zz-SENTINEL-token"))
+        let transport = URLSessionForgeTransport()
+        let scope = URL(string: instance.apiBase)
+        let headers = ["PRIVATE-TOKEN": "zz-SENTINEL-token"]
+        for path in ["/team-a/api/v4/projects", "/team-a/api/v4/hop", "/team-a/api/v4/dots"] {
+            await #expect(throws: ForgeError.self, "\(path)") {
+                _ = try await transport.send(ForgeRequest(url: URL(string: "http://127.0.0.1:\(server.port)\(path)")!, headers: headers, redirectScope: scope))
+            }
+        }
+        #expect(!server.requests.contains { $0.path.hasPrefix("/team-b") }, "\(server.requests.map(\.path))")
+        // Through the provider (which scopes every request to the instance's API base): followed within it.
+        let provider = GitLabProvider(transport: transport, tokens: vault, plainHTTPAllowed: { let list = PlainHTTPAllowList(); list.set([instance.baseURL]); return list }())
+        let moved = try await transport.send(ForgeRequest(
+            url: URL(string: "http://127.0.0.1:\(server.port)/team-a/api/v4/moved")!, headers: headers, redirectScope: scope))
+        #expect(moved.status == 200)
+        #expect(try await provider.currentUser(instance) == "me")
+        // A request without a scope follows no redirect at all.
+        await #expect(throws: ForgeError.self) {
+            _ = try await transport.send(ForgeRequest(url: URL(string: "http://127.0.0.1:\(server.port)/team-a/api/v4/moved")!, headers: headers))
+        }
+        #expect(!server.requests.contains { $0.path.hasPrefix("/team-b") })
+        #expect(URLSessionForgeTransport.within(URL(string: "https://h/a/api/v4")!, URL(string: "https://h/a/api/v4/projects/1")!))
+        #expect(!URLSessionForgeTransport.within(URL(string: "https://h/a/api/v4")!, URL(string: "https://h/a/api/v40")!))
+        #expect(!URLSessionForgeTransport.within(URL(string: "https://h/a/api/v4")!, URL(string: "https://h/b/api/v4/user")!))
+        #expect(!URLSessionForgeTransport.within(URL(string: "https://h/a/api/v4")!, URL(string: "https://h/a/api/v4/%2E%2E/x")!))
+        #expect(!URLSessionForgeTransport.within(URL(string: "https://h/a/api/v4")!, URL(string: "https://h/a/api/v4/x%2F..%2F..")!))
     }
 
     @Test func plainHTTPNeedsAnExplicitPerInstanceChoice() async throws {

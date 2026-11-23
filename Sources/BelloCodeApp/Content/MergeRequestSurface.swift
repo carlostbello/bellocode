@@ -40,7 +40,7 @@ final class MergeRequestSurfaces {
             NSWorkspace.shared.open(url)
         }
         model.openSettings = { (NSApp.delegate as? AppDelegate)?.openSettings(pane: "gitlab") }
-        model.insertIntoComposer = { [weak self] text in self?.context?.onInsertIntoComposer?(text) }
+        model.composerTarget = { [weak self] in self?.composerTarget() }
         model.confirm = { title, detail, button in Self.confirm(title, detail, button) }
         model.makeCreateContext = { [weak self, weak engine] id in
             guard let engine, let directory = self?.context?.directory ?? engine.orchestration?.node(id)?.node.directory else { return nil }
@@ -98,6 +98,17 @@ final class MergeRequestSurfaces {
             generate: { prompt in try await engine.generateText(in: sessionID, prompt: prompt, task: "Merge request text") })
     }
 
+    /// The composer shown now, bound to its context (AV10): inserting later succeeds only while that same context (the
+    /// same thread or draft) is still displayed and its composer still exists.
+    func composerTarget() -> ComposerTarget? {
+        guard let bound = context, bound.onInsertIntoComposer != nil else { return nil }
+        return ComposerTarget { [weak self, weak bound] text in
+            guard let self, let bound, self.context === bound, let insert = bound.onInsertIntoComposer else { return false }
+            insert(text)
+            return true
+        }
+    }
+
     func display(_ context: ThreadSurfaceContext?) {
         if context?.thread?.sessionID != self.context?.thread?.sessionID { closeReview() }
         self.context = context
@@ -119,7 +130,7 @@ final class MergeRequestSurfaces {
         if review?.model.ref == ref { return showPanel() }
         closeReview()
         let reviewModel = MergeRequestReviewModel(ref: ref, service: reviews)
-        reviewModel.insertIntoComposer = { [weak self] text in self?.context?.onInsertIntoComposer?(text) }
+        reviewModel.composerTarget = { [weak self] in self?.composerTarget() }
         reviewModel.openURL = { [weak self] url in
             if self?.context?.onOpenInBrowser?(url) == true { return }
             NSWorkspace.shared.open(url)

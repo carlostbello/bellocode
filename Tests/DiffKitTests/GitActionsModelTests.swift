@@ -79,6 +79,33 @@ struct GitActionsModelTests {
         #expect(log.notices.withLock { $0 }.contains { $0.contains("push failed") })
     }
 
+    /// NV16: Commit and Push on a branch whose remote has diverged; the commit is made and the person cancels the
+    /// force-push confirmation. The state is still reloaded: the new commit counts as ahead of the default branch (so
+    /// Create Merge Request is offered) without waiting for another refresh.
+    @Test func aCancelledPushAfterACommitStillReloads() async throws {
+        let (fixture, model, log, _) = try await Self.fixture(answer: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let git = { (arguments: [String]) in _ = try await fixture.git.runner.run(arguments, in: fixture.repo.path) }
+        try await git(["switch", "-q", "-c", "feat/z"])
+        try ChangesFixture.write(fixture.repo, "z.txt", "z\n")
+        try await git(["add", "-A"])
+        try await git(["commit", "-q", "-m", "z elsewhere"])
+        try await git(["push", "-q", "-u", "origin", "feat/z"])
+        try await git(["reset", "-q", "--hard", "main"])
+        try ChangesFixture.write(fixture.repo, "w.txt", "w\n")
+        model.repository.refresh()
+        try await Self.waitFor { model.repository.status?.branch == "feat/z" && model.repository.status?.isDirty == true && !model.repository.isRefreshing }
+        await model.reload()
+        #expect(model.aheadOfDefault == 0)
+        await model.perform(.commitAndPush)
+        let form = try #require(model.commit)
+        form.message = "Add w"
+        await model.finishCommit(form, as: .commitAndPush)
+        #expect(log.confirms.withLock { $0 } == ["Force push feat/z?"])
+        #expect(model.commit == nil && model.lastError == nil)
+        #expect(model.aheadOfDefault == 1, "reloaded after the cancelled push")
+    }
+
     @Test func aForcePushNeedsItsOwnConfirmation() async throws {
         let (fixture, model, log, origin) = try await Self.fixture(answer: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }

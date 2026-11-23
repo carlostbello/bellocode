@@ -704,8 +704,20 @@ public final class MergeRequestService {
         record.deferredUntil = nil
         // A failed pipeline brings a bounded, sanitised excerpt of its first failing job's log.
         var failing: (job: PipelineJob, excerpt: JobLogExcerpt)?
-        let known = await knownSecrets(ref.instance)
+        guard let known = try? await knownSecrets(ref.instance) else {
+            // No exact redaction value (AV07): the wake waits (the baseline is not advanced, so these events arrive
+            // with the next poll that can redact them); nothing reaches the thread meanwhile.
+            guard isCurrent(key, generation) else { return }
+            let firstDeferral = record.heldForRedaction != true
+            record.heldForRedaction = true
+            nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
+            watches[key] = record
+            try? await store.saveMergeRequestWatch(record)
+            if firstDeferral { await appendLog(key, record, .deferred, "The GitLab token could not be read to redact this update; waiting: \(summary)") }
+            return
+        }
         guard isCurrent(key, generation) else { return }
+        record.heldForRedaction = nil
         if events.contains(where: \.isPipelineFailure), let job = snapshot.pipeline?.failedJobs.first, let instance = GitLabInstance(baseURL: ref.instance) {
             let project = ForgeProject(instance: instance, projectPath: ref.projectPath)
             if let chunk = try? await provider.jobLog(project, jobID: job.id, maxBytes: Self.excerptBytes, tryRange: capabilities(ref.instance).support(.jobLogRange).mayTry) {
@@ -727,13 +739,22 @@ public final class MergeRequestService {
 
     /// Values never shown to a model even if GitLab echoes them (the instance's token). Read off the main actor (a
     /// Keychain read can stall while the daemon is busy, GF12); callers read it once per result, not per item.
-    public func knownSecrets(_ baseURL: String) async -> [String] {
-        await Self.readKnownSecrets(tokens, baseURL)
+    ///
+    /// Fails closed (AV07): when the token cannot be read (a locked or busy Keychain, or no token any more), this throws
+    /// `redactionUnavailable` instead of returning nothing, so GitLab content is never passed to a model without its
+    /// exact-token redaction (a self-managed token with a custom prefix escapes the generic patterns).
+    public func knownSecrets(_ baseURL: String) async throws -> [String] {
+        try await Self.readKnownSecrets(tokens, baseURL)
+    }
+
+    /// Why GitLab content was not passed on: the value to redact could not be read.
+    public nonisolated static func redactionUnavailable(_ baseURL: String) -> ExtrasError {
+        ExtrasError("BelloCode could not read the GitLab token for \(baseURL) from the Keychain, so it cannot make sure the token is removed from GitLab content; nothing was passed on. Unlock the Keychain (or set the token again in Settings ▸ GitLab) and try again.")
     }
 
     @concurrent
-    nonisolated static func readKnownSecrets(_ tokens: any SecretVault, _ baseURL: String) async -> [String] {
-        guard let token = try? tokens.read(account: baseURL), !token.isEmpty else { return [] }
+    nonisolated static func readKnownSecrets(_ tokens: any SecretVault, _ baseURL: String) async throws -> [String] {
+        guard let token = try? tokens.read(account: baseURL), !token.isEmpty else { throw redactionUnavailable(baseURL) }
         return [String(decoding: token.utf8, as: UTF8.self)]
     }
 

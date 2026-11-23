@@ -66,7 +66,14 @@ extension MainWindowController {
     /// as one undoable edit (NF09); otherwise the draft is opened with the text. The instance's token, redacted from
     /// the quote, is read off the main actor (GF12).
     func startThread(from issue: GitLabIssue, instance: String, selection: String?, in directory: String) async {
-        let known = await workspace.engine.extras?.mergeRequests.knownSecrets(instance) ?? []
+        let known: [String]
+        do {
+            known = try await workspace.engine.extras?.mergeRequests.knownSecrets(instance) ?? []
+        } catch {
+            // The issue text goes to a model: never without the exact token redacted (AV07).
+            guard !Task.isCancelled else { return }
+            return workspace.undo.showNotice(ExtrasError.message(error))
+        }
         guard !Task.isCancelled else { return }
         let text = IssueThreadPrompt.make(issue, selection: selection, known: known)
         if case .draft(let shown) = workspace.selection, shown == directory, container.displayed == .draft(directory: directory),

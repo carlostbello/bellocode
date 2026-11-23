@@ -174,6 +174,27 @@ struct GitLabToolTests {
         }
     }
 
+    /// AV07: with the Keychain locked after a read was cached, the GitLab tools return no GitLab content (the token
+    /// they would redact with cannot be read) and say why.
+    @Test func toolsReturnNothingWhenTheTokenToRedactCannotBeRead() async throws {
+        let vault = MergeRequestServiceTests.LockableVault(GitLabWorld.tokens())
+        let fixture = try await Fixture.start(tokens: vault)
+        defer { Task { await fixture.stop() } }
+        let session = try await fixture.thread()
+        let warm = await fixture.call(GitLabTools.readMergeRequest, ["ref": "!42"], session)
+        #expect(!warm.isError, "\(warm.text)")
+        vault.locked.withLock { $0 = true }
+        // These two answer from the cached read; the token to redact it with is what is missing.
+        for tool in [GitLabTools.readMergeRequest, GitLabTools.listDiscussions] {
+            let result = await fixture.call(tool, ["ref": "!42", "unresolvedOnly": false], session)
+            #expect(result.isError && result.text.contains("Keychain"), "\(tool): \(result.text)")
+            #expect(!result.text.contains(UntrustedText.beginMarker), "\(tool): no GitLab content")
+        }
+        // This one needs a fresh read, which fails first.
+        let changes = await fixture.call(GitLabTools.readChanges, ["ref": "!42"], session)
+        #expect(changes.isError && !changes.text.contains(UntrustedText.beginMarker), "\(changes.text)")
+    }
+
     /// A vault that counts reads made on the main thread (a Keychain read there stalls the UI).
     final class RecordingVault: SecretVault {
         let inner: InMemorySecretVault

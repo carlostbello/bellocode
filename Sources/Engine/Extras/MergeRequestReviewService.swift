@@ -355,7 +355,8 @@ public final class MergeRequestReviewService {
     // MARK: Agent context
 
     /// The composer text for "Add to Agent Context": where the thread is, then its notes quoted as untrusted data.
-    public func agentContext(_ discussion: ReviewDiscussion, ref: MergeRequestRef) async -> String {
+    /// Throws when the instance's token cannot be read to redact the notes (AV07).
+    public func agentContext(_ discussion: ReviewDiscussion, ref: MergeRequestRef) async throws -> String {
         let anchor = states[ref.url].map { ReviewAnchoring.anchor(discussion.position, shown: $0.refs, files: $0.diff.fileLines) } ?? .general
         let place: String = switch anchor {
         case .line(let path, let side, let line, let start): "\(path):\(start.map { "\($0)–" } ?? "")\(line)\(side == .old ? " (old side)" : "")"
@@ -363,7 +364,7 @@ public final class MergeRequestReviewService {
         case .outdated(let position): "\(position.label), outdated (written at head \(position.refs.headSHA.prefix(12)))"
         case .general: "the merge request (general comment)"
         }
-        let known = await mergeRequests.knownSecrets(ref.instance)
+        let known = try await mergeRequests.knownSecrets(ref.instance)
         let body = discussion.visibleNotes.map { note in
             "@\(note.author)\(note.created.map { " (\(Self.dateText($0)))" } ?? ""):\n" + UntrustedText.sanitise(note.body, limit: 4_000, known: known)
         }.joined(separator: "\n\n")

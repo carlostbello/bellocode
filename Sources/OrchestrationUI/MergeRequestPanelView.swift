@@ -538,7 +538,10 @@ struct BabysitSection: View {
                     .buttonStyle(DSButtonStyle(link.watching ? .outline : .primary, size: .small))
                     .help(link.watching ? "Stop waking this thread for this MR" : "Wake this thread once per event: pipeline result, new comments, approvals, merge or close")
                 if link.watching, let watch {
-                    if let until = watch.deferredUntil {
+                    if watch.heldForRedaction == true {
+                        Label("Updates held: the GitLab token could not be read from the Keychain to redact them", systemImage: "lock")
+                            .foregroundStyle(SwiftUI.Color.ds.warningText)
+                    } else if let until = watch.deferredUntil {
                         Label("Budget reached; next wake \(ExtrasTime.relative(until, now: model.now()))", systemImage: "hourglass").foregroundStyle(SwiftUI.Color.ds.warningText)
                     } else if let next = model.threadID.flatMap({ service.nextPollDate($0, link.ref.url) }) {
                         Label("Next check \(ExtrasTime.relative(next, now: model.now()))", systemImage: "eye").foregroundStyle(SwiftUI.Color.ds.infoText)
