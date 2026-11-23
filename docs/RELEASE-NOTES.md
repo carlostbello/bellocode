@@ -134,6 +134,12 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   and shown as "Updates held") (AV07); Add to Agent Context and Send to Agent never land in a thread you switched to
   meanwhile (AV10). Move Changes to New Worktree opens a thread there instead of "No Thread Selected" (NV01); a
   cancelled push after Commit and Push still refreshes the actions (NV16).
+- **Third verification round (R3a,** [Astra](reviews/v1.0.1-astra-verification-2.md),
+  [GLM](reviews/v1.0.1-glm-verification-2.md)**):** the Dockerfile reader the image policy relies on, and the build
+  instrumenter that adds the trust roots to every stage, continue a line only as BuildKit does: a trailing escaped
+  escape (`RUN echo \\`) ends the instruction, so the next line's `FROM` is a stage whose base is checked and
+  instrumented; the instrumenter also splits CRLF files into lines, honours `# escape=` and no longer takes a comment
+  ending in the escape for a continuation (AF11, GW01).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,

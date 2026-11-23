@@ -164,6 +164,32 @@ struct DockerfileBasesTests {
         #expect(refused("FROM a:1\nRUN --mount=type=bind,fr\"om=x true\n") != nil, "a mount Docker's CSV reader fails")
     }
 
+    /// AF11, GW01: BuildKit continues a line only when its trailing escape (blanks after it allowed) is the line's
+    /// first character or follows something other than the escape (`([^X])X[ \t]*$|^X[ \t]*$`). Two or more escapes
+    /// end the instruction, so the next line is a stage of its own whose base is checked.
+    @Test func anEscapedEscapeEndsTheInstruction() {
+        for (escape, directive) in [("\\", ""), ("`", "# escape=`\n")] {
+            let two = escape + escape
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo x \(two)\nFROM disallowed.example.com/image:1\n")
+                == ["allowed/base:1", "disallowed.example.com/image:1"], "two \(escape)")
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo x \(two)\(escape) \t\nFROM disallowed.example.com/image:2\n")
+                == ["allowed/base:1", "disallowed.example.com/image:2"], "three \(escape)")
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo x\(two)  \nFROM disallowed.example.com/image:3\n")
+                == ["allowed/base:1", "disallowed.example.com/image:3"], "two \(escape) then blanks")
+            // One escape, an escape after a blank, and a line that is only the escape still continue.
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo x \(escape)\nFROM not-a-stage:1\n") == ["allowed/base:1"])
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo \(escape) \(escape)\nFROM not-a-stage:1\n") == ["allowed/base:1"])
+            #expect(images(directive + "FROM \(escape)\n\(escape)\nallowed/base:2\n") == ["allowed/base:2"])
+            // A continued line that ends in an escaped escape ends the instruction there.
+            #expect(images(directive + "FROM allowed/base:1\nRUN echo \(escape)\nx \(two)\nFROM disallowed.example.com/image:4\n")
+                == ["allowed/base:1", "disallowed.example.com/image:4"])
+        }
+        #expect(DockerfileBases.trimContinuation("a\\\\", escape: "\\") == ("a\\\\", true))
+        #expect(DockerfileBases.trimContinuation("a\\ \t", escape: "\\") == ("a", false))
+        #expect(DockerfileBases.trimContinuation("\\", escape: "\\") == ("", false))
+        #expect(DockerfileBases.trimContinuation("\\\\", escape: "\\") == ("\\\\", true))
+    }
+
     /// Global ARG defaults are expanded as Docker expands them; references Docker's shell processing would change
     /// (quotes) or that use a variable where BelloCode cannot know its value are refused.
     @Test func referencesAreCheckedAsDockerResolvesThem() {

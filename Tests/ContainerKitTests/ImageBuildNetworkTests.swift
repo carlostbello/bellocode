@@ -53,6 +53,20 @@ struct ImageBuildNetworkTests {
         #expect(ImageBuildNetwork(CorporateNetwork()).instrument(dockerfile: dockerfile) == dockerfile)
     }
 
+    /// AF11, GW01: the stage after an instruction ending in an escaped escape is a stage of its own, and gets the
+    /// trust lines; under `# escape=\`` the backtick continues and the backslash does not.
+    @Test func everyStageAfterAnEscapedEscapeIsInstrumented() {
+        let network = ImageBuildNetwork(Self.certs)
+        func stages(_ dockerfile: String) -> Int {
+            network.instrument(dockerfile: dockerfile).split(separator: "\n").filter { $0.hasPrefix("COPY bellocode-ca/ /etc/bellocode/certs/") }.count
+        }
+        #expect(stages("FROM a:1\nRUN echo x \\\\\nFROM b:1\nRUN true\n") == 2)
+        #expect(stages("FROM a:1\r\nRUN echo x \\\\\r\nFROM b:1\r\n") == 2)
+        #expect(stages("FROM a:1\nRUN echo x \\\nFROM b:1\n") == 1, "one escape continues the RUN")
+        #expect(stages("# escape=`\nFROM a:1\nRUN echo x ``\nFROM b:1\n") == 2)
+        #expect(stages("# escape=`\nFROM `\n  a:1\nRUN echo C:\\\nFROM b:1\n") == 2)
+    }
+
     @Test func aNamedContextLeavesTheProjectsContextAlone() {
         let network = ImageBuildNetwork(Self.certs)
         let out = network.instrument(dockerfile: "FROM alpine\nRUN apk add curl", source: .namedContext)
