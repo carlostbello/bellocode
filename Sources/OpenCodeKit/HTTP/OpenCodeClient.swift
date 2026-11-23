@@ -424,4 +424,13 @@ extension OpenCodeClient {
         let request = try makeRequest(.get, ["api", "location"], directory: directory)
         return try await send("location.get", request, as: LocationInfo.self)
     }
+
+    /// `GET /api/debug/location` (debug.location.list): the directories of the locations the server has loaded now.
+    public func loadedLocations() async throws -> [String] {
+        let request = try makeRequest(.get, ["api", "debug", "location"])
+        return try await send("debug.location.list", request, as: [LoadedLocation].self).map(\.directory)
+    }
+
+    /// `Location.PublicRef`.
+    struct LoadedLocation: Decodable, Sendable { var directory: String }
 }

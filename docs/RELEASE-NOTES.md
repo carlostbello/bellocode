@@ -15,8 +15,10 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 
 - **Auto asks more often about recursive searches.** The preflight for `grep -r` / `-R` now walks every folder grep
   would enter, `.git` and `node_modules` included, follows links as grep does and expands globs; a search whose tree
-  holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. The risk policy version
-  is `bellocode-auto-3` (AF14).
+  holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. `--include`/`--exclude`
+  rules apply in order with the last match winning, as grep applies them, and a brace expansion, a glob the shell
+  would expand in an option or the pattern, or an operand that cannot be examined also asks. The risk policy version
+  is `bellocode-auto-4` (AF14, GV03).
 - **Workspace containers run as a verified numeric user.** The image's user is resolved from its own account files
   without running it, root and unknown names are refused before anything starts, and every exec (commands,
   terminals, MCP servers, probes, port relays, secret commands) uses the numeric `uid:gid`. An existing workspace that
@@ -30,7 +32,7 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Shared Chrome closes a thread's tabs when the thread is archived or deleted**, as the setting in Settings ▸ Browser
   always said (on by default; tabs shared with another thread stay open) (NF11).
 - **A message to a held thread waits.** After one agent stops another thread, a `thread_send` to it is queued without
-  waking it, until you resume (GF02). `create_threads` refuses unknown agents and sub-agents (GF14).
+  waking it, until you resume, including one sent while the stop is still being confirmed (GF02, GV08). `create_threads` refuses unknown agents and sub-agents (GF14).
 - **Command Palette** lists the Browser and Shared Chrome commands and refreshes GitLab to-dos while open (NF20).
 - **A short Brokered or Placeholder value saved by an earlier release is no longer used** in that mode; Settings ▸
   Secrets names it until you rotate it to at least 8 bytes or make it Visible (AF16).
@@ -45,8 +47,8 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   A pending push is bound to the remote and URL it was approved for, and the force-push confirmation binds the remote
   revision it protects (AF06, AF21). Commit and Push reports a failed push (NF05). Rewind is scoped to the thread's
   worktree root, and rollback and Undo act there; a failed Undo is reported (AF19, AF20, NF12).
-- **Project boundary and opencode config (P7, P8):** repository instruction reads are confined after the open (AF08);
-  a trust change reloads every active location it covers (AF17); a Settings save never overwrites an external
+- **Project boundary and opencode config (P7, P8):** repository instruction reads open no path through a link, atomically with the lookup, and re-check every folder's identity after the read; hard-linked instruction files are refused (AF08);
+  a trust change reloads every location the server has loaded below it, however many, and stays pending with a problem when that list cannot be read (AF17, GV07); a Settings save never overwrites an external
   editor's save to `opencode.json` (AF24); Restart Server waits for the server before refreshing (NF06); Reload opencode
   Configuration reports its result when Settings is closed (NF16).
 - **Secrets and the CLI (P5):** the CLI takes the server address and password from one authority and the password
@@ -80,13 +82,17 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   default CA files as well as Debian's (GV09).
 - **Engine, client MCP and models (P8):** the app and Shared Chrome tools are hosted for projects added while
   connected and again after a server restart (NF01); live message updates are no longer dropped after a sub-agent
-  refresh (NF02); global MCP servers are registered when a project is shown (NF03); the Auto tab loads its log at once
-  (NF22); scheduled tasks sort consistently (NF23); an unreadable background-model preference keeps its warning and
-  the plugin's mirror (AF27).
+  refresh (NF02); global MCP servers are registered when a project is shown, including a thread shown before its session has loaded (NF03); the Auto tab loads its log at once
+  (NF22); scheduled tasks sort consistently (NF23); an unreadable background-model preference, including a saved row that no longer
+  decodes, keeps its warning and the plugin's mirror (AF27).
 - **App UI and drafts (P9):** a failed first send from a draft returns its text to the new thread's composer (NF04);
   Start Thread from Issue fills an open draft (NF09); the draft's model hint only promises free models when they exist
   (NF24); the Issues view follows the displayed project (NF18); Shared Chrome viewers follow who has control and Stop
   during a start is reconciled (NF17, AF23); the menu bar's Scheduled Tasks… brings BelloCode forward (NF21).
+  For a thread in a worktree, Window ▸ opencode… and Project Environment… open on its project, so trust and
+  settings are read and written for the project root, while Open in Terminal still opens the worktree (NV04). File ▸ Reopen
+  Closed Thread (⇧⌘T) also brings back a thread deleted within its Undo window (NV13). Thread ▸ Mark Risk Notices
+  Reviewed works on a thread whose session has not loaded yet (NV15).
 - **GitLab (P9):** the request gate re-checks the 429 hold for queued requests and never exceeds its limit (GF11);
   the token used for redaction is read off the main actor once per result (GF12); titles, branch, job and stage names
   and other header fields are cleaned and redacted (GF13).

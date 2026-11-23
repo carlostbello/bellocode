@@ -38,7 +38,8 @@ Agents panel; the app mounts it as the "Agents" right-panel tab and adds the hea
   `agent` is checked before anything is created: unknown agents and sub-agents are refused (v1.0.1 GF14).
 - `thread_list`, `thread_search` (titles), `project_list`, `thread_read` (bounded: 20 messages, 12,000 chars).
 - `thread_send` (queue|steer, prefixed "[Message from …]"), `thread_wait` (≤ 45 s), `thread_interrupt` (cascades).
-  To a thread another agent interrupted (held), `thread_send` queues without waking it (`resume: false`; GF02).
+  To a thread another agent interrupted (held), `thread_send` queues without waking it (`resume: false`; GF02), and a
+  send during an interrupt still in flight waits for it and is held too (GV08).
 - `pending_requests` list approvals in self + descendants; deny a child's request. Agents can never approve.
 - `send_to_user` Markdown the person must read now: a titled quoted card in the transcript (input persists).
 - `orchestrator_capabilities` sub-agents, chat models with variants, limits.

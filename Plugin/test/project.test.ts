@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import * as P from "../src/project.ts"
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -179,6 +179,77 @@ describe("untrusted repository contents on a real file system", () => {
     expect("refused" in read).toBe(true)
     // An untouched file is still read through the same confined open.
     expect(P.readInside(repo, join(repo, "web-moved", "AGENTS.md"), P.LIMITS.fileBytes)).toEqual({ text: "web rules", size: 9 })
+    cleanup()
+  })
+
+  test("AF08: a link present only at the open is refused even when every path check sees real folders", () => {
+    // The race a path-based check cannot close: web/ is a real folder whenever it is examined itself, but a link to an
+    // outside folder whenever a path *through* it is resolved (the leaf checks and the open). Every lstat then agrees
+    // (the leaf check sees the outside file's identity, which is also what a following open would hold), so only an
+    // open that refuses links in every component (O_NOFOLLOW_ANY / a descriptor chain) stops it.
+    const base = scratch()
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    mkdirSync(join(repo, "web"), { recursive: true })
+    writeFileSync(join(repo, "web", "AGENTS.md"), "web rules")
+    mkdirSync(join(base, "outside"))
+    writeFileSync(join(base, "outside", "AGENTS.md"), "HOST-SECRET-MARKER")
+    const web = join(repo, "web")
+    let linked = false
+    const toLink = () => {
+      if (linked) return
+      renameSync(web, join(repo, "web-real"))
+      symlinkSync(join(base, "outside"), web)
+      linked = true
+    }
+    const toFolder = () => {
+      if (!linked) return
+      rmSync(web)
+      renameSync(join(repo, "web-real"), web)
+      linked = false
+    }
+    let opened = false
+    const hooks: P.ConfinedReadHooks = {
+      beforeCheck: (path) => (path === web ? toFolder() : toLink()),
+      beforeOpen: () => {
+        toLink()
+        opened = true
+      },
+    }
+    const read = P.readConfined(repo, join(web, "AGENTS.md"), P.LIMITS.fileBytes, hooks)
+    toFolder()
+    expect(opened).toBe(true)
+    expect(read).toBeUndefined()
+    // With no interference the same confined read returns the repository's own file.
+    expect(P.readConfined(repo, join(web, "AGENTS.md"), P.LIMITS.fileBytes)).toEqual({ text: "web rules", size: 9 })
+    cleanup()
+  })
+
+  test("AF08: a folder replaced between the open and the final check is refused", () => {
+    const base = scratch()
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    mkdirSync(join(repo, "web"), { recursive: true })
+    writeFileSync(join(repo, "web", "AGENTS.md"), "web rules")
+    const read = P.readConfined(repo, join(repo, "web", "AGENTS.md"), P.LIMITS.fileBytes, {
+      afterOpen: () => {
+        renameSync(join(repo, "web"), join(repo, "web-old"))
+        mkdirSync(join(repo, "web"))
+        writeFileSync(join(repo, "web", "AGENTS.md"), "other")
+      },
+    })
+    expect(read).toBeUndefined()
+    cleanup()
+  })
+
+  test("AF08: a hard-linked instruction file is refused (its other name can be outside the repository)", () => {
+    const base = scratch()
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    writeFileSync(join(base, "private.txt"), "HOST-SECRET-MARKER")
+    linkSync(join(base, "private.txt"), join(repo, "AGENTS.md"))
+    expect(P.readConfined(repo, join(repo, "AGENTS.md"), P.LIMITS.fileBytes)).toBeUndefined()
+    expect(P.instructionFiles(repo)).toEqual([])
     cleanup()
   })
 

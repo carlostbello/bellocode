@@ -366,6 +366,8 @@ struct RecursiveSearchTraversalTests {
         write("linked/src/b.swift")
         write("outside/.env", "TOKEN=x")
         write("secrets/id_rsa", "key")
+        write("dot/visible.txt")
+        write("dot/.env", "TOKEN=x")  // only a hidden name: `*` matches it under bash's dotglob
         // Inside `linked`: a link to a folder holding a secret, and an innocently named link to a key.
         try? fm.createSymbolicLink(atPath: url.appending(path: "linked/vendor").path, withDestinationPath: url.appending(path: "outside").path)
         try? fm.createSymbolicLink(atPath: url.appending(path: "linked/notes.txt").path, withDestinationPath: url.appending(path: "secrets/id_rsa").path)
@@ -408,5 +410,47 @@ struct RecursiveSearchTraversalTests {
     /// A variable can name any folder or add options: the person decides.
     @Test func variablesMakeTheSearchUnknowable() {
         #expect(readsSecret("grep -r x $DIR"))
+    }
+
+    /// AF14: include and exclude rules apply in order, the last matching one winning (GNU and BSD grep alike), so a
+    /// later include re-admits a file an earlier exclude dropped; BSD also matches the whole path and honours a later
+    /// `--include-dir`.
+    @Test(arguments: [
+        // Globs that do not themselves look like secret names, so only the traversal can find the file.
+        "grep -r x app --exclude='.e*' --include='*v'",
+        "grep -r x app --exclude='*' --include='.en?'",
+        "grep -r x app --exclude='.e*' --exclude-from=ignore.txt --include='*nv'",
+        "grep -r x app --include='*/pkg/*'",
+        "grep -r x app --exclude-dir=node_modules --include-dir=node_modules",
+        "grep -r x app --exclude-dir='node_*' --include-dir='*'",
+    ])
+    func laterRulesWin(_ command: String) {
+        #expect(readsSecret(command), "\(command): \(verdict(command))")
+    }
+
+    @Test(arguments: [
+        "grep -r x app --include='*' --exclude='.e*'",
+        "grep -r x app --include='*.js'",
+        "grep -r x app --exclude-dir='node_*'",
+        "grep -r x app --include-dir=src --exclude-dir=node_modules",
+    ])
+    func rulesThatExcludeTheSecretStayAllowed(_ command: String) {
+        #expect(verdict(command).isAllow, "\(command): \(verdict(command))")
+    }
+
+    /// GV03: what the shell does to a word before grep sees it. A brace expansion, a glob in an option value or the
+    /// pattern that matches files, and an operand that cannot be examined all ask; a quoted brace or a glob that
+    /// matches nothing (left as written) does not change the words.
+    @Test(arguments: [
+        "grep -r x {.,secrets}", "grep -r x {app,repo}/src", "grep -rn key app/{src,node_modules}", "grep -r x missing-folder",
+        "cd repo && grep -r --exclude-dir .g* x .", "cd app && grep -r --exclude-dir node* x .", "cd dot && grep -r x *",
+    ])
+    func unresolvableWordsAsk(_ command: String) {
+        #expect(readsSecret(command), "\(command): \(verdict(command))")
+    }
+
+    @Test(arguments: ["grep -rE 'a{1,2}' app/src", "grep -r \"{x,y}\" app/src", "grep -r x app/src --include=*.js", "grep -r x app/s*"])
+    func quotedOrInertWordsStayAllowed(_ command: String) {
+        #expect(verdict(command).isAllow, "\(command): \(verdict(command))")
     }
 }

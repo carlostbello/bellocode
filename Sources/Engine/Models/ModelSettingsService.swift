@@ -20,10 +20,13 @@ public struct BackgroundModelSettings: Codable, Sendable, Hashable {
         self.delegated = delegated
     }
 
+    /// A missing field is the default; a field that is present but does not decode (damaged, or a choice from another
+    /// version) makes the whole value unreadable rather than silently the default, so it never replaces a saved
+    /// choice or the plugin's copy of it (AF27).
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        gitText = (try? container.decodeIfPresent(ModelChoice.self, forKey: .gitText)) ?? .sameAsThread
-        delegated = (try? container.decodeIfPresent(ModelChoice.self, forKey: .delegated)) ?? .sameAsThread
+        gitText = try container.decodeIfPresent(ModelChoice.self, forKey: .gitText) ?? .sameAsThread
+        delegated = try container.decodeIfPresent(ModelChoice.self, forKey: .delegated) ?? .sameAsThread
     }
 }
 

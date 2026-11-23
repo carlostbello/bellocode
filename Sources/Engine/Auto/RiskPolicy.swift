@@ -10,7 +10,7 @@ import Foundation
 /// escalated or reviewed, never allowed deterministically.
 public enum RiskPolicy {
     /// Bumped whenever a list or rule changes. Every Auto decision and audit entry records it.
-    public static let version = "bellocode-auto-3"
+    public static let version = "bellocode-auto-4"
 
     /// Where the session works, and what it must never touch.
     public struct Context: Sendable, Equatable {
@@ -133,9 +133,12 @@ public enum RiskPolicy {
 
     /// `grep -r` reads every file under the folders it searches, hidden, ignored and dependency folders (`.git`,
     /// `node_modules`) included (N05, AF14): when one of them looks like a secret (`.env`, keys, credentials), or the
-    /// tree is too large to tell, the person decides. `--include`/`--exclude`/`--exclude-dir` are honoured, and links
-    /// are followed as grep follows them. Operands the shell would expand are globbed; a variable makes the search
-    /// unknowable, so it escalates. Bounded.
+    /// tree is too large to tell, the person decides. `--include`/`--exclude`/`--exclude-dir` (and BSD
+    /// `--include-dir`) are applied in order, the last matching rule winning, as GNU and BSD grep both do; a file
+    /// counts as read when either implementation would read it. Links are followed as grep follows them. Operands the
+    /// shell would glob are expanded; anything whose effect cannot be established statically (a variable, a brace
+    /// expansion, a glob the shell would expand in an option or the pattern, an operand or folder that cannot be
+    /// examined) is a finding of its own, so the person decides (GV03). Bounded.
     static func recursiveSearchFindings(_ action: Action, in context: Context) -> [RiskFinding] {
         let lines = action.command.map { [$0] } ?? action.resources
         var found: [RiskFinding] = []
@@ -154,10 +157,34 @@ public enum RiskPolicy {
                     found.append(RiskFinding(.secretRead, "grep -r with a shell variable (secret files could not be ruled out)"))
                     continue
                 }
-                var roots: [String] = []
-                for operand in search.operands.isEmpty ? ["."] : search.operands {
-                    let path = Paths.canonical(operand, base: cwd, home: context.home)
-                    roots += command.hasGlob ? expandGlob(path) : [path]
+                if !command.braceWords.isEmpty {
+                    // `{a,b}` becomes several words (operands, options or the pattern): not what was written.
+                    found.append(RiskFinding(.secretRead, "grep -r with a brace expansion (secret files could not be ruled out)"))
+                    continue
+                }
+                // Word indices in `args` are one less than in `words` (the program is word 0).
+                let globArgs = Set(command.globWords.filter { $0 > 0 }.map { $0 - 1 })
+                var roots: [(path: String, spelled: [String])] = []
+                var unknown: String?
+                for index in globArgs.sorted() where !search.operandIndices.contains(index) {
+                    // A glob in an option, its value or the pattern: the shell may replace it with file names and shift
+                    // every word after it.
+                    let pattern = Paths.canonical(args[index], base: cwd, home: context.home)
+                    if expandGlob(pattern, dotfiles: false) != [pattern] { unknown = "grep -r with an option or pattern the shell expands to file names (secret files could not be ruled out)" }
+                }
+                let operands = search.operandIndices.isEmpty ? [(index: -1, text: ".")] : search.operandIndices.map { (index: $0, text: args[$0]) }
+                for operand in operands {
+                    let path = Paths.canonical(operand.text, base: cwd, home: context.home)
+                    if globArgs.contains(operand.index) {
+                        // As the shell expands it, and (in case `dotglob` is set) with hidden names as well.
+                        for match in expandGlob(path, dotfiles: true) { roots.append((match, [match])) }
+                    } else {
+                        roots.append((path, [operand.text, path]))
+                    }
+                }
+                if let unknown {
+                    found.append(RiskFinding(.secretRead, unknown))
+                    continue
                 }
                 if let hit = secretFile(under: roots, search: search, context: context) { found.append(RiskFinding(.secretRead, hit)) }
             }
@@ -167,10 +194,22 @@ public enum RiskPolicy {
 
     /// The parts of a recursive grep that decide what it reads.
     struct GrepSearch {
-        var operands: [String] = []
-        var include: [String] = []
-        var exclude: [String] = []
-        var excludeDirs: [String] = []
+        /// An `--include`/`--exclude` (files) or `--include-dir`/`--exclude-dir` (folders) rule, in command-line order.
+        /// A nil glob never matches: `--exclude-from` rules this check does not read (they can only exclude more).
+        struct Rule: Equatable {
+            var include: Bool
+            var glob: String?
+
+            func matches(_ candidates: [String]) -> Bool {
+                guard let glob else { return false }
+                return candidates.contains { fnmatch(glob, $0, 0) == 0 }
+            }
+        }
+
+        /// Indices into the arguments of the operands (the files and folders searched).
+        var operandIndices: [Int] = []
+        var fileRules: [Rule] = []
+        var folderRules: [Rule] = []
         /// `-R` (`--dereference-recursive`, or BSD `-S`): links met inside the tree are followed too. Plain `-r`
         /// follows only links named on the command line.
         var followsLinks = false
@@ -179,14 +218,15 @@ public enum RiskPolicy {
         init?(_ args: [String]) {
             var recursive = false
             var patternGiven = false
-            var positional: [String] = []
+            var positional: [Int] = []
             var index = 0
             let valued: Set<String> = ["-e", "-f", "-m", "-A", "-B", "-C", "-d", "-D", "--regexp", "--file", "--max-count", "--context", "--include",
-                                       "--exclude", "--exclude-dir", "--exclude-from", "--directories", "--devices", "--label", "--color", "--colour"]
+                                       "--exclude", "--exclude-dir", "--include-dir", "--exclude-from", "--directories", "--devices", "--label",
+                                       "--color", "--colour", "--after-context", "--before-context", "--binary-files"]
             while index < args.count {
                 let arg = args[index]
                 let next = index + 1 < args.count ? args[index + 1] : nil
-                if arg == "--" { positional += args[(index + 1)...]; break }
+                if arg == "--" { positional += Array((index + 1)..<args.count); break }
                 if arg.hasPrefix("--") {
                     let option = String(arg.prefix { $0 != "=" })
                     let value = arg.contains("=") ? String(arg.drop { $0 != "=" }.dropFirst()) : (valued.contains(option) ? next : nil)
@@ -197,9 +237,11 @@ public enum RiskPolicy {
                         followsLinks = true
                     case "--directories": if value == "recurse" { recursive = true }
                     case "--regexp", "--file": patternGiven = true
-                    case "--include": if let value { include.append(value) }
-                    case "--exclude": if let value { exclude.append(value) }
-                    case "--exclude-dir": if let value { excludeDirs.append(value) }
+                    case "--include": fileRules.append(Rule(include: true, glob: value))
+                    case "--exclude": fileRules.append(Rule(include: false, glob: value))
+                    case "--exclude-from": fileRules.append(Rule(include: false, glob: nil))
+                    case "--exclude-dir": folderRules.append(Rule(include: false, glob: value))
+                    case "--include-dir": folderRules.append(Rule(include: true, glob: value))
                     default: break
                     }
                     index += (!arg.contains("=") && valued.contains(option)) ? 2 : 1
@@ -222,70 +264,123 @@ public enum RiskPolicy {
                     index += 1
                     continue
                 }
-                positional.append(arg)
+                positional.append(index)
                 index += 1
             }
             guard recursive else { return nil }
-            operands = patternGiven ? positional : Array(positional.dropFirst())
+            operandIndices = patternGiven ? positional : Array(positional.dropFirst())
         }
 
-        func reads(_ name: String) -> Bool {
-            if !include.isEmpty, !include.contains(where: { fnmatch($0, name, 0) == 0 }) { return false }
-            return !exclude.contains { fnmatch($0, name, 0) == 0 }
+        /// The last matching rule's verdict (include or not), or nil when none matches any of `candidates`.
+        private static func lastMatch(_ rules: [Rule], _ candidates: [String]) -> Bool? {
+            rules.last { $0.matches(candidates) }?.include
         }
 
-        func enters(_ name: String) -> Bool { !excludeDirs.contains { fnmatch($0, name, 0) == 0 } }
+        /// Whether grep reads the file `name`. `spelled` are the ways grep can spell its path (as given on the command
+        /// line, and canonical); `commandLine` is true for a file named as an operand.
+        /// GNU: last matching rule wins; with none, the file is read unless the first rule is an `--include`. Below an
+        /// operand it matches the base name, for an operand any name suffix after a `/`. BSD (measured, 2.6.0-FreeBSD
+        /// on macOS): the same order rule, matched against the base name and the whole path. Read when either reads.
+        func reads(_ name: String, spelled: [String] = [], commandLine: Bool = false) -> Bool {
+            guard let first = fileRules.first else { return true }
+            let fallback = !first.include
+            var gnuNames = [name]
+            if commandLine {
+                for path in spelled {
+                    var rest = Substring(path)
+                    gnuNames.append(String(rest))
+                    while let slash = rest.firstIndex(of: "/") {
+                        rest = rest[rest.index(after: slash)...]
+                        if let next = rest.first, next != "/" { gnuNames.append(String(rest)) }
+                    }
+                }
+            }
+            let gnu = Self.lastMatch(fileRules, gnuNames) ?? fallback
+            let bsd = (spelled.isEmpty ? [[name]] : spelled.map { [name, $0] }).contains { Self.lastMatch(fileRules, $0) ?? fallback }
+            return gnu || bsd
+        }
+
+        /// Whether grep enters the folder `name` below an operand (operands are always treated as entered). GNU skips
+        /// a folder any `--exclude-dir` matches (it has no `--include-dir`); BSD applies the order rule (the last
+        /// matching rule wins; with none, entered unless the first rule is `--include-dir`). Entered when either enters.
+        func enters(_ name: String) -> Bool {
+            let gnu = !folderRules.contains { !$0.include && $0.matches([name]) }
+            let bsd = Self.lastMatch(folderRules, [name]) ?? !(folderRules.first?.include ?? false)
+            return gnu || bsd
+        }
     }
 
     /// The paths the shell gives for an operand with glob characters (the operand itself when nothing matches, as the
-    /// shell leaves it).
-    static func expandGlob(_ pattern: String) -> [String] {
-        var result = glob_t()
-        defer { globfree(&result) }
-        guard glob(pattern, 0, nil, &result) == 0 else { return [pattern] }
-        let paths = (0..<Int(result.gl_pathc)).compactMap { result.gl_pathv[$0].map { String(cString: $0) } }
+    /// shell leaves it). With `dotfiles`, names starting with a dot are matched too in the last component (as with
+    /// bash's `dotglob`), so a setting the preflight cannot see never hides a file from it.
+    static func expandGlob(_ pattern: String, dotfiles: Bool) -> [String] {
+        func run(_ pattern: String) -> [String] {
+            var result = glob_t()
+            defer { globfree(&result) }
+            guard glob(pattern, 0, nil, &result) == 0 else { return [] }
+            return (0..<Int(result.gl_pathc)).compactMap { result.gl_pathv[$0].map { String(cString: $0) } }
+        }
+        var paths = run(pattern)
+        if dotfiles {
+            let folder = (pattern as NSString).deletingLastPathComponent
+            let last = (pattern as NSString).lastPathComponent
+            if let first = last.first, "*?[".contains(first) {
+                let hidden = run((folder as NSString).appendingPathComponent("." + last)).filter {
+                    let base = ($0 as NSString).lastPathComponent
+                    return base != "." && base != ".."
+                }
+                paths += hidden.filter { !paths.contains($0) }
+            }
+        }
         return paths.isEmpty ? [pattern] : paths
     }
 
-    /// The first secret-looking file a recursive grep would read, or a note that the tree is too large to tell.
-    /// Traverses as grep does: every folder except `--exclude-dir` ones; operands through their links; links inside the
-    /// tree only with `-R` (each folder once, so a link cycle ends). A link that grep would skip is still reported when
-    /// its name looks like a secret (grep implementations differ; the person decides).
-    static func secretFile(under roots: [String], search: GrepSearch, context: Context) -> String? {
+    /// The first secret-looking file a recursive grep would read, or a note that the tree is too large or cannot be
+    /// examined. Traverses as grep does: every folder the folder rules let in; operands through their links; links
+    /// inside the tree only with `-R` (each folder once, so a link cycle ends). A link that grep would skip is still
+    /// reported when its name looks like a secret (grep implementations differ; the person decides). An operand that
+    /// does not exist, or a folder or entry that cannot be read, is reported too: what grep reads there is unknown.
+    static func secretFile(under roots: [(path: String, spelled: [String])], search: GrepSearch, context: Context) -> String? {
+        let unknown = "grep -r over a path that could not be examined (secret files could not be ruled out)"
         var seen = 0
         var visited = Set<[UInt64]>()
-        var pending: [(path: String, isRoot: Bool)] = roots.map { ($0, true) }
-        while let (path, isRoot) = pending.popLast() {
+        // Each entry: the path, how grep spells it, and whether it is an operand.
+        var pending: [(path: String, spelled: [String], isRoot: Bool)] = roots.map { ($0.path, $0.spelled, true) }
+        while let (path, spelled, isRoot) = pending.popLast() {
             var info = stat()
             // Operands are followed; inside the tree only with -R.
-            guard (isRoot || search.followsLinks ? stat(path, &info) : lstat(path, &info)) == 0 else { continue }
+            guard (isRoot || search.followsLinks ? stat(path, &info) : lstat(path, &info)) == 0 else {
+                if isRoot { return unknown }
+                continue
+            }
             if info.st_mode & S_IFMT != S_IFDIR {
                 let name = (path as NSString).lastPathComponent
-                if secretName(name) != nil, search.reads(name) { return context.label(path) }
+                if secretName(name) != nil, search.reads(name, spelled: spelled, commandLine: isRoot) { return context.label(path) }
                 continue
             }
             guard visited.insert([UInt64(bitPattern: Int64(info.st_dev)), UInt64(info.st_ino)]).inserted else { continue }
-            guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { continue }
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return unknown }
             for name in names {
                 seen += 1
                 if seen > searchScanLimit { return "grep -r over more than \(searchScanLimit) files (secret files could not be ruled out)" }
                 let child = (path as NSString).appendingPathComponent(name)
+                let childSpelled = spelled.map { $0.hasSuffix("/") ? $0 + name : $0 + "/" + name }
                 var childInfo = stat()
-                guard lstat(child, &childInfo) == 0 else { continue }
+                guard lstat(child, &childInfo) == 0 else { return unknown }
                 var kind = childInfo.st_mode & S_IFMT
                 if kind == S_IFLNK {
-                    if secretName(name) != nil, search.reads(name) { return context.label(child) }
+                    if secretName(name) != nil, search.reads(name, spelled: childSpelled) { return context.label(child) }
                     guard search.followsLinks else { continue }
                     var target = stat()
                     guard stat(child, &target) == 0 else { continue }
                     kind = target.st_mode & S_IFMT
                     // grep reads the target: a link named innocently can still point at a secret.
                     let targetName = URL(fileURLWithPath: child).resolvingSymlinksInPath().lastPathComponent
-                    if kind != S_IFDIR, secretName(targetName) != nil, search.reads(name) { return context.label(child) }
+                    if kind != S_IFDIR, secretName(targetName) != nil, search.reads(name, spelled: childSpelled) { return context.label(child) }
                 }
                 if kind == S_IFDIR {
-                    if search.enters(name) { pending.append((child, false)) }
-                } else if secretName(name) != nil, search.reads(name) {
+                    if search.enters(name) { pending.append((child, childSpelled, false)) }
+                } else if secretName(name) != nil, search.reads(name, spelled: childSpelled) {
                     return context.label(child)
                 }
             }

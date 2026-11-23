@@ -237,6 +237,50 @@ describe("thread_interrupt", () => {
     await plugin.dispose()
   })
 
+  test("GV08: thread_send during an in-flight interrupt waits for it and holds the message", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const plugin = await makePlugin({
+      sessionInterrupt: async (input, sessions) => {
+        await gate
+        const found = sessions.get(input.sessionID)
+        if (found) found.time = { ...found.time, idle: (found.time.busy ?? 0) + 1 }
+      },
+    })
+    plugin.add({ id: "ses_caller" })
+    plugin.add({ id: "ses_b" })
+    plugin.add({ id: "ses_target", time: running })
+    const interrupt = plugin.run("thread_interrupt", { threadID: "ses_target", reason: "conflict" })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const send = plugin.run("thread_send", { threadID: "ses_target", message: "hi", delivery: "steer" }, "ses_b")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // Nothing is delivered while the stop is still being confirmed.
+    expect(plugin.calls.prompts.length).toBe(0)
+    release()
+    const [stopped, sent] = await Promise.all([interrupt, send])
+    expect(stopped.metadata.interrupt.held).toBe(true)
+    expect(plugin.calls.prompts.length).toBe(1)
+    expect(plugin.calls.prompts[0].delivery).toBe("queue")
+    expect(plugin.calls.prompts[0].resume).toBe(false)
+    expect(sent.content).toContain("waits until the user resumes")
+    await plugin.dispose()
+  })
+
+  test("GV08: an in-flight interrupt that stopped nothing does not hold a message", async () => {
+    const plugin = await makePlugin()
+    plugin.add({ id: "ses_caller" })
+    plugin.add({ id: "ses_b" })
+    plugin.add({ id: "ses_target", time: idle })
+    const [stopped, sent] = await Promise.all([
+      plugin.run("thread_interrupt", { threadID: "ses_target", reason: "x" }),
+      plugin.run("thread_send", { threadID: "ses_target", message: "hi" }, "ses_b"),
+    ])
+    expect(stopped.metadata.interrupt.actual).toBe("not_running")
+    expect("resume" in plugin.calls.prompts[0]).toBe(false)
+    expect(sent.content).not.toContain("waits until the user resumes")
+    await plugin.dispose()
+  })
+
   test("thread_send to a thread that is not held wakes it as usual", async () => {
     const plugin = await makePlugin()
     plugin.add({ id: "ses_caller" })

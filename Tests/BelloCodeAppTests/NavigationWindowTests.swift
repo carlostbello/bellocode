@@ -209,6 +209,26 @@ final class RecordingDelivery: NotificationDelivering {
         #expect(await waitUntil(timeout: .seconds(5)) { workspace.session(ids[2])?.isArchived == false })
     }
 
+    /// NV13: deleting the shown thread, then ⇧⌘T within the Undo window, cancels the delete and shows it again; nothing
+    /// is deleted on the server.
+    @Test func reopenClosedThreadCancelsAPendingDelete() async throws {
+        let shell = try await Shell.start()
+        defer { Task { await shell.stop() } }
+        let workspace = shell.controller.workspace
+        let ids = threads(shell)
+        try #require(ids.count >= 2)
+        workspace.select(.thread(ids[1]))
+        workspace.delete(ids[1])
+        #expect(workspace.hiddenThreads.contains(ids[1]))
+        #expect(workspace.selection != .thread(ids[1]))
+        #expect(shell.controller.commandContext().isEnabled(.reopenClosedThread))
+        shell.driver.perform(.reopenClosedThread)
+        #expect(workspace.selection == .thread(ids[1]))
+        #expect(!workspace.hiddenThreads.contains(ids[1]))
+        workspace.commitPendingDeletes()
+        #expect(await shell.server.session(ids[1].rawValue) != nil)
+    }
+
     @Test func groupingFilterAndPanelStatePerThread() async throws {
         let shell = try await Shell.start()
         defer { Task { await shell.stop() } }

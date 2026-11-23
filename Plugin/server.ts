@@ -871,8 +871,14 @@ export default {
           const from = scope === "descendant" ? "your parent thread" : `thread "${caller.title ?? caller.id}" (${caller.id})`
           // A thread another agent stopped stays stopped until the user resumes it: steering is turned into queueing,
           // and the message is admitted without waking it (a queued prompt to an idle thread would start a run, and
-          // that run would clear the hold).
-          const held = Boolean((target.metadata as any)?.bellocode_interrupt?.held)
+          // that run would clear the hold). The hold is read fresh, and an interrupt still in flight (its hold is
+          // written only once the stop is confirmed) is waited for; when it stopped the thread the message is held even
+          // if its record could not be written. No await separates the last check from the prompt below (GV08).
+          let held = Boolean(((await get(target.id)).metadata as any)?.bellocode_interrupt?.held)
+          for (let inflight = interrupting.get(target.id); inflight; inflight = interrupting.get(target.id)) {
+            const outcome = await inflight.catch(() => undefined)
+            held = outcome?.metadata?.interrupt?.held === true || Boolean(((await get(target.id)).metadata as any)?.bellocode_interrupt?.held)
+          }
           const delivery = input.delivery === "steer" && !held ? "steer" : "queue"
           await ctx.session.prompt({
             sessionID: target.id,
@@ -930,13 +936,6 @@ export default {
           const { caller, target, scope } = await reach(tool, String(input.threadID), "thread_interrupt")
           if (scope === "self") fail("Use your own final message to stop; you cannot interrupt yourself.")
           if ((target.time as any)?.archived) fail(`Thread ${target.id} is archived, so it was not interrupted.`)
-          const running = L.isRunning(target) || (await descendants(target.id)).some(L.isRunning)
-          if (!running) {
-            return {
-              content: `${target.id} is not running, so nothing was stopped.`,
-              metadata: { threadID: target.id, interrupt: { requested: "stop", actual: "not_running" } },
-            }
-          }
           const inflight = interrupting.get(target.id)
           if (inflight) {
             const earlier = await inflight.catch(() => undefined)
@@ -945,12 +944,23 @@ export default {
               metadata: { threadID: target.id, deduplicated: true },
             }
           }
-          if (scope !== "descendant") {
-            const refusal = interruptGuard.check(caller.id, target.id)
-            if (refusal) fail(refusal)
-            interruptGuard.record(caller.id, target.id)
-          }
+          // Registered before the next await, so a thread_send arriving while this one checks or stops the target waits
+          // for it and holds its message (GV08).
+          let settle: (value: any) => void = () => undefined
+          interrupting.set(target.id, new Promise((resolve) => (settle = resolve)))
           const work = (async () => {
+            const running = L.isRunning(target) || (await descendants(target.id)).some(L.isRunning)
+            if (!running) {
+              return {
+                content: `${target.id} is not running, so nothing was stopped.`,
+                metadata: { threadID: target.id, interrupt: { requested: "stop", actual: "not_running" } },
+              }
+            }
+            if (scope !== "descendant") {
+              const refusal = interruptGuard.check(caller.id, target.id)
+              if (refusal) fail(refusal)
+              interruptGuard.record(caller.id, target.id)
+            }
             const report = await cascadeStop(target.id, true, tool.signal)
             const actual: A.InterruptRecord["actual"] = report.failed.some((item) => item.id === target.id)
               ? "failed"
@@ -976,10 +986,10 @@ export default {
               metadata: { stop: report, interrupt: record, threadID: target.id, title: target.title ?? null },
             }
           })()
-          interrupting.set(target.id, work)
           try {
             return await work
           } finally {
+            settle(await work.catch(() => undefined))
             interrupting.delete(target.id)
           }
         },

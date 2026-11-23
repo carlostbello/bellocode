@@ -96,9 +96,11 @@ two layers:
      session's folder, outer first; 64 KB per file, 96 KB total) as the session instruction entry
      `bellocode.project-instructions`, in opencode's own wording. It is written in the awaited session `prompt` hook
      (`SessionPrompt.prepare`), so the first turn already has it, and refreshed at each run when the files change. It is
-     text, not code. `CLAUDE.md` stays off, as before. Each file is read only once the opened file is confirmed to be
-     reached from the pinned repository root through real directories (an ancestor swapped for a link is refused;
-     v1.0.1 AF08).
+     text, not code. `CLAUDE.md` stays off, as before. Each file is opened so that no component of its path can be a
+     link at the instant of the open (macOS `O_NOFOLLOW_ANY`, atomic with the lookup; on Linux, where the plugin's
+     tests run, a chain of folder descriptors), and the folder identities (device and inode) from the repository root
+     down must agree before the open and after the read, with the leaf being the opened file. A file with other hard
+     links is refused too, and any platform without such an open reads nothing (fail closed; v1.0.1 AF08).
    - **Trusted projects only** ("Trust this project's opencode config", per project, default off): the repository's
      `.opencode/agent(s)/*.md`, `.opencode/command(s)/*.md`, `.opencode/skill(s)/*/SKILL.md` and `.agents/skills` are
      added to that project's location through the per-location transforms. Agents support `description`, `mode`,
@@ -108,8 +110,10 @@ two layers:
    - Trust is stored in `app_opencode_trust` (migration `v14-opencode-trust`), mirrored to `<data>/bellocode-trust.json`
      for the plugin, and applied by RPC `bellocode.projectConfig`, which re-reads the file and replays the transforms.
      It applies at once with no restart, and untrusting removes the items again (verified). A change reloads every
-     active location at or below the changed entry (projects and their threads' folders, up to 64), not only the folder
-     chosen, and stays pending until each acknowledges; a location no entry covers any more that still reports the
+     location the server has loaded at or below the changed entry (`GET /api/debug/location`, however many, child
+     threads' folders included), not only the folder chosen, and stays pending until each acknowledges; when that list
+     cannot be read, the app's known locations reload and the change stays pending with a problem until a retry can
+     list them (v1.0.1 AF17, GV07); a location no entry covers any more that still reports the
      repository configuration keeps it pending with a problem naming it (v1.0.1 AF17). Offline, the choice is
      saved and applied at the next location setup ("Saved; applied when opencode is back").
 2. **"Load every repository's opencode.json and plugins" (`.native`, server-wide, off by default).** opencode loads every

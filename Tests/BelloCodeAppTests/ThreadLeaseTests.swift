@@ -15,6 +15,7 @@ import Testing
         let server: MockOpenCodeServer
         let engine: Engine
         let threads: [SessionID]
+        let connection: ServerConnection
     }
 
     func start() async throws -> Fixture {
@@ -29,7 +30,7 @@ import Testing
         for index in 0..<(WorkspaceController.openThreadLimit + 1) {
             threads.append(try await engine.createThread(in: "/tmp/mock-project", title: "T\(index)").id)
         }
-        return Fixture(server: server, engine: engine, threads: threads)
+        return Fixture(server: server, engine: engine, threads: threads, connection: connection)
     }
 
     func stop(_ fixture: Fixture) async {
@@ -90,6 +91,49 @@ import Testing
         _ = try #require(workspace.makeContext(for: .draft(directory: project.directory)))
         #expect(shown.last == project.directory)
         workspace.close()
+        await stop(fixture)
+    }
+
+    /// NV04: a thread working in a worktree outside the project root keeps its working directory for the terminal, but
+    /// per-project settings (opencode trust, Project Environment, global MCP servers) name the registered project.
+    @Test func aWorktreeThreadsSettingsNameItsProjectRoot() async throws {
+        let fixture = try await start()
+        let worktree = try await fixture.engine.createThread(in: "/tmp/mock-worktrees/feat-x", title: "In a worktree")
+        let model = fixture.engine.openThread(worktree.id)
+        #expect(await waitUntil(timeout: .seconds(10)) { model.session != nil })
+        let context = ThreadSurfaceContext(engine: fixture.engine, directory: "/tmp/mock-project", projectName: "mock-project", thread: model)
+        #expect(context.directory == "/tmp/mock-worktrees/feat-x")
+        #expect(context.settingsDirectory == "/tmp/mock-project")
+        // A thread whose project is not known yet falls back to where it works.
+        let unknown = ThreadSurfaceContext(engine: fixture.engine, directory: "", projectName: "", thread: model)
+        #expect(unknown.settingsDirectory == "/tmp/mock-worktrees/feat-x")
+        model.close()
+        await stop(fixture)
+    }
+
+    /// NF03: a thread shown before its session is known (cold launch, or a child or notification thread opened before
+    /// its row arrives) has no directory yet; its project is marked shown once the session hydrates, without the view
+    /// being rebuilt.
+    @Test func aThreadShownBeforeItsSessionHydratesMarksItsProjectWhenItArrives() async throws {
+        let fixture = try await start()
+        let id = fixture.threads[0]
+        // A second engine on the same server that has not synced yet: it knows nothing about the thread.
+        let late = try Engine(configuration: EngineConfiguration(server: .fixed(fixture.connection), store: .inMemory))
+        let workspace = WorkspaceController(engine: late, stateStore: ShellStateStore(defaults: nil))
+        var shown: [String] = []
+        workspace.projectShown = { shown.append($0) }
+        let context = try #require(workspace.makeContext(for: .thread(id)))
+        #expect(context.directory.isEmpty)
+        #expect(shown.isEmpty)
+        await late.start()
+        #expect(await waitUntil(timeout: .seconds(20)) { !shown.isEmpty }, "marked once the session arrived")
+        #expect(shown == ["/tmp/mock-project"])
+        // Marked once, not at every later change of the thread.
+        try await late.renameThread(id, to: "Renamed")
+        #expect(await waitUntil(timeout: .seconds(10)) { workspace.session(id)?.title == "Renamed" })
+        #expect(shown.count == 1)
+        workspace.close()
+        await late.stop()
         await stop(fixture)
     }
 }

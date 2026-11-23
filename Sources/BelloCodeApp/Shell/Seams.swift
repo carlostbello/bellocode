@@ -132,6 +132,9 @@ final class ThreadSurfaceContext {
     var directory: String { thread?.session?.directory ?? projectDirectory }
     /// The project's directory (its root).
     let projectDirectory: String
+    /// The registered project a per-project setting (opencode trust, Project Environment, global MCP servers) applies to:
+    /// its root, never a worktree the thread runs in; the working directory only when no project is known (NV04).
+    var settingsDirectory: String { projectDirectory.isEmpty ? directory : projectDirectory }
     let projectName: String
     /// The open thread; nil for a draft.
     private(set) var thread: ThreadModel?
