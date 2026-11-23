@@ -188,19 +188,24 @@ struct ProxyTests {
     }
 
     /// R12: a limited binding's use is recorded durably before the request leaves; if it cannot be, nothing is sent.
+    /// NV07: the refused request's reservation is given back, in memory and in what the recorder may have stored.
     @Test func limitedUseThatCannotBeRecordedIsRefused() async throws {
         let f = try await Self.makeFixture(binding: SecretBinding(host: "bound.test", pathPrefixes: ["/v1"], locations: [.header("Authorization", prefix: "Bearer ")], maxUses: 5))
         defer { f.stop() }
         let recorded = Mutex<[SubstitutionUse]>([])
+        let released = Mutex<[SubstitutionUse]>([])
         f.proxy.setUseRecorder { uses in recorded.withLock { $0 += uses }; return false }
+        f.proxy.setUseReleaser { uses in released.withLock { $0 += uses } }
         let (status, _, _) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
         #expect(status == 403)
         #expect(recorded.withLock { $0.map(\.bindingID) } == [f.secret.bindings[0].id])
+        #expect(released.withLock { $0.map(\.bindingID) } == [f.secret.bindings[0].id], "what was stored of it is lowered again")
         #expect(!ByteSearch.contains(f.bound.receivedBytes, Data(Self.canary.utf8)), "nothing was sent")
+        #expect(f.proxy.ledger.count(account: f.secret.account, bindingID: f.secret.bindings[0].id) == 0, "the refused reservation is given back")
         f.proxy.setUseRecorder { _ in true }
         let (ok, _, _) = try await f.client.get("https://bound.test/v1/ok", headers: ["Authorization": "Bearer \(f.placeholder)"])
         #expect(ok == 200)
-        #expect(f.proxy.ledger.count(account: f.secret.account, bindingID: f.secret.bindings[0].id) == 2, "both reservations count")
+        #expect(f.proxy.ledger.count(account: f.secret.account, bindingID: f.secret.bindings[0].id) == 1, "only the sent request counts")
     }
 }
 

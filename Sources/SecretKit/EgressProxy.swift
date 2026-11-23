@@ -85,6 +85,12 @@ public struct EgressSnapshot: Sendable {
     }
 }
 
+/// The requests a published snapshot withdrew while they were being written upstream (`EgressProxy.drain`).
+public struct EgressDrain: Sendable {
+    let ids: Set<UUID>
+    public var isEmpty: Bool { ids.isEmpty }
+}
+
 /// What happened (for the audit). Never carries a value; destinations are origin + path, no query.
 public enum EgressEvent: Sendable {
     case substituted(SubstitutionUse, destination: String, method: String, status: Int?)
@@ -156,6 +162,21 @@ public final class EgressProxy: Sendable {
         var stopped = false
         var dockerEndpointPort: UInt16?
         var useRecorder: (@Sendable ([SubstitutionUse]) async -> Bool)?
+        var useReleaser: (@Sendable ([SubstitutionUse]) async -> Void)?
+        /// Requests whose substituted value is being handed to the network right now (AF15).
+        var dispatches: [UUID: Dispatch] = [:]
+        var dispatchWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+    }
+
+    /// A request authorized against the snapshot of the moment and being written to its upstream connection. A
+    /// snapshot published meanwhile that no longer authorizes it cancels the connection, and its publisher can wait
+    /// until the write has ended (`drain`), so nothing it withdrew leaves after it returns (AF15).
+    private struct Dispatch: Sendable {
+        var original: OutboundRequest
+        var uses: [SubstitutionUse]
+        var admitsProject: @Sendable (String) -> Bool
+        var wire: WireConnection
+        var cancelled = false
     }
 
     public let authority: CertificateAuthority
@@ -212,6 +233,12 @@ public final class EgressProxy: Sendable {
             defer { state.tasks = [:]; state.connections = [:] }
             return (listeners, Array(state.tasks.values), Array(state.connections.values))
         }
+        let (dispatchWires, waiters) = state.withLock { state -> ([WireConnection], [CheckedContinuation<Void, Never>]) in
+            defer { state.dispatches = [:]; state.dispatchWaiters = [:] }
+            return (state.dispatches.values.map(\.wire), state.dispatchWaiters.values.flatMap { $0 })
+        }
+        dispatchWires.forEach { $0.cancel() }
+        waiters.forEach { $0.resume() }
         listeners.forEach { $0.cancel() }
         tasks.forEach { $0.cancel() }
         connections.forEach { $0.cancel() }
@@ -221,10 +248,55 @@ public final class EgressProxy: Sendable {
         state.withLock { $0.scopes = Dictionary(scopes.map { ($0.token, $0) }, uniquingKeysWith: { _, new in new }) }
     }
 
-    public func update(_ snapshot: EgressSnapshot) { state.withLock { $0.snapshot = snapshot } }
+    /// Publishes a new snapshot. Every request substituted afterwards is judged by it; a request already being written
+    /// upstream under a policy this snapshot withdraws (a revocation, a narrower scope or binding) has its connection
+    /// cancelled. The result names those writes: `drain` waits until each has ended (AF15).
+    @discardableResult
+    public func update(_ snapshot: EgressSnapshot) -> EgressDrain {
+        let ledger = self.ledger
+        let (wires, ids) = state.withLock { state -> ([WireConnection], Set<UUID>) in
+            state.snapshot = snapshot
+            var wires: [WireConnection] = []
+            var ids = Set<UUID>()
+            for (id, dispatch) in state.dispatches {
+                if case .failure = Self.reauthorize(dispatch.original, uses: dispatch.uses, admitsProject: dispatch.admitsProject,
+                                                    snapshot: snapshot, ledger: ledger) {
+                    state.dispatches[id]?.cancelled = true
+                    wires.append(dispatch.wire)
+                    ids.insert(id)
+                }
+            }
+            return (wires, ids)
+        }
+        wires.forEach { $0.cancel() }
+        return EgressDrain(ids: ids)
+    }
+
+    /// Returns once every write `drain` names has ended (each was cancelled by `update`, so this is prompt).
+    public func drain(_ drain: EgressDrain) async {
+        for id in drain.ids {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ended = state.withLock { state -> Bool in
+                    guard state.dispatches[id] != nil else { return true }
+                    state.dispatchWaiters[id, default: []].append(continuation)
+                    return false
+                }
+                if ended { continuation.resume() }
+            }
+        }
+    }
+
+    /// `update` then `drain`: when this returns, nothing the snapshot withdrew is still being sent.
+    public func publish(_ snapshot: EgressSnapshot) async {
+        await drain(update(snapshot))
+    }
 
     /// Persists reserved uses of limited bindings before the request is dispatched (R12); false refuses the request.
     public func setUseRecorder(_ recorder: (@Sendable ([SubstitutionUse]) async -> Bool)?) { state.withLock { $0.useRecorder = recorder } }
+
+    /// Lowers persisted counts again for uses the recorder stored but that were then refused before anything was sent
+    /// (AV13): called after the ledger released them.
+    public func setUseReleaser(_ releaser: (@Sendable ([SubstitutionUse]) async -> Void)?) { state.withLock { $0.useReleaser = releaser } }
 
     /// BelloCode's filtered Docker endpoint on the Mac's loopback (execution modes). Gateways relay workspace `docker`
     /// connections here (preamble `BCEGRESS <token> docker`), byte for byte: that endpoint authenticates and filters
@@ -429,9 +501,18 @@ public final class EgressProxy: Sendable {
     struct Faults: Sendable {
         /// The client is gone just as the tunnel's `200` is sent.
         var failTunnelEstablished = false
+        /// Runs after a substituted request was authorized for sending and before its bytes are written (AF15).
+        var beforeSend: (@Sendable () async -> Void)?
     }
 
     let faults = Mutex(Faults())
+
+    /// Tests: the snapshot requests are judged by now.
+    var currentSnapshot: EgressSnapshot { state.withLock { $0.snapshot } }
+
+    /// Tests: substituted requests being written upstream, and those a published snapshot withdrew meanwhile.
+    var dispatchCount: Int { state.withLock { $0.dispatches.count } }
+    var dispatchCancelledCount: Int { state.withLock { $0.dispatches.values.filter(\.cancelled).count } }
 
     /// Tunnels waiting for (or using) their inspection connection (tests: none may be left behind).
     var pendingTunnelCount: Int { state.withLock { $0.pendingTunnels.count } }
@@ -608,19 +689,35 @@ public final class EgressProxy: Sendable {
         let decision = RequestRewriter(admitsProject: scope.admitsProject, useCount: { ledger.count(account: $0, bindingID: $1) })
             .rewrite(request) { snapshot.resolve($0) }
         var uses: [SubstitutionUse] = []
+        // Whether the reservation was persisted (limited bindings): a refusal before sending then lowers it again (AV13).
+        var recorded = false
+        let session: String?
         switch decision {
         case .refused(let reason, let account, let session):
             emit(.refused(reason, account: account, sessionID: session, destination: request.auditDestination, method: method))
             try await client.send(Self.refusal(reason, status: 403))
             return !clientCloses
-        case .unchanged: break
+        case .unchanged:
+            session = Self.sessionOfPlaceholders(in: head, body: body, snapshot: snapshot)
         case .substituted(let rewritten, let made):
+            session = made.first?.sessionID
+            // Refused before anything is reserved: an upgrade never carries a substituted value (GV05).
+            if wantsUpgrade {
+                emit(.refused(.upgrade, account: made.first?.account, sessionID: session, destination: request.auditDestination, method: method))
+                try await client.send(Self.refusal(.upgrade, status: 403))
+                return false
+            }
             // Reserve uses atomically against the limits in the ledger the brokered tool shares (another connection, or
             // a brokered call, may have used the last one); limited bindings are recorded durably before dispatch.
             let limit = { (use: SubstitutionUse) -> Int? in snapshot.secrets[use.account]?.bindings.first { $0.id == use.bindingID }?.maxUses }
             var allowed = made.allSatisfy { snapshot.secrets[$0.account] != nil } && ledger.reserve(made, limit: limit)
-            if allowed, made.contains(where: { limit($0) != nil }) {
-                if let recorder = state.withLock({ $0.useRecorder }) { allowed = await recorder(made) }
+            if allowed, made.contains(where: { limit($0) != nil }), let recorder = state.withLock({ $0.useRecorder }) {
+                recorded = true
+                if !(await recorder(made)) {
+                    // Not sent: the reservation is given back, in memory and in what was stored of it (NV07).
+                    await giveBack(made, recorded: true)
+                    allowed = false
+                }
             }
             guard allowed else {
                 let label = snapshot.secrets[made.first?.account ?? ""]?.label ?? "the secret"
@@ -631,66 +728,42 @@ public final class EgressProxy: Sendable {
             request = rewritten
             uses = made
         }
-        let session = uses.first?.sessionID ?? Self.sessionOfPlaceholders(in: head, body: body, snapshot: snapshot)
-        if wantsUpgrade, !bound.isEmpty || !uses.isEmpty {
+        if wantsUpgrade, !bound.isEmpty {
             emit(.refused(.upgrade, account: bound.first?.account, sessionID: session, destination: request.auditDestination, method: method))
             try await client.send(Self.refusal(.upgrade, status: 403))
             return false
         }
         if wantsUpgrade { request.headers.append(HTTPField("Connection", "Upgrade")) }
 
-        // Upstream (reused while the destination is the same and the connection is open).
-        let key = "\(scheme)://\(destination)"
-        if upstream?.key != key {
-            upstream?.wire.cancel()
-            upstream = nil
+        // Upstream (reused while the destination is the same and the connection is open). Every way out before the
+        // substituted bytes are handed to the network gives the reserved uses back (GV05, NV07, AV13).
+        var transmitted = false
+        let exchanged: Exchange
+        do {
+            exchanged = try await exchange(request, original: original, uses: uses, method: method, scheme: scheme, destination: destination,
+                                           scope: scope, clientCloses: clientCloses, upstream: &upstream, transmitted: &transmitted)
+        } catch {
+            if !transmitted { await giveBack(uses, recorded: recorded) }
+            throw error
         }
-        var response: (HTTPHead, WireConnection)?
-        for attempt in 0..<2 {
-            if upstream == nil {
-                do {
-                    upstream = Upstream(key: key, wire: try await connectUpstream(scheme: scheme, destination: destination, scope: scope.id))
-                } catch let error as DestinationRefused {
-                    try await client.send(Self.plainResponse(403, "Forbidden", error.message))
-                    return false
-                } catch {
-                    try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode could not reach \(destination) (\(Self.describe(error)))."))
-                    return false
-                }
-            }
-            guard let wire = upstream?.wire else { break }
-            // AF15: the substitution was decided before the use was recorded and the connection opened, both of which can
-            // take a while. Re-authorized against the snapshot as it is now, at the handoff to the send: a revocation,
-            // narrower scope or binding change published meanwhile refuses the request (nothing was sent), and a rotation
-            // sends the current value.
-            if !uses.isEmpty {
-                switch reauthorize(original, uses: uses, scope: scope) {
-                case .success(let current):
-                    request = current
-                case .failure(let refusal):
-                    ledger.release(uses)
-                    emit(.refused(refusal.reason, account: refusal.account ?? uses.first?.account, sessionID: refusal.session ?? uses.first?.sessionID,
-                                  destination: request.auditDestination, method: method))
-                    try await client.send(Self.refusal(refusal.reason, status: 403))
-                    return !clientCloses
-                }
-            }
-            do {
-                try await wire.send(HTTPHead(startLine: [method, request.target, "HTTP/1.1"], fields: request.headers).serialized + request.body)
-                guard let data = try await wire.readHead(limit: 128 * 1024), let parsed = HTTPHead(data) else { throw WireError.closed }
-                response = (parsed, wire)
-                break
-            } catch {
-                // A kept-alive upstream may have closed; retry once on a fresh connection for idempotent methods.
-                wire.cancel()
-                upstream = nil
-                if attempt == 1 || !["GET", "HEAD", "OPTIONS"].contains(method) || !uses.isEmpty { break }
-            }
+        let firstHead: HTTPHead
+        let wire: WireConnection
+        let sent: EgressSnapshot
+        switch exchanged {
+        case .answered(let answer, let keepAlive):
+            if !transmitted { await giveBack(uses, recorded: recorded) }
+            try await client.send(answer)
+            return keepAlive
+        case .response(let head, let connection, let snapshotSent, let current):
+            firstHead = head
+            wire = connection
+            sent = snapshotSent
+            request = current
         }
-        guard let (firstHead, wire) = response else {
-            try await client.send(Self.plainResponse(502, "Bad Gateway", "\(destination) closed the connection."))
-            return false
-        }
+        // The response is inspected for every secret bound to this origin under the snapshot the request was admitted
+        // with and the one it was sent under, with the values of both: a rotation or binding change while the request
+        // was in flight never lets the value actually sent come back unscanned (AV01).
+        let boundAccounts = Set((bound + sent.secretsBound(to: scheme, host: destination.host, port: destination.port)).map(\.account)).sorted()
         // Interim responses (100 Continue, 103 Early Hints) are not passed on: the proxy answered Expect itself, and an
         // interim head is metadata the inspection below would otherwise have to cover separately. Bounded.
         var responseHead = firstHead
@@ -724,10 +797,10 @@ public final class EgressProxy: Sendable {
         if status == 101 {
             // Only an upgrade the client asked for, to a destination that never receives secrets, becomes a raw tunnel.
             // An unsolicited 101 (or one from a secret-bound destination) would leave the inspected path entirely.
-            guard wantsUpgrade, bound.isEmpty, uses.isEmpty else {
+            guard wantsUpgrade, boundAccounts.isEmpty, uses.isEmpty else {
                 wire.cancel()
                 upstream = nil
-                emit(.responseBlocked(accounts: bound.map(\.account), destination: request.auditDestination, method: method,
+                emit(.responseBlocked(accounts: boundAccounts, destination: request.auditDestination, method: method,
                                       reason: "The destination switched protocols without a negotiated upgrade.", sessionID: session))
                 try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: the destination switched protocols without a negotiated upgrade."))
                 return false
@@ -738,7 +811,7 @@ public final class EgressProxy: Sendable {
             return false
         }
 
-        if bound.isEmpty && uses.isEmpty {
+        if boundAccounts.isEmpty && uses.isEmpty {
             // Fast path: no secret could be in this response. Head and body pass through as framed.
             var fields = responseHead.fields
             fields.remove("Connection")
@@ -767,18 +840,14 @@ public final class EgressProxy: Sendable {
             let reason = error is TimeLimitExceeded
                 ? "The response did not finish within \(configuration.inspectedResponseTime) (streaming responses from a destination that receives secrets cannot be inspected)."
                 : (error as? WireError) == WireError.tooLarge ? "The response was too large to inspect." : "The response could not be read."
-            emit(.responseBlocked(accounts: bound.map(\.account), destination: request.auditDestination, method: method, reason: reason, sessionID: session))
+            emit(.responseBlocked(accounts: boundAccounts, destination: request.auditDestination, method: method, reason: reason, sessionID: session))
             try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: " + reason))
             return false
         }
-        let filter = ResponseFilter(secrets: bound.compactMap { secret in
-            guard let value = snapshot.values[secret.account] else { return nil }
-            let replacement = snapshot.placeholder(account: secret.account, session: session) ?? "bcsec_redacted"
-            return ResponseFilter.Secret(account: secret.account, value: value.utf8, replacement: replacement)
-        }, bodyLimit: limit)
+        let filter = ResponseFilter(secrets: Self.inspected(boundAccounts, snapshots: [sent, snapshot], session: session), bodyLimit: limit)
         switch filter.filter(headers: responseHead.fields, body: rawBody) {
         case .block(let reason, let accounts):
-            emit(.responseBlocked(accounts: accounts.isEmpty ? bound.map(\.account) : accounts, destination: request.auditDestination,
+            emit(.responseBlocked(accounts: accounts.isEmpty ? boundAccounts : accounts, destination: request.auditDestination,
                                   method: method, reason: reason, sessionID: session))
             try await client.send(Self.plainResponse(502, "Bad Gateway", "BelloCode: " + reason))
             return !clientCloses
@@ -796,23 +865,158 @@ public final class EgressProxy: Sendable {
         }
     }
 
-    /// The thread whose placeholder appears in a request that was not substituted (for the audit only).
+    /// The values a response is scanned for: each bound account's value in every snapshot given (the one the request
+    /// was sent under first), replaced by the thread's placeholder.
+    static func inspected(_ accounts: [String], snapshots: [EgressSnapshot], session: String?) -> [ResponseFilter.Secret] {
+        var out: [ResponseFilter.Secret] = []
+        for account in accounts {
+            let replacement = snapshots.lazy.compactMap { $0.placeholder(account: account, session: session) }.first ?? "bcsec_redacted"
+            var seen: [Data] = []
+            for snapshot in snapshots {
+                guard let value = snapshot.values[account]?.utf8, !seen.contains(value) else { continue }
+                seen.append(value)
+                out.append(ResponseFilter.Secret(account: account, value: value, replacement: replacement))
+            }
+        }
+        return out
+    }
+
+    /// Gives back uses reserved for a request refused before anything was sent: in the ledger, and (when they had been
+    /// stored) in the persisted counts, so a relaunch does not count them either (AV13).
+    private func giveBack(_ uses: [SubstitutionUse], recorded: Bool) async {
+        guard !uses.isEmpty else { return }
+        ledger.release(uses)
+        if recorded, let releaser = state.withLock({ $0.useReleaser }) { await releaser(uses) }
+    }
+
+    private enum Exchange {
+        /// No response to relay: what to tell the client, and whether its connection may carry another request.
+        case answered(Data, keepAlive: Bool)
+        /// The upstream's first response head, the snapshot the request was sent under and the request as sent.
+        case response(HTTPHead, WireConnection, EgressSnapshot, OutboundRequest)
+    }
+
+    /// Opens (or reuses) the upstream connection and writes the request. A substituted request is re-authorized against
+    /// the snapshot of the moment and registered as a dispatch in the same step (AF15): a snapshot published after that
+    /// step cancels it if it withdraws what it carries, and its publisher waits for the write to end. `transmitted`
+    /// becomes true just before the substituted bytes are handed to the network.
+    private func exchange(_ request: OutboundRequest, original: OutboundRequest, uses: [SubstitutionUse], method: String, scheme: String,
+                          destination: HostPort, scope: EgressScope, clientCloses: Bool, upstream: inout Upstream?,
+                          transmitted: inout Bool) async throws -> Exchange {
+        let key = "\(scheme)://\(destination)"
+        if upstream?.key != key {
+            upstream?.wire.cancel()
+            upstream = nil
+        }
+        for attempt in 0..<2 {
+            if upstream == nil {
+                do {
+                    upstream = Upstream(key: key, wire: try await connectUpstream(scheme: scheme, destination: destination, scope: scope.id))
+                } catch let error as DestinationRefused {
+                    return .answered(Self.plainResponse(403, "Forbidden", error.message), keepAlive: false)
+                } catch {
+                    return .answered(Self.plainResponse(502, "Bad Gateway", "BelloCode could not reach \(destination) (\(Self.describe(error)))."), keepAlive: false)
+                }
+            }
+            guard let wire = upstream?.wire else { break }
+            let id = UUID()
+            var outgoing = request
+            let sentSnapshot: EgressSnapshot
+            if uses.isEmpty {
+                sentSnapshot = state.withLock { $0.snapshot }
+            } else {
+                switch beginDispatch(id, original: original, uses: uses, scope: scope, wire: wire) {
+                case .success(let (current, snapshot)):
+                    outgoing = current
+                    sentSnapshot = snapshot
+                case .failure(let refusal):
+                    emit(.refused(refusal.reason, account: refusal.account ?? uses.first?.account, sessionID: refusal.session ?? uses.first?.sessionID,
+                                  destination: request.auditDestination, method: method))
+                    return .answered(Self.refusal(refusal.reason, status: 403), keepAlive: !clientCloses)
+                }
+                if let hook = faults.withLock({ $0.beforeSend }) { await hook() }
+                // Withdrawn since it was registered: its connection is already cancelled; nothing was written.
+                if state.withLock({ $0.dispatches[id]?.cancelled ?? true }) {
+                    endDispatch(id)
+                    wire.cancel()
+                    upstream = nil
+                    let refusal: Reauthorization
+                    if case .failure(let now) = reauthorize(original, uses: uses, scope: scope) { refusal = now } else {
+                        refusal = Reauthorization(reason: .unknownPlaceholder, account: nil, session: nil)
+                    }
+                    emit(.refused(refusal.reason, account: refusal.account ?? uses.first?.account, sessionID: refusal.session ?? uses.first?.sessionID,
+                                  destination: request.auditDestination, method: method))
+                    return .answered(Self.refusal(refusal.reason, status: 403), keepAlive: !clientCloses)
+                }
+                transmitted = true
+            }
+            do {
+                defer { if !uses.isEmpty { endDispatch(id) } }
+                try await wire.send(HTTPHead(startLine: [method, outgoing.target, "HTTP/1.1"], fields: outgoing.headers).serialized + outgoing.body)
+            } catch {
+                wire.cancel()
+                upstream = nil
+                // A kept-alive upstream may have closed; retry once on a fresh connection for idempotent methods.
+                if attempt == 1 || !["GET", "HEAD", "OPTIONS"].contains(method) || !uses.isEmpty { break }
+                continue
+            }
+            do {
+                guard let data = try await wire.readHead(limit: 128 * 1024), let parsed = HTTPHead(data) else { throw WireError.closed }
+                return .response(parsed, wire, sentSnapshot, outgoing)
+            } catch {
+                wire.cancel()
+                upstream = nil
+                if attempt == 1 || !["GET", "HEAD", "OPTIONS"].contains(method) || !uses.isEmpty { break }
+            }
+        }
+        return .answered(Self.plainResponse(502, "Bad Gateway", "\(destination) closed the connection."), keepAlive: false)
+    }
+
+    /// Re-authorizes a substituted request against the current snapshot and, if it still holds, registers it as a
+    /// dispatch, both under the state lock: no snapshot can be published between the check and the registration.
+    private func beginDispatch(_ id: UUID, original: OutboundRequest, uses: [SubstitutionUse], scope: EgressScope,
+                               wire: WireConnection) -> Result<(OutboundRequest, EgressSnapshot), Reauthorization> {
+        let ledger = self.ledger
+        return state.withLock { state in
+            let snapshot = state.snapshot
+            switch Self.reauthorize(original, uses: uses, admitsProject: scope.admitsProject, snapshot: snapshot, ledger: ledger) {
+            case .success(let current):
+                state.dispatches[id] = Dispatch(original: original, uses: uses, admitsProject: scope.admitsProject, wire: wire)
+                return .success((current, snapshot))
+            case .failure(let refusal):
+                return .failure(refusal)
+            }
+        }
+    }
+
+    private func endDispatch(_ id: UUID) {
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.dispatches[id] = nil
+            return state.dispatchWaiters.removeValue(forKey: id) ?? []
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    /// Why a substituted request may no longer be sent.
     private struct Reauthorization: Error {
         var reason: SecretRefusal
         var account: String?
         var session: String?
     }
 
-    /// `original` substituted under the current snapshot: the request to send when it makes exactly the same uses
-    /// (secrets, bindings, placeholders) as were reserved, else why not. This request's own reservations are already in
-    /// the ledger and are discounted, so its use limits are judged as when it was admitted.
     private func reauthorize(_ original: OutboundRequest, uses: [SubstitutionUse], scope: EgressScope) -> Result<OutboundRequest, Reauthorization> {
-        let snapshot = state.withLock { $0.snapshot }
-        let ledger = self.ledger
+        Self.reauthorize(original, uses: uses, admitsProject: scope.admitsProject, snapshot: state.withLock { $0.snapshot }, ledger: ledger)
+    }
+
+    /// `original` substituted under `snapshot`: the request to send when it makes exactly the same uses (secrets,
+    /// bindings, placeholders) as were reserved, else why not. This request's own reservations are already in the
+    /// ledger and are discounted, so its use limits are judged as when it was admitted.
+    private static func reauthorize(_ original: OutboundRequest, uses: [SubstitutionUse], admitsProject: @escaping @Sendable (String) -> Bool,
+                                     snapshot: EgressSnapshot, ledger: SecretUseLedger) -> Result<OutboundRequest, Reauthorization> {
         var own: [String: Int] = [:]
         for use in uses { own[use.account + "\u{1F}" + use.bindingID, default: 0] += 1 }
         let reserved = own
-        let rewriter = RequestRewriter(admitsProject: scope.admitsProject, useCount: { account, binding in
+        let rewriter = RequestRewriter(admitsProject: admitsProject, useCount: { account, binding in
             ledger.count(account: account, bindingID: binding) - (reserved[account + "\u{1F}" + binding] ?? 0)
         })
         switch rewriter.rewrite(original, resolve: { snapshot.resolve($0) }) {

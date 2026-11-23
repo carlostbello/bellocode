@@ -221,6 +221,15 @@ public struct HTTPHead: Sendable {
 }
 
 extension WireConnection {
+    /// A chunk-size line (RFC 9112 §7.1: hex digits, then optional extensions). Anything else, or a size `Int` cannot
+    /// hold, is refused.
+    static func chunkSize(_ line: String) throws -> Int {
+        let text = line.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        guard !text.isEmpty, text.utf8.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 | 0x20 >= 0x61 && $0 | 0x20 <= 0x66) }),
+              let size = Int(text, radix: 16) else { throw WireError("invalid chunk size") }
+        return size
+    }
+
     /// Reads a whole body per `framing` (chunked decoded), bounded.
     func readBody(_ framing: HTTPHead.Framing, limit: Int) async throws -> Data {
         switch framing {
@@ -232,15 +241,14 @@ extension WireConnection {
         case .chunked:
             var body = Data()
             while true {
-                let sizeLine = try await readLine()
-                let sizeText = sizeLine.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-                guard let size = Int(sizeText, radix: 16), size >= 0 else { throw WireError("invalid chunk size") }
+                let size = try Self.chunkSize(try await readLine())
                 if size == 0 {
                     // Trailers until a blank line (dropped).
                     while !(try await readLine()).isEmpty {}
                     return body
                 }
-                guard body.count + size <= limit else { throw WireError.tooLarge }
+                // Compared with what is left, never summed: a size near Int.max must not overflow (AV09).
+                guard size <= limit - body.count else { throw WireError.tooLarge }
                 body.append(try await read(exactly: size))
                 guard try await readLine().isEmpty else { throw WireError("invalid chunk") }
             }
@@ -264,9 +272,7 @@ extension WireConnection {
             while let piece = try await readSome() { try await sink.send(piece) }
         case .chunked:
             while true {
-                let sizeLine = try await readLine()
-                let sizeText = sizeLine.split(separator: ";").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
-                guard let size = Int(sizeText, radix: 16), size >= 0 else { throw WireError("invalid chunk size") }
+                let size = try Self.chunkSize(try await readLine())
                 try await sink.send(Data("\(String(size, radix: 16))\r\n".utf8))
                 if size == 0 {
                     while true {
@@ -275,7 +281,16 @@ extension WireConnection {
                         if line.isEmpty { return }
                     }
                 }
-                try await sink.send(try await read(exactly: size))
+                // Copied as it arrives: a chunk is never buffered whole (its size is the destination's to choose).
+                var remaining = size
+                while remaining > 0 {
+                    if buffer.isEmpty, !(try await receiveMore()) { throw WireError.closed }
+                    let take = min(remaining, buffer.count)
+                    let piece = Data(buffer.prefix(take))
+                    buffer.removeFirst(take)
+                    remaining -= take
+                    try await sink.send(piece)
+                }
                 _ = try await readLine()
                 try await sink.send(Data("\r\n".utf8))
             }

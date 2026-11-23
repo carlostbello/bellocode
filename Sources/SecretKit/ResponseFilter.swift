@@ -141,13 +141,26 @@ public struct ResponseFilter: Sendable {
         self.bodyLimit = bodyLimit
     }
 
+    /// The codings named by every field of one header, in order (lowercased; empty items dropped).
+    static func codings(_ values: [String]) -> [String] {
+        values.flatMap { $0.lowercased().split(separator: ",") }.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
     /// 16 MiB decoded.
     public static let defaultBodyLimit = 16 << 20
 
+    /// `body` is the message body with chunked framing already removed. Every other coding is undone before scanning:
+    /// transfer codings (`Transfer-Encoding: gzip, chunked`, AV02) and then content codings, each from every field that
+    /// carries it, not only the first. A coding that cannot be undone blocks the response.
     public func filter(headers: [HTTPField], body: Data) -> ResponseVerdict {
         let decoded: Data
         do {
-            decoded = try ContentDecoding.decode(body, contentEncoding: headers.first("Content-Encoding"), limit: bodyLimit)
+            var transfer = Self.codings(headers.all("Transfer-Encoding"))
+            if transfer.last == "chunked" { transfer.removeLast() }
+            // Chunked anywhere else (applied twice, or under another coding) is not something the reader removed.
+            if transfer.contains("chunked") { throw ContentDecoding.Unsupported(encoding: "chunked") }
+            let unframed = try ContentDecoding.decode(body, contentEncoding: transfer.joined(separator: ","), limit: bodyLimit)
+            decoded = try ContentDecoding.decode(unframed, contentEncoding: Self.codings(headers.all("Content-Encoding")).joined(separator: ","), limit: bodyLimit)
         } catch is ContentDecoding.Unsupported {
             // The encoding's name is the destination's text (it could carry a reflected value): never echoed.
             return .block(reason: "The response uses a content encoding BelloCode cannot inspect.", accounts: [])

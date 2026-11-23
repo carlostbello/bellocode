@@ -93,6 +93,11 @@ final class EchoServer: Sendable {
             case "deflate": payload = ScannerTests.deflate(reflected); fields.append(HTTPField("Content-Encoding", "deflate"))
             case "br": payload = ScannerTests.brotli(reflected); fields.append(HTTPField("Content-Encoding", "br"))
             case "zstd": payload = reflected; fields.append(HTTPField("Content-Encoding", "zstd"))
+            case "ce-twice":
+                // Two Content-Encoding fields, each applied (AV02's sibling: only the first field was decoded).
+                payload = ScannerTests.gzip(ScannerTests.gzip(reflected))
+                fields += [HTTPField("Content-Encoding", "gzip"), HTTPField("Content-Encoding", "gzip")]
+            case "te-gzip", "te-gzip-close": payload = ScannerTests.gzip(reflected)
             case "base64": payload = Data(reflected.base64EncodedString().utf8)
             case "hex": payload = Data(reflected.map { String(format: "%02x", $0) }.joined().utf8)
             case "url": payload = Data((String(decoding: reflected, as: UTF8.self).addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "").utf8)
@@ -110,6 +115,17 @@ final class EchoServer: Sendable {
                 ]).serialized)
                 return true
             default: payload = reflected
+            }
+            if encoding == "te-gzip" {
+                // A transfer coding under the chunked framing (AV02).
+                try await wire.send(HTTPHead(startLine: ["HTTP/1.1", "200", "OK"], fields: fields + [HTTPField("Transfer-Encoding", "gzip, chunked")]).serialized)
+                try await wire.send(Data("\(String(payload.count, radix: 16))\r\n".utf8) + payload + Data("\r\n0\r\n\r\n".utf8))
+                return true
+            }
+            if encoding == "te-gzip-close" {
+                // A transfer coding without chunked: the body runs until the connection closes.
+                try await wire.send(HTTPHead(startLine: ["HTTP/1.1", "200", "OK"], fields: fields + [HTTPField("Transfer-Encoding", "gzip"), HTTPField("Connection", "close")]).serialized + payload)
+                return false
             }
             if encoding == "chunked" || encoding == "split" {
                 // Chunked, with the value split across chunk boundaries (3-byte chunks).
@@ -136,6 +152,11 @@ final class EchoServer: Sendable {
         if path.hasSuffix("/truncated") {
             // Announces 100 bytes, sends 10, closes: a response that ends early (not one that is too large).
             try await wire.send(Data("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789".utf8))
+            return false
+        }
+        if path.hasSuffix("/overflow-chunk") {
+            // One byte, then a chunk size that overflows when added to what was read (AV09).
+            try await wire.send(Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n7fffffffffffffff\r\n".utf8))
             return false
         }
         if path.hasSuffix("/reflect-reason") {

@@ -53,6 +53,8 @@ public struct SecretBroker: Sendable {
     public var ledger: SecretUseLedger
     /// Persists reserved uses of limited bindings before the request is sent; false refuses it.
     public var recordUses: (@Sendable ([SubstitutionUse]) async -> Bool)?
+    /// Lowers what `recordUses` stored for uses then refused before anything was sent (AV13); after the ledger released them.
+    public var releaseUses: (@Sendable ([SubstitutionUse]) async -> Void)?
     public var responseLimit: Int
     /// Asked immediately before every outbound hop (the first and each redirect): whether every secret of the request
     /// is still exactly as it was resolved (not revoked; same scope, mode, bindings and value). False stops the request
@@ -156,15 +158,19 @@ public struct SecretBroker: Sendable {
                 let label = secrets.values.first { $0.0.account == uses.first?.account }?.0.label ?? "the secret"
                 return refuse(SecretRefusal.useLimit(label: label).message, uses.first?.account ?? account, destination: outbound.auditDestination)
             }
-            if uses.contains(where: { limit($0) != nil }), let recordUses, !(await recordUses(uses)) {
-                // Not sent: the reservation is given back (N13), so a refused request never uses up a limited binding.
+            let recorded = uses.contains(where: { limit($0) != nil }) && recordUses != nil
+            if recorded, let recordUses, !(await recordUses(uses)) {
+                // Not sent: the reservation is given back (N13), so a refused request never uses up a limited binding;
+                // what was stored of it (another account of the same request) is lowered again.
                 ledger.release(uses)
+                await releaseUses?(uses)
                 return refuse("BelloCode could not record this use of a limited secret, so it was not sent.", uses.first?.account ?? account,
                               destination: outbound.auditDestination)
             }
             // Recording may have waited: the last check is right before the bytes leave.
             if let stillAuthorized, !(await stillAuthorized()) {
                 ledger.release(uses)
+                if recorded { await releaseUses?(uses) }
                 return refuse(changed, account, destination: outbound.auditDestination)
             }
             reserved += uses
