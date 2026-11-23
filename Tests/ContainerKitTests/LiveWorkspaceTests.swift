@@ -8,7 +8,7 @@ import Testing
 /// Opt-in workspace lifecycle checks against a real Rancher Desktop (dockerd):
 /// `BELLOCODE_CONTAINER_TESTS=1 swift test --filter LiveWorkspace`. Uses the already-present `node:22-bookworm-slim`
 /// image (never pulls), labels everything `app.bellocode.test=1` and removes it.
-@Suite("Live workspace", .serialized, .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTAINER_TESTS"] == "1"))
+@Suite("Live workspace", .serialized, .timeLimit(.minutes(10)), .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTAINER_TESTS"] == "1"))
 struct LiveWorkspaceTests {
     static let image = "node:22-bookworm-slim"
     let client = EngineClient(socketPath: NSHomeDirectory() + "/.rd/docker.sock")
@@ -38,6 +38,12 @@ struct LiveWorkspaceTests {
         await cleanup(spec)
     }
 
+    /// NF13: every test needs the image; when it is missing the test fails and says why (never passes having checked
+    /// nothing).
+    func requireImage(_ image: String = LiveWorkspaceTests.image) async throws {
+        try #require(try await client.inspectImage(image) != nil, "needs \(image) present (docker pull \(image) once); nothing was checked")
+    }
+
     func sh(_ id: String, _ script: String, env: [String: String] = [:], spec: WorkspaceSpec) async throws -> (Int, String, String) {
         let r = try await ExecSession.run(client: client, container: id, argv: ["/bin/sh", "-c", script], workingDir: spec.projectRoot,
                                           environment: env, user: spec.user)
@@ -45,7 +51,7 @@ struct LiveWorkspaceTests {
     }
 
     @Test func lifecycleRecreatesOnSettingAndFolderChanges() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { Issue.record("needs \(Self.image) present"); return }
+        try await requireImage()
         try await withProject { root, original in
         var spec = original
         let id = try await manager.ensureRunning(spec)
@@ -91,7 +97,7 @@ struct LiveWorkspaceTests {
     }
 
     @Test func portsForwardingAndWildcardBindingsStayOffTheNetwork() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await requireImage()
         try await withProject { _, spec in
         let id = try await manager.ensureRunning(spec)
         let server = """
@@ -135,7 +141,7 @@ struct LiveWorkspaceTests {
     }
 
     @Test func reaperRemovesEscapedDaemonsAndTouchRaisesInotify() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await requireImage()
         try await withProject { _, spec in
         let id = try await manager.ensureRunning(spec)
         // A command that escapes its process group, as the spike found.
@@ -169,7 +175,7 @@ struct LiveWorkspaceTests {
     }
 
     @Test func secretsTravelInOneExecOnly() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await requireImage()
         try await withProject { _, spec in
         let id = try await manager.ensureRunning(spec)
         let sentinel = "BCSENTINEL-\(UUID().uuidString)"
@@ -186,7 +192,7 @@ struct LiveWorkspaceTests {
     /// C3: a secret command runs in a one-shot container: value on stdin (never in any configuration), no network, the
     /// project read-only, no shared home; the container is gone afterwards.
     @Test func secretCommandRunsInAOneShotOfflineReadOnlyContainer() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await requireImage()
         try await withProject { root, spec in
         _ = try await manager.ensureRunning(spec)
         let sentinel = "BCSENTINEL-\(UUID().uuidString)"
@@ -218,7 +224,7 @@ struct LiveWorkspaceTests {
 
     /// M6: sustained output on both streams keeps each stream's start and end and reports the cut.
     @Test func sustainedOutputIsBoundedVisiblyPerStream() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { return }
+        try await requireImage()
         try await withProject { _, spec in
         let id = try await manager.ensureRunning(spec)
         let script = "echo FIRST-OUT; echo FIRST-ERR >&2; head -c 2000000 /dev/zero | tr '\\0' o; head -c 2000000 /dev/zero | tr '\\0' e >&2; echo; echo LAST-OUT; echo LAST-ERR >&2"
@@ -235,7 +241,7 @@ struct LiveWorkspaceTests {
     /// N09 (live): a container whose user is root in its image (a dev container's remoteUser) is refused and removed,
     /// whatever the name says; the host user and a named non-root user run.
     @Test func aUserThatIsRootInTheImageIsRefused() async throws {
-        guard try await client.inspectImage(Self.image) != nil else { Issue.record("needs \(Self.image) present"); return }
+        try await requireImage()
         try await withProject { _, original in
             var spec = original
             spec.user = "root"
@@ -246,6 +252,65 @@ struct LiveWorkspaceTests {
             let id = try await manager.ensureRunning(spec)
             let (code, out, _) = try await sh(id, "id -u", spec: spec)
             #expect(code == 0 && out.trimmingCharacters(in: .whitespacesAndNewlines) == "1000")
+        }
+    }
+
+    /// Runs `body` with a test image built from `node:22-bookworm-slim` with `steps` (no step needs the network), then
+    /// removes the image, pass or fail.
+    func withTestImage(_ steps: String, _ body: (String) async throws -> Void) async throws {
+        try await requireImage()
+        let tag = "bctest-ws:\(UUID().uuidString.prefix(8).lowercased())"
+        let context = TarArchive([.init(path: "Dockerfile", contents: Data("FROM \(Self.image)\n\(steps)\n".utf8))]).data()
+        _ = try await client.buildImage(context: context, tag: tag, labels: ["app.bellocode.test": "1"])
+        do {
+            try #require(try await client.inspectImage(tag) != nil, "the test image \(tag) was not built")
+            try await body(tag)
+        } catch {
+            try? await client.removeImage(tag, force: true)
+            throw error
+        }
+        try? await client.removeImage(tag, force: true)
+    }
+
+    /// AF09 (live): nothing of the project's image runs as root while the workspace is prepared. The image's `chown`
+    /// and `mkdir` leave a mark when run (as root they did, from the old `$HOME` step); the workspace has no
+    /// capabilities, it runs as the verified numbers, and `$HOME` and a nested cache belong to the user.
+    @Test func noProgramOfTheProjectImageRunsAsRoot() async throws {
+        try await withTestImage(#"""
+            RUN for t in chown mkdir dirname; do p=$(command -v $t); mv "$p" "$p.real"; printf '#!/bin/sh\ntouch "/tmp/ran-%s-$(id -u)" 2>/dev/null\nexec "%s.real" "$@"\n' "$t" "$p" > "$p"; chmod 755 "$p"; done
+            """#) { tag in
+        try await withProject { _, original in
+            var spec = original
+            spec.image = tag
+            spec.user = "node"
+            spec.cacheMounts = [CacheMount(cache: .npm, path: WorkspaceSpec.home + "/.cache/npm")]
+            let id = try await manager.ensureRunning(spec)
+            let inspect = try #require(try await client.inspectContainer(id))
+            #expect(inspect.config.user == "1000:1000", "created with the verified numbers, not the name")
+            #expect(inspect.hostConfig?.capAdd?.isEmpty ?? true, "no capabilities: \(inspect.hostConfig?.capAdd ?? [])")
+            // Marks of runs as uid 0 only (this test's own command, as the user, may run `mkdir`).
+            let (code, out, _) = try await sh(id, "ls /tmp | grep -- '-0$' || true; stat -c %u \"$HOME\" \"$HOME/.cache\" \"$HOME/.cache/npm\"; id -u", spec: spec)
+            #expect(code == 0)
+            #expect(!out.contains("ran-"), "the image's own tools ran as root: \(out)")
+            #expect(out == "1000\n1000\n1000\n1000\n", "\(out)")
+        }
+        }
+    }
+
+    /// AF10 (live): an image that maps a plausible name to uid 0, and whose `id` says 1000, is refused before any
+    /// container of it starts; no container of the project is left.
+    @Test func aNameMappedToRootIsRefusedWhateverTheImageReports() async throws {
+        try await withTestImage(#"""
+            RUN echo 'dev:x:0:0:dev:/home/dev:/bin/sh' >> /etc/passwd && printf '#!/bin/sh\necho 1000\n' > /usr/local/bin/id && chmod 755 /usr/local/bin/id
+            """#) { tag in
+        try await withProject { _, original in
+            var spec = original
+            spec.image = tag
+            spec.user = "dev"
+            await #expect(throws: WorkspaceError.rootUser("dev")) { try await manager.ensureRunning(spec) }
+            let left = try await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(spec.projectKey)"])
+            #expect(left.isEmpty, "no container of the project is left: \(left.map(\.name))")
+        }
         }
     }
 

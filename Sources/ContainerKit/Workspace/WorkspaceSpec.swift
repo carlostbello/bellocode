@@ -195,11 +195,12 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
         var host = HostConfig()
         host.init_ = true  // tini reaps orphans left by commands
         host.privileged = false
+        // AF09: no capabilities at all. Nothing runs as root in the workspace: `$HOME` is prepared by BelloCode's own
+        // image before it exists (`WorkspaceManager.prepareVolumes`), and every command runs as the (verified) user.
         host.capDrop = ["ALL"]
-        // Only the root exec BelloCode itself issues (preparing $HOME) uses these; commands run as the host
-        // user, so they have no capabilities.
-        host.capAdd = ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
         host.securityOpt = ["no-new-privileges:true"]
+        // Process-group files of commands (`ExecSession`), writable by the user without a root step.
+        host.tmpfs = ["/tmp/.bellocode": "rw,nosuid,nodev,noexec,mode=1777,size=1m"]
         host.nanoCPUs = Int64(resources.cpus * 1_000_000_000)
         host.memory = resources.memoryBytes
         host.pidsLimit = resources.pidsLimit
@@ -223,6 +224,11 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
         // First, so its proxy variables win over the corporate ones (the company proxy is BelloCode's proxy's upstream).
         egress?.apply(to: &body)
         corporateNetwork?.apply(to: &body, noProxyExtra: serviceNames ?? [])
+        if let corporateNetwork {
+            let mounts = body.hostConfig?.mounts ?? []
+            let targets = Set(mounts.map(\.target))
+            body.hostConfig?.mounts = mounts + corporateNetwork.compiledBundleMounts.filter { !targets.contains($0.target) }
+        }
         return body
     }
 

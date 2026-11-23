@@ -5,7 +5,7 @@ import Testing
 
 /// Opt-in checks against a real Rancher Desktop (dockerd): `BELLOCODE_CONTAINER_TESTS=1 swift test --filter Live`.
 /// Uses the already-present `node:22-bookworm-slim` image (pulls it if missing) and removes what it creates.
-@Suite("Live Engine API", .serialized, .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTAINER_TESTS"] == "1"))
+@Suite("Live Engine API", .serialized, .timeLimit(.minutes(10)), .enabled(if: ProcessInfo.processInfo.environment["BELLOCODE_CONTAINER_TESTS"] == "1"))
 struct LiveEngineTests {
     let client = EngineClient(socketPath: NSHomeDirectory() + "/.rd/docker.sock")
 

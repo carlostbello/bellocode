@@ -5,10 +5,10 @@ import Foundation
 /// administrator sets them. Applied at creation to workspace, service and MCP containers.
 ///
 /// Certificates need no root at run time: the folder holding the bundles is mounted read-only and the common
-/// variables point at it (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`).
-/// The enterprise roots are also mounted into the distribution's trust-store source folders, and the workspace runs
-/// `update-ca-certificates` / `update-ca-trust` as root once after creation when the image has it
-/// (`trustStoreUpdateScript`), so programs that ignore the variables trust them too.
+/// variables point at it (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`,
+/// `CURL_CA_BUNDLE`). The enterprise roots are also mounted into the distributions' trust-store source folders, and a
+/// workspace gets the combined bundle, read-only, at the distributions' compiled bundle paths (`compiledBundleMounts`),
+/// so programs that ignore the variables trust them too. Nothing of a project's image runs as root for it (AF09).
 public struct CorporateNetwork: Codable, Sendable, Equatable, Hashable {
     /// Host folder holding `ca-bundle.pem` (the Mac's trusted roots plus the selected enterprise roots) and
     /// `enterprise-roots.pem` (only the selected enterprise roots). Nil: no certificates are added.
@@ -71,6 +71,7 @@ public struct CorporateNetwork: Codable, Sendable, Equatable, Hashable {
             env["REQUESTS_CA_BUNDLE"] = Self.containerBundle
             env["PIP_CERT"] = Self.containerBundle
             env["GIT_SSL_CAINFO"] = Self.containerBundle
+            env["CURL_CA_BUNDLE"] = Self.containerBundle
             // Node adds these to its own roots (it does not read SSL_CERT_FILE).
             env["NODE_EXTRA_CA_CERTS"] = Self.containerEnterprise
             if let certificateFingerprint { env["BELLOCODE_CA_FINGERPRINT"] = String(certificateFingerprint.prefix(16)) }
@@ -102,6 +103,18 @@ public struct CorporateNetwork: Codable, Sendable, Equatable, Hashable {
         ]
     }
 
+    /// The compiled trust bundles of Debian, Ubuntu and Alpine, and of Fedora and RHEL: what programs that read no
+    /// variable use. A workspace gets the combined bundle there instead of running the image's
+    /// `update-ca-certificates` / `update-ca-trust` as root (AF09).
+    public static let compiledBundles = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
+
+    /// The combined bundle (the Mac's trusted roots and the enterprise roots), read-only at each compiled bundle path.
+    public var compiledBundleMounts: [Mount] {
+        guard let certificateDirectory else { return [] }
+        let bundle = (certificateDirectory as NSString).appendingPathComponent(Self.bundleName)
+        return Self.compiledBundles.map { Mount(type: .bind, source: bundle, target: $0, readOnly: true) }
+    }
+
     /// Adds the variables (a value the definition already sets wins) and the mounts to a create body.
     public func apply(to body: inout ContainerCreate, noProxyExtra: [String]) {
         guard !isEmpty else { return }
@@ -116,16 +129,4 @@ public struct CorporateNetwork: Codable, Sendable, Equatable, Hashable {
         host.mounts = (host.mounts ?? []) + mounts.filter { !targets.contains($0.target) }
         body.hostConfig = host
     }
-
-    /// Run as root once in a new workspace container: rebuilds the distribution's trust store from the mounted
-    /// enterprise roots when the image has the tool (prints `updated`, `skipped` or `failed`). Never fails creation.
-    public static let trustStoreUpdateScript = [
-        "/bin/sh", "-c",
-        """
-        if command -v update-ca-certificates >/dev/null 2>&1; then update-ca-certificates >/dev/null 2>&1 && echo updated || echo failed
-        elif command -v update-ca-trust >/dev/null 2>&1; then update-ca-trust extract >/dev/null 2>&1 && echo updated || echo failed
-        else echo skipped; fi
-        """,
-        "bellocode-trust",
-    ]
 }
