@@ -56,23 +56,25 @@ struct FinalCheckRewindTests {
     /// and applied), and the parent refuses the child's. A settled child created by the rewound turns themselves is part
     /// of what the rewind undoes and does not block it.
     @Test func aDelegatedChildBlocksItsParentsFileRestore() async throws {
-        let (_, engine) = try await start()
+        let (harness, engine) = try await start()
         defer { Task { await engine.stop() } }
         let repo = try await TempRepo.make(files: ["a/f.txt": "one\n", "b/g.txt": "two\n"])
         defer { repo.remove() }
         let parent = try await engine.createThread(in: repo.path + "/a", title: "Parent")
         try await list(engine, parent)
-        let message = MessageID(rawValue: "msg_1")
-        // A turn of the parent: checkpoint first; it then delegates a child, which edits files and settles.
-        var earlier = repo.runner
-        earlier.environment["GIT_COMMITTER_DATE"] = "\(Int(Date().timeIntervalSince1970) - 60) +0000"
+        // A turn of the parent: checkpoint first; it then delegates a child (on the server), which edits files and settles.
+        await harness.server.enqueueScript(TurnScript(steps: [
+            .subagent(agent: "explore", description: "Edit", prompt: "Edit the file") { TurnStep.text("Edited.") },
+        ]), for: parent.id.rawValue)
+        let message = try await engine.send("go", to: parent.id)
+        await harness.server.waitUntilAllIdle()
         _ = try #require(try await GitCheckpoints.capture(
-            directory: repo.path + "/a", ref: GitCheckpoints.ref(session: parent.id, message: message), runner: earlier))
-        let ownChild = try await engine.createThread(in: repo.path + "/a", title: "Delegated by the rewound turn", parent: parent.id)
+            directory: repo.path + "/a", ref: GitCheckpoints.ref(session: parent.id, message: message), runner: repo.runner))
+        let ownChild = try #require(await engine.threadsSharingWorktree(of: repo.path + "/a", except: parent.id).first { $0.parentID == parent.id })
         try repo.write("b/g.txt", "child's edit\n")
         let project = await engine.project(parent.projectID)
         try await waitUntil("child known") { project.row(ownChild.id) != nil }
-        try await waitUntil("child settled") { project.row(ownChild.id)?.status?.status == .idle }
+        try await waitUntil("child settled") { [.idle, .finishedUnread].contains(project.row(ownChild.id)?.status?.status) }
         #expect(!project.sessionIDs.contains(ownChild.id), "a child is not a top-level row")
         let allowed = try await engine.planRewind(parent.id, to: message, directory: repo.path + "/a", revertFiles: true)
         #expect(allowed.files?.paths == ["b/g.txt"], "\(allowed.filesUnavailable ?? "")")
@@ -99,9 +101,63 @@ struct FinalCheckRewindTests {
         #expect(refused.filesUnavailable?.contains("3 other threads") == true, "\(refused.filesUnavailable ?? "")")
         // The child's own restore is refused by its parent (and its sibling).
         _ = try #require(try await GitCheckpoints.capture(
-            directory: repo.path + "/a", ref: GitCheckpoints.ref(session: independent.id, message: message), runner: repo.runner))
-        let child = try await engine.planRewind(independent.id, to: message, directory: repo.path + "/a", revertFiles: true)
+            directory: repo.path + "/a", ref: GitCheckpoints.ref(session: independent.id, message: second), runner: repo.runner))
+        let child = try await engine.planRewind(independent.id, to: second, directory: repo.path + "/a", revertFiles: true)
         #expect(child.files == nil && child.filesUnavailable?.contains("other thread") == true)
+    }
+
+    /// AF19 (third round): whether a child was created by the rewound turns is read from the server's own record (the
+    /// first assistant message after the rewound user message), never from a git timestamp mapped through an estimated
+    /// clock offset. Here the checkpoint is stamped an hour early (a lagging clock, a delayed event): a settled child
+    /// delegated before the turn still blocks the restore, at plan and at apply. The child the turn itself delegated
+    /// (on the server, during the turn) does not, once the older one is out of the way. With no history to read,
+    /// nothing is exempt.
+    @Test func aChildFromAnEarlierTurnBlocksHoweverTheCheckpointIsStamped() async throws {
+        let (harness, engine) = try await start()
+        defer { Task { await engine.stop() } }
+        let repo = try await TempRepo.make(files: ["a/f.txt": "one\n", "b/g.txt": "two\n"])
+        defer { repo.remove() }
+        let parent = try await engine.createThread(in: repo.path + "/a", title: "Parent")
+        try await list(engine, parent)
+        let project = await engine.project(parent.projectID)
+        let older = try await engine.createThread(in: repo.path + "/a", title: "Delegated by an earlier turn", parent: parent.id)
+        try await waitUntil("older settled") { project.row(older.id)?.status?.status == .idle }
+
+        await harness.server.enqueueScript(TurnScript(steps: [
+            .text("Delegating."),
+            .subagent(agent: "explore", description: "Edit", prompt: "Edit the file") { TurnStep.text("Edited.") },
+        ]), for: parent.id.rawValue)
+        let message = try await engine.send("go", to: parent.id)
+        await harness.server.waitUntilAllIdle()
+        var early = repo.runner
+        early.environment["GIT_COMMITTER_DATE"] = "\(Int(Date().timeIntervalSince1970) - 3600) +0000"
+        _ = try #require(try await GitCheckpoints.capture(
+            directory: repo.path + "/a", ref: GitCheckpoints.ref(session: parent.id, message: message), runner: early))
+        try repo.write("b/g.txt", "the turn's child edited this\n")
+        let own = try #require(await engine.threadsSharingWorktree(of: repo.path + "/a", except: parent.id)
+            .first { $0.parentID == parent.id && $0.id != older.id }, "the turn delegated a child on the server")
+        try await waitUntil("own child settled") { [.idle, .finishedUnread].contains(project.row(own.id)?.status?.status) }
+        let cutoff = try #require(await engine.rewoundTurnsStart(parent.id, from: message))
+        let olderCreated = try #require(project.row(older.id)?.session.created)
+        #expect(olderCreated < cutoff && own.created > cutoff, "the server's order separates the two children")
+
+        let refused = try await engine.planRewind(parent.id, to: message, directory: repo.path + "/a", revertFiles: true)
+        #expect(refused.files == nil)
+        #expect(refused.filesUnavailable?.contains("1 other thread") == true, "\(refused.filesUnavailable ?? "")")
+
+        // Without the older child the turn's own child is part of what is rewound; a plan made then is still refused at
+        // apply if the older child comes back meanwhile.
+        try await engine.setArchived(older.id, true)
+        try await waitUntil("older archived") { project.row(older.id)?.session.isArchived == true }
+        let allowed = try await engine.planRewind(parent.id, to: message, directory: repo.path + "/a", revertFiles: true)
+        #expect(allowed.files?.paths == ["b/g.txt"], "\(allowed.filesUnavailable ?? "")")
+        try await engine.setArchived(older.id, false)
+        try await waitUntil("older restored") { project.row(older.id)?.session.isArchived == false }
+        await #expect(throws: GitError.self) { _ = try await engine.rewind(allowed) }
+        #expect(try repo.read("b/g.txt") == "the turn's child edited this\n")
+
+        // A message the server does not list: nothing to order by, so no child is exempt.
+        #expect(await engine.rewoundTurnsStart(parent.id, from: MessageID(rawValue: "msg_unknown")) == nil)
     }
 
     /// AF20: a session opened in a subdirectory restores worktree-relative paths at the root; a refused rewind puts

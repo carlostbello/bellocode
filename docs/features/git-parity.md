@@ -75,8 +75,12 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
   sibling directory of the same checkout blocks a file restore), re-checked just before files are written. It checks
   every unarchived session the engine knows, delegated children included (not only sidebar rows); the rewound
-  thread's own children are exempt only when settled and created after the checkpoint, i.e. by the turns the rewind
-  removes (second round of AF19). Worktree
+  thread's own children are exempt only when settled and created by the turns the rewind removes (second round of
+  AF19). "Created by those turns" is read from the server's own record, not from a clock (third round): the child's
+  creation time must be strictly later than that of the first assistant message after the rewound user message, both
+  stamped by the server. No git timestamp or estimated clock offset is involved, so a lagging clock or a delayed event
+  cannot exempt an older child; when the history cannot be read, the message is not listed in the newest 2,000, or no
+  assistant message follows it, no child is exempt. Worktree
   cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
   rewind Undo is shown with the affected path.
 - **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.
