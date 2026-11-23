@@ -52,6 +52,13 @@ import Testing
         let text = shell.controller.container.composerController?.composer.currentDraft().text ?? ""
         #expect(text.contains("Flaky login"), "the visible composer shows the issue: \(text)")
         #expect(workspace.pendingIssueLinks[directory]?.issue.iid == 7)
+        // AV07: without the token to redact the issue with, nothing is inserted (the notice says why).
+        try shell.forgeTokens.delete(account: IntegratedShellTests.Shell.gitLabInstance)
+        let other = GitLabIssue(iid: 8, projectPath: "team/app", title: "Token in body", webURL: "https://gitlab.corp.test/team/app/-/issues/8", description: "x")
+        await shell.controller.startThread(from: other, instance: "https://gitlab.corp.test", selection: nil, in: directory)
+        let after = shell.controller.container.composerController?.composer.currentDraft().text ?? ""
+        #expect(!after.contains("Token in body"))
+        #expect(workspace.pendingIssueLinks[directory]?.issue.iid == 7)
     }
 
     /// NF24: the draft promises free built-in models only when the catalog lists them and nothing else.
