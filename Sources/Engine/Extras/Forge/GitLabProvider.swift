@@ -245,7 +245,8 @@ public struct GitLabProvider: ForgeProvider {
         try await gate.acquire(instance.baseURL)
         let response: ForgeResponse
         do {
-            response = try await transport.send(ForgeRequest(url: url, headers: headers, method: method, body: body, tailLimit: tailLimit))
+            response = try await transport.send(
+                ForgeRequest(url: url, headers: headers, method: method, body: body, tailLimit: tailLimit, redirectScope: URL(string: instance.apiBase)))
             await gate.release(instance.baseURL)
         } catch {
             await gate.release(instance.baseURL)

@@ -56,8 +56,9 @@ asking) and `relatedMergeRequests`. Nothing predicts mergeability: the panel sho
 
 ## Token handling
 Per-instance PAT in the Keychain (`app.bellocode.gitlab-tokens`, account = base URL incl. path prefix), read per
-request and sent only as `PRIVATE-TOKEN` to that origin (redirects to another origin refused, HTTP needs an explicit
-per-instance choice). Scopes and expiry come from token introspection when available; warnings at 30, 7 and 1 days and
+request and sent only as `PRIVATE-TOKEN` to that installation (a redirect is followed only to the same origin and a
+path under the instance's API base, `<base>/api/v4`, on every hop, so another application under another path prefix of
+the same host never receives it, v1.0.1 AV04; HTTP needs an explicit per-instance choice). Scopes and expiry come from token introspection when available; warnings at 30, 7 and 1 days and
 on expiry in the panel and Settings (unknown is shown as unknown). Writes need the instance switch and, when scopes are
 known, `api`. Since the Git parity package, git over HTTPS to a configured instance authenticates with this token through
 BelloCode's credential helper (`bellocode-exec --git-credential` answered by `GitCredentialBroker`, only for git the app

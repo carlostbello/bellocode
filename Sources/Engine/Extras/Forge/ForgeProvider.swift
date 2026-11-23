@@ -125,13 +125,20 @@ public struct ForgeRequest: Sendable, Hashable {
     /// Keep only the last `tailLimit` bytes of the body (job logs on servers that ignore byte ranges); the response
     /// then carries `x-bellocode-total-bytes` and, when bytes were dropped, `x-bellocode-truncated: 1`.
     public var tailLimit: Int?
+    /// Where a redirect may lead (the instance's API base, `https://host/prefix/api/v4`): the same origin and a path at
+    /// or below this one, on every hop. Nil: no redirect is followed. The request carries the instance's token, so a
+    /// redirect to another application on the same origin (another path prefix) must not take it there (AV04).
+    public var redirectScope: URL?
 
-    public init(url: URL, headers: [String: String], method: String = "GET", body: Data? = nil, tailLimit: Int? = nil) {
+    public init(
+        url: URL, headers: [String: String], method: String = "GET", body: Data? = nil, tailLimit: Int? = nil, redirectScope: URL? = nil
+    ) {
         self.url = url
         self.headers = headers
         self.method = method
         self.body = body
         self.tailLimit = tailLimit
+        self.redirectScope = redirectScope
     }
 }
 
@@ -154,9 +161,11 @@ public protocol ForgeTransport: Sendable {
 }
 
 /// URLSession with an ephemeral configuration: no cookies, no URL cache (ETags are handled by `ForgeCache`), system
-/// trust evaluation, no credential store. Redirects (M1 in docs/reviews/M3-M6-review.md) are followed only within the
-/// same origin (scheme, host and effective port); any other redirect is refused before it is followed, so the token
-/// header never travels to another origin or down to HTTP. The refused 3xx surfaces as `ForgeError.redirected`.
+/// trust evaluation, no credential store. Redirects (M1 in docs/reviews/M3-M6-review.md, AV04) are followed only within
+/// the request's `redirectScope`: the same origin (scheme, host and effective port) and a path at or below the
+/// instance's API base, checked on every hop; any other redirect is refused before it is followed, so the token header
+/// never travels to another origin, down to HTTP, or to a sibling application under another path prefix of the same
+/// origin. The refused 3xx surfaces as `ForgeError.redirected`.
 public struct URLSessionForgeTransport: ForgeTransport {
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -179,11 +188,33 @@ public struct URLSessionForgeTransport: ForgeTransport {
         return left == right
     }
 
+    /// `url` is on `scope`'s origin and its path is `scope`'s path or below it, segment by segment (no `.` or `..`
+    /// segment, literal or percent-encoded, anywhere: a server would resolve it out of the scope).
+    public static func within(_ scope: URL, _ url: URL) -> Bool {
+        guard sameOrigin(scope, url) else { return false }
+        func segments(_ url: URL) -> [String]? {
+            let parts = url.path(percentEncoded: true).split(separator: "/", omittingEmptySubsequences: false).dropFirst().map(String.init)
+            for part in parts {
+                let decoded = (part.removingPercentEncoding ?? part).lowercased()
+                if decoded == "." || decoded == ".." || decoded.contains("/") || decoded.contains("\\") { return nil }
+            }
+            return parts
+        }
+        guard var base = segments(scope), let target = segments(url) else { return false }
+        if base.last == "" { base.removeLast() }
+        return target.count >= base.count && Array(target.prefix(base.count)) == base
+    }
+
+    /// Refuses every redirect outside `scope` (nil: every redirect). Used as the session's delegate (no scope) and as
+    /// each request's own task delegate (its scope), which takes precedence.
     final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+        let scope: URL?
+        init(scope: URL? = nil) { self.scope = scope }
+
         func urlSession(
             _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest
         ) async -> URLRequest? {
-            guard let from = task.originalRequest?.url, let to = request.url, URLSessionForgeTransport.sameOrigin(from, to) else { return nil }
+            guard let scope, let to = request.url, URLSessionForgeTransport.within(scope, to) else { return nil }
             return request
         }
     }
@@ -201,7 +232,7 @@ public struct URLSessionForgeTransport: ForgeTransport {
             var extra: [String: String] = [:]
             if let limit = request.tailLimit {
                 // Streams and keeps only the end: a 50 MB log never sits in memory whole. Reading stops at 32 MB.
-                let (bytes, streamed) = try await Self.session.bytes(for: urlRequest)
+                let (bytes, streamed) = try await Self.session.bytes(for: urlRequest, delegate: RedirectGuard(scope: request.redirectScope))
                 response = streamed
                 data = Data()
                 var total = 0
@@ -223,7 +254,7 @@ public struct URLSessionForgeTransport: ForgeTransport {
                 extra["x-bellocode-total-bytes"] = String(total)
                 if total > data.count { extra["x-bellocode-truncated"] = "1" }
             } else {
-                (data, response) = try await Self.session.data(for: urlRequest)
+                (data, response) = try await Self.session.data(for: urlRequest, delegate: RedirectGuard(scope: request.redirectScope))
             }
             guard let http = response as? HTTPURLResponse else { throw ForgeError.unexpected("No HTTP response.") }
             if (300..<400).contains(http.statusCode), http.statusCode != 304 {
