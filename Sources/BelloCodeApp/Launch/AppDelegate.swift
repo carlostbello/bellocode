@@ -136,7 +136,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.informativeText = "They are still there and will show again the next time BelloCode opens."
                 alert.runModal()
             }
-            await ComposerDraftArchive.shared.flush()
+            // A draft whose attachments or record could not be written stays pending: ask before losing it (AF22).
+            while !(await ComposerDraftArchive.shared.flush()) {
+                let alert = NSAlert()
+                alert.messageText = "Some drafts could not be saved"
+                alert.informativeText = "An attachment or context pill in an unsent draft could not be written (the disk may be full). Its text is kept; quitting now loses what could not be saved."
+                alert.addButton(withTitle: "Try Again")
+                alert.addButton(withTitle: "Quit Anyway")
+                guard alert.runModal() == .alertFirstButtonReturn else { break }
+            }
             await runtime.stop()
             self.visualRenderer.close()
             await PreviewFiles.current.removeAll()

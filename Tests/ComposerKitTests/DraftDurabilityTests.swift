@@ -194,3 +194,49 @@ struct DraftDurabilityTests {
         #expect(host.draft.text == "typed just before quit")
     }
 }
+
+/// v1.0.1 AF22: a draft whose attachment or record could not be written is never marked committed. The previous record
+/// stays, the key reads as unsaved, and the next flush (quit) writes it once space or the directory is back.
+@Suite("Draft write failures", .timeLimit(.minutes(3)))
+struct DraftWriteFailureTests {
+    typealias Fixture = DraftDurabilityTests.Fixture
+
+    @Test func anAttachmentThatCouldNotBeStoredIsRetriedByFlush() async throws {
+        let fixture = try Fixture(maxTotalBytes: 100, inUseGrace: .zero)
+        defer { fixture.remove() }
+        // Something else pinned fills the store: the paste cannot be written.
+        let outbox = try await fixture.files.materialize(.text(String(repeating: "o", count: 80), name: "o.txt"))
+        let token = fixture.files.pins.add { [outbox] }
+        let archive = fixture.archive()
+        await archive.write(ComposerDraft(text: "earlier", attachments: [.text("kept", name: "a.txt")]), for: "k")
+        let pasted = ComposerDraft(text: "look", attachments: [.image(Data(repeating: 9, count: 60), type: .png)])
+        await archive.write(pasted, for: "k")
+        #expect(archive.isUnsaved("k"))
+        #expect(archive.load("k")?.text == "earlier", "the previous record stays; no partial record without the paste")
+        #expect(await archive.flush() == false, "still full: still unsaved")
+        // Space comes back before quit: flush writes the whole draft.
+        fixture.files.pins.remove(token)
+        #expect(await archive.flush())
+        #expect(!archive.isUnsaved("k"))
+        let reopened = fixture.archive()
+        let record = try #require(reopened.load("k"))
+        #expect(record.text == "look")
+        #expect(record.attachments.count == 1)
+        #expect(record.attachments.first?.fileURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
+    }
+
+    @Test func aRecordThatCouldNotBeWrittenIsRetriedByFlush() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        // The drafts directory cannot be made (a file is in its place).
+        try Data("x".utf8).write(to: fixture.drafts)
+        let archive = fixture.archive()
+        await archive.write(ComposerDraft(text: "pill", attachments: [.text("pasted")]), for: "k")
+        #expect(archive.isUnsaved("k"))
+        #expect(await archive.flush() == false)
+        try FileManager.default.removeItem(at: fixture.drafts)
+        #expect(await archive.flush())
+        #expect(!archive.isUnsaved("k"))
+        #expect(fixture.archive().load("k")?.text == "pill")
+    }
+}
