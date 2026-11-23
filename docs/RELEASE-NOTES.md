@@ -47,7 +47,12 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Show Merge Requests, Show Issues and Show To-dos work without an open thread**: on a new-thread draft (Issues for
   its project) and with nothing selected (Merge Requests, To-dos) (NV02).
 - **Revoking Shared Chrome for a project stops its calls already waiting or running**: none is sent after the
-  revocation and a running call's result is withheld (AV05).
+  revocation, including a first call still waiting for the browser's MCP process to start, and a running call's
+  result is withheld (AV05).
+- **Removing a code root ends secret use by its projects on open connections too**: a workspace connection kept
+  alive across the change is judged by the new scope at its next request (AV2-04).
+- **Stop Shared Chrome is available when a start failed or a stop was not confirmed**, from the Browser menu, the
+  Command Palette, Settings ▸ Browser and the panel (AF23).
 - **Free models are promised only when one can be chosen now** (usable and not hidden with Hide Model) in the draft
   hint, onboarding and Settings ▸ Accounts, whose empty state otherwise says "Connect a provider to use your own
   models." (NF24, NV14).
@@ -75,6 +80,12 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   store, and an upgrade with a placeholder reserves nothing (AV13, GV05, NV07); a thread's environment replacements are
   ordered, so a stale one cannot land after a revocation's (AF26, GV04); a short hidden value saved by an earlier release
   is never activated (AF16).
+- **Secrets, egress and Shared Chrome, third round (R3c,** [Astra](reviews/v1.0.1-astra-verification-2.md)**):** a
+  revocation whose environment replacement was superseded before it was sent waits for the newer replacement's answer
+  instead of returning with the value still on the server (AF26); concurrent use refunds leave the same count in the
+  database and in memory (AV13); the egress proxy judges each request and dispatch by the gateway scope as it is now,
+  not as it was when a kept-alive connection opened, and cancels in-flight writes a scope change withdraws (AV2-04);
+  Shared Chrome checks a call's authorization at the transport as each request is sent (AV05).
 - **Containers and the Docker filter (P6, P6b):** dev-container staging copies through pinned folder descriptors and
   never blocks on a FIFO (AF07, AF25); CRLF Dockerfiles and a nameless global `ARG` are parsed correctly (AF11, AF12);
   an oversized chunk size no longer crashes the filter (AF13); "Sign in to the registry" opens Settings ▸ Containers

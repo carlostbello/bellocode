@@ -42,9 +42,12 @@ environment, the proxy snapshot, the brokered tool) reads the account of the rev
 an unfinished first save is discarded (shown), orphaned new or retired values are removed, and grants that no longer
 fit their secret are dropped. Settings edits patch only the editable fields onto the current record.
 
-**Changes stay in force (v1.0.1 AF03, AF04, AF15, AF26).** One secret's row writes run one at a time, each from the state
-the previous one left; use counts go through the same path, so a count never writes back a policy a revocation
-replaced. A new mode, name or withdrawn confirmation (from Settings or a save under the same label from a card) retires
+**Changes stay in force (v1.0.1 AF03, AF04, AF15, AF26, AV13, AV2-04).** One secret's row writes run one at a time, each
+from the state the previous one left; use counts and refunds go through the same path, so a count never writes back a
+policy a revocation replaced. Each write's change is computed once, on that state, and the record in memory becomes
+exactly the row written: a count read from the live use ledger is the same in the database and in memory, and whether
+a refund lowers anything is decided in its turn, so concurrent refunds and reservations cannot leave a use charged
+after a relaunch. A new mode, name or withdrawn confirmation (from Settings or a save under the same label from a card) retires
 every thread's grant of the old policy, and delivery requires the grant kind the mode gives (a placeholder grant never
 yields the value). The proxy substitutes again against the current snapshot and registers the request as being sent in
 one step under its lock; a snapshot published afterwards that withdraws it (revocation, narrower scope or binding)
@@ -52,8 +55,9 @@ cancels that upstream connection, and publishing waits until the write has ended
 only once the proxy holds a snapshot at least that new, so nothing carrying a withdrawn value leaves after it returns.
 The response is scanned for the values of both the snapshot the request was admitted under and the one it was sent
 under, so a rotation in flight cannot echo the new value back. A thread's environment replacements are sent one at a
-time, each computed when its turn comes (one superseded meanwhile is skipped), so a replacement read before a
-revocation never lands after the revocation's. A thread whose replacement fails stays pending (shown in Settings ▸
+time, each computed when its turn comes (one superseded meanwhile is not sent), so a replacement read before a
+revocation never lands after the revocation's. A superseded caller waits for the newer replacement's answer, so a
+revocation returns only with its value gone from the server or the thread shown as pending. A thread whose replacement fails stays pending (shown in Settings ▸
 Secrets) and is retried at every reconnect, with or without grants left.
 
 **Use limits count what was sent.** A use is reserved, and for a limited binding stored, before the request leaves.
@@ -113,7 +117,11 @@ Routing is a step of its own, after the request checks and any substitution: `Eg
 (`EgressRouter`: `.internet`, `.dial(EgressDial)` to a Mac-loopback endpoint, `.refuse`). `SuffixRouter` sends `*.bc`
 names through a table and refuses unknown ones; everything else goes to the internet path (company CA, proxy).
 Substitution never looks at the route or the client: a scope (`EgressScope`: token, which projects it serves) is all
-the proxy knows of a client, so a browser container is one more scope (`admitsProject` = every project it serves) with
+the proxy knows of a client. A connection keeps only its scope's token: every request, and the dispatch (in the same
+step that registers it), is judged by the scope as it is now, so removing a project from the shared workspace's scope
+(a code root removed) applies to kept-alive connections at their next request; a withdrawn scope's connections are
+refused and closed, and `setScopes` cancels writes the new scopes no longer authorize (`publishScopes` waits for them,
+AV2-04), so a browser container is one more scope (`admitsProject` = every project it serves) with
 the same snapshot. **The browser package plugs in by:** (1) making its gateway with `EgressGateway.ensure` (scope
 key e.g. `browser`) and registering the scope; (2) `EgressGateway.attach(scopeKey:network:)` to each project's service
 or workspace network when it is in use (`detach` after); (3) per route, a ContainerKit `PortForwarder` on

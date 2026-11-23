@@ -58,7 +58,8 @@ start** (including one that adopted a browser left running by a previous launch)
 which checks the container's actual state; a daemon failure shows "Stop not confirmed", never Stopped, and an absent
 container counts as stopped (v1.0.1 AF23, `SharedBrowserStopTests`). A start that fails after adopting such a browser
 (readiness timeout, viewer password) stops it like one it started, and Stop in Failed stops a container that still
-runs instead of only relabelling it.
+runs instead of only relabelling it. Browser ▸ Stop Shared Chrome, its Command Palette entry, Settings ▸ Browser and
+the panel all offer Stop in Failed and Stop not confirmed (`SharedChromeStopCommandTests`).
 
 ## Networking and canonical URLs
 
@@ -102,7 +103,10 @@ waiting across threads, 4 per thread, round-robin; overflow, takeover or another
 `chrome_request_access`, which raises a card (Allow Once = this thread; Always = the project; revocable in Settings).
 Access is checked again when a call gets its tab (right before dispatch) and before its result is returned: revoking
 a project cancels its calls already waiting or running, none is sent afterwards, and a running call's result is
-withheld (AV05).
+withheld (AV05). Each admitted call carries an authorization that the pooled MCP client checks in the same step that
+registers and sends each request (the first one, opening the tab, a retry), so a call that was still waiting for the
+browse process to start never reaches the browser once the revocation has returned; a cancellation that arrives before
+a request is registered is kept, never forgotten.
 **Guidance** (`bellocode.chrome` instruction entry): WebKit preview vs shared Chrome, canonical URLs, own group, Busy,
 handoff, and that sign-ins are shared.
 **Done threads:** when a thread is archived or deleted its own tabs close (Settings ▸ Browser, on by default), except
