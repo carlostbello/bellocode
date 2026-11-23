@@ -18,9 +18,10 @@ struct SharedBrowserApprovalTests {
         let defaults: UserDefaults
         let suite: String
 
-        static func make() throws -> Fixture {
+        static func make(subscriberLimit: Int = 4096) throws -> Fixture {
             let suite = "bellocode.tests.browser.\(UUID().uuidString)"
-            return Fixture(store: try ProjectionStore(location: .inMemory), defaults: UserDefaults(suiteName: suite)!, suite: suite)
+            return Fixture(store: try ProjectionStore(location: .inMemory, changes: ChangeBus(subscriberLimit: subscriberLimit)),
+                           defaults: UserDefaults(suiteName: suite)!, suite: suite)
         }
 
         /// A fresh service on the same store and defaults: what a relaunch sees.
@@ -204,5 +205,98 @@ struct SharedBrowserApprovalTests {
         try await fixture.store.apply(batch)
         await service.threadEnded("ses_c")
         #expect(closing.withLock { $0.count } == 1)
+    }
+
+    // MARK: NF11 residuals (v1.0.1 verification)
+
+    static func session(_ id: String, archived: Bool, updated: Double = 1) -> Session {
+        Session(id: SessionID(id), projectID: ProjectID("p"), directory: directory, created: Timestamp(milliseconds: 0),
+                updated: Timestamp(milliseconds: archived ? updated + 1 : updated), archivedAt: archived ? Timestamp(milliseconds: updated + 1) : nil)
+    }
+
+    /// Records closes and lets the test wait for each one.
+    final class CloseRecorder: Sendable {
+        let closing = Mutex<[String: [String]]>([:])
+        let stream: AsyncStream<String>
+        let continuation: AsyncStream<String>.Continuation
+        init() { (stream, continuation) = AsyncStream.makeStream(of: String.self) }
+        @MainActor func install(on service: SharedBrowserService) {
+            service.closeThreadTabs = { [self] tabs, session, _ in
+                closing.withLock { $0[session] = tabs }
+                continuation.yield(session)
+                return tabs
+            }
+        }
+    }
+
+    @MainActor func boundService(_ fixture: Fixture, sessions: [String]) async -> (SharedBrowserService, CloseRecorder) {
+        let service = await fixture.service()
+        let recorder = CloseRecorder()
+        recorder.install(on: service)
+        for id in sessions {
+            await service.save(BrowserBinding(sessionID: id, project: Self.directory, group: BrowserNaming.group(sessionID: id)))
+        }
+        // The tracker is seeded from the store before it follows changes.
+        for _ in 0..<20_000 where service.threadEnds.isEmpty { await Task.yield() }
+        return (service, recorder)
+    }
+
+    /// NF11: threads already in the store at launch (loaded from the cache, so they emit no change until they change)
+    /// close their tabs when archived or deleted afterwards.
+    @Test func threadsThatExistedBeforeLaunchCloseTheirTabsWhenArchivedOrDeleted() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        var batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: false), Self.session("ses_b", archived: false)]
+        try await fixture.store.apply(batch)
+        let (service, recorder) = await boundService(fixture, sessions: ["ses_a", "ses_b"])
+        #expect(!service.threadEnds.isEmpty, "seeded")
+        var events = recorder.stream.makeAsyncIterator()
+        batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: true)]
+        try await fixture.store.apply(batch)
+        #expect(await events.next() == "ses_a")
+        batch = StoreBatch()
+        batch.removedSessions = [SessionID("ses_b")]
+        try await fixture.store.apply(batch)
+        #expect(await events.next() == "ses_b")
+        #expect(recorder.closing.withLock { $0["ses_b"] } == [BrowserNaming.mainTab(group: BrowserNaming.group(sessionID: "ses_b"))])
+    }
+
+    /// NF11: an archive lost in a change-stream overflow is found by reconciling with every thread.
+    @Test func anArchiveLostInAnOverflowStillClosesTheTabs() async throws {
+        let fixture = try Fixture.make(subscriberLimit: 4)
+        defer { fixture.cleanup() }
+        var batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: false)]
+        try await fixture.store.apply(batch)
+        let (service, recorder) = await boundService(fixture, sessions: ["ses_a"])
+        var events = recorder.stream.makeAsyncIterator()
+        // More distinct threads in one change than a subscriber holds: the change set is replaced by "overflowed".
+        batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: true)]
+            + (0..<(fixture.store.changes.subscriberLimit + 1)).map { Self.session("ses_fill\($0)", archived: false) }
+        try await fixture.store.apply(batch)
+        #expect(await events.next() == "ses_a")
+        withExtendedLifetime(service) {}
+    }
+
+    /// NF11: after shutdown, a new start follows thread ends again (the follower flag is reset).
+    @Test func aRestartedServiceFollowsThreadEndsAgain() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        var batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: false)]
+        try await fixture.store.apply(batch)
+        let (service, recorder) = await boundService(fixture, sessions: ["ses_a"])
+        await service.shutdown()
+        #expect(service.threadEnds.isEmpty)
+        await service.start()
+        for _ in 0..<20_000 where service.threadEnds.isEmpty { await Task.yield() }
+        var events = recorder.stream.makeAsyncIterator()
+        batch = StoreBatch()
+        batch.sessions = [Self.session("ses_a", archived: true)]
+        try await fixture.store.apply(batch)
+        #expect(await events.next() == "ses_a")
     }
 }
