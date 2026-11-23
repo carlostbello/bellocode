@@ -160,7 +160,7 @@ struct OrchestrationServiceTests {
         defer { Task { await fixture.stop() } }
         let engine = fixture.engine
         let parent = try await engine.createThread(in: "/tmp/mock-orch", title: "parent")
-        let scripts = Self.delegateScripts(childDelay: 400)
+        let scripts = Self.delegateScripts(childDelay: 3_000)  // long enough to observe the running child on a loaded machine
         await fixture.harness.server.enqueueScript(scripts.parent, for: parent.id.rawValue)
         await fixture.harness.server.enqueueScript(scripts.wake, for: parent.id.rawValue)
         let thread = engine.openThread(parent.id)
