@@ -283,6 +283,20 @@ struct DockerFilterTests {
         #expect(answer.status == 400)
     }
 
+    /// AF13: a chunk size near `Int.max` is refused as too large before any arithmetic on it (it trapped the host app),
+    /// and the proxy keeps serving.
+    @Test func anOversizedChunkDeclarationIsRefusedAndTheProxyKeepsServing() async throws {
+        defer { proxy.stop(); daemon.stop() }
+        for size in ["7fffffffffffffff", "7ffffffffffffffe", "fffffffffffffffff", "-1", "+5", "1 0"] {
+            let raw = "POST /\(token)/v1.47/containers/create HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n\(size)\r\n{}\r\n0\r\n\r\n"
+            let answer = try await send("", "", raw: Data(raw.utf8))
+            #expect(answer.status == 400, "\(size): \(answer.status) \(answer.body)")
+        }
+        #expect(!forwarded.contains { $0.path == "/v1.47/containers/create" })
+        let ping = try await send("GET", "/_ping")
+        #expect(ping.status == 200, "the proxy still answers")
+    }
+
     // MARK: What is allowed, and how it is rewritten
 
     @Test func ownContainerInsideTheRootsIsCreatedWithLabelsLimitsAndCanonicalPaths() async throws {
@@ -362,6 +376,10 @@ struct DockerFilterTests {
             ("refused through a build argument", "/build?t=x:1&buildargs=%7B%22B%22%3A%22evil.example.com%2Fy%22%7D", "ARG B=registry.acme.internal/base:1\nFROM $B\n",
              "evil.example.com/y", nil),
             ("unresolvable base", "/build?t=x:1", "ARG B\nFROM $B\n", "cannot check", nil),
+            // AF11: a Windows-edited Dockerfile whose first line is a comment.
+            ("CRLF file with a leading comment", "/build?t=x:1", "# built on Windows\r\nFROM evil.example.com/crlf:1\r\n", "evil.example.com/crlf:1", nil),
+            // AF12: a global ARG without a name is refused, not a crash of the host.
+            ("nameless global ARG", "/build?t=x:1", "ARG =\nFROM registry.acme.internal/base:1\n", "has no name", nil),
             ("Dockerfile elsewhere", "/build?t=x:1&dockerfile=ci/Dockerfile", "FROM registry.acme.internal/base:1\n", "no Dockerfile", nil),
             ("corrupt gzip context", "/build?t=x:1", nil, "compressed", Data([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3] + [UInt8](repeating: 0xFF, count: 600))),
             ("bzip2 context", "/build?t=x:1", nil, "compressed", Data([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41] + [UInt8](repeating: 0, count: 600))),
