@@ -771,6 +771,11 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let raw = menuItem.representedObject as? String, let command = SharedChromeMenu.Command(rawValue: raw), let service else { return false }
+        return Self.isEnabled(command, service: service)
+    }
+
+    /// Whether `command` can run now (the menu and the Command Palette).
+    static func isEnabled(_ command: SharedChromeMenu.Command, service: SharedBrowserService) -> Bool {
         switch command {
         case .show, .openWindow: return service.isAvailable
         case .takeOver: return service.phase.isReady && service.humanControl.isEmpty

@@ -1,4 +1,5 @@
 import BelloCore
+import BrowserKit
 import DesignSystem
 import Engine
 import Foundation
@@ -66,6 +67,10 @@ enum PalettePayload: Hashable, Sendable {
     case message(thread: SessionID, session: SessionID, message: MessageID)
     /// A GitLab to-do of the person (GitLab 2): its instance and ID.
     case todo(instance: String, id: Int)
+    /// A Browser menu command for the window's built-in browser (nil: Show Browser) (NF20).
+    case browser(BrowserPaneCommand?)
+    /// A Browser ▸ Shared Chrome menu command (NF20).
+    case sharedChrome(SharedChromeMenu.Command)
 }
 
 struct PaletteItem: Hashable, Sendable, Identifiable {

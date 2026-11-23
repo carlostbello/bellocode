@@ -58,6 +58,10 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private var selectedRow = -1
     private var fileTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
+    /// The open palette's GitLab to-do refresh (cancelled when it closes).
+    private(set) var todoTask: Task<Void, Never>?
+    /// Reloads the to-dos (tests stand in a fixed list).
+    var loadTodos: (MainWindowController) async -> [PaletteCandidate]? = { await PaletteSourceBuilder.refreshTodos(window: $0) }
     private var messageGroups: [ThreadSearchGroup] = []
     private var messageQuery = ""
     private var fileQueryDirectory: String?
@@ -193,6 +197,7 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         self.mode = mode
         sources = PaletteSourceBuilder.build(window: window)
         sourceBuilds += 1
+        refreshTodos(in: window)
         messageGroups = []
         messageQuery = ""
         status = nil
@@ -213,11 +218,24 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         lastOpenMilliseconds = Self.milliseconds(since: start)
     }
 
+    /// Reloads GitLab to-dos while the palette is open and shows them in place, with the query as typed (NF20).
+    private func refreshTodos(in window: MainWindowController) {
+        todoTask?.cancel()
+        todoTask = Task { [weak self, weak window] in
+            guard let window, let load = self?.loadTodos, let todos = await load(window) else { return }
+            guard !Task.isCancelled, let self, self.panel.isVisible, self.window === window else { return }
+            self.sources.todos = todos
+            // Messages mode lists no to-dos (and re-running it would restart its search).
+            if self.mode != .messages { self.refresh(selectFirst: false) }
+        }
+    }
+
     /// Closes the palette; with `restoreFocus`, the window and view that had focus get it back.
     func hide(restoreFocus: Bool = true) {
         guard panel.isVisible else { return }
         fileTask?.cancel()
         messageTask?.cancel()
+        todoTask?.cancel()
         panel.orderOut(nil)
         scrim.removeFromSuperview()
         if restoreFocus, let previousWindow {
@@ -358,6 +376,7 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
     func settleSearches() async {
         await fileTask?.value
         await messageTask?.value
+        await todoTask?.value
     }
 
     private func updateFooter() {
@@ -462,6 +481,12 @@ final class PaletteController: NSObject, NSTableViewDataSource, NSTableViewDeleg
         case .todo(let instance, let id):
             hide()
             window.openTodo(instance: instance, id: id)
+        case .browser(let command):
+            if !background { hide() }
+            if let command { window.browser?.perform(command) } else { window.showBrowserPanel() }
+        case .sharedChrome(let command):
+            if !background { hide() }
+            SharedChromeMenuRouter.run(command, in: window)
         case .message(_, let session, let message):
             let reveal = PendingReveal(sessionID: session, messageID: message, query: query.text)
             if background {

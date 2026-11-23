@@ -1,5 +1,6 @@
 import AppKit
 import BelloCore
+import BrowserKit
 import Engine
 import Foundation
 import MockOpenCode
@@ -291,6 +292,30 @@ final class RecordingDelivery: NotificationDelivering {
             palette.rows.contains { row in if case .item(let item) = row { item.title == "Parser.swift" } else { false } }
         }
         #expect(found, "Parser.swift listed")
+        palette.hide()
+    }
+
+    /// NF20: to-dos fetched after ⌘K opened show in the open palette, and the Browser menu's commands (built-in
+    /// browser and shared Chrome) are palette actions.
+    @Test func paletteShowsFreshToDosAndBrowserCommands() async throws {
+        let shell = try await Shell.start()
+        defer { Task { await shell.stop() } }
+        let controller = shell.controller
+        let palette = controller.palette
+        let todo = GitLabTodo(id: 77, action: "review_requested", targetType: "MergeRequest", targetTitle: "Fresh parser", targetURL: "u",
+                              targetIID: 5, projectPath: "team/app", author: "mara")
+        palette.loadTodos = { _ in PaletteSourceBuilder.todoItems([(instance: "https://gitlab.corp.test", todo: todo)], now: Date()) }
+        shell.driver.perform(.commandPalette)
+        #expect(palette.isVisible)
+        palette.setQuery("+fresh")
+        await palette.settleSearches()
+        #expect(palette.rows.contains { row in if case .item(let item) = row { item.payload == .todo(instance: "https://gitlab.corp.test", id: 77) } else { false } },
+                "the refreshed to-do is listed without reopening")
+        palette.setQuery(">shared chrome")
+        let titles = palette.rows.compactMap { row -> String? in if case .item(let item) = row { item.title } else { nil } }
+        #expect(titles.contains("Take Over Shared Chrome") && titles.contains("Show Shared Chrome"), "\(titles)")
+        palette.setQuery(">reload page")
+        #expect(palette.rows.contains { row in if case .item(let item) = row { item.payload == .browser(.reload) } else { false } })
         palette.hide()
     }
 
