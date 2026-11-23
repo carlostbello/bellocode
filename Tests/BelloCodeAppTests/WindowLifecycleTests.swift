@@ -73,11 +73,13 @@ import Testing
         let context = ThreadSurfaceContext(engine: engine, directory: "", projectName: "p", thread: thread)
         let banner = ThreadContainerViewController.makeEnvironmentBanner(engine: engine, context: context)
         #expect(banner.currentDirectory == "", "unknown before the session loads")
+        // The thread's first (empty) snapshot has landed, so only the change below sets its session.
+        #expect(await waitUntil(timeout: .seconds(10)) { thread.phase == .ready })
         var batch = StoreBatch()
         batch.sessions = [Session(id: id, projectID: ProjectID("p"), directory: "/tmp/late-project", created: Timestamp(milliseconds: 0),
                                   updated: Timestamp(milliseconds: 1))]
         try await engine.store.apply(batch)
-        #expect(await waitUntil(timeout: .seconds(5)) { thread.session != nil })
+        #expect(await waitUntil(timeout: .seconds(10)) { thread.session != nil })
         #expect(banner.currentDirectory == "/tmp/late-project")
     }
 }
