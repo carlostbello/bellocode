@@ -7,7 +7,7 @@
 // skills (text only; no opencode.json, no plugins). Pure functions over a small file-system interface, so the tests
 // run without opencode.
 
-import { type BigIntStats, closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "fs"
 import { dirname, join, relative, sep } from "path"
 
 export type ProjectConfigMode = "bellocode" | "native"
@@ -34,15 +34,134 @@ export interface FS {
   /**
    * At most `limit` bytes of a regular file, opened without following a final link and without blocking (a FIFO or a
    * device never stalls the server). `size` is the file's full size. Undefined for anything but a regular file. With
-   * `root` (canonical), the opened file must still be reached from `root` through directories only, checked on the
-   * open descriptor before any byte is read, so an ancestor replaced by a link between the caller's check and the
-   * open cannot hand over a file outside the repository (AF08).
+   * `root` (canonical), the file is opened confined to `root` (`readConfined`): no component can be a link at the
+   * instant of the open, and the folder identities before and after the read must agree, so an ancestor replaced by
+   * a link at any moment cannot hand over a file outside the repository (AF08).
    */
   readRegular(path: string, limit: number, root?: string): { text: string; size: number } | undefined
 }
 
 const NOFOLLOW = (constants as any).O_NOFOLLOW ?? 0
 const NONBLOCK = (constants as any).O_NONBLOCK ?? 0
+const DIRECTORY = (constants as any).O_DIRECTORY ?? 0
+/** macOS `O_NOFOLLOW_ANY` (sys/fcntl.h, macOS 11+): the open fails if any component of the path is a link. Not in
+ * Node's or Bun's `constants`; passed through to open(2) as a number. */
+const DARWIN_NOFOLLOW_ANY = 0x20000000
+
+/**
+ * Test hooks for the confined read (AF08): called at the points a concurrent replacement could strike, so a test can
+ * swap a folder for a link exactly there. Never set in production.
+ */
+export type ConfinedReadHooks = { beforeOpen?: () => void; afterOpen?: () => void; beforeCheck?: (path: string) => void }
+
+type Identity = { dev: bigint; ino: bigint }
+
+/** The components of `path` below `root`, or undefined when `path` is not strictly below it. */
+function componentsBelow(root: string, path: string): string[] | undefined {
+  if (path === root || !inside(root, path)) return undefined
+  const parts = relative(root, path).split(sep)
+  if (parts.some((part) => part === "" || part === "." || part === "..")) return undefined
+  return parts
+}
+
+/**
+ * The identity of `root` and of every component from it down to `path`, examined without following links: each
+ * component above the leaf must be a real folder and the leaf a regular file. Undefined otherwise.
+ */
+function walkIdentities(root: string, parts: string[], hooks?: ConfinedReadHooks): Identity[] | undefined {
+  const top = lstatSync(root, { bigint: true })
+  if (!top.isDirectory()) return undefined
+  const identities: Identity[] = [{ dev: top.dev, ino: top.ino }]
+  let current = root
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index])
+    hooks?.beforeCheck?.(current)
+    const info = lstatSync(current, { bigint: true })
+    if (index < parts.length - 1 ? !info.isDirectory() : !info.isFile()) return undefined
+    identities.push({ dev: info.dev, ino: info.ino })
+  }
+  return identities
+}
+
+/**
+ * Opens `path` (canonical, strictly below the canonical `root`) so that no component of it can be a link at the
+ * instant of the open: the kernel refuses a link anywhere in the path, atomically with the lookup. On macOS that is
+ * `O_NOFOLLOW_ANY`; on Linux (the plugin's tests run there) every folder is opened relative to the descriptor of its
+ * verified parent (`/proc/self/fd/N/name`, which resolves through the descriptor, not the path) with
+ * `O_DIRECTORY | O_NOFOLLOW`. Anywhere else, or when the facility is missing, nothing is opened (fail closed).
+ * The returned descriptor is the caller's to close.
+ */
+function openConfined(root: string, parts: string[]): number | undefined {
+  if (process.platform === "darwin") {
+    return openSync(join(root, ...parts), constants.O_RDONLY | NONBLOCK | DARWIN_NOFOLLOW_ANY)
+  }
+  if (process.platform !== "linux" || DIRECTORY === 0 || NOFOLLOW === 0) return undefined
+  let parent = openSync(root, constants.O_RDONLY | DIRECTORY | NOFOLLOW)
+  try {
+    for (let index = 0; index < parts.length - 1; index++) {
+      const next = openSync(`/proc/self/fd/${parent}/${parts[index]}`, constants.O_RDONLY | DIRECTORY | NOFOLLOW)
+      closeSync(parent)
+      parent = next
+    }
+    return openSync(`/proc/self/fd/${parent}/${parts[parts.length - 1]}`, constants.O_RDONLY | NOFOLLOW | NONBLOCK)
+  } finally {
+    closeSync(parent)
+  }
+}
+
+/**
+ * At most `limit` bytes of the regular file `path`, reached from `root` through real folders only (AF08). Three
+ * independent guards, any of which refuses the read:
+ *  1. before the open, `root` and every component down to the leaf are examined without following links;
+ *  2. the open itself refuses a link in any component, atomically with the lookup (`openConfined`);
+ *  3. after the bytes are read, the same walk must find the same folder identities (device and inode) and a leaf that
+ *     is the very file the descriptor holds.
+ * A file is also refused when it has other hard links (`nlink > 1`): a second name can sit outside the repository.
+ */
+export function readConfined(root: string, path: string, limit: number, hooks?: ConfinedReadHooks): { text: string; size: number } | undefined {
+  const parts = componentsBelow(root, path)
+  if (!parts) return undefined
+  let fd: number | undefined
+  try {
+    const before = walkIdentities(root, parts, hooks)
+    if (!before) return undefined
+    hooks?.beforeOpen?.()
+    fd = openConfined(root, parts)
+    if (fd === undefined) return undefined
+    hooks?.afterOpen?.()
+    const info = fstatSync(fd, { bigint: true })
+    if (!info.isFile() || info.nlink !== 1n) return undefined
+    const leaf = before[before.length - 1]
+    if (info.dev !== leaf.dev || info.ino !== leaf.ino) return undefined
+    const read = readBounded(fd, Number(info.size), limit)
+    const after = walkIdentities(root, parts, hooks)
+    if (!after || after.length !== before.length) return undefined
+    for (let index = 0; index < after.length; index++) {
+      if (after[index].dev !== before[index].dev || after[index].ino !== before[index].ino) return undefined
+    }
+    return read
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {}
+    }
+  }
+}
+
+function readBounded(fd: number, size: number, limit: number): { text: string; size: number } {
+  const want = Math.max(0, Math.min(size, limit))
+  const buffer = Buffer.alloc(want)
+  let offset = 0
+  while (offset < want) {
+    const count = readSync(fd, buffer, offset, want - offset, offset)
+    if (count <= 0) break
+    offset += count
+  }
+  return { text: buffer.subarray(0, offset).toString("utf8"), size }
+}
 
 export const nodeFS: FS = {
   kind: (path) => {
@@ -68,24 +187,13 @@ export const nodeFS: FS = {
     }
   },
   readRegular: (path, limit, root) => {
+    if (root !== undefined) return readConfined(root, path, limit)
     let fd: number | undefined
     try {
-      // The root is pinned (its identity before the open must still be its identity after it).
-      const pinned = root === undefined ? undefined : lstatSync(root, { bigint: true })
-      if (pinned && !pinned.isDirectory()) return undefined
       fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK)
       const info = fstatSync(fd)
       if (!info.isFile()) return undefined
-      if (root !== undefined && !reachedFrom(root, pinned!, path, fstatSync(fd, { bigint: true }))) return undefined
-      const want = Math.max(0, Math.min(info.size, limit))
-      const buffer = Buffer.alloc(want)
-      let offset = 0
-      while (offset < want) {
-        const count = readSync(fd, buffer, offset, want - offset, offset)
-        if (count <= 0) break
-        offset += count
-      }
-      return { text: buffer.subarray(0, offset).toString("utf8"), size: info.size }
+      return readBounded(fd, info.size, limit)
     } catch {
       return undefined
     } finally {
@@ -96,32 +204,6 @@ export const nodeFS: FS = {
       }
     }
   },
-}
-
-/**
- * Whether the opened file (`opened`, from the descriptor) is the one `path` names now, reached from `root` (whose
- * identity is still `pinned`) through real directories only: every component below the root is examined without
- * following links, and the leaf must be the very file that was opened. A file opened through an ancestor that was a
- * link at open time is a different file from the one inside the root, so it fails this check, even if the link has
- * been swapped back by the time it runs.
- */
-function reachedFrom(root: string, pinned: BigIntStats, path: string, opened: BigIntStats): boolean {
-  if (path === root || !inside(root, path)) return false
-  const now = lstatSync(root, { bigint: true })
-  if (!now.isDirectory() || now.dev !== pinned.dev || now.ino !== pinned.ino) return false
-  const parts = relative(root, path).split(sep)
-  if (parts.some((part) => part === "" || part === "." || part === "..")) return false
-  let current = root
-  for (let index = 0; index < parts.length; index++) {
-    current = join(current, parts[index])
-    const info = lstatSync(current, { bigint: true })
-    if (index < parts.length - 1) {
-      if (!info.isDirectory()) return false
-    } else if (!info.isFile() || info.dev !== opened.dev || info.ino !== opened.ino) {
-      return false
-    }
-  }
-  return true
 }
 
 export function projectConfigOptions(options: any): ProjectConfigOptions | undefined {

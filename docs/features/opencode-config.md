@@ -96,9 +96,11 @@ two layers:
      session's folder, outer first; 64 KB per file, 96 KB total) as the session instruction entry
      `bellocode.project-instructions`, in opencode's own wording. It is written in the awaited session `prompt` hook
      (`SessionPrompt.prepare`), so the first turn already has it, and refreshed at each run when the files change. It is
-     text, not code. `CLAUDE.md` stays off, as before. Each file is read only once the opened file is confirmed to be
-     reached from the pinned repository root through real directories (an ancestor swapped for a link is refused;
-     v1.0.1 AF08).
+     text, not code. `CLAUDE.md` stays off, as before. Each file is opened so that no component of its path can be a
+     link at the instant of the open (macOS `O_NOFOLLOW_ANY`, atomic with the lookup; on Linux, where the plugin's
+     tests run, a chain of folder descriptors), and the folder identities (device and inode) from the repository root
+     down must agree before the open and after the read, with the leaf being the opened file. A file with other hard
+     links is refused too, and any platform without such an open reads nothing (fail closed; v1.0.1 AF08).
    - **Trusted projects only** ("Trust this project's opencode config", per project, default off): the repository's
      `.opencode/agent(s)/*.md`, `.opencode/command(s)/*.md`, `.opencode/skill(s)/*/SKILL.md` and `.agents/skills` are
      added to that project's location through the per-location transforms. Agents support `description`, `mode`,
