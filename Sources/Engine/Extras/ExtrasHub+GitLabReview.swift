@@ -38,7 +38,7 @@ extension ExtrasHub {
     func readIssueTool(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
         let (project, iid) = try await toolIssue(arguments, caller)
         let issue = try await gitLabWork.loadIssue(project, iid: iid)
-        let known = await mergeRequests.knownSecrets(project.instance.baseURL)
+        let known = try await mergeRequests.knownSecrets(project.instance.baseURL)
         // Header fields come from GitLab too: cleaned, on one line, redacted (GF13).
         let field = { (text: String) in UntrustedText.field(text, known: known) }
         var lines = ["Source: \(field(issue.webURL)) · \(project.instance.baseURL) · \(field(issue.reference)) · read \(Self.dateText(Date()))"]
@@ -67,7 +67,7 @@ extension ExtrasHub {
         let search = arguments["search"]?.stringValue ?? ""
         let projectID = filter == .mentioned ? try? await gitLabWork.projectID(project) : nil
         let result = try await mergeRequests.provider.issues(project, filter: filter, search: search, page: page, projectID: projectID)
-        let known = await mergeRequests.knownSecrets(project.instance.baseURL)
+        let known = try await mergeRequests.knownSecrets(project.instance.baseURL)
         let field = { (text: String) in UntrustedText.field(text, known: known) }
         let body = result.issues.map { issue in
             "#\(issue.iid) [\(issue.stateLabel)] \(field(issue.title))"
@@ -86,7 +86,7 @@ extension ExtrasHub {
         let (ref, _) = try await toolRef(arguments, caller)
         guard let state = await reviews.load(ref) else { throw ExtrasError(Self.reviewProblem(reviews.phases[ref.url])) }
         let unresolvedOnly = arguments["unresolvedOnly"]?.boolValue ?? false
-        let known = await mergeRequests.knownSecrets(ref.instance)
+        let known = try await mergeRequests.knownSecrets(ref.instance)
         let field = { (text: String) in UntrustedText.field(text, known: known) }
         let anchored = state.anchored.filter { !unresolvedOnly || ($0.discussion.isResolvable && !$0.discussion.isResolved) }
         let shown = anchored.suffix(Self.maxToolDiscussions)

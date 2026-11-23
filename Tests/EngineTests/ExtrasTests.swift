@@ -269,6 +269,8 @@ final class FakeMergeRequestHost: MergeRequestHost {
     var wakes: [(SessionID, String)] = []
     var pauses: [SessionID: MergeRequestPause] = [:]
     var remote = "git@code.corp.test:platform/rocket.git"
+    /// Runs when the service asks whether a thread is paused: after a poll's fetch, before the wake is written.
+    var onPause: (() -> Void)?
 
     func allSessions() async -> [Session] { [] }
 
@@ -279,7 +281,10 @@ final class FakeMergeRequestHost: MergeRequestHost {
     }
 
     func wake(_ sessionID: SessionID, text: String, url: String) async throws { wakes.append((sessionID, text)) }
-    func pause(_ sessionID: SessionID) -> MergeRequestPause { pauses[sessionID] ?? .none }
+    func pause(_ sessionID: SessionID) -> MergeRequestPause {
+        onPause?()
+        return pauses[sessionID] ?? .none
+    }
     func checkout(of sessionID: SessionID) async -> (remote: String, branch: String)? { (remote, "feat/checklist") }
 }
 
@@ -288,7 +293,7 @@ final class FakeMergeRequestHost: MergeRequestHost {
 struct MergeRequestServiceTests {
     let thread = SessionID("ses_mr")
 
-    func make(store: ProjectionStore? = nil, tokens: InMemorySecretVault = GitLabFixtures.tokens()) async throws
+    func make(store: ProjectionStore? = nil, tokens: any SecretVault = GitLabFixtures.tokens()) async throws
         -> (MergeRequestService, ManualWallClock, FakeMergeRequestHost, FixtureForgeTransport)
     {
         let clock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
@@ -331,6 +336,58 @@ struct MergeRequestServiceTests {
         #expect(service.nextPollDate(thread, GitLabFixtures.ref.url) == nil)
         #expect(host.links[thread]?.first?.watching == false)
         for (_, text) in host.wakes { #expect(!text.contains("SENTINEL"), "the token never reaches a wake") }
+        service.shutdown()
+    }
+
+    /// A vault whose reads can be made to fail (a locked or busy Keychain).
+    final class LockableVault: SecretVault {
+        let inner: InMemorySecretVault
+        let locked = Mutex(false)
+        init(_ inner: InMemorySecretVault) { self.inner = inner }
+        func store(account: String, label: String, value: SecretValue) throws { try inner.store(account: account, label: label, value: value) }
+        func read(account: String) throws -> SecretValue? {
+            if locked.withLock({ $0 }) { throw CocoaError(.userCancelled) }
+            return try inner.read(account: account)
+        }
+        func delete(account: String) throws { try inner.delete(account: account) }
+    }
+
+    /// AV07: the Keychain locks after a poll fetched a failed pipeline (whose log holds the instance's bare token, a
+    /// custom prefix the generic patterns do not know) and before the wake is redacted. Nothing reaches the thread; the
+    /// watch says it is held. Once the token can be read, the wake goes out with the token redacted.
+    @Test func aWakeWaitsWhenTheTokenToRedactCannotBeRead() async throws {
+        let token = "corp7-Q2hxNnZ3dWl6c0F4cGdtYk9u"
+        let inner = InMemorySecretVault()
+        try inner.store(account: GitLabFixtures.instance.baseURL, label: "t", value: SecretValue(token))
+        let vault = LockableVault(inner)
+        let (service, clock, host, transport) = try await make(tokens: vault)
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(), jobs: GitLabFixtures.jobs([("unit", "running")]))
+        try await service.setWatching(GitLabFixtures.ref, for: thread, true)
+        await service.waitForFetches()
+        await service.pollDue()
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]))
+        transport.setJSON("\(GitLabFixtures.api)/jobs/1/trace", "Step 3/9\nauth with \(token) failed\nERROR: job failed\n")
+        // The service asks twice per poll: before the fetch (archived?) and after it (paused?). Lock at the second.
+        var asked = 0
+        host.onPause = {
+            asked += 1
+            if asked == 2 { vault.locked.withLock { $0 = true } }
+        }
+        clock.advance(by: 120)
+        await service.pollDue()
+        #expect(host.wakes.isEmpty, "nothing reaches the thread without the exact redaction value")
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.heldForRedaction == true)
+        host.onPause = nil
+        vault.locked.withLock { $0 = false }
+        clock.advance(by: 120)
+        await service.pollDue()
+        try #require(host.wakes.count == 1)
+        #expect(host.wakes[0].1.contains("Pipeline failed"))
+        #expect(!host.wakes[0].1.contains(token), "the token is redacted")
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.heldForRedaction == nil)
+        // Every model-facing reader fails closed the same way.
+        vault.locked.withLock { $0 = true }
+        await #expect(throws: ExtrasError.self) { _ = try await service.knownSecrets(GitLabFixtures.instance.baseURL) }
         service.shutdown()
     }
 

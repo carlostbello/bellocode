@@ -632,6 +632,8 @@ public struct MergeRequestWatchRecord: Hashable, Sendable, Codable {
     public var recentWakes: [Date]?
     /// Events wait (the budget is spent) until this time.
     public var deferredUntil: Date?
+    /// Events wait because the instance's token could not be read to redact them (AV07); cleared by the next wake.
+    public var heldForRedaction: Bool?
     /// The last successful GitLab read for this watch.
     public var lastChecked: Date?
 

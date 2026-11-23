@@ -156,7 +156,12 @@ instance token are redacted (best effort, counted). Excerpts: first error-lookin
 Short header fields outside the block (titles, branches, labels, user, job, stage and rule names, file lists, issue
 titles) go through `UntrustedText.field`: controls stripped, line breaks collapsed (a job name cannot forge a line),
 secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). The token to redact with is read
-from the Keychain off the main actor, once per tool result, wake or excerpt (GF12).
+from the Keychain off the main actor, once per tool result, wake or excerpt (GF12). If it cannot be read (a locked or
+busy Keychain, no token), nothing from GitLab reaches a model: tools return an error naming the Keychain, Add to Agent
+Context, Send to Agent and Start Thread from Issue say so and insert nothing, and a babysit wake is held (the watch shows
+"Updates held", the log says why) and goes out redacted at the next poll that can read it (v1.0.1 AV07). Text that is
+ready only after such an await goes to the composer that was shown when the action started (`ComposerTarget`); if the
+person switched threads meanwhile it is not inserted anywhere and the panel says so (AV10).
 
 ## UI
 Merge Requests tab: notices (connect, problems, expiry), cards (cached-first, chevron expands): overview, approvals

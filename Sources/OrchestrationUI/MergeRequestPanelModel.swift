@@ -73,8 +73,9 @@ public final class MergeRequestPanelModel {
     @ObservationIgnored public var openURL: (URL, Bool) -> Void = { url, _ in NSWorkspace.shared.open(url) }
     @ObservationIgnored public var openSettings: () -> Void = {}
     @ObservationIgnored public var now: () -> Date = Date.init
-    /// Inserts text into the thread's composer (the person sends it). Nil when no composer is shown.
-    @ObservationIgnored public var insertIntoComposer: ((String) -> Void)?
+    /// The composer shown now, bound to it (the person sends what is inserted); nil when no composer is shown. Bound
+    /// when an action starts, so text that is ready only after an await never lands in another thread's composer (AV10).
+    @ObservationIgnored public var composerTarget: () -> ComposerTarget? = { nil }
     /// Asks the person to confirm something that cannot be undone (title, detail, confirm button). True to go on.
     @ObservationIgnored public var confirm: (String, String, String) -> Bool = { _, _, _ in false }
     /// Builds the create form's context for the thread (checkout, commits, model generation); set by the app.
@@ -215,7 +216,12 @@ public final class MergeRequestPanelModel {
         defer { excerptLoading.remove(job.id) }
         switch await service.jobLog(ref, jobID: job.id, maxBytes: 64 << 10) {
         case .success(let chunk):
-            excerpts[job.id] = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: await service.knownSecrets(ref.instance))
+            // The excerpt can go to an agent (Send to Agent): without the exact token to redact, none is made (AV07).
+            guard let known = try? await service.knownSecrets(ref.instance) else {
+                message = MergeRequestService.redactionUnavailable(ref.instance).message
+                return
+            }
+            excerpts[job.id] = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: known)
         case .failure(let error):
             message = "The log of \(job.name) could not be read: \(error.description)"
         }
@@ -236,13 +242,17 @@ public final class MergeRequestPanelModel {
     }
 
     public func sendToAgent(_ ref: MergeRequestRef, _ job: PipelineJob) async {
-        await loadExcerpt(ref, job)
-        guard let excerpt = excerpts[job.id], let snapshot = service.snapshots[ref.url] else { return }
-        guard let insert = insertIntoComposer else {
+        // Bound before the log is read: the excerpt goes to the composer shown now or nowhere (AV10).
+        guard let target = composerTarget() else {
             message = "Open the thread's composer to send the excerpt."
             return
         }
-        insert(Self.agentText(snapshot, job, excerpt))
+        await loadExcerpt(ref, job)
+        guard let excerpt = excerpts[job.id], let snapshot = service.snapshots[ref.url] else { return }
+        guard target.insert(Self.agentText(snapshot, job, excerpt)) else {
+            message = ComposerTarget.movedMessage
+            return
+        }
         notice = "The excerpt of \(job.name) is in the composer: review it and send."
     }
 

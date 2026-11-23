@@ -69,7 +69,7 @@ struct MergeRequestPanelModelTests {
         }
         #expect(parsed.lines.first?.spans.first?.colour == 2)
         var inserted: String?
-        model.insertIntoComposer = { inserted = $0 }
+        model.composerTarget = { ComposerTarget { inserted = $0; return true } }
         await model.sendToAgent(Self.ref, job)
         let text = try #require(inserted)
         #expect(text.contains(UntrustedText.beginMarker))
