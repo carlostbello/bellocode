@@ -22,7 +22,10 @@ provider is gone or disabled. Choices that are not one model are listed first ("
 No migration: `app_preference` already exists. opencode 2.3.2's config PATCH (`experimental.config.update`) only
 accepts `shell` (Contracts/opencode-2.3.2/openapi.json), so the two opencode values are written with `JSONCEditor`,
 an in-place JSONC edit that keeps comments and formatting and refuses a file that does not parse, then
-`POST /api/location/reload`. A reload cancels pending approvals and questions: the pane asks first ("Reload Now" or
+`POST /api/location/reload`. The edited text is swapped in atomically (`RENAME_SWAP`) and the displaced file is
+checked against the one edited: a save that landed in between is put back and edited again, and a further one is kept
+as `opencode.json.conflict-<time>` with the edit failing to say so; another program's save is never silently replaced
+(v1.0.1 AF24, `ModelSettingsService`). A reload cancels pending approvals and questions: the pane asks first ("Reload Now" or
 "Save Only"; saved-only shows "Saved; not applied yet" with Reload opencode Now). Compaction ("summaries") keeps the
 thread's model: a smaller model's context window can be too small for it.
 
@@ -38,6 +41,9 @@ no model parameter); a chosen model or the small model is `generate.text` with `
 stands on the commits alone). **Delegated threads:** `delegate_task`'s model, else the agent's, else the owner's
 default (read from `bellocode-models.json` at each call, no restart). **Scheduled runs:** the task's model, else none if
 its agent has one, else the owner's default, "Same as parent" being the thread that created the schedule.
+If the `models.background` preference cannot be read, the plugin mirror is left as it was and the read error stays
+shown; a change first re-reads the preference and is refused while it is unreadable, so the fallback is never saved
+as the setting (v1.0.1 AF27).
 
 ## Provider refusals (`BackgroundModelError`)
 

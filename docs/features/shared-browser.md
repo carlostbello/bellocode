@@ -53,7 +53,10 @@ immediate orderly stop"; live test). Every stop advances the browser **generatio
 each thread that used the browser gets a plain `[BelloCode] …` line with its next result, restart with backoff
 1/2/5/10/30 s, five failures in five minutes stop retrying. Exit 78 (no sandbox) is never retried. Bounds: 2 GB / 2 CPU /
 1024 pids, shm 1 GB, HTTP cache 128 MB in tmpfs (not in the profile); profile size is measured (Docker volumes have no
-byte quota) with a warning at 80% of the Settings limit. Quitting BelloCode stops the browser in order.
+byte quota) with a warning at 80% of the Settings limit. Quitting BelloCode stops the browser in order. **Stop during a
+start** (including one that adopted a browser left running by a previous launch) hands over to the orderly stop,
+which checks the container's actual state; a daemon failure shows "Stop not confirmed", never Stopped, and an absent
+container counts as stopped (v1.0.1 AF23, `SharedBrowserStopTests`).
 
 ## Networking and canonical URLs
 
@@ -109,7 +112,10 @@ VNC password set over exec stdin, handed to the page by a call (never a URL); qu
 agent calls fail Busy, new ones are refused, the browser counts as active; **Give Back** restores. The overlay names
 the thread running a call (and tab), the person's control, or the last user. Tab-group switcher by thread. Clipboard:
 Chrome → Mac only while you have control; Mac → Chrome only by Paste. Downloads: `/data/downloads`, copied to
-~/Downloads on request. Menu: Browser ▸ Show Shared Chrome (⌥⌃⌘B), Open in Window, Take Over, Give Back, Start, Stop.
+~/Downloads on request. Menu: Browser ▸ Show Shared Chrome (⌥⌃⌘B), Open in Window, Take Over, Give Back, Start, Stop
+(also in the Command Palette, NF20). Every viewer (the Chrome tab and the detached window) follows the service's
+human-control state, whichever one took over; the menu's Take Over acts in the detached window when it is open, else
+the panel (v1.0.1 NF17, `SharedChromeViewerTests`).
 
 ## Security
 

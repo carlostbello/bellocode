@@ -1,6 +1,7 @@
 # Composer (M1-C)
 
-Status: done 2026-11-16. `ComposerKit` (AppKit, TextKit 2) plus the `ComposerDemo` harness. No shell wiring yet.
+Status: done 2026-11-16. `ComposerKit` (AppKit, TextKit 2) plus the `ComposerDemo` harness. Since wired into the shell
+(thread and new-thread draft composers, `Content/ComposerSurface.swift`); see "Drafts in the shell" below.
 
 ## Mounting (`import ComposerKit`)
 
@@ -44,7 +45,8 @@ when it turns true shows the stored draft or, if the user typed meanwhile, the s
 `ThreadModel` (via `ComposerThreadSource`); tokens, attachments and selection live in a bounded in-memory
 `ComposerDraftCache` and are used while the persisted text still matches (entries are scoped to the thread source
 that stored them, so another engine's thread with the same session ID cannot replace them; a reopened model gets the
-newest matching entry for its session). It reports `supportsAttachments = false`.
+newest matching entry for its session). It now reports `supportsAttachments = true` and names its thread source as
+`draftOwner` (the object that stores its draft; NF04).
 
 ## What the prompt API needs for attachments (Contracts/opencode-2.3.0/openapi.json)
 
@@ -54,8 +56,8 @@ newest matching entry for its session). It reports `supportsAttachments = false`
 server's `Prompt.FileAttachment` carries `data` + `mime`), so the host must turn every attachment into a URI:
 `.file(url)` → `file://` URL; `.data` (pasted images) and `.text` (large pastes) → write to an app-owned temp file and
 send its `file://` URL (or try a `data:` URI; unverified). File tokens become `files` entries with `mention` from
-`PlacedToken` (UTF-16 offsets, as JavaScript counts). `OpenCodeKit.PromptRequest.FileAttachment` lacks `source` and
-`mention`, and `ThreadModel.send` takes text only: both need extending in Engine/OpenCodeKit before attachments ship.
+`PlacedToken` (UTF-16 offsets, as JavaScript counts). `OpenCodeKit.PromptRequest.FileAttachment` has since gained
+`source` and `mention` (`OpenCodeKit/DTO/Prompt.swift`), and attachments ship.
 
 ## Verified by script (`swift run ComposerDemo`: 17 scenarios, 129 checks, all pass; `swift test`: 42 tests)
 
@@ -69,6 +71,20 @@ Undo; growth, cap, scroll-to-caret, shrink; per-thread drafts with selection, no
 its own thread; spell checking off for code; VoiceOver labels on text, chips, remove, send/queue/stop, menu.
 Snapshots: `build/snapshots/composer-{empty,draft,unfocused,token,completion,attachments,error,running-queue,
 running-steer,running-stop,capped,hero}-{light,dark}.png`.
+
+## Drafts in the shell (v1.0.1 final-check fixes)
+
+- **Rich drafts persist** in `ComposerDraftArchive` (one versioned JSON record per draft key under Application Support
+  `BelloCode/drafts`; text stays in the thread's or project's stored draft). A commit is all or nothing: a draft whose
+  attachment or record write fails keeps its previous record, stays pending and is written whole by the next save or
+  flush. Quit asks "Some drafts could not be saved" (Try Again / Quit Anyway) while one is still pending (AF22).
+- **Failed first send from a draft** (the send that creates the thread): the shell has already switched to the new
+  thread, so the text, merged with anything typed since, goes back into every live composer with the same
+  `draftOwner` (the new thread's) with the error there, not into a stored draft nobody re-reads (NF04).
+- **Start Thread… from a GitLab issue** with the project's new-thread draft on screen inserts into that open composer
+  (the draft wires `onInsertIntoComposer` as a thread does), so the text is no longer lost on the next keystroke (NF09).
+- **Draft model hint** follows the catalog: "Free built-in models work without signing in…" only when every enabled
+  model is free; otherwise, and before the catalog arrives, "Choose a model with ⇧⌘M." (NF24).
 
 ## Needs a human at the keyboard
 
@@ -91,5 +107,6 @@ Keyboard: pass by script; FKA order unverified. Accessibility: labels and announ
 unverified; status never colour-only (labelled pills, icon + text errors). Parallelism, approvals, artifacts: N/A
 (other packages). Streaming and control: queue / steer / stop labelled, delivery claimed only after the host answers;
 the queued list is the timeline's job. Persistence: drafts with selection per thread pass; relaunch keeps text only
-(rich state is in memory). Windows/integrations: Quick Look and drag and drop unverified. Localization: Japanese,
+(rich state is in memory) at M1-C; tokens and attachments now persist in
+`ComposerDraftArchive` (see below). Windows/integrations: Quick Look and drag and drop unverified. Localization: Japanese,
 Chinese, emoji pass; RTL untested. Evidence: Darwin 27.0, Swift 6.4, Command Line Tools, debug build.

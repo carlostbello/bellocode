@@ -8,7 +8,7 @@ out into threads, message other threads; the person sees a lineage tree with att
 | --- | --- | --- |
 | opencode native | Child sessions (`parentID`); the `<subagent>` report + parent wake after **every** child round (durable outbox, `session/execution/subagent-report.ts`); native `subagent` tool; permissions/approvals; instruction entries | Works |
 | Server plugin `Plugin/` (TS, in the server) | 14 agent tools; cascade stop; child summaries in `metadata.bellocode`; guidance entry per session; RPC `bellocode.info` | Works (durable state lives in opencode: links, metadata, entries) |
-| Client MCP `bellocode_app` (Swift, `OpenCodeKit/ClientMCP`) | UI tools: `open_thread`, `queue` | Gone: opencode drops the tools when the socket closes |
+| Client MCP `bellocode_app` (Swift, `OpenCodeKit/ClientMCP`) | UI tools: `open_thread`, `queue` (more since: orchestration-extras.md) | Gone: opencode drops the tools when the socket closes |
 
 Loading: `OPENCODE_CONFIG_CONTENT={"plugins":[{package:<Contents/Resources/opencode-plugin>, options:{limits}}],
 "experimental":{"subagent_depth":2}}` (`ServerConfiguration.pluginDirectory`). A local directory with a root `server.ts`
@@ -34,13 +34,18 @@ Agents panel; the app mounts it as the "Agents" right-panel tab and adds the hea
   and failed, sessions read back as settled within 5 s, still stopping, and threads left unexamined. Children are listed
   page by page (200 per page, ≤ 25 pages per parent, ≤ 2,000 per tree); a walk cut by a limit or a failed list is
   reported incomplete, and `thread_wait` never reports such a tree as settled.
-- `create_threads` 1–8 top-level threads (optional worktree each, optional first prompt), one fan-out group.
+- `create_threads` 1–8 top-level threads (optional worktree each, optional first prompt), one fan-out group. Each
+  `agent` is checked before anything is created: unknown agents and sub-agents are refused (v1.0.1 GF14).
 - `thread_list`, `thread_search` (titles), `project_list`, `thread_read` (bounded: 20 messages, 12,000 chars).
 - `thread_send` (queue|steer, prefixed "[Message from …]"), `thread_wait` (≤ 45 s), `thread_interrupt` (cascades).
+  To a thread another agent interrupted (held), `thread_send` queues without waking it (`resume: false`; GF02).
 - `pending_requests` list approvals in self + descendants; deny a child's request. Agents can never approve.
 - `send_to_user` Markdown the person must read now: a titled quoted card in the transcript (input persists).
 - `orchestrator_capabilities` sub-agents, chat models with variants, limits.
 - App (client MCP): `bellocode_app_open_thread`, `bellocode_app_queue` (list / cancel / steer).
+  The engine hosts the app (and shared Chrome) client-MCP servers for every project on connect and on every
+  project-list change while live, and replaces the hosts when the server connection changes (a supervised restart has
+  a new port and password); v1.0.1 NF01, `ClientMCPEngineTests`, `OrchestrationRealBinaryTests`.
 
 ## Lifecycle, verified on 2.3.0 (10 prompts on `opencode/big-pickle`)
 - Wake once: a child created via `parentID` (plugin or API) posts exactly one `<subagent … state="completed">` report and
@@ -100,7 +105,8 @@ selection, ghost row actions on hover or selection (always in the accessibility 
 ## Verification
 `swift test` (OpenCodeKit `ClientMCPTests` 7; Engine `TaskGraphTests` 5 + `OrchestrationServiceTests` 6; TranscriptKit
 `OrchestrationCardTests` 3; OrchestrationUI 1; app shortcut tests), `cd Plugin && bun test` (13), real suite 5/5,
-`make app`, `make smoke` ("bellocode plugin loaded from opencode-plugin: contract 1, 14 tools"). Snapshots
+`make app`, `make smoke` ("bellocode plugin loaded from opencode-plugin: contract 1, 14 tools"; the contract is 2
+since, `Plugin/src/logic.ts`, still 14 tools). Snapshots
 `.build/debug/BelloCode --snapshot orch` (16); `docs/snapshots/orch-{agents-tree-light,agents-tree-dark,
 transcript-cards-light,waiting-reports-dark,child-view-light,fanout-sidebar-dark}.png`.
 
@@ -118,8 +124,8 @@ the client-MCP route (the host retries with backoff in mock mode); `thread_read`
 history); no per-thread "allow other project" setting beyond opencode's saved rules. Two existing tests
 (`queueSteerAndStopWhileRunning`, `sendStreamApproveQueueStopAndSwitch`) failed once under full-suite load, passed alone.
 
-## Next package (not built)
-Scheduled tasks, PR link/watch, secrets, HTML previews plug in as: a plugin tool (durable work, e.g. schedules, PR watch
+## Extension points (the next packages, since built: orchestration-extras.md, secrets.md, gitlab.md)
+Scheduled tasks, merge-request link/watch, secrets, HTML previews plug in as: a plugin tool (durable work, e.g. schedules, MR watch
 waking via `ctx.session.synthetic`) and/or an entry in `AppTools.definitions` + a case in `handleAppTool` (UI work:
 secret card backed by Keychain returning a reference, `html_preview` via WKWebView). Transport, attribution and scoping
 are already in place.

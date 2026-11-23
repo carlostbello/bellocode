@@ -46,7 +46,9 @@ card with a before/after card naming the asking thread (no "Always"); the card c
 it shows, and approval applies only to exactly that (a stale card approves nothing). Deny on a change card restores
 the approved version. "Always in This Project" covers creation only, never changes. The user's own edits in Settings
 keep the approval; Settings' Approve binds to the definition the editor shows. UI: Settings ▸ Scheduled Tasks (Window ▸ Scheduled Tasks… ⌃⌘E): list, switch, next run, last result
-with Open Thread, inline editor, Run Now, Delete with Undo, revoke project grants.
+with Open Thread, inline editor, Run Now, Delete with Undo, revoke project grants. Tasks are listed by name
+(case-insensitive), then ID (v1.0.1 NF23). The menu-bar item's Scheduled Tasks… brings BelloCode forward before opening
+the pane (NF21).
 
 ## 2. GitLab merge requests
 **Superseded in part by [gitlab.md](gitlab.md) (GitLab 1):** capability gating, the MR panel, triage, babysit

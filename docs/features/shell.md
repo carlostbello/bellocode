@@ -21,9 +21,11 @@ panel's tab and the drawer height restore per window and per thread (`ShellState
   behaviours would add the floating sidebar material). Show/Hide Sidebar and Show/Hide Right Panel are validated and
   retitled by the split controller and the window (no toolbar items to show or customise, so View ▸ Show Toolbar and
   Customize Toolbar… are gone).
-- **Right panel.** A 40 pt `DSTabBar` (Changes, Files, Browser, Terminal, Agents, Merge Requests) with live counts
+- **Right panel.** A 40 pt `DSTabBar` (Changes, Browser, Terminal, Agents, Merge Requests, Auto, Chrome) with live counts
   (changed files, child threads). When the panel is too narrow, tabs from the end drop their titles (icon only, the
   title stays the accessibility label); the selected tab keeps its title.
+  The placeholder Files tab is gone (v1.0.1 NF07): files open from ⌘P Quick Open and the palette's `/` scope, and
+  a "files" selection saved by an earlier version falls back to Changes.
 - **Sidebar footer.** "Add project" (ghost), the connection state (6 pt dot or glyph + word, `label text2`; the state
   before the source label so the state never truncates) and Settings.
 - **Banners above the composer** (status unknown, queued and unconfirmed follow-ups): DS outline / primary / ghost

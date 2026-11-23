@@ -32,6 +32,9 @@ xterm-256color, the thread's directory); list/get/PUT (title, size)/DELETE `…/
 takeover&input_protocol=1` with Basic auth: `attached` → one replay frame → `replay_complete`, then output,
 `resized`, `title_changed`, `foreground_process_changed {process}`, `exited {exitCode, finalOffset}`, close 1000. An
 exited PTY vanishes from the server at once, so the code is kept only in our record.
+Since the containers packages, a terminal of a containerised project runs its shell in the project's workspace
+through `bellocode-exec`, as the container's verified numeric uid:gid (v1.0.1 AF10; containers.md, "Workspace,
+failures, ports, file watching").
 
 ## Behaviour
 Every running terminal of the displayed thread is attached; other threads' are detached (PTYs untouched) and replay

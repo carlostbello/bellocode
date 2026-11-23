@@ -8,6 +8,9 @@ Status: done 2026-11-16 against opencode 2.3.0 and MockOpenCode. Gate G2 passed 
   `stop()` before quitting. Source: `.supervised(ServerSupervisor)`, `.fixed(ServerConnection)` (mock, or
   `ServerSource.fromEnvironment()` for `BELLOCODE_SERVER_URL`/`_PASSWORD`; the app honours it only in development
   (debug) builds, in a separate data namespace, S1), `.dynamic { … }` (tests).
+  `EngineCore.restartServer()` (supervised only) returns once the restarted server is ready, false if it does not come
+  back (v1.0.1 NF06). On connect and on every project-list change while live, the engine hosts the client-MCP servers
+  (`bellocode_app`, `chrome`) for every project, and replaces them when the server connection changes (NF01).
 - `engine.root: EngineRoot`: `connection` (cached/connecting/syncing/live/offline; content stays visible in all),
   `projects: [ProjectItem]` (pinned first), `attention: AttentionSummary` ("Needs you" items + `counts.dockBadge`),
   `catalog: CatalogModel`, `project(id) -> ProjectModel?`.

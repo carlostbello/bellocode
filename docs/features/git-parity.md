@@ -24,14 +24,14 @@ project-settings.md, composer.md; `GitActionsControl.logic.ts`, `BranchToolbar*`
 | 13 | Generated MR title/description | GitLab 1 create form | verify | done (GitLab 1) |
 | 14 | Git actions control: quick action + menu with reasons | `GitActionPlanner` (port of `resolveQuickAction`), header button + ⌄ popover, Git menu, palette | build | done |
 | 15 | HTTPS auth with the host's credentials | app-owned credential helper (below) | build | done |
-| 16 | Confirm pushing to the default branch; force push | `GitActionsModel.push` alerts; force only with its own confirmation, `--force-with-lease` | build | done |
+| 16 | Confirm pushing to the default branch; force push | `GitActionsModel.push` alerts; force only with its own confirmation, `--force-with-lease` on the remote head the plan showed (`GitPushPlan.remoteHead`, v1.0.1 AF21) | build | done |
 | 17 | Auto-pull default branch (ff-only, clean) | `GitRepositoryModel.backgroundFetch`; Git ▸ Automatically Pull Default Branch (off by default) | build | done (app-wide switch, saved; not per project) |
 | 18 | Behind/ahead | fetch every 5 min while watched (ContinuousClock, backoff to 60 min), header crumb ↑↓, popover status line | build | done |
 | 19 | Publish repository | `GitProjectService.publish`: `POST /projects` (private), HTTPS origin, `push -u` | adapt | done |
 | 20 | Clone; project opens at once; send waits; retry | `GitProjectService.clone` + `GitCloneJob`; picker `GET /projects?membership=true`; `DraftComposerHost.send` waits | adapt | partial: no progress percentage (indeterminate); Retry is API-only, failure shown as a toast |
 | 21 | SSH → HTTPS | owner chose HTTPS: SSH remote on a configured instance → "Switch Remote to HTTPS" (explicit) | adapt | done |
 | 22 | New project from scratch | `GitRepository.initialise`, `GitProjectService.createProject` (Git ▸ New Project…, `~/BelloCode/Projects`) | build | done |
-| 23 | Stash when switching with local changes | picker offers Stash and Switch; Git ▸ Restore Stashed Changes (by hash) | build | done |
+| 23 | Stash when switching with local changes | picker offers Stash and Switch; Git ▸ Restore Stashed Changes (by hash; index and working files restored and verified against the stash before it is dropped, else kept with a recovery ref, v1.0.1 AF05) | build | done |
 | 24 | Conflict and detached-HEAD states | `GitStatus.operation`, conflicted files; planner disables with reasons; Abort Merge/Rebase… | build | done |
 | 25 | MR auto-discovery, several links per thread | GitLab 1 | verify | done (GitLab 1) |
 | 26 | Git status in header, sidebar, composer line | header + composer (M2-C); sidebar rows add `↑2 ↓1` / `⚠ Conflict` for loaded checkouts | build | done |
@@ -44,6 +44,24 @@ project-settings.md, composer.md; `GitActionsControl.logic.ts`, `BranchToolbar*`
 
 Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21, 28, 32), 1 adapted with less scope (4),
 2 partial (10, 20), 3 dropped (29–31). Shortcuts: ⌃⌘↩ suggested action, ⌃⌘G actions, ⌃⌘P push, ⌃⌘L pull, ⌃⌘R fetch.
+
+## Final-check fixes (v1.0.1, `FinalCheckGitTests`, `FinalCheckRewindTests`, `GitShellFinalCheckTests`)
+
+- **Commit-message context (AF01):** untracked files are read beneath the checkout without following links
+  (`ConfinedDirectory`): a link is quoted as its text, as git commits it, and a file's size is checked on the open
+  descriptor before any byte is read.
+- **Pushes bound to their plan (AF06, AF21):** `GitPushPlan` carries the local commit and the remote head it showed.
+  `push(_:force:)` re-checks branch, HEAD and the remote's push URL, then pushes the plan's commit to the plan's
+  resolved URL (so the destination and the credentials git asks for are the approved ones); a force push leases on the
+  plan's remote head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation
+  both use it; there is no unbound force push.
+- **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
+  the closed form.
+- **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
+  sibling directory of the same checkout blocks a file restore), re-checked just before files are written; worktree
+  cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
+  rewind Undo is shown with the affected path.
+- **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.
 
 ## HTTPS credentials
 

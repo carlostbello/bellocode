@@ -59,13 +59,18 @@ Per-instance PAT in the Keychain (`app.bellocode.gitlab-tokens`, account = base 
 request and sent only as `PRIVATE-TOKEN` to that origin (redirects to another origin refused, HTTP needs an explicit
 per-instance choice). Scopes and expiry come from token introspection when available; warnings at 30, 7 and 1 days and
 on expiry in the panel and Settings (unknown is shown as unknown). Writes need the instance switch and, when scopes are
-known, `api`. Git keeps the person's own transport (Push in the form uses the git service); the token never reaches
-git, agent shells, tool results, wakes, the store or logs (tests below). Known secret values are redacted from
+known, `api`. Since the Git parity package, git over HTTPS to a configured instance authenticates with this token through
+BelloCode's credential helper (`bellocode-exec --git-credential` answered by `GitCredentialBroker`, only for git the app
+launched; [git-parity.md](git-parity.md) "HTTPS credentials"); other remotes (SSH, other hosts) keep the person's own
+helpers. Push in the form uses the git service. The token never reaches git's arguments, environment or configuration,
+agent shells, tool results, wakes, the store or logs (tests below). Known secret values are redacted from
 anything quoted to a model.
 
 ## Polling and wake semantics
 One service, per-instance `ForgeGate`: ≤ 4 requests in flight; a 429 holds the whole instance (`Retry-After` seconds
-or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. Watches of the same MR share one
+or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. A release hands its slot straight to
+the next waiter, and a woken waiter re-checks the hold (passing the slot on when refused), so queued requests neither
+exceed the limit nor go out inside a backoff window (v1.0.1 GF11). Watches of the same MR share one
 read; ≤ 8 MRs per pass. Failures keep the cached snapshot with its time and a kind label (Offline, Token invalid, No
 access, Not found or hidden, Changed on GitLab, Rate limited, TLS problem). Wakes go through an outbox: the wake (ID
 `w_…`, in its text) is persisted with the next baseline before posting; after a lost answer or a relaunch the thread's
@@ -100,11 +105,13 @@ nothing is sent, the new version loads and drafts move only where the same line 
 Outdated, not sendable). Resolve/unresolve is immediate (explicit) after the same check. All writes need the switch.
 
 ## Issues, to-dos, approvals, dependencies (GitLab 2)
-Tab sections Merge Requests · Issues · To-dos. **Issues** of the displayed thread's project (its `origin`): Assigned to
+Tab sections Merge Requests · Issues · To-dos. **Issues** of the displayed thread's project (its `origin`; showing a
+thread or draft of another project drops the list and selection and reloads, v1.0.1 NF18): Assigned to
 me / Mentioned / All open, search, Load More to 100 then "more on GitLab". Selecting shows the text as data, related MRs
 and **Start Thread…**: the project's new-thread draft gets the issue link and the whole or selected text quoted as
 untrusted (appended to any draft text); the draft's workspace and branch pickers choose branch and worktree; the thread
-the first send creates gets the issue linked (metadata) and a header chip `#212 Title` (shows Issues). **To-dos**
+the first send creates gets the issue linked (metadata) and a header chip `#212 Title` (shows Issues). With that draft already
+on screen the text goes into its open composer (NF09). **To-dos**
 (⌃⌘Y, palette `+`): compact rows (action in words, target, project, author, age), Open (a linked MR expands in place,
 else the built-in browser), Done (switch; restorable on GitLab's Done list). Not in Needs You and never notified:
 Needs You and notifications are for blocked agents (navigation.md); to-dos are the person's own GitLab work. Cached 2
@@ -145,6 +152,10 @@ Notes, descriptions, diffs and logs reach models only inside `----- BEGIN UNTRUS
 markers and CR overprints are stripped; GitLab/GitHub/Slack/AWS/JWT/bearer/URL-credential/`*TOKEN=` shapes and the
 instance token are redacted (best effort, counted). Excerpts: first error-looking block (≤ 16 lines) + last 60 lines,
 ≤ 8 KB, lines ≤ 400 chars. "Send to Agent" puts the same block, fenced, into the composer for the person to send.
+Short header fields outside the block (titles, branches, labels, user, job, stage and rule names, file lists, issue
+titles) go through `UntrustedText.field`: controls stripped, line breaks collapsed (a job name cannot forge a line),
+secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). The token to redact with is read
+from the Keychain off the main actor, once per tool result, wake or excerpt (GF12).
 
 ## UI
 Merge Requests tab: notices (connect, problems, expiry), cards (cached-first, chevron expands): overview, approvals
@@ -207,4 +218,4 @@ for ranges and renamed files; `blocks`/`blockees` availability; `approval_state`
 | Writes | off per instance | Settings ▸ GitLab "Allow write actions" (`gitlab.instanceSettings`) |
 | Approve/merge | off; person only, SHA-checked; agents never | Settings ▸ GitLab "Show Approve and Merge" |
 | Babysit budget | 6/hour, pass wakes on, own notes ignored | Settings ▸ GitLab ▸ Babysitting (`gitlab.babysitPolicy`) |
-| Git transport | the person's own git/SSH setup | unchanged; the token is never given to git |
+| Git transport | HTTPS remotes on a configured instance: the token through BelloCode's credential helper (git-parity.md); other remotes: the person's own git/SSH setup | the token is never in git's arguments, environment, config or remote URLs; an SSH remote can be switched with Git ▸ Switch Remote to HTTPS |
