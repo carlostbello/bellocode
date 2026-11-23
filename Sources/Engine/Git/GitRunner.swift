@@ -112,16 +112,29 @@ public struct GitRunner: Sendable {
         return environment
     }
 
+    /// One configuration entry for a single invocation, read after every configuration file (`GIT_CONFIG_COUNT`), so
+    /// it wins over anything the repository says. Key and value travel separately: no quoting, any characters.
+    public struct Setting: Sendable, Hashable {
+        public var key: String
+        public var value: String
+        public init(_ key: String, _ value: String) {
+            self.key = key
+            self.value = value
+        }
+    }
+
     /// The confined launch for `arguments` (nil when the sandbox or git is unavailable).
     func invocation(
         _ arguments: [String], in directory: String, writableRoots extra: [String], trusted: HostGit.TrustedConfiguration,
-        credentials setup: GitCredentialSetup? = nil
+        credentials setup: GitCredentialSetup? = nil, configuration: [Setting] = []
     ) -> HostGit.Invocation? {
         var environment = environment
-        if allowsLocalRemotes {
+        var settings = configuration
+        if allowsLocalRemotes { settings.insert(Setting("protocol.file.allow", "always"), at: 0) }
+        for setting in settings {
             let count = Int(environment["GIT_CONFIG_COUNT"] ?? "0") ?? 0
-            environment["GIT_CONFIG_KEY_\(count)"] = "protocol.file.allow"
-            environment["GIT_CONFIG_VALUE_\(count)"] = "always"
+            environment["GIT_CONFIG_KEY_\(count)"] = setting.key
+            environment["GIT_CONFIG_VALUE_\(count)"] = setting.value
             environment["GIT_CONFIG_COUNT"] = String(count + 1)
         }
         return HostGit.invocation(
@@ -140,11 +153,13 @@ public struct GitRunner: Sendable {
         return HostGit.networkSubcommands.contains(subcommand) ? .network : .local
     }
 
-    /// Runs git in `directory`. Throws `GitError.failed` for a non-zero exit unless `allowFailure`.
+    /// Runs git in `directory`. Throws `GitError.failed` for a non-zero exit unless `allowFailure`. `configuration`
+    /// applies to this invocation only and wins over the repository's files; `destinations` are URLs the invocation
+    /// connects to that neither its arguments nor the remotes name (a pinned push URL), for the app's credentials.
     @concurrent
     public func run(
         _ arguments: [String], in directory: String, input: Data? = nil, timeout: Duration? = nil, outputLimit: Int? = nil,
-        allowFailure: Bool = false, writableRoots extra: [String] = []
+        allowFailure: Bool = false, writableRoots extra: [String] = [], configuration: [Setting] = [], destinations: [String] = []
     ) async throws -> GitOutput {
         try Task.checkCancellation()
         let name = arguments.first(where: { !$0.hasPrefix("-") && !$0.contains("=") }) ?? "git"
@@ -165,7 +180,7 @@ public struct GitRunner: Sendable {
         var grant: GitCredentialBroker.Grant?
         var setup: GitCredentialSetup?
         if Self.mode(of: arguments) == .network, let credentials {
-            let targets = await authenticationTargets(arguments, in: directory, broker: credentials.broker)
+            let targets = await authenticationTargets(arguments + destinations, in: directory, broker: credentials.broker)
             if !targets.urls.isEmpty {
                 // Bound to the installations the remotes resolve to (most specific path prefix), not their host.
                 let granted = credentials.broker.grant(instances: targets.urls.compactMap { credentials.broker.instance(forURL: $0) })
@@ -178,7 +193,7 @@ public struct GitRunner: Sendable {
         defer { if let grant, let credentials { credentials.broker.revoke(grant) } }
         guard let launch = invocation(
             ["-c", "core.quotePath=false", "-c", "color.ui=false"] + arguments, in: directory, writableRoots: extra, trusted: trusted,
-            credentials: setup)
+            credentials: setup, configuration: configuration)
         else { throw GitError.launchFailed("the git sandbox is unavailable") }
         let broker = credentials?.broker
         let boundGrant = grant

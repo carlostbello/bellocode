@@ -152,12 +152,18 @@ extension GitRepository {
         _ = try await git(arguments, timeout: .seconds(180))
     }
 
-    /// Pushes exactly what `plan` showed and the person (or the agent's approval card) confirmed (AF06, AF21): its
-    /// local commit, to its resolved URL (so the destination, and the credentials git asks for, are the approved ones
-    /// even if the remote is repointed meanwhile), after checking that the branch, HEAD and the remote's push URL are
-    /// still the plan's. A force push leases on the remote head the plan saw (`--force-with-lease=<ref>:<oid>`), never
-    /// on whatever the tracking ref holds by then. On success the tracking ref and, when the plan said so, the upstream
-    /// are set as a push to the remote name would.
+    /// Pushes exactly what `plan` showed and the person (or the agent's approval card) confirmed (AF06, AF21, AV08): its
+    /// local commit, to its URL, and nothing else, after checking that the branch, HEAD and the remote's push URL are
+    /// still the plan's.
+    ///
+    /// The push goes to the remote by name, so settings scoped to it (`remote.<name>.sslVerify`, `.proxy`, `.receivepack`)
+    /// apply as they would in a terminal (GV10), but its push URL is pinned for this one invocation (`pinnedPush`): the
+    /// approved URL is what git connects to even if the remote, or a `url.<base>.insteadOf` rule, changes between the
+    /// check and the push, and the URL is never rewritten a second time (a URL handed back to git as a new repository
+    /// argument would be, so a rule matching the already-rewritten URL could send the commit to another repository).
+    /// Only the approved branch is updated: no annotated tags (`push.followTags`) and no push options. A force push
+    /// leases on the remote head the plan saw (`--force-with-lease=<ref>:<oid>`), never on whatever the tracking ref
+    /// holds by then. On success the tracking ref and, when the plan said so, the upstream are recorded.
     public func push(_ plan: GitPushPlan, force: Bool) async throws {
         if plan.needsForce && !force { throw GitPushPlanError.forceNotConfirmed }
         let status = try await self.status(limit: 1)
@@ -165,16 +171,37 @@ extension GitRepository {
         let urls = try await pushURLs(plan.remote)
         guard urls.count <= 1 else { throw GitPushPlanError.severalPushURLs(plan.remote) }
         guard urls.first == plan.remoteURL else { throw GitPushPlanError.destinationChanged }
-        var arguments = ["push", "--quiet"]
+        var arguments = ["push", "--quiet", "--no-follow-tags"]
         if force { arguments.append("--force-with-lease=refs/heads/\(plan.branch):\(plan.remoteHead ?? "")") }
-        arguments += ["--", plan.remoteURL, "\(plan.localHead):refs/heads/\(plan.branch)"]
-        _ = try await git(arguments, timeout: .seconds(180))
-        // What `git push <remote>` would have recorded (a push to a URL updates no tracking ref).
+        arguments += [plan.remote, "\(plan.localHead):refs/heads/\(plan.branch)"]
+        _ = try await git(arguments, timeout: .seconds(180), configuration: Self.pinnedPush(plan), destinations: [plan.remoteURL])
+        // What `git push <remote> <branch>` would have recorded (the source is a commit, not a branch, so git sets no
+        // upstream itself, and records the tracking ref only when a fetch refspec covers it).
         _ = try? await git(["update-ref", "refs/remotes/\(plan.remote)/\(plan.branch)", plan.localHead], allowFailure: true)
         if plan.setsUpstream {
             _ = try? await git(["config", "branch.\(plan.branch).remote", plan.remote], allowFailure: true)
             _ = try? await git(["config", "branch.\(plan.branch).merge", "refs/heads/\(plan.branch)"], allowFailure: true)
         }
+    }
+
+    /// Configuration that makes `git push <plan.remote>` connect to exactly `plan.remoteURL`, read after every file:
+    /// the remote's URLs and push URLs are cleared (an empty value resets the list) and replaced by an unguessable
+    /// placeholder that one `insteadOf` rule, ours, maps to the approved URL (with a URL configured, git reads no
+    /// legacy `.git/remotes` file that could add another push URL). A rule matches by prefix and the longest wins, so no
+    /// rule in a file can out-match ours on the full placeholder; a push URL gets `insteadOf` only, never
+    /// `pushInsteadOf`, and git rewrites once. Push options and tag following are off: one ref update, the one shown.
+    static func pinnedPush(_ plan: GitPushPlan) -> [GitRunner.Setting] {
+        let placeholder = "bellocode-approved-push-\(UUID().uuidString.lowercased()):"
+        return [
+            GitRunner.Setting("remote.\(plan.remote).url", ""),
+            GitRunner.Setting("remote.\(plan.remote).url", placeholder),
+            GitRunner.Setting("remote.\(plan.remote).pushurl", ""),
+            GitRunner.Setting("remote.\(plan.remote).pushurl", placeholder),
+            GitRunner.Setting("url.\(plan.remoteURL).insteadOf", placeholder),
+            GitRunner.Setting("push.followTags", "false"),
+            GitRunner.Setting("push.pushOption", ""),
+            GitRunner.Setting("remote.\(plan.remote).mirror", "false"),
+        ]
     }
 
     /// The remote's default branch (`refs/remotes/<remote>/HEAD`), else `main`/`master` if present.

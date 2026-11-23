@@ -128,6 +128,68 @@ struct FinalCheckGitTests {
         await #expect(throws: GitPushPlanError.severalPushURLs("origin")) { _ = try await repo.repository.pushPlan() }
     }
 
+    /// AF06 (second round): the URL a plan shows is already rewritten by `url.<base>.insteadOf`; handing it back to git
+    /// as a repository argument would rewrite it again. With a rule matching the rewritten URL, the push must still
+    /// reach the approved repository and nothing else.
+    @Test func aPushIsNotRewrittenASecondTime() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let (first, second) = try await remotes(repo)
+        try await repo.git("remote", "set-url", "origin", "approved-alias:")
+        try await repo.git("config", "url.\(first).insteadOf", "approved-alias:")
+        try await repo.git("config", "url.\(second).insteadOf", first)
+        try await repo.git("switch", "-q", "-c", "feature")
+        try repo.write("b.txt", "b\n")
+        try await repo.repository.commitAll(message: "b")
+        let plan = try #require(try await repo.repository.pushPlan())
+        #expect(plan.remoteURL == first, "the card shows the first repository")
+        try await repo.repository.push(plan, force: false)
+        #expect(try await repo.git("--git-dir=" + first, "rev-parse", "feature", in: repo.base.path).trimmingCharacters(in: .whitespacesAndNewlines) == plan.localHead)
+        #expect(try await repo.git("--git-dir=" + second, "branch", "--list", "feature", in: repo.base.path).isEmpty, "never the second")
+    }
+
+    /// GV10: the approved push goes to the remote by name, so settings scoped to that name apply as in a terminal
+    /// (here `remote.origin.receivepack`, which a push to a bare URL ignores).
+    @Test func aPushHonoursSettingsScopedToTheRemoteName() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let (first, _) = try await remotes(repo)
+        try await repo.git("switch", "-q", "-c", "feature")
+        try repo.write("b.txt", "b\n")
+        try await repo.repository.commitAll(message: "b")
+        try await repo.git("config", "remote.origin.receivepack", "git-receive-pack-that-does-not-exist")
+        let plan = try #require(try await repo.repository.pushPlan())
+        await #expect(throws: GitError.self) { try await repo.repository.push(plan, force: false) }
+        try await repo.git("config", "--unset", "remote.origin.receivepack")
+        try await repo.repository.push(plan, force: false)
+        #expect(try await repo.git("--git-dir=" + first, "rev-parse", "feature", in: repo.base.path).trimmingCharacters(in: .whitespacesAndNewlines) == plan.localHead)
+    }
+
+    /// AV08: an approved branch push publishes that branch only, even with `push.followTags` on and an annotated tag
+    /// on the outgoing commit (a tag the card never showed, which could start a release pipeline).
+    @Test func anApprovedPushPublishesNoTags() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let (first, _) = try await remotes(repo)
+        try await repo.git("config", "push.followTags", "true")
+        try await repo.git("switch", "-q", "-c", "feature")
+        try repo.write("b.txt", "b\n")
+        try await repo.repository.commitAll(message: "b")
+        try await repo.git("tag", "-a", "-m", "release", "v9.9.9")
+        let plan = try #require(try await repo.repository.pushPlan())
+        try await repo.repository.push(plan, force: false)
+        #expect(try await repo.git("--git-dir=" + first, "rev-parse", "feature", in: repo.base.path).trimmingCharacters(in: .whitespacesAndNewlines) == plan.localHead)
+        #expect(try await repo.git("--git-dir=" + first, "tag", "--list", in: repo.base.path).isEmpty, "no tag reached the remote")
+        // Configured push options are not sent either (GitLab acts on some, e.g. `merge_request.create`); this receiving
+        // end advertises none, so sending one would fail the push.
+        try await repo.git("config", "push.pushOption", "merge_request.create")
+        try repo.write("c.txt", "c\n")
+        try await repo.repository.commitAll(message: "c")
+        let next = try #require(try await repo.repository.pushPlan())
+        try await repo.repository.push(next, force: false)
+        #expect(try await repo.git("--git-dir=" + first, "rev-parse", "feature", in: repo.base.path).trimmingCharacters(in: .whitespacesAndNewlines) == next.localHead)
+    }
+
     /// AF21: a force push leases on the remote head the confirmation showed. A commit someone else pushed meanwhile is
     /// not overwritten even after a fetch advanced the tracking ref (git would otherwise lease on the new value).
     @Test func aForcePushLeasesOnTheConfirmedRemoteHead() async throws {

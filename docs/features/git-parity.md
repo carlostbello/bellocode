@@ -51,10 +51,17 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   (`ConfinedDirectory`): a link is quoted as its text, as git commits it, and a file's size is checked on the open
   descriptor before any byte is read.
 - **Pushes bound to their plan (AF06, AF21):** `GitPushPlan` carries the local commit and the remote head it showed.
-  `push(_:force:)` re-checks branch, HEAD and the remote's push URL, then pushes the plan's commit to the plan's
-  resolved URL (so the destination and the credentials git asks for are the approved ones); a force push leases on the
-  plan's remote head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation
-  both use it; there is no unbound force push.
+  `push(_:force:)` re-checks branch, HEAD and the remote's push URL, then pushes the plan's commit to the remote by
+  name with its push URL pinned for that one git process to the URL the plan showed (`GitRepository.pinnedPush`: the
+  remote's URLs are reset and replaced by an unguessable placeholder that BelloCode's own `insteadOf` rule maps to the
+  approved URL). The destination and the credentials git asks for are the approved ones even if the remote or an
+  `insteadOf` rule changes meanwhile, and the URL is rewritten once, as `git remote get-url --push` showed it (v1.0.1
+  AF06: re-passing the shown URL as a repository argument let a second rule redirect it). Settings scoped to the remote
+  name (`remote.<name>.sslVerify`, `.proxy`, `.receivepack`) apply as in a terminal (GV10); for a GitLab remote the
+  app's credential overrides still reset its proxy. Only the shown branch is updated: no tags (`--no-follow-tags`,
+  `push.followTags` ignored), no configured push options, no mirror (AV08). A force push leases on the plan's remote
+  head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation both use it;
+  there is no unbound force push.
 - **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
   the closed form.
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
