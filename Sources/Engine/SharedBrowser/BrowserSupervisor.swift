@@ -74,6 +74,15 @@ public enum BrowserPhase: Sendable, Equatable {
     }
 
     public var isReady: Bool { self == .ready }
+
+    /// Whether Stop applies: the phases `BrowserSupervisor.stop` acts on. Failed is included because a failed start or
+    /// recovery may leave a container running; Stop then checks and stops it (AF23).
+    public var canStop: Bool {
+        switch self {
+        case .ready, .starting, .recovering, .failed, .stopUnconfirmed: true
+        case .stopped, .preparingImage, .stopping, .sandboxUnavailable: false
+        }
+    }
 }
 
 /// Supervises the one shared browser container (docs/features/shared-browser.md "Lifecycle and flush"):

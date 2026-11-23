@@ -28,6 +28,10 @@ struct SharedChromeSettingsGroup: View {
                             Button("Restart") { Task { await service.restartBrowser() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                             Button("Stop") { Task { await service.stopBrowser() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
                         } else {
+                            if service.phase.canStop {
+                                // Failed or Stop not confirmed: the container may still run (AF23).
+                                Button("Stop") { Task { await service.stopBrowser() } }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                            }
                             Button("Start") { Task { await service.startBrowser() } }
                                 .buttonStyle(DSButtonStyle(.outline, size: .small))
                                 .disabled(!service.isAvailable || !settings.enabled)

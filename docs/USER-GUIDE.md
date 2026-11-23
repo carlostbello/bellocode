@@ -236,9 +236,9 @@ Details: [features/secrets.md](features/secrets.md).
 - **Changes** (⇧⌘D): the diff of this turn, the thread or uncommitted work, unified or side by side, with Next/Previous
   Change (⌃⌘↓ / ⌃⌘↑) and file (⌃⌘→ / ⌃⌘←). Add Review Comment (⇧⌘K) attaches a comment on the selected lines to the
   composer; Revert Hunk, File or Turn put the files back as they were, and Edit ▸ Undo restores the exact bytes; Open
-  in Editor (⌘O).
+  in Editor (⌘O). The Changes menu also has Commit…, Push (⌃⌘P) and Create Merge Request.
 - **Git** menu: Run Suggested Git Action (⌃⌘↩), Git Actions… (⌃⌘G), Commit and Push…, Pull (⌃⌘L), Pull with Rebase,
-  Fetch (⌃⌘R), Sync, Push (⌃⌘P), Abort Merge or Rebase…, Restore Stashed Changes, Clone from GitLab…, New Project…,
+  Fetch (⌃⌘R), Sync, Abort Merge or Rebase…, Restore Stashed Changes, Clone from GitLab…, New Project…,
   Publish to GitLab… and Switch Remote to HTTPS. Commit messages and merge request text can be written by a model
   (Settings ▸ Models). A failed push after a commit is reported, not hidden.
 - **Worktrees and branches:** Choose Workspace… (⇧⌘E) and Choose Branch… (⇧⌘B) start a thread in a new worktree or on
@@ -329,9 +329,10 @@ text field, the terminal and the browser keep their own keys while focused.
 | Terminal | Next / Previous Terminal / Clear Terminal / Send Selection to Composer | ⌘} / ⌘{ / ⌘K / ⇧⌘L |
 | Changes | Show Changes / Add Review Comment… / Open in Editor | ⇧⌘D / ⇧⌘K / ⌘O |
 | Changes | Next / Previous Change, Next / Previous Changed File | ⌃⌘↓ / ⌃⌘↑, ⌃⌘→ / ⌃⌘← |
+| Changes | Push | ⌃⌘P |
 | Changes | Choose Workspace… / Choose Branch… | ⇧⌘E / ⇧⌘B |
 | Git | Run Suggested Git Action / Git Actions… | ⌃⌘↩ / ⌃⌘G |
-| Git | Pull / Fetch / Push | ⌃⌘L / ⌃⌘R / ⌃⌘P |
+| Git | Pull / Fetch | ⌃⌘L / ⌃⌘R |
 | GitLab | Show Merge Requests / Issues / To-dos | ⌃⌘M / ⌃⌘I / ⌃⌘Y |
 | GitLab | Review Merge Request Diff / Submit Review… | ⌃⌥⌘R / ⌃⌥⌘↩ |
 | GitLab | Next / Previous Review Thread | ⌃⌥⌘] / ⌃⌥⌘[ |
@@ -345,7 +346,9 @@ text field, the terminal and the browser keep their own keys while focused.
 | Window | Scheduled Tasks… / Models… | ⌃⌘E / ⌃⌥⌘M |
 
 ⌘K is the Command Palette, except while a terminal has focus, where it clears the terminal. The Browser menu's keys
-act on the browser that is showing. In the composer, Return and ⌘Return follow the send-key setting (section 4).
+act on the built-in browser (Show Browser), not Shared Chrome. Typed without ⌃⌘ (⌘L, ⌘R, ⇧⌘R, ⌘=, ⌘-, ⌘0, ⇧⌘C,
+⌃⇥, ⌃⇧⇥) they act only while the Browser tab is shown and has focus; otherwise the composer, a text field or the
+terminal keeps the key. Chosen from the menu, and the ⌃⌘ shortcuts, they work wherever you are. In the composer, Return and ⌘Return follow the send-key setting (section 4).
 
 ## 17. Troubleshooting
 
@@ -377,11 +380,13 @@ reviewed, and the Auto audit entry says so with a button to Settings ▸ Models.
 
 **Shared Chrome shows "Stop not confirmed".** BelloCode could not confirm the browser's container stopped (a Docker
 error, or a start that failed and could not be cleaned up). It may still be running. Choose Stop again (Browser ▸ Stop
-Shared Chrome or Settings ▸ Browser); if Rancher Desktop itself is down, restart it first. "Sandbox unavailable" means
+Shared Chrome, the Stop button in Settings ▸ Browser or in the Shared Chrome panel); if Rancher Desktop itself is down, restart it first. "Sandbox unavailable" means
 the container engine cannot run Chromium's sandbox; Settings ▸ Browser explains the fix.
 
-**A message shows as unconfirmed.** The server did not acknowledge it (for example during a reconnect). Thread ▸ Retry
-Unconfirmed Message sends it again; the composer keeps the text until the server confirms.
+**A message shows "Delivery unknown".** The server did not acknowledge it (for example during a reconnect). The
+composer is cleared and a banner above it holds the message: Retry asks the server whether it arrived and sends it
+only if it did not (also Thread ▸ Retry Unconfirmed Message). If the server confirms it was not sent, Edit in
+Composer puts the text back.
 
 **opencode ignores my `opencode.json`.** Window ▸ opencode… shows the syntax error with its line and column, or says
 the file was ignored. Fix it and choose Reload Configuration.

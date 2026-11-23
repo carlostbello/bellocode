@@ -9,6 +9,15 @@ import Testing
 /// recovery wins over the restart.
 @Suite("Shared browser stop and recovery", .timeLimit(.minutes(3)))
 struct SharedBrowserStopTests {
+    /// Stop is offered wherever the supervisor acts on it, including Failed and Stop not confirmed, where the
+    /// container may still run (NV2-01, AF23).
+    @Test func stopIsOfferedWhereverTheSupervisorActsOnIt() {
+        let stoppable: [BrowserPhase] = [.ready, .starting, .recovering("x"), .failed("x"), .stopUnconfirmed("x")]
+        let inert: [BrowserPhase] = [.stopped, .preparingImage("x"), .stopping("x"), .sandboxUnavailable]
+        for phase in stoppable { #expect(phase.canStop, "\(phase.title)") }
+        for phase in inert { #expect(!phase.canStop, "\(phase.title)") }
+    }
+
     func make(_ runtime: FakeBrowserRuntime, _ sleeper: ManualSleeper) -> BrowserSupervisor {
         var timing = BrowserSupervisor.Timing(idle: .seconds(600))
         timing.pollInterval = .seconds(2)

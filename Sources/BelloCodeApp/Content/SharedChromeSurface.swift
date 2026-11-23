@@ -174,6 +174,7 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
             giveBack: { [weak self] in self?.giveBack() },
             paste: { [weak self] in self?.pasteClipboard() },
             start: { [weak self] in Task { await self?.service.startBrowser() } },
+            stop: { [weak self] in Task { await self?.service.stopBrowser() } },
             openWindow: { [weak self] in self?.onOpenWindow?() },
             exportDownload: { [weak self] name in self?.export(name) },
             refresh: { [weak self] in Task { await self?.service.refreshStatus() } })
@@ -392,6 +393,7 @@ struct SharedChromeActions {
     var giveBack: () -> Void
     var paste: () -> Void
     var start: () -> Void
+    var stop: () -> Void
     var openWindow: () -> Void
     var exportDownload: (String) -> Void
     var refresh: () -> Void
@@ -646,8 +648,15 @@ struct SharedChromePlaceholder: View {
             Image(systemName: symbol).font(.system(size: 28)).foregroundStyle(SwiftUI.Color.ds.icon)
             Text(title).font(.ds(.bodyEmph)).foregroundStyle(SwiftUI.Color.ds.text)
             Text(detail).font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.text3).multilineTextAlignment(.center).frame(maxWidth: 380)
-            if showsStart {
-                Button("Start Shared Chrome") { actions.start() }.buttonStyle(DSButtonStyle(.outline, size: .small))
+            if showsStart || showsStop {
+                HStack(spacing: DS.Space.s6) {
+                    if showsStart {
+                        Button("Start Shared Chrome") { actions.start() }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    }
+                    if showsStop {
+                        Button("Stop Shared Chrome") { actions.stop() }.buttonStyle(DSButtonStyle(.outline, size: .small))
+                    }
+                }
             }
             Spacer()
         }
@@ -660,6 +669,14 @@ struct SharedChromePlaceholder: View {
     private var showsStart: Bool {
         switch service.phase {
         case .stopped, .failed: service.isAvailable
+        default: false
+        }
+    }
+
+    /// A failed start or an unconfirmed stop may leave the container running: Stop checks and stops it (AF23).
+    private var showsStop: Bool {
+        switch service.phase {
+        case .failed, .stopUnconfirmed: true
         default: false
         }
     }
@@ -781,7 +798,7 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
         case .takeOver: return service.phase.isReady && service.humanControl.isEmpty
         case .giveBack: return !service.humanControl.isEmpty
         case .start: return service.isAvailable && !service.phase.isReady
-        case .stop: return service.phase.isReady || service.phase.isStopUnconfirmed
+        case .stop: return service.phase.canStop
         }
     }
 }

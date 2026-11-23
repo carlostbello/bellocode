@@ -125,8 +125,8 @@ environment variable and run with `swift test --filter <Suite>` (export the `SWI
 
 End-to-end runs of the assembled app: `make e2e-containers` (one prompt in a container), `make e2e-exec` (shared
 workspace, two repositories and a compose stack; see the Makefile for the images it needs) and
-`BELLOCODE_SMOKE_SECRETS=1 build/BelloCode.app/Contents/MacOS/BelloCode --smoke-test` (secrets through the egress
-proxy). `make opencode-upgrade VERSION=x.y.z` / `make opencode-verify VERSION=x.y.z` gate an opencode upgrade, and
+`BELLOCODE_SMOKE_SECRETS=1 BELLOCODE_SMOKE_IMAGE=<a local image with curl> build/BelloCode.app/Contents/MacOS/BelloCode
+--smoke-test` (secrets through the egress proxy; the default `node:22-bookworm-slim` has no curl). `make opencode-upgrade VERSION=x.y.z` / `make opencode-verify VERSION=x.y.z` gate an opencode upgrade, and
 `make browser-verify` gates a change to the shared Chrome image.
 
 ## Repository layout
