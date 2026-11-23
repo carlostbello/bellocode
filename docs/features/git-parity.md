@@ -71,6 +71,11 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   removes (second round of AF19). Worktree
   cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
   rewind Undo is shown with the affected path.
+  The rewound prompt goes back to its own thread (NV09) and reaches every composer of it (AV2-02,
+  `ComposerController.placeRecovered`): the visible composer when this window shows the thread, and every other live
+  composer of that thread in any window takes it in front of what it shows, so none saves over it later; with none
+  open, it goes in front of the stored draft through the composer's draft host (once the draft has loaded, bounded at
+  10 s), keeping the draft's mentions and attachments (`WindowLifecycleTests`, `RecoveredPromptTests`).
 - **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.
 
 ## HTTPS credentials

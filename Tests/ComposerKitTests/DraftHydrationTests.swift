@@ -12,6 +12,7 @@ final class LateDraftHost: ComposerHost {
     var stored: ComposerDraft
     var saved: [ComposerDraft] = []
     private var listeners: [@MainActor () -> Void] = []
+    var listenerCount: Int { listeners.count }
 
     init(stored: ComposerDraft) { self.stored = stored }
 

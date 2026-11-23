@@ -143,6 +143,9 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   The plugin's repository instructions are bound to the session's checkout: a session folder that is, or comes to
   be, a link inside a checkout, or that leads into the middle of another checkout, hands over no instructions, and
   each session keeps the root its first prompt found (AF08).
+  Edit from Here's rewound prompt reaches every open composer of its thread, in any window, so a second window no
+  longer saves over it, and when no window shows the thread it goes in front of the saved draft with that draft's
+  mentions and attachments kept (AV2-02).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,
