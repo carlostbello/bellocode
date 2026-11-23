@@ -38,7 +38,7 @@ private func waitFor(_ inbox: Inbox, count: Int) async -> [JSONValue] {
     return await inbox.frames
 }
 
-@Suite("Client MCP")
+@Suite("Client MCP", .timeLimit(.minutes(3)))
 struct ClientMCPTests {
     let handler = MCPServerProtocol(serverName: "bellocode_app", serverVersion: "1")
 

@@ -160,8 +160,9 @@ exports the chosen roots natively (`SecTrustSettingsCopyCertificates`; certifica
 non-CA certificates never offered; default: admin-domain self-signed CAs) to `<data>/network/certs/`
 (`enterprise-roots.pem`; `ca-bundle.pem` = the Mac's built-in roots plus them). Every BelloCode container mounts it
 read-only at `/etc/bellocode/certs` (roots also in `/usr/local/share/ca-certificates/`, `/etc/pki/ca-trust/source/`)
-with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO` (bundle), `NODE_EXTRA_CA_CERTS` (roots); the
-workspace runs `update-ca-certificates`/`update-ca-trust` as root once if present; opencode gets `NODE_EXTRA_CA_CERTS`
+with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `CURL_CA_BUNDLE` (bundle), `NODE_EXTRA_CA_CERTS`
+(roots); a workspace also gets the bundle read-only at the compiled bundle paths (`/etc/ssl/certs/ca-certificates.crt`,
+`/etc/pki/tls/certs/ca-bundle.crt`), so nothing of its image runs as root for it; opencode gets `NODE_EXTRA_CA_CERTS`
 at each launch (Bun reads neither the Keychain nor macOS proxies). **Proxies:** `HTTP(S)_PROXY`/`NO_PROXY` from an
 administrator, else the Mac (environment, then System Settings; no PAC), to containers and opencode; `NO_PROXY` always
 adds loopback and service names; a Mac-loopback proxy becomes `host.docker.internal`. **Network diagnostics** fetches
@@ -203,7 +204,10 @@ created by BelloCode…", naming it (`ForeignResourceError`, `ResourceOwnershipT
 ## Workspace, failures, ports, file watching
 
 One container per project (`bellocode-ws-<key>`), project and worktrees at the same paths, host uid:gid, no capabilities,
-`no-new-privileges`, `init`; saved policy in force first (S3). Recreated when image, setting, folder identity or the
+`no-new-privileges`, `init`; saved policy in force first (S3). A dev container's named `remoteUser` is resolved to its
+uid:gid from the image's `/etc/passwd` (read from a never-started container) and refused if root or undefined; `$HOME`
+and nested caches are given to the user by BelloCode's own image (the egress gateway's), never the project's, and
+nothing runs as root in the workspace. Recreated when image, setting, folder identity or the
 certificate selection changes; stopped when idle; archiving only hides; volumes go only by **Delete Container and
 Data…** (lists, asks once). Every blocked state is a phase with message and fix (helper configuration, banner, status
 item, context line). Ports forward on demand to `127.0.0.1` through an exec relay. File-watch bridge: FSEvents → `touch`.

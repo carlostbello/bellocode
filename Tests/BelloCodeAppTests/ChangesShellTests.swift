@@ -12,7 +12,7 @@ import Testing
 
 /// M2-C in the real main window against MockOpenCode: the "Changes" tab follows the displayed thread and shows its
 /// turn's changes, the Changes commands validate, and review comments land in the composer as chips.
-@MainActor @Suite(.serialized) struct ChangesShellTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct ChangesShellTests {
     @Test func changesCommandValidation() {
         var context = CommandContext()
         #expect(!context.isEnabled(.showChanges) && !context.isEnabled(.revertTurn) && !context.isEnabled(.chooseWorkspace))

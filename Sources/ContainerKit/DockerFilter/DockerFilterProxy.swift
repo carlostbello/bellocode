@@ -263,7 +263,14 @@ public final class DockerFilterProxy: Sendable {
                     }
                     let line = buffered.range(of: Data("\r\n".utf8))!
                     let text = String(decoding: buffered[..<line.lowerBound], as: UTF8.self).split(separator: ";").first ?? ""
-                    guard let size = Int(text.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else { throw HTTPParseError.malformedChunk }
+                    let digits = text.trimmingCharacters(in: .whitespaces)
+                    // chunk-size is 1*HEXDIG: no sign; more digits than an Int holds is not a size either.
+                    guard !digits.isEmpty, digits.allSatisfy(\.isHexDigit), let size = Int(digits, radix: 16) else {
+                        throw HTTPParseError.malformedChunk
+                    }
+                    // AF13: the declared payload must fit what the body may still carry, checked before any arithmetic
+                    // on it (`size + 2` near Int.max trapped the host app). `total` never exceeds `limit` here.
+                    guard size <= limit - total else { throw HTTPParseError.bodyTooLarge(limit: limit) }
                     buffered = Data(buffered[line.upperBound...])
                     if size == 0 {
                         // Trailer section: skip to the empty line.

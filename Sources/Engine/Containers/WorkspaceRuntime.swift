@@ -83,8 +83,6 @@ public protocol WorkspaceRuntime: Sendable {
     func removeMCPLeftovers(knownIDs: Set<String>) async
     /// Fetches `urls` from inside a container (network diagnostics); nil when the container cannot run the probe.
     func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult]
-    /// Runs the trust-store update as root in a new workspace container (`CorporateNetwork.trustStoreUpdateScript`).
-    func updateTrustStore(container: String) async -> String
 }
 
 extension WorkspaceRuntime {
@@ -114,7 +112,6 @@ extension WorkspaceRuntime {
     public func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] { [] }
     public func removeMCPLeftovers(knownIDs: Set<String>) async {}
     public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] { [] }
-    public func updateTrustStore(container: String) async -> String { "skipped" }
     public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan { PrunePlan() }
     public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult { PruneResult() }
 }
@@ -238,10 +235,5 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         let result = try await ExecSession.run(client: client, container: container, argv: NetworkProbe.script(urls: urls), user: user,
                                                wrap: true, limit: 256 * 1024, timeout: .seconds(20 + 12 * urls.count))
         return NetworkProbe.parse(String(decoding: result.stdout, as: UTF8.self), urls: urls)
-    }
-    public func updateTrustStore(container: String) async -> String {
-        let result = try? await ExecSession.run(client: client, container: container, argv: CorporateNetwork.trustStoreUpdateScript, user: "0:0",
-                                                wrap: false, limit: 4096, timeout: .seconds(60))
-        return result.map { String(decoding: $0.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? "failed"
     }
 }

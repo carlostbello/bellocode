@@ -85,7 +85,10 @@ extension WorkspaceManager {
             throw WorkspaceError.engine(.http(status: 400, message: "invalid variable name"))
         }
         guard let image = try await client.inspectImage(spec.image) else { throw WorkspaceError.imageMissing(spec.image) }
-        let body = spec.secretCommandBody(imageID: image.id, policy: policy)
+        // AF10: as the workspace, it runs as the verified numeric user, known before anything of the image starts.
+        let user = try await verifiedUser(spec, imageID: image.id)
+        var body = spec.secretCommandBody(imageID: image.id, policy: policy)
+        body.user = user.numeric
         let containerName = "bellocode-secret-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
         let id = try await client.createContainer(name: containerName, body)
         do {
@@ -95,7 +98,7 @@ extension WorkspaceManager {
             let wrapper = "\(name)=$(cat); export \(name); exec \"$@\" </dev/null"
             let session = try await ExecSession.start(
                 client: client, container: id, argv: ["/bin/sh", "-c", wrapper, "bellocode-secret", shell, "-c", command], workingDir: workingDir,
-                environment: [:], user: spec.user, tty: false)
+                environment: [:], user: user.numeric, tty: false)
             defer { session.close() }
             try await session.write(secret)
             session.closeStdin()

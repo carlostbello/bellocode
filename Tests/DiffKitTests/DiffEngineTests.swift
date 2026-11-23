@@ -32,7 +32,7 @@ struct SeededGenerator: RandomNumberGenerator {
     }
 }
 
-@Suite("Diff algorithm against git")
+@Suite("Diff algorithm against git", .timeLimit(.minutes(3)))
 struct LineDiffTests {
     /// Random edits of a text drawn from a small vocabulary (so repeated lines create ties).
     static func corpus(seed: UInt64, count: Int) -> [(String, String)] {

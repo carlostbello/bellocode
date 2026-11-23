@@ -59,10 +59,14 @@ public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible 
     case engine(ContainerError)
     /// The container's user resolves to root (N09): its commands would hold the container's capabilities.
     case rootUser(String)
+    /// A named user (or group) the image does not define (AF10), so it cannot be shown not to be root.
+    case unknownUser(String)
 
     public var description: String {
         switch self {
-        case .rootUser(let user): "The container's user “\(user)” is root in its image; BelloCode never runs commands as root. Use the image's non-root user (remoteUser), or leave it out to use your Mac user." 
+        case .rootUser(let user): "The container's user “\(user)” is root in its image; BelloCode never runs commands as root. Use the image's non-root user (remoteUser), or leave it out to use your Mac user."
+        case .unknownUser(let user):
+            "The container's user “\(user)” is not defined in its image's /etc/passwd (or /etc/group), so BelloCode cannot show it is not root. Use a user the image defines, a numeric uid:gid, or leave remoteUser out to use your Mac user."
         case .imageMissing(let image): "The image \(image) is not on this Mac yet. Pull it in Project Settings ▸ Environment."
         case .unmountable(let paths):
             "These folders cannot be mounted (missing, or not shared with Rancher Desktop): \(paths.joined(separator: ", "))"
@@ -96,7 +100,11 @@ public struct WorkspaceManager: Sendable {
         }
         let labels = inspect.config.labels ?? [:]
         var reason: String?
-        if labels[WorkspaceSpec.labelConfig] != spec.configHash(imageID: image?.id) {
+        if !WorkspaceUser.isVerifiedContainerUser(inspect.config.user) {
+            // AF10: reused or adopted only when it runs as a nonzero numeric uid, as every workspace BelloCode creates
+            // does (one created by an earlier version with a name, or by someone else, is replaced).
+            reason = "user not verified"
+        } else if labels[WorkspaceSpec.labelConfig] != spec.configHash(imageID: image?.id) {
             reason = image?.id != nil && !inspect.image.isEmpty && inspect.image != image?.id ? "image changed" : "settings changed"
         } else if labels[WorkspaceSpec.labelMountIdentity] != spec.mountIdentity() {
             // A bind mount pins the directory it was created from: a deleted and re-created project folder (a re-clone)
@@ -165,13 +173,14 @@ public struct WorkspaceManager: Sendable {
     /// mount an empty directory. Create, check that a marker file written on the Mac a moment ago is visible in every
     /// workspace root, and recreate after a pause until it is (at most ~6 s). The markers are removed at once.
     private func createWithLiveMounts(_ spec: WorkspaceSpec, imageID: String?) async throws -> String {
+        let user = try await prepare(spec, imageID: imageID)
         let name = ".bellocode-mount-check-\(UUID().uuidString.prefix(8))"
         let markers = spec.workspaceRoots.map { ($0 as NSString).appendingPathComponent(name) }
         for marker in markers { FileManager.default.createFile(atPath: marker, contents: Data()) }
         defer { for marker in markers { try? FileManager.default.removeItem(atPath: marker) } }
         let check = ["/bin/sh", "-c", "for f; do [ -e \"$f\" ] || exit 9; done", "check"] + markers
         for attempt in 0..<8 {
-            let id = try await create(spec, imageID: imageID)
+            let id = try await createContainer(spec, imageID: imageID, user: user)
             let result = try await ExecSession.run(client: client, container: id, argv: check, user: spec.user, wrap: false, limit: 1024,
                                                    timeout: .seconds(10))
             if result.exitCode == 0 { return id }
@@ -182,6 +191,13 @@ public struct WorkspaceManager: Sendable {
     }
 
     private func create(_ spec: WorkspaceSpec, imageID: String?) async throws -> String {
+        try await createContainer(spec, imageID: imageID, user: try await prepare(spec, imageID: imageID))
+    }
+
+    /// Everything a new workspace container needs before it exists: its folders mountable, its network and volumes
+    /// (owned by this project), its user resolved to a nonzero uid without running the image (AF10), and `$HOME` and
+    /// the caches in it given to that user by BelloCode's own image (AF09). Returns the user.
+    private func prepare(_ spec: WorkspaceSpec, imageID: String?) async throws -> WorkspaceUser {
         let unmountable = spec.unmountablePaths()
         guard unmountable.isEmpty else { throw WorkspaceError.unmountable(unmountable) }
         if spec.serviceNetwork != nil {
@@ -201,7 +217,16 @@ public struct WorkspaceManager: Sendable {
                 name: cache.volumeName(projectKey: spec.projectKey), labels: labels.merging(spec.extraLabels) { a, _ in a },
                 required: labels.filter { $0.key != WorkspaceSpec.labelProject })
         }
+        let user = try await verifiedUser(spec, imageID: imageID)
+        try await prepareVolumes(spec, user: user)
+        return user
+    }
+
+    /// Creates and starts the container as `user` (verified, numeric): no program of the image ever runs as root or as
+    /// a name it could map to root, and BelloCode runs nothing in it as root afterwards.
+    private func createContainer(_ spec: WorkspaceSpec, imageID: String?, user: WorkspaceUser) async throws -> String {
         var body = spec.createBody(imageID: imageID)
+        body.user = user.numeric
         body.labels?[WorkspaceSpec.labelConfig] = spec.configHash(imageID: imageID)
         body.labels?[WorkspaceSpec.labelMountIdentity] = spec.mountIdentity()
         let id: String
@@ -217,35 +242,109 @@ public struct WorkspaceManager: Sendable {
             throw WorkspaceError.nameTaken(spec.containerName)
         }
         try await client.startContainer(id)
-        // N09: a named user (a dev container's remoteUser) may still be uid 0 in the image; never run commands as root.
-        if !spec.userIsNonRootByConstruction {
-            let probe = try await ExecSession.run(client: client, container: id, argv: ["id", "-u"], user: spec.user, wrap: false, limit: 64)
-            let uid = String(decoding: probe.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard probe.exitCode == 0, let value = Int(uid), value != 0 else {
-                try? await client.removeContainer(id, force: true)
-                throw WorkspaceError.rootUser(spec.user)
-            }
-        }
-        try await prepareHome(id, spec: spec)
-        if spec.corporateNetwork?.certificateDirectory != nil {
-            // Best effort: images without the tool (or a writable store) still trust the roots through the variables.
-            _ = try? await ExecSession.run(client: client, container: id, argv: CorporateNetwork.trustStoreUpdateScript, user: "0:0",
-                                           wrap: false, limit: 4096, timeout: .seconds(60))
-        }
         return id
     }
 
-    /// Creates $HOME for the non-root user (a fresh volume belongs to root). Runs as root, issued by BelloCode only.
-    func prepareHome(_ id: String, spec: WorkspaceSpec) async throws {
-        // Cache volumes nested in $HOME make the daemon create their parent folders (and a fresh volume) as root: give
-        // each folder from the cache up to $HOME to the user (not recursively: a shared cache keeps its contents).
+    /// Marks the short-lived containers BelloCode makes to prepare a workspace (never a workspace: `status` ignores
+    /// them; `purge` finds them by the project key).
+    public static let labelSetup = "app.bellocode.workspace-setup"
+
+    func setupLabels(_ spec: WorkspaceSpec) -> [String: String] {
+        [WorkspaceSpec.labelProject: spec.projectRoot, WorkspaceSpec.labelProjectKey: spec.projectKey, Self.labelSetup: "1"]
+            .merging(spec.extraLabels) { a, _ in a }
+    }
+
+    /// AF10: the numeric, non-root user the workspace runs as. Numbers are taken as they are; a user or group name is
+    /// resolved from the exact image's own account files, read without running anything of the image.
+    func verifiedUser(_ spec: WorkspaceSpec, imageID: String?) async throws -> WorkspaceUser {
+        let user: WorkspaceUser?
+        if let numeric = WorkspaceUser.numeric(spec.user) {
+            user = numeric
+        } else {
+            let files = try await accountFiles(image: imageID ?? spec.image, spec: spec)
+            user = WorkspaceUser.resolve(spec.user, passwd: files.passwd, group: files.group)
+        }
+        guard let user else { throw WorkspaceError.unknownUser(spec.user) }
+        guard user.uid != 0 else { throw WorkspaceError.rootUser(spec.user) }
+        return user
+    }
+
+    /// The image's `/etc/passwd` and `/etc/group`, from a container created from it and never started (no mounts, no
+    /// network) and removed at once: the engine's archive endpoint reads the image's files, no program of the image
+    /// runs. A missing file is nil; one that is not a regular file (a link) cannot be read so and counts as missing.
+    func accountFiles(image: String, spec: WorkspaceSpec) async throws -> (passwd: String?, group: String?) {
+        var body = ContainerCreate(image: image)
+        body.entrypoint = ["/bellocode-never-started"]
+        body.labels = setupLabels(spec)
+        var host = HostConfig()
+        host.networkMode = "none"
+        host.capDrop = ["ALL"]
+        host.securityOpt = ["no-new-privileges:true"]
+        body.hostConfig = host
+        let id = try await client.createContainer(name: nil, body)
+        func read(_ path: String) async throws -> String? {
+            do {
+                let tar = try await client.getArchive(id, path: path)
+                return WorkspaceUser.regularFile(inTar: tar).map { String(decoding: $0, as: UTF8.self) }
+            } catch ContainerError.notFound {
+                return nil
+            }
+        }
+        do {
+            let files = (try await read("/etc/passwd"), try await read("/etc/group"))
+            try? await client.removeContainer(id, force: true)
+            return files
+        } catch {
+            try? await client.removeContainer(id, force: true)
+            throw error
+        }
+    }
+
+    /// AF09: `$HOME` (a fresh volume belongs to root) and the folders from each cache nested in it up to `$HOME` are
+    /// given to the user by BelloCode's own image, never the project's: the egress gateway's image (a base pinned by
+    /// digest, built by this process and run by its ID, with no program of a project in it). It runs as root with only
+    /// the home and cache volumes mounted, no network and a read-only root, and is removed when done. The workspace
+    /// itself then runs as the user with no capabilities, and nothing in it runs as root.
+    func prepareVolumes(_ spec: WorkspaceSpec, user: WorkspaceUser) async throws {
+        let image: String
+        do {
+            image = try await EgressGatewayImage.ensure(client: client)
+        } catch {
+            throw ContainerError.http(status: 500, message: "BelloCode prepares the workspace's home folder with its own helper image, which is not available: \(error)")
+        }
+        // Not recursively: a shared cache keeps its contents' owners. `-h`: a link in the home volume is not followed.
         let caches = (spec.cacheMounts ?? []).map(\.path).filter { $0.hasPrefix(WorkspaceSpec.home + "/") }
-        let script = "mkdir -p \"$HOME\" /tmp/.bellocode && chown \(spec.user) \"$HOME\" && chmod 1777 /tmp/.bellocode"
-            + #" && for p; do d=$p; while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do chown \#(spec.user) "$d"; d=$(dirname "$d"); done; done"#
-        let result = try await ExecSession.run(
-            client: client, container: id, argv: ["/bin/sh", "-c", script, "prepare-home"] + caches,
-            user: "0:0", wrap: false, limit: 4096)
-        if result.exitCode != 0 { throw ContainerError.http(status: 500, message: "preparing $HOME failed (exit \(result.exitCode))") }
+        let owner = user.numeric
+        let script = #"mkdir -p "$HOME" && chown -h \#(owner) "$HOME" && for p; do d=$p; while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do chown -h \#(owner) "$d"; d=$(dirname "$d"); done; done"#
+        var body = ContainerCreate(image: image)
+        body.entrypoint = ["/bin/sh", "-c", script, "prepare-home"] + caches
+        body.user = "0:0"
+        body.env = ["HOME=\(WorkspaceSpec.home)"]
+        body.labels = setupLabels(spec)
+        var host = HostConfig()
+        host.privileged = false
+        host.capDrop = ["ALL"]
+        host.capAdd = ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+        host.securityOpt = ["no-new-privileges:true"]
+        host.readonlyRootfs = true
+        host.networkMode = "none"
+        host.pidsLimit = 64
+        host.memory = 128 << 20
+        // The same volumes at the same paths as the workspace (the daemon creates the nested caches' parents here).
+        host.mounts = [Mount(type: .volume, source: spec.volumeName("home"), target: WorkspaceSpec.home)]
+            + (spec.cacheMounts ?? []).sorted { $0.path < $1.path }.map { Mount(type: .volume, source: $0.volumeName(projectKey: spec.projectKey), target: $0.path) }
+        body.hostConfig = host
+        let id = try await client.createContainer(name: nil, body)
+        let client = self.client
+        do {
+            try await client.startContainer(id)
+            let status = try await withDeadline(.seconds(120), operation: "preparing $HOME") { try await client.waitContainer(id) }
+            try? await client.removeContainer(id, force: true)
+            if status != 0 { throw ContainerError.http(status: 500, message: "preparing $HOME failed (exit \(status))") }
+        } catch {
+            try? await client.removeContainer(id, force: true)
+            throw error
+        }
     }
 
     public func stop(_ spec: WorkspaceSpec) async throws {

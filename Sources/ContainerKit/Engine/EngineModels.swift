@@ -364,7 +364,9 @@ public struct ContainerInspect: Decodable, Sendable, Equatable {
         public var image: String?
         /// The container's own environment (never secrets: those travel per exec).
         public var env: [String]?
-        enum CodingKeys: String, CodingKey { case labels = "Labels", image = "Image", env = "Env" }
+        /// The user its processes run as (`uid[:gid]` or a name, as created).
+        public var user: String?
+        enum CodingKeys: String, CodingKey { case labels = "Labels", image = "Image", env = "Env", user = "User" }
     }
     enum CodingKeys: String, CodingKey {
         case id = "Id", name = "Name", image = "Image", state = "State", config = "Config"

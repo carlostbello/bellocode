@@ -177,7 +177,7 @@ extension DevContainerBuildInputs {
             return .failure(Problem("The dev container was not built: a private copy of its context could not be made (\(String(cString: strerror(errno))))."))
         }
         let staged = StagedContext(directory: directory, digest: Data())
-        if case .failure(let problem) = Self.copyContext(context, into: directory) {
+        if case .failure(let problem) = Self.copyContext(context, into: directory, identity: before, projectRoot: projectRoot) {
             staged.remove()
             return .failure(problem)
         }
@@ -198,75 +198,164 @@ extension DevContainerBuildInputs {
         }
     }
 
-    /// The kept entries of `root` copied into `destination` (which exists), as `contextDigest` walks them.
-    static func copyContext(_ root: String, into destination: String) -> Result<Void, Problem> {
-        let ignore = (FileManager.default.contents(atPath: root + "/.dockerignore")?.prefix(1 << 20))
-            .map { DockerIgnore(String(decoding: $0, as: UTF8.self)) } ?? DockerIgnore("")
-        var files = 0
-        var bytes: Int64 = 0
-        var pending = [""]
-        let tooLarge = Problem("The dev container's build context sends more than 200 000 files or 4 GiB; add a .dockerignore so only what the image needs is sent.")
-        while let relative = pending.popLast() {
-            let folder = relative.isEmpty ? root : root + "/" + relative
-            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { continue }
-            for name in names.sorted() {
-                let path = relative.isEmpty ? name : relative + "/" + name
-                let source = root + "/" + path
-                let target = destination + "/" + path
-                let ignored = ignore.ignores(path)
-                var info = stat()
-                guard lstat(source, &info) == 0 else { continue }
-                let type = info.st_mode & S_IFMT
-                if type == S_IFDIR {
-                    if !ignored || ignore.hasExclusions {
-                        guard mkdir(target, 0o700) == 0 else { return .failure(Problem("The dev container was not built: copying its context failed.")) }
-                        pending.append(path)
-                    }
-                    continue
-                }
-                if ignored { continue }
-                files += 1
-                bytes += Int64(info.st_size)
-                guard files <= maxContextFiles, bytes <= maxContextBytes else { return .failure(tooLarge) }
-                if type == S_IFLNK {
-                    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
-                    let count = readlink(source, &buffer, Int(PATH_MAX))
-                    guard count >= 0 else { continue }
-                    buffer[count] = 0
-                    guard symlink(buffer, target) == 0 else { return .failure(Problem("The dev container was not built: copying its context failed.")) }
-                } else if type == S_IFREG {
-                    // A clone shares blocks until either side changes; never follows a link swapped in meanwhile.
-                    if clonefile(source, target, UInt32(CLONE_NOFOLLOW)) != 0 {
-                        guard copyfile(source, target, nil, copyfile_flags_t(COPYFILE_ALL | COPYFILE_NOFOLLOW)) == 0 else {
-                            return .failure(Problem("The dev container was not built: copying \(path) from its context failed."))
-                        }
-                    }
-                }
-            }
-        }
-        // Folder permissions as in the context (set last: a read-only folder must be filled first).
-        return setFolderModes(root, destination)
-    }
+    static let contextReplaced = Problem("The dev container was not built: its build context changed while it was being copied.")
+    static let copyFailed = Problem("The dev container was not built: copying its context failed.")
+    static let contextTooLarge = Problem("The dev container's build context sends more than 200 000 files or 4 GiB; add a .dockerignore so only what the image needs is sent.")
 
-    static func setFolderModes(_ root: String, _ destination: String) -> Result<Void, Problem> {
-        guard let enumerator = FileManager.default.enumerator(atPath: destination) else { return .success(()) }
-        var folders: [String] = []
-        while let relative = enumerator.nextObject() as? String {
-            var info = stat()
-            if lstat(destination + "/" + relative, &info) == 0, info.st_mode & S_IFMT == S_IFDIR { folders.append(relative) }
-        }
-        for relative in folders.reversed() {
-            var info = stat()
-            if lstat(root + "/" + relative, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
-                chmod(destination + "/" + relative, info.st_mode & 0o7777)
-            }
+    /// The kept entries of `root` copied into `destination` (which exists), as `contextDigest` walks them.
+    ///
+    /// AF07: the walk never resolves a path again. The context folder is opened once without following a link and must
+    /// be `identity` (the folder that was verified); every folder below it is opened relative to its already open
+    /// parent with `O_NOFOLLOW` and must be the folder that was listed; every file is opened the same way, checked on
+    /// its descriptor (a regular file, the one listed, its size counted) and cloned or copied from that descriptor. A
+    /// folder swapped for a link while the copy runs therefore fails the copy instead of leading outside the project.
+    /// When it is done, the opened context folder must still be `root`, inside `projectRoot`. `beforeDescending` (tests)
+    /// runs after a folder was listed as one and before it is opened.
+    static func copyContext(_ root: String, into destination: String, identity: stat, projectRoot: String,
+                            beforeDescending: ((String) -> Void)? = nil) -> Result<Void, Problem> {
+        let source = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard source >= 0 else { return .failure(contextReplaced) }
+        defer { close(source) }
+        var info = stat()
+        guard fstat(source, &info) == 0, info.st_dev == identity.st_dev, info.st_ino == identity.st_ino else { return .failure(contextReplaced) }
+        let target = open(destination, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard target >= 0 else { return .failure(copyFailed) }
+        defer { close(target) }
+        let ignore = readRegularFile(".dockerignore", in: source, limit: 1 << 20)
+            .map { DockerIgnore(String(decoding: $0, as: UTF8.self)) } ?? DockerIgnore("")
+        var walk = ContextCopy(ignore: ignore, beforeDescending: beforeDescending)
+        if case .failure(let problem) = walk.copyFolder(source, into: target, relative: "") { return .failure(problem) }
+        // The folder read is still the context, inside the project (not a folder moved there and back meanwhile).
+        guard let now = path(of: source), now == root, let project = CodeRootPaths.canonical(projectRoot), CodeRootPaths.inside(now, project) else {
+            return .failure(contextReplaced)
         }
         return .success(())
     }
 
+    /// The current path of an open file or folder (`F_GETPATH`).
+    static func path(of descriptor: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) + 1)
+        guard fcntl(descriptor, F_GETPATH, &buffer) == 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// The bytes of the regular file `name` in the open folder `folder` (or a path, with `AT_FDCWD`), at most `limit`:
+    /// nil for a link, a FIFO or a device (opened without following and without blocking; checked on the descriptor).
+    static func readRegularFile(_ name: String, in folder: Int32 = AT_FDCWD, limit: Int) -> Data? {
+        let fd = openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        return (try? handle.read(upToCount: limit)) ?? Data()
+    }
+
+    /// One copy walk over open folder descriptors (AF07), bounded like `contextDigest`.
+    struct ContextCopy {
+        let ignore: DockerIgnore
+        let beforeDescending: ((String) -> Void)?
+        var files = 0
+        var bytes: Int64 = 0
+
+        /// The names in an open folder, sorted ("." and ".." left out), as raw bytes and as text.
+        static func names(_ folder: Int32) -> [(raw: [CChar], text: String)]? {
+            let copy = dup(folder)
+            guard copy >= 0, let stream = fdopendir(copy) else {
+                if copy >= 0 { close(copy) }
+                return nil
+            }
+            defer { closedir(stream) }
+            var names: [(raw: [CChar], text: String)] = []
+            while let entry = readdir(stream) {
+                let raw = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+                    Array(bytes.prefix(Int(entry.pointee.d_namlen)).map { CChar(bitPattern: $0) }) + [0]
+                }
+                let text = String(decoding: raw.dropLast().map { UInt8(bitPattern: $0) }, as: UTF8.self)
+                if text == "." || text == ".." { continue }
+                names.append((raw, text))
+            }
+            return names.sorted { $0.text < $1.text }
+        }
+
+        mutating func copyFolder(_ source: Int32, into target: Int32, relative: String) -> Result<Void, Problem> {
+            guard let names = Self.names(source) else { return .failure(DevContainerBuildInputs.contextReplaced) }
+            for (raw, name) in names {
+                let path = relative.isEmpty ? name : relative + "/" + name
+                let ignored = ignore.ignores(path)
+                var listed = stat()
+                guard fstatat(source, raw, &listed, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+                let type = listed.st_mode & S_IFMT
+                if type == S_IFDIR {
+                    guard !ignored || ignore.hasExclusions else { continue }
+                    beforeDescending?(path)
+                    guard mkdirat(target, raw, 0o700) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
+                    let child = openat(source, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard child >= 0 else { return .failure(DevContainerBuildInputs.contextReplaced) }
+                    defer { close(child) }
+                    var opened = stat()
+                    guard fstat(child, &opened) == 0, opened.st_dev == listed.st_dev, opened.st_ino == listed.st_ino else {
+                        return .failure(DevContainerBuildInputs.contextReplaced)
+                    }
+                    let childTarget = openat(target, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard childTarget >= 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
+                    defer { close(childTarget) }
+                    if case .failure(let problem) = copyFolder(child, into: childTarget, relative: path) { return .failure(problem) }
+                    // Folder permissions as in the context, set once it is filled (a read-only folder must be filled first).
+                    fchmod(childTarget, opened.st_mode & 0o7777)
+                    continue
+                }
+                if ignored { continue }
+                files += 1
+                bytes += Int64(listed.st_size)
+                guard files <= maxContextFiles, bytes <= maxContextBytes else { return .failure(DevContainerBuildInputs.contextTooLarge) }
+                if type == S_IFLNK {
+                    var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+                    let count = readlinkat(source, raw, &buffer, Int(PATH_MAX))
+                    guard count >= 0 else { continue }
+                    buffer[count] = 0
+                    guard symlinkat(buffer, target, raw) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
+                } else if type == S_IFREG {
+                    if case .failure(let problem) = copyFile(raw, path: path, from: source, into: target, listed: listed) { return .failure(problem) }
+                }
+            }
+            return .success(())
+        }
+
+        /// One regular file, from its own descriptor: the file listed (not a link or FIFO swapped in), its size as
+        /// opened counted, cloned (blocks shared until either side changes) or copied.
+        mutating func copyFile(_ raw: [CChar], path: String, from source: Int32, into target: Int32, listed: stat) -> Result<Void, Problem> {
+            let fd = openat(source, raw, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard fd >= 0 else { return .failure(DevContainerBuildInputs.contextReplaced) }
+            defer { close(fd) }
+            var opened = stat()
+            guard fstat(fd, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG, opened.st_dev == listed.st_dev, opened.st_ino == listed.st_ino else {
+                return .failure(DevContainerBuildInputs.contextReplaced)
+            }
+            bytes += Int64(opened.st_size) - Int64(listed.st_size)
+            guard bytes <= maxContextBytes else { return .failure(DevContainerBuildInputs.contextTooLarge) }
+            if fclonefileat(fd, target, raw, 0) != 0 {
+                let output = openat(target, raw, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, opened.st_mode & 0o7777)
+                guard output >= 0 else { return .failure(Problem("The dev container was not built: copying \(path) from its context failed.")) }
+                defer { close(output) }
+                guard fcopyfile(fd, output, nil, copyfile_flags_t(COPYFILE_ALL)) == 0 else {
+                    return .failure(Problem("The dev container was not built: copying \(path) from its context failed."))
+                }
+            }
+            // What was copied counts (the file may have grown since it was opened).
+            var copied = stat()
+            if fstatat(target, raw, &copied, AT_SYMLINK_NOFOLLOW) == 0 {
+                bytes += Int64(copied.st_size) - Int64(opened.st_size)
+                guard bytes <= maxContextBytes else { return .failure(DevContainerBuildInputs.contextTooLarge) }
+            }
+            return .success(())
+        }
+    }
+
     /// The digest of what a build context sends: paths in order, each with its type, permissions and contents.
     public static func contextDigest(_ root: String, cache: DevContextDigestCache) -> Result<Data, Problem> {
-        let ignore = (FileManager.default.contents(atPath: root + "/.dockerignore")?.prefix(1 << 20))
+        // Never a link followed or a FIFO waited on (AF25): a `.dockerignore` that is not a regular file has no patterns.
+        let ignore = readRegularFile(root + "/.dockerignore", limit: 1 << 20)
             .map { DockerIgnore(String(decoding: $0, as: UTF8.self)) } ?? DockerIgnore("")
         var hasher = SHA256()
         var files = 0
@@ -316,9 +405,12 @@ extension DevContainerBuildInputs {
     }
 
     static func fileDigest(_ path: String) -> Data? {
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        // Without blocking (AF25): a FIFO swapped in after the listing is refused on the descriptor, never waited on.
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
         var hasher = SHA256()
         var buffer = [UInt8](repeating: 0, count: 1 << 16)
         while true {

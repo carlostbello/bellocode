@@ -24,6 +24,8 @@ public enum DockerfileBases {
     /// `FROM image AS name`, which is all Docker accepts), so script lines such as Python's `from x import y` are not
     /// taken for instructions.
     public static func images(in dockerfile: String, buildArgs: [String: String] = [:]) -> Result<[String], Refusal> {
+        // AF11: the physical lines are taken once, from Unicode scalars, and both readings below share them.
+        let dockerfile = physicalLines(dockerfile)
         let directives = Directives(dockerfile)
         if let problem = directives.problem { return .failure(Refusal(problem)) }
         var images: [String] = []
@@ -35,11 +37,11 @@ public enum DockerfileBases {
             add(value)
         }
         let withHeredocs: [String]
-        switch instructions(dockerfile, escape: directives.escape, heredocs: true) {
+        switch instructions(lines: dockerfile, escape: directives.escape, heredocs: true) {
         case .failure(let refusal): return .failure(refusal)
         case .success(let lines): withHeredocs = lines
         }
-        let without = (try? instructions(dockerfile, escape: directives.escape, heredocs: false).get()) ?? []
+        let without = (try? instructions(lines: dockerfile, escape: directives.escape, heredocs: false).get()) ?? []
         for reading in [withHeredocs, without] {
             switch externalImages(reading, buildArgs: buildArgs) {
             case .failure(let refusal): return .failure(refusal)
@@ -48,6 +50,28 @@ public enum DockerfileBases {
         }
         return .success(images)
     }
+
+    /// The lines as BuildKit reads them (Go's line scanner): split at each LF, one CR before it dropped. Taken from the
+    /// Unicode scalars, never from Swift `Character`s (AF11): CR LF is a single `Character`, so a CRLF file split on
+    /// `Character`s is one line (a leading comment then hides every instruction), and a combining mark after `#`, a
+    /// blank or the escape character fuses with it, so a `Character` reading would see a different line or word than
+    /// Docker does.
+    static func physicalLines(_ text: String) -> [String] {
+        text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            var line = String.UnicodeScalarView(line)
+            if line.last == "\r" { line.removeLast() }
+            return String(line)
+        }
+    }
+
+    /// Words split on spaces and tabs, scalar by scalar (AF11).
+    static func blankSeparatedWords(_ text: String) -> [String] {
+        text.unicodeScalars.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { String(String.UnicodeScalarView($0)) }
+    }
+
+    /// The first and last scalar of a line (AF11: never a `Character`, which may fuse a mark with `#` or the escape).
+    static func first(_ text: String) -> Unicode.Scalar? { text.unicodeScalars.first }
+    static func last(_ text: String) -> Unicode.Scalar? { text.unicodeScalars.last }
 
     /// The external images of one reading of the file.
     static func externalImages(_ instructions: [String], buildArgs: [String: String]) -> Result<[String], Refusal> {
@@ -67,13 +91,16 @@ public enum DockerfileBases {
             return .success(value)
         }
         for instruction in instructions {
-            let words = instruction.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            let words = blankSeparatedWords(instruction)
             guard let keyword = words.first?.uppercased() else { continue }
             switch keyword {
             case "ARG" where !seenFrom:
                 for word in words.dropFirst() {
-                    let parts = word.split(separator: "=", maxSplits: 1).map(String.init)
-                    let name = parts[0]
+                    // AF12: `ARG =x` or `ARG =` names nothing; Docker fails such a file, so it is refused, never indexed.
+                    let parts = word.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                    guard let name = parts.first, !name.isEmpty else {
+                        return .failure(Refusal("the Dockerfile's ARG “\(word)” has no name"))
+                    }
                     if let value = buildArgs[name] { globals[name] = value } else if parts.count == 2 { globals[name] = unquote(parts[1]) }
                 }
             case "FROM":
@@ -116,19 +143,19 @@ public enum DockerfileBases {
     /// other line (a comment, an unknown key, an empty line, an instruction) ends them. A `syntax` key is collected from
     /// any comment before the first instruction (more than BuildKit honours, so a frontend is never missed).
     struct Directives {
-        var escape: Character = "\\"
+        var escape: Unicode.Scalar = "\\"
         var syntax: [String] = []
         var problem: String?
 
         static let known: Set<String> = ["escape", "syntax", "check"]
 
-        init(_ dockerfile: String) {
+        init(_ lines: [String]) {
             var active = true
             var seen = Set<String>()
             var first = true
-            for raw in dockerfile.split(separator: "\n", omittingEmptySubsequences: false) {
-                var line = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
-                if first, line.hasPrefix("\u{FEFF}") { line.removeFirst() }
+            for raw in lines {
+                var line = raw
+                if first, line.unicodeScalars.first == "\u{FEFF}" { line = String(line.unicodeScalars.dropFirst()) }
                 first = false
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 let pair = Self.directive(trimmed)
@@ -143,7 +170,7 @@ public enum DockerfileBases {
                                 problem = "the Dockerfile's escape directive “\(value)” is not \\ or `"
                                 return
                             }
-                            escape = value.first!
+                            escape = value.unicodeScalars.first!
                         }
                         if key == "syntax" { syntax.append(value) }
                         continue
@@ -151,15 +178,15 @@ public enum DockerfileBases {
                     active = false
                 }
                 if trimmed.isEmpty { continue }
-                guard trimmed.hasPrefix("#") else { break }
+                guard DockerfileBases.first(trimmed) == "#" else { break }
                 if let (key, value) = pair, key == "syntax", !syntax.contains(value) { syntax.append(value) }
             }
         }
 
         /// `# key = value` (key letters and digits, starting with a letter), lowercased key.
         static func directive(_ line: String) -> (String, String)? {
-            guard line.hasPrefix("#") else { return nil }
-            let body = line.dropFirst().trimmingCharacters(in: .whitespaces)
+            guard DockerfileBases.first(line) == "#" else { return nil }
+            let body = String(line.unicodeScalars.dropFirst()).trimmingCharacters(in: .whitespaces)
             guard let equals = body.firstIndex(of: "=") else { return nil }
             let key = body[..<equals].trimmingCharacters(in: .whitespaces)
             let value = body[body.index(after: equals)...].trimmingCharacters(in: .whitespaces)
@@ -171,21 +198,24 @@ public enum DockerfileBases {
 
     /// Instructions with continuations joined; comments, parser directives and empty lines dropped (also inside a
     /// continuation, as BuildKit does); with `heredocs`, heredoc bodies dropped and an unterminated heredoc refused.
-    static func instructions(_ dockerfile: String, escape: Character = "\\", heredocs: Bool = true) -> Result<[String], Refusal> {
+    static func instructions(_ dockerfile: String, escape: Unicode.Scalar = "\\", heredocs: Bool = true) -> Result<[String], Refusal> {
+        instructions(lines: physicalLines(dockerfile), escape: escape, heredocs: heredocs)
+    }
+
+    static func instructions(lines: [String], escape: Unicode.Scalar, heredocs: Bool) -> Result<[String], Refusal> {
         var result: [String] = []
         var current = ""
         var pending: [String] = []
-        for raw in dockerfile.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            let line = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+        for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let end = pending.first {
                 // Ends no later than BuildKit would (it compares the line, tabs stripped for `<<-`, with the word).
                 if trimmed == end { pending.removeFirst() }
                 continue
             }
-            if trimmed.hasPrefix("#") || trimmed.isEmpty { continue }
-            if trimmed.last == escape {
-                current += trimmed.dropLast() + " "
+            if first(trimmed) == "#" || trimmed.isEmpty { continue }
+            if last(trimmed) == escape {
+                current += String(trimmed.unicodeScalars.dropLast()) + " "
                 continue
             }
             current += trimmed
@@ -228,13 +258,13 @@ public enum DockerfileBases {
         return ends
     }
 
-    /// Words split on blanks outside single or double quotes; quotes and backslashes kept as written.
+    /// Words split on blanks outside single or double quotes; quotes and backslashes kept as written (scalar by scalar).
     static func shellWords(_ text: String) -> [String] {
         var words: [String] = []
-        var current = ""
-        var quote: Character?
+        var current = String.UnicodeScalarView()
+        var quote: Unicode.Scalar?
         var escaped = false
-        for character in text {
+        for character in text.unicodeScalars {
             if escaped { current.append(character); escaped = false; continue }
             if character == "\\", quote != "'" { current.append(character); escaped = true; continue }
             if let open = quote {
@@ -244,12 +274,12 @@ public enum DockerfileBases {
             }
             if character == "\"" || character == "'" { quote = character; current.append(character); continue }
             if character == " " || character == "\t" {
-                if !current.isEmpty { words.append(current); current = "" }
+                if !current.isEmpty { words.append(String(current)); current = String.UnicodeScalarView() }
                 continue
             }
             current.append(character)
         }
-        if !current.isEmpty { words.append(current) }
+        if !current.isEmpty { words.append(String(current)) }
         return words
     }
 

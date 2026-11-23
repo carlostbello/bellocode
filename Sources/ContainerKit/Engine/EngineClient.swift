@@ -400,6 +400,12 @@ public struct EngineClient: Sendable {
                        headers: [("Content-Type", "application/x-tar")])
     }
 
+    /// `GET /containers/{id}/archive`: a tar of `path` in the container's file system (the container need not run, so
+    /// no program of its image runs). At most `limit` bytes; a missing path throws `.notFound`.
+    public func getArchive(_ id: String, path: String, limit: Int = 4 << 20) async throws -> Data {
+        try await call("GET", "/containers/\(Self.escape(id))/archive", query: [("path", path)], limit: limit)
+    }
+
     /// `POST /containers/{id}/attach` with a hijacked stream.
     public func attach(_ id: String, stdin: Bool, logs: Bool = false) async throws -> HTTPConnection {
         let (connection, head) = try await open("POST", "/containers/\(Self.escape(id))/attach", query: [

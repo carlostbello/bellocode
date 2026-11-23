@@ -69,7 +69,7 @@ func deltaFrame(session: String, index: Int) -> [UInt8] {
     frame(#"{"id":"evt_\#(index)","type":"session.text.delta","data":{"sessionID":"\#(session)","assistantMessageID":"msg_1","ordinal":0,"delta":"\#(index)"}}"#)
 }
 
-@Suite("EventHub")
+@Suite("EventHub", .timeLimit(.minutes(3)))
 struct EventHubTests {
     private let fastBackoff = BackoffPolicy(initial: .milliseconds(1), maximum: .milliseconds(5), jitter: 0)
 

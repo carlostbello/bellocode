@@ -4,7 +4,7 @@ import Testing
 
 @testable import ContainerKit
 
-@Suite("Engine client against a fake daemon")
+@Suite("Engine client against a fake daemon", .timeLimit(.minutes(3)))
 struct EngineClientTests {
     @Test func pingAndVersion() async throws {
         let server = try FakeEngineServer { request, stream in

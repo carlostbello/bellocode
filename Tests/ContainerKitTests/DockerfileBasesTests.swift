@@ -86,4 +86,28 @@ struct DockerfileBasesTests {
         #expect(images("FROM \\\n\n  alpine:3\n") == ["alpine:3"])
         guard case .failure = DockerfileBases.images(in: "# escape=`\n# escape=\\\\\nFROM a\n") else { Issue.record("two escape directives accepted"); return }
     }
+
+    /// AF11: a Windows-edited (CRLF) Dockerfile with a leading comment is read line by line like Docker reads it, so its
+    /// base image is checked; so is one where a combining mark follows `#` or the escape character.
+    @Test func crlfAndCombiningMarksDoNotHideInstructions() {
+        #expect(images("# built on Windows\r\nFROM evil.example.com/x:1\r\nRUN true\r\n") == ["evil.example.com/x:1"])
+        #expect(images("# syntax=docker/dockerfile:1\r\nFROM alpine:3 \\\r\n  AS base\r\nFROM base\r\n") == ["docker/dockerfile:1", "alpine:3"])
+        #expect(images("FROM a:1\r\nRUN <<EOF\r\nFROM b:2\r\nEOF\r\nFROM c:3\r\n") == ["a:1", "c:3", "b:2"])
+        // `#` plus a combining mark is a comment to Docker (its line starts with `#`); its trailing escape joins nothing.
+        #expect(images("#\u{301} comment \\\nFROM evil.example.com/y:1\n") == ["evil.example.com/y:1"])
+        // A lone CR is not a line break to Docker.
+        #expect(DockerfileBases.physicalLines("a\rb\r\nc\n") == ["a\rb", "c", ""])
+    }
+
+    /// AF12: a global ARG without a name is refused (Docker fails the file), never a crash.
+    @Test func aGlobalArgWithoutANameIsRefused() {
+        for file in ["ARG =\nFROM alpine\n", "ARG =x\nFROM alpine\n", "ARG A=1 =\nFROM alpine\n"] {
+            guard case .failure(let refusal) = DockerfileBases.images(in: file) else {
+                Issue.record("accepted \(file.debugDescription)")
+                continue
+            }
+            #expect(refusal.reason.contains("has no name"))
+        }
+        #expect(images("ARG A=\nFROM alpine${A}\n") == ["alpine"], "an empty value is still a value")
+    }
 }
