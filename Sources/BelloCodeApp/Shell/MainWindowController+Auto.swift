@@ -6,9 +6,13 @@ import Engine
 // tray banners' actions and Resume.
 
 extension MainWindowController {
-    func autoCommandState() -> AutoCommandState {
-        guard let thread = container.context?.thread, let id = thread.session?.id else { return AutoCommandState() }
-        return AutoCommandState(noticesPending: (workspace.engine.auto?.noticeCount(id) ?? 0) > 0, canResume: thread.heldInterrupt != nil)
+    func autoCommandState() -> AutoCommandState { Self.autoCommandState(for: container.context?.thread, auto: workspace.engine.auto) }
+
+    /// Keyed by the thread's own ID, never its loaded session: an offline or not yet hydrated thread with cached risk
+    /// notices still offers Mark Risk Notices Reviewed (NV15).
+    static func autoCommandState(for thread: ThreadModel?, auto: AutoModeService?) -> AutoCommandState {
+        guard let thread else { return AutoCommandState() }
+        return AutoCommandState(noticesPending: (auto?.noticeCount(thread.sessionID) ?? 0) > 0, canResume: thread.heldInterrupt != nil)
     }
 
     func showAutoAuditPanel() {
@@ -31,7 +35,7 @@ extension MainWindowController {
         case .modeFullAccess: setMode(.fullAccess)
         case .showAutoAudit: showAutoAuditPanel()
         case .reviewRiskNotices:
-            if let id = container.context?.thread?.session?.id { workspace.engine.auto?.markReviewed(id) }
+            if let id = container.context?.thread?.sessionID { workspace.engine.auto?.markReviewed(id) }
         case .resumeInterrupted:
             guard let thread = container.context?.thread else { return NSSound.beep() }
             Task { _ = await thread.resumeAfterInterrupt() }

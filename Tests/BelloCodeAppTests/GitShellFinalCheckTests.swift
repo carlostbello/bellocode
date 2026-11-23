@@ -26,6 +26,22 @@ struct GitShellFinalCheckTests {
         #expect(notices.isEmpty, "a successful Undo needs no notice")
     }
 
+    /// NV15: Thread ▸ Mark Risk Notices Reviewed is keyed by the thread's ID, so an offline or not yet hydrated thread
+    /// (no loaded session) with cached notices still offers it.
+    @Test func riskNoticeCommandsFollowAnUnhydratedThread() async throws {
+        let engine = TestWindows.engine
+        let id = SessionID(rawValue: "ses_nv15_\(UUID().uuidString.prefix(8))")
+        let thread = engine.openThread(id)
+        defer { thread.close() }
+        #expect(thread.session == nil)
+        let auto = try #require(engine.auto)
+        #expect(!MainWindowController.autoCommandState(for: thread, auto: auto).noticesPending)
+        auto.recordNoticesForTesting([
+            RiskNoticeEvent(sessionID: id, messageID: MessageID("msg_1"), callID: "c1", tool: "read", findings: [RiskFinding(.secretRead, ".env")], stage: .completed),
+        ])
+        #expect(MainWindowController.autoCommandState(for: thread, auto: auto).noticesPending)
+    }
+
     /// NF19: opening the Git Actions popover N times leaves one live watch: the commit form is shown once.
     @Test func reopeningThePopoverWatchesTheCommitFormOnce() async throws {
         let service = GitService(client: { throw CancellationError() }, store: nil)

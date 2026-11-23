@@ -65,7 +65,8 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   during a start is reconciled (NF17, AF23); the menu bar's Scheduled Tasks… brings BelloCode forward (NF21).
   For a thread in a worktree, Window ▸ opencode… and Project Environment… open on its project, so trust and
   settings are read and written for the project root, while Open in Terminal still opens the worktree (NV04). File ▸ Reopen
-  Closed Thread (⇧⌘T) also brings back a thread deleted within its Undo window (NV13).
+  Closed Thread (⇧⌘T) also brings back a thread deleted within its Undo window (NV13). Thread ▸ Mark Risk Notices
+  Reviewed works on a thread whose session has not loaded yet (NV15).
 - **GitLab (P9):** the request gate re-checks the 429 hold for queued requests and never exceeds its limit (GF11);
   the token used for redaction is read off the main actor once per result (GF12); titles, branch, job and stage names
   and other header fields are cleaned and redacted (GF13).
