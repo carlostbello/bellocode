@@ -342,3 +342,67 @@ extension RiskPolicyTests {
         #expect(categories(shell(command)).contains(expected), "\(command): \(shell(command))")
     }
 }
+
+/// AF14: the recursive-grep preflight walks what grep walks. A project of its own, so the shared fixture's
+/// expectations are unaffected.
+@Suite("Risk policy: recursive search traversal")
+struct RecursiveSearchTraversalTests {
+    static let root: URL = {
+        let url = FileManager.default.temporaryDirectory.appending(path: "bellocode-grep-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let fm = FileManager.default
+        func write(_ path: String, _ text: String = "x") {
+            let file = url.appending(path: path)
+            try? fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? text.write(to: file, atomically: true, encoding: .utf8)
+        }
+        write("app/src/main.js")
+        write("app/node_modules/pkg/.env", "API_KEY=x")  // a dependency's secret-looking file
+        write("repo/src/a.swift")
+        write("repo/.git/credentials", "https://user:token@example.com")
+        write("linked/src/b.swift")
+        write("outside/.env", "TOKEN=x")
+        write("secrets/id_rsa", "key")
+        // Inside `linked`: a link to a folder holding a secret, and an innocently named link to a key.
+        try? fm.createSymbolicLink(atPath: url.appending(path: "linked/vendor").path, withDestinationPath: url.appending(path: "outside").path)
+        try? fm.createSymbolicLink(atPath: url.appending(path: "linked/notes.txt").path, withDestinationPath: url.appending(path: "secrets/id_rsa").path)
+        // A link cycle.
+        try? fm.createSymbolicLink(atPath: url.appending(path: "linked/src/loop").path, withDestinationPath: url.appending(path: "linked").path)
+        return url
+    }()
+
+    func verdict(_ command: String) -> RiskPolicy.Verdict {
+        let context = RiskPolicy.Context(directory: Self.root.path, roots: [Self.root.path], home: "/Users/tester", protected: [])
+        return RiskPolicy.decide(RiskPolicy.Action(action: "shell", resources: [command], tool: "shell", command: command), in: context)
+    }
+
+    func readsSecret(_ command: String) -> Bool {
+        if case .escalate(let findings) = verdict(command) { return findings.contains { $0.category == .secretRead } }
+        return false
+    }
+
+    /// Dependency and VCS folders are searched unless the command excludes them.
+    @Test(arguments: ["grep -r x app", "grep -rn key .", "grep -r x repo", "cd app && grep -r x .", "grep -r x ap*"])
+    func dependencyAndVCSFoldersAreSearched(_ command: String) {
+        #expect(readsSecret(command), "\(command): \(verdict(command))")
+    }
+
+    @Test(arguments: ["grep -r x app --exclude-dir=node_modules", "grep -r x repo --exclude-dir=.git", "grep -r x app/src"])
+    func excludedOrUnrelatedFoldersStayAllowed(_ command: String) {
+        #expect(verdict(command).isAllow, "\(command): \(verdict(command))")
+    }
+
+    /// `-R` follows links inside the tree (to a folder with a secret, or to a key under an innocent name), and a link
+    /// cycle ends. Plain `-r` does not follow them.
+    @Test func dereferencingSearchFollowsLinks() {
+        #expect(readsSecret("grep -R x linked"))
+        #expect(readsSecret("grep --dereference-recursive x linked"))
+        #expect(readsSecret("grep -R x linked --exclude-dir=vendor"), "notes.txt is a link to a key")
+        #expect(verdict("grep -r x linked").isAllow, "\(verdict("grep -r x linked"))")
+        #expect(verdict("grep -R x linked --exclude-dir=vendor --exclude=notes.txt").isAllow)
+    }
+
+    /// A variable can name any folder or add options: the person decides.
+    @Test func variablesMakeTheSearchUnknowable() {
+        #expect(readsSecret("grep -r x $DIR"))
+    }
+}
