@@ -90,9 +90,12 @@ final class TerminalSurfaces: TerminalWorkspaceDelegate {
 
     /// Detaches every emulator (window closing). PTYs keep running on the server.
     func close() {
+        isClosed = true
         settingsLoop?.cancel()
         workspace?.close()
     }
+    /// The window closed and its emulators were detached.
+    private(set) var isClosed = false
 
     // MARK: Following the displayed thread
 
