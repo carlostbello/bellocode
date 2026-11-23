@@ -97,12 +97,12 @@ extension GitRepositoryModel {
     /// What `pushCurrentBranch` would send.
     public func pushPlan() async throws -> GitPushPlan? { try await repository.pushPlan() }
 
-    /// Pushes the current branch to `origin` (sets the upstream the first time). Never forces unless `force`.
-    public func pushCurrentBranch(force: Bool = false) async throws {
+    /// Pushes what `plan` showed (its commit, to its destination; sets the upstream the first time). Never forces
+    /// unless `force`, and then only over the remote head the plan saw. `GitPushPlanError` when the branch or the
+    /// remote changed since the plan: nothing is pushed and the person reviews a fresh plan (AF21).
+    public func push(_ plan: GitPushPlan, force: Bool = false) async throws {
         try checkScopes(.write)
-        guard let branch = status?.branch else { throw GitError.failed(command: "push", status: 1, message: "Detached HEAD: switch to a branch before pushing.") }
-        let setUpstream = status?.upstream == nil
-        try await run(force ? "Force pushing…" : "Pushing…") { try await $0.push(branch: branch, setUpstream: setUpstream, force: force) }
+        try await run(force ? "Force pushing…" : "Pushing…") { try await $0.push(plan, force: force) }
     }
 
     /// Points `origin` at the HTTPS URL of the same project on its configured instance (the owner chose HTTPS).
@@ -154,13 +154,23 @@ extension GitRepositoryModel {
     /// The stash parked for the current branch, if any.
     public var parkedStashForCurrentBranch: String? { status?.branch.flatMap { parkedStashes[$0] } }
 
-    /// Re-applies a stash made by `stashAndSwitch` and drops it when it applied cleanly. It stays parked (and the
-    /// "Restore stashed changes" affordance stays) when the apply fails; once applied it is unparked even if the
+    /// Re-applies a stash made by `stashAndSwitch`, staged changes to the index and the rest to the working tree, and
+    /// drops it only once both verifiably match the saved copy (AF05: applying without the index would fold the staged
+    /// version into the working file and lose it with the drop). It stays parked (and the "Restore stashed changes"
+    /// affordance stays) when the restore fails, with a ref that keeps it reachable even if the entry is dropped by
+    /// hand, and the failure is a `StashRecoveryError` saying how to recover. Once verified it is unparked even if the
     /// drop fails, so the same changes are never offered twice (N29).
     public func restoreStash(_ hash: String) async throws {
+        let directory = repository.directory
         try await run("Restoring stashed changes…") { repository in
-            try await repository.applyStash(hash)
+            let ref = "refs/bellocode/recovery/parked-\(hash)"
+            if let failure = await repository.restore(hash) {
+                let kept = (try? await repository.git(["update-ref", ref, hash])) != nil
+                throw StashRecoveryError(
+                    stash: hash, ref: kept ? ref : "refs/stash", directory: directory, unresolved: failure.unresolved, reason: failure.message)
+            }
             await MainActor.run { self.parkedStashes = self.parkedStashes.filter { $0.value != hash } }
+            await repository.deleteRecoveryRef(ref)
             try await repository.dropStash(hash)
         }
     }

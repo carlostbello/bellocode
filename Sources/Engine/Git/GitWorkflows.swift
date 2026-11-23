@@ -30,6 +30,34 @@ public struct GitPushPlan: Sendable, Hashable {
     /// The remote branch has commits the local one lacks: only a force push would succeed.
     public var needsForce: Bool
     public var setsUpstream: Bool
+    /// The commit the push sends (HEAD when the plan was read): the push sends exactly this, never a later HEAD.
+    public var localHead: String
+    /// `refs/remotes/<remote>/<branch>` when the plan was read (nil: none). A force push leases on exactly this, so a
+    /// remote commit the person never saw is not overwritten even if a fetch advanced the tracking ref meanwhile.
+    public var remoteHead: String?
+}
+
+/// The push no longer matches its plan (what was shown and confirmed): nothing was pushed (AF06, AF21).
+public enum GitPushPlanError: Error, Sendable, Equatable, CustomStringConvertible {
+    /// The branch or its HEAD moved.
+    case branchChanged
+    /// The remote's push URL is no longer the one shown.
+    case destinationChanged
+    /// The remote has several push URLs: one push would send to all of them, more than one card can show.
+    case severalPushURLs(String)
+    /// The plan needs a force push and none was confirmed.
+    case forceNotConfirmed
+
+    public var description: String { userMessage }
+
+    public var userMessage: String {
+        switch self {
+        case .branchChanged: "The branch changed since the push was confirmed. Nothing was pushed; push again to review it."
+        case .destinationChanged: "The remote's address changed since the push was confirmed. Nothing was pushed; push again to review it."
+        case .severalPushURLs(let remote): "\(remote) has several push URLs. BelloCode pushes to one reviewed destination; push from a terminal."
+        case .forceNotConfirmed: "The remote has commits this branch does not. Nothing was pushed."
+        }
+    }
 }
 
 // Git parity workflows (docs/features/git-parity.md): fetch, pull, sync, push with plans, remotes, stashes, switching,
@@ -83,10 +111,13 @@ extension GitRepository {
     public func pushPlan(remote: String = "origin") async throws -> GitPushPlan? {
         let status = try await self.status(limit: 1)
         guard let branch = status.branch else { return nil }
-        let url = try await git(["remote", "get-url", "--push", remote], allowFailure: true).text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return nil }
+        let urls = try await pushURLs(remote)
+        guard let url = urls.first else { return nil }
+        guard urls.count == 1 else { throw GitPushPlanError.severalPushURLs(remote) }
+        guard let localHead = try await revParse("HEAD") else { return nil }
         let remoteRef = "refs/remotes/\(remote)/\(branch)"
-        let exists = try await resolves(remoteRef)
+        let remoteHead = try await revParse(remoteRef)
+        let exists = remoteHead != nil
         var range = "HEAD"
         var needsForce = false
         if exists {
@@ -103,17 +134,47 @@ extension GitRepository {
         }
         return GitPushPlan(
             remote: remote, remoteURL: url, branch: branch, remoteBranchExists: exists, commits: commits, moreCommits: max(0, count - commits.count),
-            needsForce: needsForce, setsUpstream: status.upstream == nil)
+            needsForce: needsForce, setsUpstream: status.upstream == nil, localHead: localHead, remoteHead: remoteHead)
     }
 
-    /// Pushes `branch` to `remote`. `force` uses `--force-with-lease` against the remote-tracking ref the plan saw,
-    /// so a push that someone else updated meanwhile is refused instead of overwritten.
-    public func push(branch: String, remote: String = "origin", setUpstream: Bool, force: Bool = false, expectedRemoteHead: String? = nil) async throws {
+    /// Every push URL of `remote` (`--all`: git pushes to each of them), insteadOf rewriting applied.
+    func pushURLs(_ remote: String) async throws -> [String] {
+        let output = try await git(["remote", "get-url", "--push", "--all", remote], allowFailure: true)
+        guard output.status == 0 else { return [] }
+        return output.text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// Pushes `branch` to `remote` (an ordinary push: never forces; git refuses a non-fast-forward).
+    public func push(branch: String, remote: String = "origin", setUpstream: Bool) async throws {
         var arguments = ["push", "--quiet"]
         if setUpstream { arguments.append("-u") }
-        if force { arguments.append("--force-with-lease=refs/heads/\(branch)" + (expectedRemoteHead.map { ":\($0)" } ?? "")) }
         arguments += [remote, "HEAD:refs/heads/\(branch)"]
         _ = try await git(arguments, timeout: .seconds(180))
+    }
+
+    /// Pushes exactly what `plan` showed and the person (or the agent's approval card) confirmed (AF06, AF21): its
+    /// local commit, to its resolved URL (so the destination, and the credentials git asks for, are the approved ones
+    /// even if the remote is repointed meanwhile), after checking that the branch, HEAD and the remote's push URL are
+    /// still the plan's. A force push leases on the remote head the plan saw (`--force-with-lease=<ref>:<oid>`), never
+    /// on whatever the tracking ref holds by then. On success the tracking ref and, when the plan said so, the upstream
+    /// are set as a push to the remote name would.
+    public func push(_ plan: GitPushPlan, force: Bool) async throws {
+        if plan.needsForce && !force { throw GitPushPlanError.forceNotConfirmed }
+        let status = try await self.status(limit: 1)
+        guard status.branch == plan.branch, try await revParse("HEAD") == plan.localHead else { throw GitPushPlanError.branchChanged }
+        let urls = try await pushURLs(plan.remote)
+        guard urls.count <= 1 else { throw GitPushPlanError.severalPushURLs(plan.remote) }
+        guard urls.first == plan.remoteURL else { throw GitPushPlanError.destinationChanged }
+        var arguments = ["push", "--quiet"]
+        if force { arguments.append("--force-with-lease=refs/heads/\(plan.branch):\(plan.remoteHead ?? "")") }
+        arguments += ["--", plan.remoteURL, "\(plan.localHead):refs/heads/\(plan.branch)"]
+        _ = try await git(arguments, timeout: .seconds(180))
+        // What `git push <remote>` would have recorded (a push to a URL updates no tracking ref).
+        _ = try? await git(["update-ref", "refs/remotes/\(plan.remote)/\(plan.branch)", plan.localHead], allowFailure: true)
+        if plan.setsUpstream {
+            _ = try? await git(["config", "branch.\(plan.branch).remote", plan.remote], allowFailure: true)
+            _ = try? await git(["config", "branch.\(plan.branch).merge", "refs/heads/\(plan.branch)"], allowFailure: true)
+        }
     }
 
     /// The remote's default branch (`refs/remotes/<remote>/HEAD`), else `main`/`master` if present.
@@ -155,18 +216,35 @@ extension GitRepository {
         var patch = try await git(command + ["-p", "--no-color", "--no-ext-diff", "--no-textconv", "-U1"] + target, limit: 4 << 20, allowFailure: true).text
         var summary = stat
         // Untracked files are committed too when nothing is staged (commitAll stages them): list them and quote the
-        // start of each small text file.
+        // start of each small text file, as git would commit it (AF01).
         if cached.isEmpty {
             let untracked = GitStatusParser.split(try await git(["ls-files", "--others", "--exclude-standard", "-z"], allowFailure: true).stdout)
             for path in untracked.prefix(50) {
                 summary += "\n new file: \(path)"
-                guard patch.count < patchLimit, let data = FileManager.default.contents(atPath: (directory as NSString).appendingPathComponent(path)),
-                      data.count < 64 << 10, !data.prefix(8_000).contains(0)
-                else { continue }
-                patch += "\n+++ new file \(path)\n" + String(decoding: data.prefix(2_000), as: UTF8.self)
+                guard patch.count < patchLimit, let excerpt = Self.untrackedExcerpt(path, in: directory) else { continue }
+                patch += "\n+++ new file \(path)\n" + excerpt
             }
         }
         return (summary, String(patch.prefix(patchLimit)))
+    }
+
+    /// The start of untracked `path` as git would commit it, or nil when it is not quoted (large, binary, unreadable,
+    /// or reached through a link). Read beneath `directory` without following any link (`ConfinedDirectory`): a link
+    /// is committed as its text, so its text is what is quoted, never the file it points to, which may be outside the
+    /// checkout. The size is checked on the open file before any byte is read.
+    static func untrackedExcerpt(_ path: String, in directory: String) -> String? {
+        guard let components = ConfinedDirectory.components(path), let name = components.last,
+              case .success(let parent) = ConfinedDirectory.open(root: directory, components.dropLast(), create: false)
+        else { return nil }
+        switch parent.preview(name, maxSize: 64 << 10, prefix: 8_000) {
+        case .regular(let data):
+            guard !data.contains(0) else { return nil }
+            return String(decoding: data.prefix(2_000), as: UTF8.self)
+        case .symlink(let target):
+            return "(symbolic link to \(target))"
+        case .skipped:
+            return nil
+        }
     }
 
     /// Recent commit subjects (repository conventions for generated messages).
@@ -408,7 +486,8 @@ public struct StashRecoveryError: Error, Sendable, Equatable, CustomStringConver
         }
         lines.append("Then, in \((directory as NSString).abbreviatingWithTildeInPath), run:")
         lines.append("    git stash apply \(stash)")
-        lines.append("When it applies cleanly: git stash drop (the matching entry) and git update-ref -d \(ref)")
+        // `refs/stash` is the fallback when no ref of its own could be made: deleting it would drop every stash.
+        lines.append("When it applies cleanly: git stash drop (the matching entry)" + (ref == "refs/stash" ? "" : " and git update-ref -d \(ref)"))
         if let keptWorktree {
             lines.append("The new worktree at \((keptWorktree as NSString).abbreviatingWithTildeInPath) was kept; remove it once your changes are back.")
         }

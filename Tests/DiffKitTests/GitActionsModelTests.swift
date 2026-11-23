@@ -57,6 +57,28 @@ struct GitActionsModelTests {
         #expect(remote == local, "nothing was pushed")
     }
 
+    /// NF05: Commit & Push where the commit succeeds and the push fails: the form is closed, so the failure is
+    /// reported as the action's error and a notice, never only in the closed form.
+    @Test func aFailedPushAfterACommitIsReported() async throws {
+        let (fixture, model, log, origin) = try await Self.fixture(answer: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try await fixture.git.runner.run(["switch", "-q", "-c", "feat/y"], in: fixture.repo.path)
+        try ChangesFixture.write(fixture.repo, "y.txt", "y\n")
+        model.repository.refresh()
+        try await Self.waitFor { model.repository.status?.branch == "feat/y" && model.repository.status?.isDirty == true && !model.repository.isRefreshing }
+        await model.perform(.commitAndPush)
+        let form = try #require(model.commit)
+        form.message = "Add y"
+        // The remote is gone: the push fails after the commit was made.
+        try FileManager.default.removeItem(atPath: origin)
+        await model.finishCommit(form, as: .commitAndPush)
+        #expect(model.commit == nil, "the commit was made and the form closed")
+        let subject = try await fixture.git.runner.run(["log", "-1", "--format=%s"], in: fixture.repo.path).text
+        #expect(subject.contains("Add y"))
+        #expect(model.lastError?.contains("push failed") == true, "\(model.lastError ?? "nil")")
+        #expect(log.notices.withLock { $0 }.contains { $0.contains("push failed") })
+    }
+
     @Test func aForcePushNeedsItsOwnConfirmation() async throws {
         let (fixture, model, log, origin) = try await Self.fixture(answer: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }

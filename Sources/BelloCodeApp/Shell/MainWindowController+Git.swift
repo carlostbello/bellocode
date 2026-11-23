@@ -12,7 +12,33 @@ final class GitUIState {
     var order: [String] = []
     weak var popover: NSPopover?
     weak var panel: NSPanel?
+    /// The one watch on a commit form opening (replaced each time the Git Actions popover opens).
+    let commitWatch = CommitFormWatch()
     static let limit = 16
+}
+
+/// Opens the commit form when a Git Actions model's `commit` is set. At most one watch is live: starting another
+/// retires the previous one, so opening the popover N times never shows (and generates for) one form N times (NF19).
+@MainActor
+final class CommitFormWatch {
+    private var generation = 0
+
+    /// Watches `model.commit` until a form opens (then `show` runs once), replacing any earlier watch.
+    func watch(_ model: GitActionsModel, show: @escaping @MainActor (GitActionsModel) -> Void) {
+        generation += 1
+        arm(model, generation: generation, show: show)
+    }
+
+    func cancel() { generation += 1 }
+
+    private func arm(_ model: GitActionsModel, generation: Int, show: @escaping @MainActor (GitActionsModel) -> Void) {
+        withObservationTracking { _ = model.commit } onChange: { [weak self, weak model] in
+            Task { @MainActor in
+                guard let self, let model, self.generation == generation else { return }
+                if model.commit != nil { show(model) } else { self.arm(model, generation: generation, show: show) }
+            }
+        }
+    }
 }
 
 extension MainWindowController {
@@ -131,6 +157,9 @@ extension MainWindowController {
                 do {
                     try await model.repository.restoreStash(hash)
                     workspace.undo.showNotice("Restored the stashed changes")
+                } catch let recovery as StashRecoveryError {
+                    // The recovery steps stay on screen: the work is only in the stash until it is put back (R04).
+                    presentStashRecovery(recovery)
                 } catch {
                     workspace.undo.showNotice((error as? GitError)?.userMessage ?? "The stash could not be applied; it is still in git stash list.")
                 }
@@ -163,12 +192,7 @@ extension MainWindowController {
     }
 
     func observeCommitForm(_ model: GitActionsModel) {
-        withObservationTracking { _ = model.commit } onChange: { [weak self, weak model] in
-            Task { @MainActor in
-                guard let self, let model else { return }
-                if model.commit != nil { self.showCommitForm(model) } else { self.observeCommitForm(model) }
-            }
-        }
+        gitUI.commitWatch.watch(model) { [weak self] model in self?.showCommitForm(model) }
     }
 
     func showCommitForm(_ model: GitActionsModel) {
@@ -374,10 +398,27 @@ extension MainWindowController {
                 if !applied.written.isEmpty {
                     _ = self?.workspace.undo.perform(ReversibleAction(
                         name: "Restore Files", message: "Restored \(applied.written.count) file\(applied.written.count == 1 ? "" : "s") to the checkpoint",
-                        apply: {}, revert: { Task { try? await engine.undoRewindFiles(applied) } }))
+                        apply: {}, revert: { [weak self] in
+                            Task {
+                                await Self.undoRewindFiles(applied, undo: { try await engine.undoRewindFiles($0) }, notice: { self?.workspace.undo.showNotice($0) })
+                            }
+                        }))
                 }
             })
         showGitPanel(RewindView(model: model, close: { [weak self] _ in self?.closeGitPanel() }), title: "Edit from Here")
+    }
+
+    /// Undo of a rewind's file restore. A failure (a restored file changed since, so nothing is overwritten, or a
+    /// write error) is shown with the affected path, never swallowed (NF12).
+    static func undoRewindFiles(
+        _ applied: AppliedRewind, undo: @MainActor (AppliedRewind) async throws -> Void, notice: @MainActor (String) -> Void
+    ) async {
+        do {
+            try await undo(applied)
+        } catch {
+            let reason = (error as? WorkingCopyError)?.userMessage ?? (error as? GitError)?.userMessage ?? String(describing: error)
+            notice("Could not undo the file restore: \(reason)")
+        }
     }
 
     // MARK: Actions

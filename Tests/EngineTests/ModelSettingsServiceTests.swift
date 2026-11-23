@@ -79,6 +79,50 @@ struct ModelSettingsServiceTests {
         #expect(JSONCEditor.string(at: ["model"], in: try text(folder)) == "x/theirs")
     }
 
+    /// AF24: an editor saves an unrelated setting after BelloCode's comparison and before its replace. The swap keeps
+    /// the displaced file, sees it is not the one the edit was made from, puts it back and edits it: both survive.
+    @Test func aSaveBetweenTheComparisonAndTheReplaceIsKept() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (_, folder, _) = try make(root)
+        let url = try folder.ensure(.config).url
+        let once = Flag()
+        try await ModelSettingsService.edit(folder, path: ["model"], value: "p/mine", beforeSwap: {
+            if !once.on {
+                once.set(true)
+                try? Data("{\n  \"theme\": \"editor\"\n}\n".utf8).write(to: url, options: .atomic)
+            }
+        })
+        #expect(once.on)
+        let merged = try text(folder)
+        #expect(JSONCEditor.string(at: ["theme"], in: merged) == "editor", "the editor's save survives")
+        #expect(JSONCEditor.string(at: ["model"], in: merged) == "p/mine")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path).filter { $0.contains("bellocode-") }
+        #expect(leftovers.isEmpty, "\(leftovers)")
+    }
+
+    /// AF24: a save before the swap and a further one right after it: the first is put back and the second, which
+    /// the put-back displaced, is kept beside the file; the edit fails saying so.
+    @Test func aSecondRacingSaveIsKeptAsAConflictCopy() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (_, folder, _) = try make(root)
+        let url = try folder.ensure(.config).url
+        await #expect(throws: CocoaError.self) {
+            try await ModelSettingsService.edit(folder, path: ["model"], value: "p/mine", beforeSwap: {
+                try? Data("{\n  \"theme\": \"first\"\n}\n".utf8).write(to: url, options: .atomic)
+            }, afterSwap: {
+                try? Data("{\n  \"theme\": \"second\"\n}\n".utf8).write(to: url, options: .atomic)
+            })
+        }
+        let files = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        let conflict = try #require(files.first { $0.hasPrefix("opencode.json.conflict-") })
+        let kept = try String(contentsOf: url.deletingLastPathComponent().appending(path: conflict), encoding: .utf8)
+        #expect(JSONCEditor.string(at: ["theme"], in: kept) == "second")
+        #expect(JSONCEditor.string(at: ["theme"], in: try text(folder)) == "first")
+        #expect(!files.contains { $0.contains("bellocode-") })
+    }
+
     @Test func aFailedPreferenceSaveKeepsThePreviousChoiceAndSaysSo() async throws {
         let root = Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

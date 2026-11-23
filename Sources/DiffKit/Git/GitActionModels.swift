@@ -123,7 +123,8 @@ public final class GitActionsModel {
             }
             await reload()
         } catch {
-            lastError = (error as? GitError)?.userMessage ?? (error as? GitSwitchError).map { _ in "Local changes are in the way." } ?? "The git action failed."
+            lastError = (error as? GitError)?.userMessage ?? (error as? GitPushPlanError)?.userMessage
+                ?? (error as? GitSwitchError).map { _ in "Local changes are in the way." } ?? "The git action failed."
             host.notice(lastError ?? "")
         }
     }
@@ -139,12 +140,13 @@ public final class GitActionsModel {
         if plan.needsForce {
             guard await host.confirm(
                 "Force push \(plan.branch)?",
-                "origin/\(plan.branch) has commits your branch does not. A force push replaces them on the remote (sent with --force-with-lease, so it fails if someone pushed meanwhile).",
+                "origin/\(plan.branch) has commits your branch does not. A force push replaces origin/\(plan.branch) at \(plan.remoteHead.map { String($0.prefix(12)) } ?? "(none)") with \(plan.localHead.prefix(12)) on \(plan.remoteURL) (sent with --force-with-lease on that commit, so it fails if someone pushed meanwhile).",
                 "Force Push")
             else { return false }
             force = true
         }
-        try await repository.pushCurrentBranch(force: force)
+        // Exactly what was confirmed: the plan's commit, destination and (for a force push) remote head (AF21).
+        try await repository.push(plan, force: force)
         host.notice("Pushed \(plan.branch)\(plan.commits.isEmpty ? "" : " (\(plan.commits.count + plan.moreCommits) commit\(plan.commits.count + plan.moreCommits == 1 ? "" : "s"))")")
         return true
     }
@@ -155,22 +157,33 @@ public final class GitActionsModel {
             "Push to \(branch)?", "\(branch) is the repository's default branch. The commits go straight to origin/\(branch) without a merge request.", "Push to \(branch)")
     }
 
-    /// Called by the commit form: commits, then pushes and opens the MR form as the chosen action says.
+    /// Called by the commit form: commits, then pushes and opens the MR form as the chosen action says. A failed
+    /// commit stays in the form; once the commit is made the form is closed, so a failed push is reported like any
+    /// other action's failure (`lastError` and a notice), never only in the closed form (NF05).
     public func finishCommit(_ form: GitCommitModel, as action: GitAction) async {
+        let message = form.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        lastError = nil
         do {
-            let message = form.message.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !message.isEmpty else { return }
             try await repository.commitAll(message: message)
-            commit = nil
-            host.notice("Committed to \(repository.status?.branch ?? "HEAD")")
-            if action == .commitAndPush || action == .commitPushAndCreateMergeRequest {
-                guard try await push() else { return }
-                if action == .commitPushAndCreateMergeRequest { host.createMergeRequest() }
-            }
-            await reload()
         } catch {
             form.error = (error as? GitError)?.userMessage ?? "The commit failed."
+            return
         }
+        commit = nil
+        let branch = repository.status?.branch ?? "HEAD"
+        host.notice("Committed to \(branch)")
+        if action == .commitAndPush || action == .commitPushAndCreateMergeRequest {
+            do {
+                guard try await push() else { return }
+                if action == .commitPushAndCreateMergeRequest { host.createMergeRequest() }
+            } catch {
+                let reason = (error as? GitError)?.userMessage ?? (error as? GitPushPlanError)?.userMessage ?? "The push failed."
+                lastError = "Committed to \(branch), but the push failed: \(reason)"
+                host.notice(lastError ?? "")
+            }
+        }
+        await reload()
     }
 }
 

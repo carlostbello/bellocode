@@ -154,7 +154,7 @@ let targets: [Target] =
         .testTarget(
             name: "BelloCodeAppTests",
             dependencies: [
-                "BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore", "OrchestrationUI",
+                "BelloCodeApp", "Engine", "MockOpenCode", "ComposerKit", "AgentUI", "OpenCodeKit", "BelloCore", "OrchestrationUI", "DiffKit",
                 "TestProcessSetup",
             ],
             swiftSettings: testSwiftSettings

@@ -7,7 +7,7 @@
 // skills (text only; no opencode.json, no plugins). Pure functions over a small file-system interface, so the tests
 // run without opencode.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "fs"
+import { type BigIntStats, closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "fs"
 import { dirname, join, relative, sep } from "path"
 
 export type ProjectConfigMode = "bellocode" | "native"
@@ -33,9 +33,12 @@ export interface FS {
   list(path: string): string[]
   /**
    * At most `limit` bytes of a regular file, opened without following a final link and without blocking (a FIFO or a
-   * device never stalls the server). `size` is the file's full size. Undefined for anything but a regular file.
+   * device never stalls the server). `size` is the file's full size. Undefined for anything but a regular file. With
+   * `root` (canonical), the opened file must still be reached from `root` through directories only, checked on the
+   * open descriptor before any byte is read, so an ancestor replaced by a link between the caller's check and the
+   * open cannot hand over a file outside the repository (AF08).
    */
-  readRegular(path: string, limit: number): { text: string; size: number } | undefined
+  readRegular(path: string, limit: number, root?: string): { text: string; size: number } | undefined
 }
 
 const NOFOLLOW = (constants as any).O_NOFOLLOW ?? 0
@@ -64,12 +67,16 @@ export const nodeFS: FS = {
       return []
     }
   },
-  readRegular: (path, limit) => {
+  readRegular: (path, limit, root) => {
     let fd: number | undefined
     try {
+      // The root is pinned (its identity before the open must still be its identity after it).
+      const pinned = root === undefined ? undefined : lstatSync(root, { bigint: true })
+      if (pinned && !pinned.isDirectory()) return undefined
       fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK)
       const info = fstatSync(fd)
       if (!info.isFile()) return undefined
+      if (root !== undefined && !reachedFrom(root, pinned!, path, fstatSync(fd, { bigint: true }))) return undefined
       const want = Math.max(0, Math.min(info.size, limit))
       const buffer = Buffer.alloc(want)
       let offset = 0
@@ -89,6 +96,32 @@ export const nodeFS: FS = {
       }
     }
   },
+}
+
+/**
+ * Whether the opened file (`opened`, from the descriptor) is the one `path` names now, reached from `root` (whose
+ * identity is still `pinned`) through real directories only: every component below the root is examined without
+ * following links, and the leaf must be the very file that was opened. A file opened through an ancestor that was a
+ * link at open time is a different file from the one inside the root, so it fails this check, even if the link has
+ * been swapped back by the time it runs.
+ */
+function reachedFrom(root: string, pinned: BigIntStats, path: string, opened: BigIntStats): boolean {
+  if (path === root || !inside(root, path)) return false
+  const now = lstatSync(root, { bigint: true })
+  if (!now.isDirectory() || now.dev !== pinned.dev || now.ino !== pinned.ino) return false
+  const parts = relative(root, path).split(sep)
+  if (parts.some((part) => part === "" || part === "." || part === "..")) return false
+  let current = root
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index])
+    const info = lstatSync(current, { bigint: true })
+    if (index < parts.length - 1) {
+      if (!info.isDirectory()) return false
+    } else if (!info.isFile() || info.dev !== opened.dev || info.ino !== opened.ino) {
+      return false
+    }
+  }
+  return true
 }
 
 export function projectConfigOptions(options: any): ProjectConfigOptions | undefined {
@@ -164,12 +197,14 @@ export function trustedProject(directory: string | undefined, trusted: string[],
 
 export type BoundedRead = { text: string; size: number } | { refused: string }
 
-/** Reads `path` only if it resolves to a regular file inside `root` (canonical), at most `limit` bytes. */
+/** Reads `path` only if it resolves to a regular file inside `root` (canonical), at most `limit` bytes. The resolved
+ * path is opened confined to the root (`FS.readRegular` with `root`): a concurrent replacement of an ancestor between
+ * the check and the open is refused, not followed (AF08). */
 export function readInside(root: string, path: string, limit: number, fs: FS = nodeFS): BoundedRead {
   const real = fs.realpath(path)
   if (!real) return { refused: "cannot be read" }
   if (!inside(root, real)) return { refused: "links outside the repository" }
-  const read = fs.readRegular(real, limit)
+  const read = fs.readRegular(real, limit, root)
   return read ?? { refused: "not a regular file" }
 }
 

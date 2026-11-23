@@ -104,8 +104,12 @@ public final class OpenCodeConfigService {
     @ObservationIgnored private let writeTrust: @Sendable (ProjectTrustFile, URL) throws -> Void
     /// The revision of the trust file last written (the plugin must acknowledge it).
     @ObservationIgnored private(set) var trustRevision = 0
-    /// Projects whose trust change the plugin has not acknowledged yet.
+    /// Locations whose trust change the plugin has not acknowledged yet.
     @ObservationIgnored private var unacknowledged: Set<String> = []
+    /// The directories opencode may hold as locations (projects and their threads; set by the engine). A trust entry
+    /// covers the folders below it, and each location keeps its own loaded agents and skills, so a change reloads
+    /// every one of these it covers, not only the folder chosen in Settings (AF17).
+    @ObservationIgnored public var activeLocations: @MainActor () -> [String] = { [] }
     /// Trust changes run one at a time, in order (rapid toggles must not interleave their writes or rollbacks).
     @ObservationIgnored private var trustTail: Task<Void, Never>?
 
@@ -169,14 +173,46 @@ public final class OpenCodeConfigService {
         }
         let fileProblem = await writeTrustFile()
         guard runningPolicy == .bellocode else { return fileProblem }
-        unacknowledged.insert(directory)
-        let applyProblem = await applyTrust(directory)
+        // Every location the entry covers reloads and must acknowledge, not only `directory` (AF17).
+        let locations = Self.covered(by: directory, among: activeLocations())
+        unacknowledged.formUnion(locations)
+        var applyProblem: String?
+        for location in locations {
+            let problem = await applyTrust(location)
+            if applyProblem == nil { applyProblem = problem }
+        }
         await refresh(directory: directory, retryTrust: false)
         return fileProblem ?? applyProblem
     }
 
-    /// Asks the plugin at `directory` to re-read the trust file; nil when it acknowledged this revision. Offline (no
-    /// client) is not a problem: the server reads the file when it starts.
+    /// `directory` and the locations at or below it (canonical comparison), `directory` first. Bounded.
+    nonisolated static func covered(by directory: String, among locations: [String]) -> [String] {
+        let base = canonical(directory)
+        var seen: Set<String> = [directory]
+        var result = [directory]
+        for location in locations where result.count < 64 && seen.insert(location).inserted && contains(base, canonical(location)) {
+            result.append(location)
+        }
+        return result
+    }
+
+    nonisolated static func canonical(_ path: String) -> String { URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path }
+
+    /// Whether canonical `path` is canonical `base` or below it.
+    nonisolated static func contains(_ base: String, _ path: String) -> Bool {
+        path == base || path.hasPrefix(base == "/" ? "/" : base + "/")
+    }
+
+    /// Whether any trust entry covers `location` by path (the plugin also requires the same repository, so a covered
+    /// location may still report untrusted; an uncovered one must never report trusted).
+    func coveredByTrust(_ location: String) -> Bool {
+        let path = Self.canonical(location)
+        return trusted.keys.contains { Self.contains(Self.canonical($0), path) }
+    }
+
+    /// Asks the plugin at `directory` to re-read the trust file; nil when it acknowledged this revision, every
+    /// transform reloaded, and a location no entry covers any more reports itself untrusted. Offline (no client) is
+    /// not a problem: the server reads the file when it starts.
     private func applyTrust(_ directory: String) async -> String? {
         let connection: OpenCodeClient
         do {
@@ -194,6 +230,10 @@ public final class OpenCodeConfigService {
             if let revision = status.revision, revision != trustRevision {
                 trustPending = true
                 return "Saved, but opencode applied an older trust list. It applies at the next reload or restart."
+            }
+            if status.trusted, !coveredByTrust(directory) {
+                trustPending = true
+                return "Saved, but opencode still uses the repository configuration at \((directory as NSString).abbreviatingWithTildeInPath). It applies at the next reload or restart."
             }
             unacknowledged.remove(directory)
             trustPending = !unacknowledged.isEmpty || trustProblem != nil

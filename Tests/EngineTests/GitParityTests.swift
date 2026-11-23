@@ -126,7 +126,8 @@ struct GitWorkflowTests {
         plan = try #require(try await repository.pushPlan())
         #expect(plan.needsForce)
         await #expect(throws: GitError.self) { try await repository.push(branch: "main", setUpstream: false) }
-        try await repository.push(branch: "main", setUpstream: false, force: true)
+        await #expect(throws: GitPushPlanError.forceNotConfirmed) { try await repository.push(plan, force: false) }
+        try await repository.push(plan, force: true)
         #expect(try await repository.pushPlan()?.needsForce == false)
     }
 
