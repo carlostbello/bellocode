@@ -879,13 +879,25 @@ public actor ProjectionStore {
 
     // MARK: - App preferences
 
-    /// An app-owned preference (`app_preference`, kept by `rebuild()`), or nil when unset or unreadable.
+    /// An app-owned preference (`app_preference`, kept by `rebuild()`), or nil when unset. A stored value that cannot
+    /// be decoded throws `PreferenceUnreadable`: it is not the same as an absent one, and a caller that treats the two
+    /// alike says so with `try?` (AF27).
     public func preference<Value: Decodable & Sendable>(_ key: String, as type: Value.Type) async throws -> Value? {
         let data = try await read("preference") { db in
             try Data.fetchOne(db, sql: "SELECT json FROM app_preference WHERE key = ?", arguments: [key])
         }
         guard let data else { return nil }
-        return try? Self.decode(Value.self, data)
+        do {
+            return try Self.decode(Value.self, data)
+        } catch {
+            throw PreferenceUnreadable(key: key)
+        }
+    }
+
+    /// A stored preference that does not decode as the type asked for (damaged, or written by another version).
+    public struct PreferenceUnreadable: Error, LocalizedError, Equatable {
+        public var key: String
+        public var errorDescription: String? { "the saved value of \(key) is unreadable (damaged, or from another version)" }
     }
 
     /// Stores an app-owned preference. Never store credentials here.

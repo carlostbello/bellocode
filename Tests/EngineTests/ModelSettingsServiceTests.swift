@@ -198,4 +198,43 @@ struct ModelSettingsServiceTests {
         #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
         #expect(second.storageProblem == nil)
     }
+
+    /// AF27: the production reader over a stored row that does not decode (damaged, or written by another version)
+    /// reports it as unreadable, not as absent: the delegated-model mirror keeps the confirmed choice and the warning
+    /// stays, and the row is not overwritten with defaults.
+    @Test func anUndecodableStoredRowIsUnreadableNotAbsent() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ProjectionStore(location: .inMemory)
+        let defaults = root.appending(path: "bellocode-models.json")
+        func service() -> ModelSettingsService {
+            ModelSettingsService(store: store, folder: nil, modelDefaultsFile: defaults, client: { throw EngineError.offline })
+        }
+        let chosen = ModelChoice.specific(ModelSelection(providerID: "openai", modelID: "gpt-x"))
+        let first = service()
+        await first.load()
+        #expect(await first.setDelegated(chosen) == nil)
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+
+        // The stored row no longer decodes as the settings: not JSON of that shape, and a field of the wrong kind.
+        try await store.setPreference(ModelSettingsService.key, [1, 2])
+        await #expect(throws: ProjectionStore.PreferenceUnreadable.self) {
+            _ = try await store.preference(ModelSettingsService.key, as: BackgroundModelSettings.self)
+        }
+        try await store.setPreference(ModelSettingsService.key, ["delegated": 42])
+        await #expect(throws: ProjectionStore.PreferenceUnreadable.self) {
+            _ = try await store.preference(ModelSettingsService.key, as: BackgroundModelSettings.self)
+        }
+        let second = service()
+        await second.load()
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+        #expect(second.storageProblem?.contains("unreadable") == true)
+        #expect(await second.setGitText(.smallModel) != nil)
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+        // An absent row is still the defaults, and an absent field its default.
+        let empty = try ProjectionStore(location: .inMemory)
+        #expect(try await empty.preference(ModelSettingsService.key, as: BackgroundModelSettings.self) == nil)
+        try await empty.setPreference(ModelSettingsService.key, [String: String]())
+        #expect(try await empty.preference(ModelSettingsService.key, as: BackgroundModelSettings.self) == .standard)
+    }
 }

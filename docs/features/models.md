@@ -41,7 +41,8 @@ no model parameter); a chosen model or the small model is `generate.text` with `
 stands on the commits alone). **Delegated threads:** `delegate_task`'s model, else the agent's, else the owner's
 default (read from `bellocode-models.json` at each call, no restart). **Scheduled runs:** the task's model, else none if
 its agent has one, else the owner's default, "Same as parent" being the thread that created the schedule.
-If the `models.background` preference cannot be read, the plugin mirror is left as it was and the read error stays
+If the `models.background` preference cannot be read (a store error, or a saved row or field that does not decode,
+which counts as unreadable, never as absent: only a missing row or field is the default), the plugin mirror is left as it was and the read error stays
 shown; a change first re-reads the preference and is refused while it is unreadable, so the fallback is never saved
 as the setting (v1.0.1 AF27).
 

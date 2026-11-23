@@ -57,8 +57,8 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Engine, client MCP and models (P8):** the app and Shared Chrome tools are hosted for projects added while
   connected and again after a server restart (NF01); live message updates are no longer dropped after a sub-agent
   refresh (NF02); global MCP servers are registered when a project is shown (NF03); the Auto tab loads its log at once
-  (NF22); scheduled tasks sort consistently (NF23); an unreadable background-model preference keeps its warning and
-  the plugin's mirror (AF27).
+  (NF22); scheduled tasks sort consistently (NF23); an unreadable background-model preference, including a saved row that no longer
+  decodes, keeps its warning and the plugin's mirror (AF27).
 - **App UI and drafts (P9):** a failed first send from a draft returns its text to the new thread's composer (NF04);
   Start Thread from Issue fills an open draft (NF09); the draft's model hint only promises free models when they exist
   (NF24); the Issues view follows the displayed project (NF18); Shared Chrome viewers follow who has control and Stop
