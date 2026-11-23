@@ -47,6 +47,9 @@ public enum GitPushPlanError: Error, Sendable, Equatable, CustomStringConvertibl
     case severalPushURLs(String)
     /// The plan needs a force push and none was confirmed.
     case forceNotConfirmed
+    /// The installed git keeps a remote's configured push URLs ahead of a pinned one (before git 2.46 and Apple
+    /// Git-155), so the push could reach a destination nobody approved; `version` is git's own version line.
+    case gitCannotPinDestination(version: String)
 
     public var description: String { userMessage }
 
@@ -56,6 +59,8 @@ public enum GitPushPlanError: Error, Sendable, Equatable, CustomStringConvertibl
         case .destinationChanged: "The remote's address changed since the push was confirmed. Nothing was pushed; push again to review it."
         case .severalPushURLs(let remote): "\(remote) has several push URLs. BelloCode pushes to one reviewed destination; push from a terminal."
         case .forceNotConfirmed: "The remote has commits this branch does not. Nothing was pushed."
+        case .gitCannotPinDestination(let version):
+            "This git (\(version.isEmpty ? "unknown version" : version)) cannot hold a push to the reviewed address: BelloCode needs git 2.46 or Apple Git-155 or later. Nothing was pushed. Update the Command Line Tools, or push from a terminal."
         }
     }
 }
@@ -113,6 +118,8 @@ extension GitRepository {
         guard let branch = status.branch else { return nil }
         let urls = try await pushURLs(remote)
         guard let url = urls.first else { return nil }
+        // Before anything is shown for approval: a push this git cannot pin is refused now, not after the approval.
+        try await requirePinnablePush()
         guard urls.count == 1 else { throw GitPushPlanError.severalPushURLs(remote) }
         guard let localHead = try await revParse("HEAD") else { return nil }
         let remoteRef = "refs/remotes/\(remote)/\(branch)"
@@ -171,6 +178,7 @@ extension GitRepository {
         let urls = try await pushURLs(plan.remote)
         guard urls.count <= 1 else { throw GitPushPlanError.severalPushURLs(plan.remote) }
         guard urls.first == plan.remoteURL else { throw GitPushPlanError.destinationChanged }
+        try await requirePinnablePush()
         var arguments = ["push", "--quiet", "--no-follow-tags"]
         if force { arguments.append("--force-with-lease=refs/heads/\(plan.branch):\(plan.remoteHead ?? "")") }
         arguments += [plan.remote, "\(plan.localHead):refs/heads/\(plan.branch)"]
@@ -202,6 +210,32 @@ extension GitRepository {
             GitRunner.Setting("push.pushOption", ""),
             GitRunner.Setting("remote.\(plan.remote).mirror", "false"),
         ]
+    }
+
+    /// Refuses (`gitCannotPinDestination`) unless the git that will run the push provably clears a remote's URL lists
+    /// on an empty value, which `pinnedPush` relies on (AF06, GV10). git 2.45 and older, and Apple Git-154 and older,
+    /// append the empty value instead, so the repository's own push URLs stay ahead of the pinned one and are pushed
+    /// to first. Both checks must pass, and either failing to run refuses (fail closed):
+    /// - the version line (`git --version`, or the runner's `simulatedVersion` in tests) is not a known older git;
+    /// - the same binary, asked about a remote that only this invocation defines (an unguessable name, so no file can
+    ///   add to it), reports exactly the value after the reset for both its URL and push URL lists.
+    /// Probed at every plan and every push (one local, confined git each): nothing is cached that a Command Line Tools
+    /// update could make stale.
+    func requirePinnablePush() async throws {
+        let line: String
+        if let simulated = runner.simulatedVersion {
+            line = simulated
+        } else {
+            let output = try await git(["--version"], allowFailure: true)
+            line = output.status == 0 ? output.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        }
+        guard GitPushPinning.versionClearsURLLists(line) != false else { throw GitPushPlanError.gitCannotPinDestination(version: line) }
+        // `remote -v` lists a remote defined on the command line too (`get-url` only accepts the repository's own).
+        let probe = "bellocode-probe-\(UUID().uuidString.lowercased())"
+        let output = try await git(["remote", "-v"], limit: 1 << 20, allowFailure: true, configuration: GitPushPinning.probeConfiguration(remote: probe))
+        guard output.status == 0, GitPushPinning.probeShowsReset(listing: output.text, remote: probe) else {
+            throw GitPushPlanError.gitCannotPinDestination(version: line)
+        }
     }
 
     /// The remote's default branch (`refs/remotes/<remote>/HEAD`), else `main`/`master` if present.
@@ -546,4 +580,49 @@ actor GitStashLock {
 public enum GitSwitchError: Error, Sendable, Equatable {
     /// The switch would overwrite these files' local changes.
     case localChanges([String])
+}
+
+/// Whether a git can pin an approved push (`GitRepository.pinnedPush`, `requirePinnablePush`): an empty
+/// `remote.<name>.url` / `.pushurl` must clear the list read so far. Upstream git clears it from v2.46.0, Apple's from
+/// Apple Git-155 (Apple's numbering, not the upstream version, decides for an Apple build); older ones append the
+/// empty value (docs/reviews/v1.0.1-glm-verification-2.md, GV10).
+enum GitPushPinning {
+    /// false for a version known to append, true for one known to clear, nil when the line cannot be read (the
+    /// behavioural probe then decides alone).
+    static func versionClearsURLLists(_ line: String) -> Bool? {
+        if let range = line.range(of: "Apple Git-") {
+            let digits = line[range.upperBound...].prefix { $0.isASCII && $0.isNumber }
+            guard !digits.isEmpty, digits.count <= 6, let build = Int(digits) else { return false }
+            return build >= 155
+        }
+        guard line.hasPrefix("git version ") else { return nil }
+        let numbers = line.dropFirst("git version ".count).prefix { $0 != " " }.split(separator: ".").prefix(2)
+            .map { part -> Int? in
+                let digits = part.prefix { $0.isASCII && $0.isNumber }
+                return digits.isEmpty || digits.count > 6 ? nil : Int(digits)
+            }
+        guard numbers.count == 2, let major = numbers[0], let minor = numbers[1] else { return nil }
+        return major > 2 || (major == 2 && minor >= 46)
+    }
+
+    static let probeValues = (first: "https://bellocode-probe.invalid/first", second: "https://bellocode-probe.invalid/second")
+
+    /// A remote with two values before an empty one and one after it, in both lists.
+    static func probeConfiguration(remote: String) -> [GitRunner.Setting] {
+        [
+            GitRunner.Setting("remote.\(remote).url", probeValues.first),
+            GitRunner.Setting("remote.\(remote).url", ""),
+            GitRunner.Setting("remote.\(remote).url", probeValues.second),
+            GitRunner.Setting("remote.\(remote).pushurl", probeValues.first),
+            GitRunner.Setting("remote.\(remote).pushurl", ""),
+            GitRunner.Setting("remote.\(remote).pushurl", probeValues.second),
+        ]
+    }
+
+    /// `git remote -v` shows the probe remote's fetch URL (the first in its list) and every push URL, and each is
+    /// exactly the value after the reset: an appending git shows the first value (and an empty entry) instead.
+    static func probeShowsReset(listing: String, remote: String) -> Bool {
+        let lines = listing.components(separatedBy: "\n").filter { $0.hasPrefix(remote + "\t") }
+        return lines == ["\(remote)\t\(probeValues.second) (fetch)", "\(remote)\t\(probeValues.second) (push)"]
+    }
 }

@@ -181,6 +181,60 @@ struct FinalCheckGitTests {
         #expect(try await repo.git("--git-dir=" + second, "branch", "--list", "feature", in: repo.base.path).isEmpty, "never the second")
     }
 
+    /// AF06/GV10 (third round): the pin relies on an empty `remote.<name>.url`/`.pushurl` clearing the list, which git
+    /// 2.45 and older and Apple Git-154 and older do not do (they keep the repository's push URLs ahead of the pinned
+    /// one). On such a git (simulated through the version probe) neither a plan nor an approved push goes ahead, and
+    /// nothing reaches either repository; the message names the version. On this Mac's git both checks pass.
+    @Test func anOlderGitRefusesApprovedPushes() async throws {
+        let repo = try await TempRepo.make(files: ["a.txt": "one\n"])
+        defer { repo.remove() }
+        let (first, second) = try await remotes(repo)
+        try await repo.git("switch", "-q", "-c", "feature")
+        try repo.write("b.txt", "b\n")
+        try await repo.repository.commitAll(message: "b")
+        let plan = try #require(try await repo.repository.pushPlan(), "the current git pins pushes")
+        for version in ["git version 2.39.5 (Apple Git-154)", "git version 2.39.3 (Apple Git-146)", "git version 2.45.2"] {
+            var runner = repo.runner
+            runner.simulatedVersion = version
+            let old = GitRepository(directory: repo.path, runner: runner)
+            await #expect(throws: GitPushPlanError.gitCannotPinDestination(version: version)) { _ = try await old.pushPlan() }
+            await #expect(throws: GitPushPlanError.gitCannotPinDestination(version: version)) { try await old.push(plan, force: false) }
+            #expect(GitPushPlanError.gitCannotPinDestination(version: version).userMessage.contains(version))
+        }
+        #expect(try await repo.git("--git-dir=" + first, "branch", "--list", "feature", in: repo.base.path).isEmpty, "nothing pushed")
+        #expect(try await repo.git("--git-dir=" + second, "branch", "--list", "feature", in: repo.base.path).isEmpty)
+        // A newer version line still needs the behavioural probe of the binary; here it passes and the push goes.
+        var runner = repo.runner
+        runner.simulatedVersion = "git version 2.39.5 (Apple Git-155)"
+        try await GitRepository(directory: repo.path, runner: runner).push(plan, force: false)
+        #expect(try await repo.git("--git-dir=" + first, "rev-parse", "feature", in: repo.base.path).trimmingCharacters(in: .whitespacesAndNewlines) == plan.localHead)
+    }
+
+    /// The decision itself: Apple's build number decides for an Apple git, upstream 2.46 otherwise; an unreadable line
+    /// leaves it to the probe, whose output on an appending git (the earlier values kept, the empty one included) fails.
+    @Test func pinnedPushCapabilityReadsVersionsAndProbeOutput() {
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.54.0 (Apple Git-157)") == true)
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.39.5 (Apple Git-155)") == true)
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.39.5 (Apple Git-154)") == false)
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.50.1 (Apple Git-x)") == false, "an unreadable Apple build fails closed")
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.46.0") == true)
+        #expect(GitPushPinning.versionClearsURLLists("git version 3.0.0.windows.1") == true)
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.45.1") == false)
+        #expect(GitPushPinning.versionClearsURLLists("git version 1.9.5") == false)
+        #expect(GitPushPinning.versionClearsURLLists("") == nil)
+        #expect(GitPushPinning.versionClearsURLLists("something else") == nil)
+        #expect(GitPushPinning.versionClearsURLLists("git version 99999999999999999999.1") == nil, "no trap on a huge number")
+        #expect(GitPushPinning.versionClearsURLLists("git version 2.54.0 (Apple Git-9999999999)") == false, "nor on a huge build")
+        let (one, two) = GitPushPinning.probeValues
+        let name = "bellocode-probe-x"
+        #expect(GitPushPinning.probeShowsReset(listing: "origin\t/a (fetch)\norigin\t/a (push)\n\(name)\t\(two) (fetch)\n\(name)\t\(two) (push)\n", remote: name))
+        #expect(!GitPushPinning.probeShowsReset(
+            listing: "\(name)\t\(one) (fetch)\n\(name)\t\(one) (push)\n\(name)\t (push)\n\(name)\t\(two) (push)\n", remote: name),
+            "appended: the earlier values are kept ahead of the pinned one")
+        #expect(!GitPushPinning.probeShowsReset(listing: "\(name)\t\(two) (fetch)\n\(name)\t\(two) (push)\n\(name)\t\(two) (push)\n", remote: name))
+        #expect(!GitPushPinning.probeShowsReset(listing: "", remote: name), "no listing: refused")
+    }
+
     /// GV10: the approved push goes to the remote by name, so settings scoped to that name apply as in a terminal
     /// (here `remote.origin.receivepack`, which a push to a bare URL ignores).
     @Test func aPushHonoursSettingsScopedToTheRemoteName() async throws {

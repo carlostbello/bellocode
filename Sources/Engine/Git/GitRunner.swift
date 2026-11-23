@@ -86,6 +86,9 @@ public struct GitRunner: Sendable {
     public var outputLimit: Int
     /// The app's GitLab credentials for HTTPS remotes (nil: git uses only the person's own helpers).
     public var credentials: GitCredentials?
+    /// Tests only: replaces `git --version`'s line where a decision depends on the installed git (the pinned push's
+    /// capability check, `GitRepository.requirePinnablePush`). nil in the app.
+    public var simulatedVersion: String?
 
     static let log = Logger(subsystem: "dev.bellocode.engine", category: "git")
     static let signposter = OSSignposter(subsystem: "dev.bellocode.engine", category: .pointsOfInterest)

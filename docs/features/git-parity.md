@@ -62,6 +62,14 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   `push.followTags` ignored), no configured push options, no mirror (AV08). A force push leases on the plan's remote
   head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation both use it;
   there is no unbound force push.
+- **Only on a git that can pin (AF06, GV10, third round):** the reset relies on an empty `remote.<name>.url` /
+  `.pushurl` clearing the list, which git 2.45 and older and Apple Git-154 and older do not do (they append it, so the
+  repository's own push URLs stay ahead of the pinned one). Every plan and every approved push first checks the git
+  that will run it (`requirePinnablePush`): its version line must not be a known older git (Apple's build number
+  decides for an Apple git, 2.46 otherwise), and the same binary, asked through `git remote -v` about a remote only that
+  invocation defines, must show just the value after the reset in both lists. Either check failing, or not running,
+  refuses with "This git (…) cannot hold a push to the reviewed address … Update the Command Line Tools, or push from
+  a terminal", and nothing is sent. Sync and Publish push as a terminal would and are not affected.
 - **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
   the closed form.
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
