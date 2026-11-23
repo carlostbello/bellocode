@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import * as P from "../src/project.ts"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs"
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -148,6 +148,37 @@ describe("untrusted repository contents on a real file system", () => {
     const text = P.instructionsText(P.instructionFiles(repo)) ?? ""
     expect(text).not.toContain("HOST-SECRET-MARKER")
     expect(P.instructionFiles(repo)).toEqual([])
+    cleanup()
+  })
+
+  test("AF08: an ancestor replaced by a link between the check and the open is refused, not followed", () => {
+    const base = scratch()
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    mkdirSync(join(repo, "web"), { recursive: true })
+    writeFileSync(join(repo, "web", "AGENTS.md"), "web rules")
+    mkdirSync(join(base, "outside"))
+    writeFileSync(join(base, "outside", "AGENTS.md"), "HOST-SECRET-MARKER")
+    // The repository's web/ is swapped for a link to the outside folder just before the open (after the realpath
+    // check), as a concurrent checkout or a hostile tool would.
+    let swapped = false
+    const racing: P.FS = {
+      ...P.nodeFS,
+      readRegular: (path, limit, root) => {
+        if (!swapped && path.endsWith(join("web", "AGENTS.md"))) {
+          swapped = true
+          renameSync(join(repo, "web"), join(repo, "web-moved"))
+          symlinkSync(join(base, "outside"), join(repo, "web"))
+        }
+        return P.nodeFS.readRegular(path, limit, root)
+      },
+    }
+    const read = P.readInside(repo, join(repo, "web", "AGENTS.md"), P.LIMITS.fileBytes, racing)
+    expect(swapped).toBe(true)
+    expect(JSON.stringify(read)).not.toContain("HOST-SECRET-MARKER")
+    expect("refused" in read).toBe(true)
+    // An untouched file is still read through the same confined open.
+    expect(P.readInside(repo, join(repo, "web-moved", "AGENTS.md"), P.LIMITS.fileBytes)).toEqual({ text: "web rules", size: 9 })
     cleanup()
   })
 
