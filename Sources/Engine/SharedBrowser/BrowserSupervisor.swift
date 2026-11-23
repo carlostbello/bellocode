@@ -268,18 +268,26 @@ public actor BrowserSupervisor {
             set(.sandboxUnavailable)
             throw error
         } catch {
-            // The container this attempt created or started is ours to stop: a failed or cancelled start never leaves
-            // it running behind a Failed or Stopped phase (R23).
+            // Stop won: `stop` reconciles the container's actual state, whether this attempt started it or adopted one
+            // already running, and stops it in order with its confirmation (AF23).
+            if stopRequested {
+                note("start-cancelled")
+                throw error
+            }
+            // The container this attempt created or started is ours to stop: a failed start never leaves it running
+            // behind a Failed or Stopped phase (R23), and a stop that cannot be confirmed is shown as such (A19).
             if touchedContainer {
                 note("cleanup-stop")
-                try? await runtime.stop(timeout: timing.stopTimeoutSeconds)
+                do { try await runtime.stop(timeout: timing.stopTimeoutSeconds) } catch _ {
+                    note("cleanup-stop-error")
+                    if await !confirmedStopped() {
+                        set(.stopUnconfirmed("The shared Chrome did not start (\(Self.describe(error))) and BelloCode could not confirm it stopped. It may still be running; Stop again to retry."))
+                        startStopConfirmation(reason: "it did not start")
+                        throw error
+                    }
+                }
             }
-            if error is CancellationError || stopRequested {
-                note("start-cancelled")
-                set(.stopped)
-            } else {
-                set(.failed(Self.describe(error)))
-            }
+            set(error is CancellationError ? .stopped : .failed(Self.describe(error)))
             throw error
         }
     }
@@ -319,7 +327,19 @@ public actor BrowserSupervisor {
             note("cancel-start")
             starting.cancel()
             _ = try? await starting.value
-            if phase != .ready { return }
+            // A cancelled start leaves its phase as it was: reconcile with the container's actual state. One already
+            // running (adopted from a previous launch, or started by this attempt) gets the orderly stop below (AF23).
+            switch phase {
+            case .preparingImage, .starting:
+                if await confirmedStopped() {
+                    note("start-cancelled-stopped")
+                    set(.stopped)
+                    return
+                }
+                set(.starting)
+            default:
+                break
+            }
         }
         guard phase == .ready || phase == .starting || phase.isRecovering || phase.isStopUnconfirmed else {
             if case .failed = phase { set(.stopped) }
@@ -378,11 +398,14 @@ public actor BrowserSupervisor {
 
     /// Whether the container is verifiably not running (absent or exited). Unknown counts as not confirmed.
     private func confirmedStopped() async -> Bool {
-        guard let state = try? await runtime.inspect() else {
-            // The inspection itself failed: unknown, unless the container is gone.
+        do {
+            // Gone counts as stopped.
+            guard let state = try await runtime.inspect() else { return true }
+            return !state.running
+        } catch {
+            // The inspection itself failed: unknown.
             return false
         }
-        return !state.running
     }
 
     private func finishStop(reason: String) {

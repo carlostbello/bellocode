@@ -95,4 +95,76 @@ struct SharedBrowserStopTests {
         #expect(await sleeper.pending(.seconds(1)) == 0, "the backoff sleep was cancelled")
         #expect(!runtime.entries.contains("start"), "no restart")
     }
+
+    /// v1.0.1 AF23: a browser left running by a previous launch is adopted by a start; Stop during its readiness wait
+    /// stops it in order instead of showing Stopped while it keeps running.
+    @Test func aStopDuringReadinessOfAnAdoptedBrowserStopsIt() async throws {
+        let runtime = FakeBrowserRuntime()
+        let sleeper = ManualSleeper()
+        let supervisor = make(runtime, sleeper)
+        adoptRunningBrowser(runtime)
+        let start = Task { try await supervisor.begin(.call) }
+        #expect(await sleeper.waitUntil(.milliseconds(150)), "waiting for readiness")
+        #expect(!runtime.entries.contains("createAndStart") && !runtime.entries.contains("start"), "adopted, not started")
+        await supervisor.stop(reason: "test")
+        await #expect(throws: (any Error).self) { try await start.value }
+        #expect(runtime.entries.contains("stop(30)"), "\(runtime.entries)")
+        #expect(!runtime.state.withLock { $0.running })
+        #expect(await supervisor.phase == .stopped)
+    }
+
+    /// AF23: the same Stop while the runtime cannot stop it is shown as unconfirmed, never as Stopped.
+    @Test func aStopDuringReadinessThatCannotStopTheAdoptedBrowserIsUnconfirmed() async throws {
+        let runtime = FakeBrowserRuntime()
+        let sleeper = ManualSleeper()
+        let supervisor = make(runtime, sleeper)
+        adoptRunningBrowser(runtime)
+        runtime.state.withLock { $0.stopFails = true }
+        let start = Task { try await supervisor.begin(.call) }
+        #expect(await sleeper.waitUntil(.milliseconds(150)))
+        await supervisor.stop(reason: "test")
+        _ = try? await start.value
+        #expect(await supervisor.phase.isStopUnconfirmed)
+        #expect(runtime.state.withLock { $0.running })
+    }
+
+    /// AF23: Stop during image preparation with no container at all is a plain stop (nothing to stop).
+    @Test func aStopBeforeAnyContainerIsAPlainStop() async throws {
+        let hold = ManualSleeper()
+        let runtime = FakeBrowserRuntime(imageHold: hold)
+        let supervisor = make(runtime, ManualSleeper())
+        let start = Task { try await supervisor.begin(.call) }
+        #expect(await hold.waitUntil(.seconds(3_600)))
+        await supervisor.stop(reason: "test")
+        _ = try? await start.value
+        #expect(await supervisor.phase == .stopped)
+        #expect(!runtime.entries.contains("stop(30)"))
+        #expect(await supervisor.generation == 0)
+    }
+
+    /// AF23: a start that fails readiness and cannot stop the container it started says so instead of Failed.
+    @Test func aFailedStartWhoseCleanupStopFailsIsUnconfirmed() async throws {
+        let runtime = FakeBrowserRuntime()
+        runtime.state.withLock { $0.stopFails = true }
+        var timing = BrowserSupervisor.Timing(idle: .seconds(600))
+        timing.readyTimeout = .zero
+        let supervisor = BrowserSupervisor(runtime: runtime, timing: timing, viewerPassword: "pw", spec: { image, placement, seccomp in
+            BrowserContainerSpec(image: image, seccompProfile: seccomp, network: placement.network, proxy: placement.proxy)
+        }, sleep: { try await ManualSleeper().sleep($0) })
+        await #expect(throws: BrowserStartError.timedOut) { try await supervisor.begin(.call) }
+        #expect(await supervisor.phase.isStopUnconfirmed)
+        #expect(runtime.state.withLock { $0.running })
+    }
+
+    /// The container a previous launch left running, with the configuration this start wants, not yet ready.
+    private func adoptRunningBrowser(_ runtime: FakeBrowserRuntime) {
+        let wanted = BrowserContainerSpec(image: "bellocode-browser:test", seccompProfile: "{}", network: "bellocode-egress-browser",
+                                          proxy: "http://bellocode-proxy:3128")
+        runtime.state.withLock {
+            $0.exists = true
+            $0.running = true
+            $0.configHash = wanted.configHash
+            $0.statusReady = false
+        }
+    }
 }
