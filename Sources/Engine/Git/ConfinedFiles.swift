@@ -104,6 +104,42 @@ final class ConfinedDirectory {
         }
     }
 
+    /// What a bounded preview of `name` finds (`preview`).
+    enum Preview: Equatable {
+        /// A regular file of at most the size limit: its first `prefix` bytes.
+        case regular(Data)
+        /// A link: its text, never its target.
+        case symlink(String)
+        /// Missing, too large, unreadable, or not a file or link.
+        case skipped
+    }
+
+    /// The start of `name` without following a link: a regular file's first `prefix` bytes, read only when its size
+    /// (checked on the opened descriptor, before anything is allocated) is below `maxSize`; a link's text.
+    func preview(_ name: String, maxSize: Int, prefix: Int) -> Preview {
+        var info = stat()
+        guard fstatat(descriptor, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return .skipped }
+        switch info.st_mode & S_IFMT {
+        case S_IFLNK:
+            if case .symlink(let text) = entry(name) { return .symlink(text) }
+            return .skipped
+        case S_IFREG:
+            let file = openat(descriptor, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard file >= 0 else { return .skipped }
+            let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+            var opened = stat()
+            guard fstat(file, &opened) == 0, (opened.st_mode & S_IFMT) == S_IFREG, opened.st_size < maxSize else { return .skipped }
+            do {
+                // nil at end of file: an empty file.
+                return .regular(try handle.read(upToCount: max(1, prefix)) ?? Data())
+            } catch {
+                return .skipped
+            }
+        default:
+            return .skipped
+        }
+    }
+
     /// Creates `name` (which must not exist) holding `data`, or a link to `link` when given.
     func create(_ name: String, data: Data, permissions: Int, link: String?) -> Bool {
         if let link {

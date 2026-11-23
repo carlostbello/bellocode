@@ -389,7 +389,7 @@ struct GitServiceTests {
         try await model.switchBranch("main", create: false)
         // A local edit to the same file makes the apply fail.
         try repo.write("a.txt", "in the way\n")
-        await #expect(throws: GitError.self) { try await model.restoreStash(hash) }
+        await #expect(throws: StashRecoveryError.self) { try await model.restoreStash(hash) }
         #expect(model.parkedStashes["main"] == hash)
         #expect(try await repo.git("stash", "list", "--format=%H").contains(hash))
         try repo.write("a.txt", "one\n")

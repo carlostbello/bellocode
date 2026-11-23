@@ -25,9 +25,6 @@ struct PendingGitPush: Sendable {
     var directory: String
     var plan: GitPushPlan
     var force: Bool
-    /// `refs/remotes/<remote>/<branch>` when the card was raised (the lease for a force push).
-    var remoteHead: String?
-    var localHead: String
     var digest: String
 }
 
@@ -63,20 +60,21 @@ extension ExtrasHub {
         }
         let isDefault = (try? await repository.defaultRemoteBranch(remote: "origin")) == plan.branch
         if isDefault { warnings.append("⚠ \(plan.branch) is the repository's default branch.") }
-        let localHead = try await repository.revParse("HEAD") ?? ""
-        let remoteHead = try? await repository.revParse("refs/remotes/origin/\(plan.branch)")
+        let localHead = plan.localHead
+        let remoteHead = plan.remoteHead
         let commitLines = plan.commits.prefix(20).map { "  \($0.shortHash) \(String($0.subject.prefix(100)))" }.joined(separator: "\n")
         let more = plan.commits.count > 20 || plan.moreCommits > 0 ? "\n  … and \(plan.moreCommits + max(0, plan.commits.count - 20)) more" : ""
         let detail = """
             Remote: \(plan.remoteURL)
             Branch: \(plan.branch) → origin/\(plan.branch)\(plan.remoteBranchExists ? "" : " (new on the remote)")\(plan.setsUpstream ? ", sets upstream" : "")
-            Force: \(force ? "YES: replaces origin/\(plan.branch) (\(remoteHead.map { String($0.prefix(12)) } ?? "unknown")) with \(localHead.prefix(12)) (--force-with-lease)" : "no")
+            Commit: \(localHead)
+            Force: \(force ? "YES: replaces origin/\(plan.branch) (\(remoteHead ?? "none")) with \(localHead.prefix(12)) (--force-with-lease)" : "no")
             Commits (\(plan.commits.count + plan.moreCommits)):
             \(commitLines.isEmpty ? "  (none)" : commitLines)\(more)
             \(warnings.joined(separator: "\n"))
             """.trimmingCharacters(in: .whitespacesAndNewlines)
         let digest = SHA256Hex.of(detail)
-        let pending = PendingGitPush(sessionID: caller.sessionID, directory: caller.directory, plan: plan, force: force, remoteHead: remoteHead ?? nil, localHead: localHead, digest: digest)
+        let pending = PendingGitPush(sessionID: caller.sessionID, directory: caller.directory, plan: plan, force: force, digest: digest)
         // Full access acts at once only for an ordinary push to a non-default, unprotected branch.
         if caller.permissionMode == .fullAccess, !force, !isProtected, !isDefault {
             return ClientMCPResult(text: try await executeGitPush(pending))
@@ -95,18 +93,17 @@ extension ExtrasHub {
         return ClientMCPResult(text: "Asked the user to approve this push (a card shows the remote, branch and commits). Nothing was pushed yet. You are woken with the result; end your turn now.")
     }
 
-    /// Pushes once, after checking the branch still points where the card said (and, for a force push, with a lease on
-    /// the remote head the card showed).
+    /// Pushes once, exactly what the card showed (AF06): the card's commit to the card's resolved URL, after checking
+    /// the branch, HEAD and the remote's push URL are unchanged (and, for a force push, with a lease on the remote head
+    /// the card showed). A remote repointed meanwhile invalidates the card instead of receiving the push.
     func executeGitPush(_ pending: PendingGitPush) async throws -> String {
         let runner = engine?.git.runner ?? GitRunner()
         let repository = GitRepository(directory: pending.directory, runner: runner)
-        let status = try await repository.status(limit: 1)
-        guard status.branch == pending.plan.branch, try await repository.revParse("HEAD") == pending.localHead else {
-            throw ExtrasError("The branch changed since the card was shown. Nothing was pushed; ask again.")
+        do {
+            try await repository.push(pending.plan, force: pending.force)
+        } catch let changed as GitPushPlanError {
+            throw ExtrasError(changed == .branchChanged ? "The branch changed since the card was shown. Nothing was pushed; ask again." : changed.userMessage)
         }
-        try await repository.push(
-            branch: pending.plan.branch, remote: pending.plan.remote, setUpstream: pending.plan.setsUpstream, force: pending.force,
-            expectedRemoteHead: pending.force ? (pending.remoteHead ?? "") : nil)
         engine?.git.refreshAll(under: pending.directory)
         return "Pushed \(pending.plan.branch) to origin (\(pending.plan.commits.count + pending.plan.moreCommits) commit\(pending.plan.commits.count + pending.plan.moreCommits == 1 ? "" : "s"))\(pending.force ? " with --force-with-lease" : "")."
     }
