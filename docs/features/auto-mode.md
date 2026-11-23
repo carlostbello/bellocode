@@ -29,7 +29,7 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
   still ask for everything except saved grants (reviewed only once the plugin loads).
 - Non-waking synthetic input (`resume: false`) is parked in the **inbox** until the next run (probe).
 
-## Policy (`RiskPolicy`, version `bellocode-auto-4`, pure and unit-tested; precedence below, a model can override none)
+## Policy (`RiskPolicy`, version `bellocode-auto-5`, pure and unit-tested; precedence below, a model can override none)
 1. **opencode's configured denies** (never reach BelloCode).
 2. **Hard deny** (reply `reject` with the reason): BelloCode/opencode data and config (`~/.config/opencode`,
    `~/.local/share|state/opencode`, `~/Library/Application Support/BelloCode`, `bellocode-exec.json`), `~/Library/Keychains`,
@@ -44,7 +44,10 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
    rule winning and a file counting as read when GNU or BSD grep would read it (BSD also matches the whole path);
    following links as `-r`/`-R` do; glob operands expanded as the shell does, hidden names included; a shell variable, a
    brace expansion, a glob the shell would expand in an option or the pattern, an operand or folder that cannot be
-   examined, or over 20 000 entries, counts as one; N05, AF14, GV03); paths outside the project and its worktrees
+   examined, or over 20 000 entries, counts as one; N05, AF14, GV03; the command is read with GNU's and BSD grep's
+   option grammars, abbreviations (`--rec`, `--dir=rec`) included, optional values (`--color`) only attached, and an
+   option neither knows read as recursive with and without a value, GW02); the same scan for `diff -r`,
+   `git diff --no-index` and `git grep --no-index`/`--untracked`/`--no-exclude-standard`; paths outside the project and its worktrees
    after `~`, `..`, `cd` and symlink resolution (`/tmp` exempt for container commands); cross-project
    (`bellocode_other_project`); agent/MCP/isolation config (`opencode.json*`, `.opencode/`, `.mcp.json`, `.devcontainer/`,
    `.git/hooks`, `.git/config`, `git config`, proxy/TLS env vars, firewall tools; written by output redirections or by any
@@ -58,7 +61,13 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
 4. **Deterministic allow** (`once`): in-project non-secret read/list/glob/grep; in-project non-policy edits; read-only
    commands (ls, cat, grep/rg, find without -exec/-delete, git status/diff/log/show, …) whose every path is inside, and
    never with an option that runs a program (`rg --pre`, `git grep -O`/`--open-files-in-pager`, `--ext-diff`, `--textconv`,
-   `sort --compress-program`) or writes a file (N05);
+   `sort --compress-program`, `ag --pager`) or writes a file (`sort -o`, `tree -o`, `file -C`, `xxd -r`) or sets the
+   clock (N05). Every spelling a program reads counts as the option (GW02): any unique abbreviation of a long option,
+   since getopt_long and git's parse-options take them (`git grep --op=CMD`, `sort --out=FILE`), its value attached or
+   as the next word, and a short option anywhere in a cluster or with an attached value (`sort -ro FILE`, `-oFILE`;
+   an attached value naming a secret, a protected store or a policy file counts as naming it). `git branch`, `tag`
+   and `remote` are read-only only with listing options, and `git stash` only as `list`/`show`. Mandatory
+   escalations match abbreviations too (`git reset --har`, `rm --rec`);
    todowrite, question, skill, subagent, BelloCode app tools (they ask themselves).
 5. **Saved grant** (non-mandatory only): a project grant the person saved with "Always" covers it (`once`).
 6. **Reviewer** for everything else (unknown tools, MCP tools, builds/tests, network without credentials, …).

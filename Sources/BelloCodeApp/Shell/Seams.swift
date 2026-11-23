@@ -1,5 +1,6 @@
 import AppKit
 import BelloCore
+import ComposerKit
 import DesignSystem
 import Engine
 import Observation
@@ -42,6 +43,9 @@ struct ShellSurfaces {
     var autoAudit: AutoAuditSurfaces? = nil
     /// The shared Chromium's live view, the "Chrome" tab (Content/SharedChromeSurface.swift); nil in tests.
     var sharedChrome: SharedChromeSurfaces? = nil
+    /// The composer host for a thread's draft outside any composer (a rewound prompt for a thread no window shows,
+    /// AV2-02): the same attachment store and draft archive as the composer surfaces, so its rich draft is kept.
+    var draftHost: @MainActor (ThreadModel) -> any ComposerHost = { ThreadModelComposerHost($0) }
 
     static var builtIn: ShellSurfaces { builtIn(services: AppServices()) }
 
@@ -80,6 +84,7 @@ struct ShellSurfaces {
             terminalDrawer: { terminals.makeDrawerController() }, changes: changes, browser: browser, agents: agents,
             mergeRequests: mergeRequests, autoAudit: autoAudit)
         surfaces.sharedChrome = sharedChrome
+        surfaces.draftHost = { ThreadModelComposerHost($0, fileStore: services.attachmentStore, archive: services.draftArchive) }
         return surfaces
     }
 }

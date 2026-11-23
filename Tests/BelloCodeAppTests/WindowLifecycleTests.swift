@@ -1,5 +1,6 @@
 import AppKit
 import BelloCore
+import ComposerKit
 import Engine
 import Foundation
 import SwiftUI
@@ -60,6 +61,47 @@ import Testing
         #expect(await waitUntil(timeout: .seconds(5)) { other.isDraftLoaded && other.draft.hasPrefix("rewound prompt for B") }, "\(other.draft)")
         controller.placeRewoundPrompt("rewound prompt for A", thread: threads[0])
         #expect(composer.textView.string.contains("rewound prompt for A"), "the shown thread's own prompt goes to its composer")
+    }
+
+    /// AV2-02: a second window already shows the rewound thread. Its loaded composer takes the prompt (in front of its
+    /// draft), so its next save keeps it instead of overwriting the thread's draft with the text it showed before.
+    @Test func aRewoundPromptReachesTheThreadsComposerInAnotherWindow() async throws {
+        let shell = try await IntegratedShellTests.Shell.start()
+        defer { Task { await shell.stop() } }
+        let threads = shell.threads
+        try #require(threads.count >= 2)
+        let first = shell.controller
+        #expect(await shell.driver.select(.thread(threads[0])))
+        shell.driver.settle()
+        let workspace = WorkspaceController(engine: shell.engine, stateStore: ShellStateStore(defaults: nil))
+        let services = AppServices(settings: AppSettings(defaults: nil), auth: shell.engine.makeAuthService(openURL: { _ in }),
+                                   attachmentStore: AttachmentFileStore(directory: shell.attachments))
+        let second = MainWindowController(workspace: workspace, configuration: .init(surfaces: .builtIn(services: services), autosaveSuffix: nil))
+        defer {
+            workspace.close()
+            second.close()
+        }
+        second.showWindow(nil)
+        let driver = ShellDriver(controller: second)
+        #expect(await driver.select(.thread(threads[1])))
+        driver.settle()
+        #expect(await waitUntil(timeout: .seconds(5)) { second.changesComposer.map { !$0.controller.awaitingDraft } ?? false })
+        let composer = try #require(second.changesComposer)
+        composer.focus()
+        composer.insert(text: "half-typed")
+        composer.controller.flushDraft()
+
+        first.placeRewoundPrompt("rewound prompt for B", thread: threads[1])
+        #expect(await waitUntil(timeout: .seconds(5)) { composer.textView.string.hasPrefix("rewound prompt for B") }, "\(composer.textView.string)")
+        #expect(composer.textView.string.contains("half-typed"), "what that window showed stays, after the prompt")
+        // Its next edit and save keep the prompt in the thread's draft.
+        composer.insert(text: "!")
+        composer.controller.flushDraft()
+        let model = shell.engine.openThread(threads[1])
+        defer { model.close() }
+        #expect(model.draft.hasPrefix("rewound prompt for B"), "\(model.draft)")
+        let firstText = first.changesComposer?.textView.string ?? ""
+        #expect(firstText.range(of: "rewound prompt for B") == nil, "the first window's thread is untouched")
     }
 
     /// NV10: the blocked-command banner follows the context's directory live: a thread shown before its session

@@ -1,5 +1,6 @@
 import AppKit
 import BelloCore
+import ComposerKit
 import DiffKit
 import Engine
 import SwiftUI
@@ -413,16 +414,30 @@ extension MainWindowController {
         showGitPanel(RewindView(model: model, close: { [weak self] _ in self?.closeGitPanel() }), title: "Edit from Here")
     }
 
-    /// The rewound prompt goes back to its own thread (NV09): into the visible composer while the window still shows
-    /// that thread, else into that thread's draft (in front of what is there), never into another thread's composer.
+    /// The rewound prompt goes back to its own thread (NV09), and every composer of that thread sees it (AV2-02):
+    /// while this window shows the thread it is inserted into the visible composer (one undoable edit); every other
+    /// live composer of the thread, in any window, takes it in front of what it shows, so none of them saves over it
+    /// later. With no composer showing the thread, it goes in front of the thread's stored draft through the draft
+    /// host, keeping that draft's tokens and attachments; never into another thread's composer.
     func placeRewoundPrompt(_ text: String, thread id: SessionID) {
-        if container.context?.thread?.sessionID == id, let composer = changesComposer {
+        let recovered = ComposerDraft(text: text)
+        if container.context?.thread?.sessionID == id, let composer = changesComposer, let thread = container.context?.thread {
             composer.insert(text: text)
+            composer.controller.flushDraft()
+            ComposerController.Registry.shared.placeRecovered(recovered, owner: ObjectIdentifier(thread), except: composer.controller)
             return
         }
         let thread = workspace.engine.openThread(id)
-        thread.draft = thread.draft.isEmpty ? text : text + "\n\n" + thread.draft
-        thread.close()
+        let host = draftHost(thread)
+        // Not cancelled with the window: like a failed send's restore, the prompt must reach its thread (bounded by
+        // the draft-load timeout).
+        Task {
+            defer { thread.close() }
+            if await ComposerController.placeRecovered(recovered, into: host) == .unloadedDraft {
+                // The stored draft never loaded: the thread merges the text with it when it does (text only).
+                thread.draft = thread.draft.isEmpty ? text : text + "\n\n" + thread.draft
+            }
+        }
     }
 
     /// Undo of a rewind's file restore. A failure (a restored file changed since, so nothing is overwritten, or a

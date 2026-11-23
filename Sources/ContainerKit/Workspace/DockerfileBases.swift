@@ -462,13 +462,18 @@ public enum DockerfileBases {
         instructions(lines: physicalLines(dockerfile), escape: escape, heredocs: heredocs)
     }
 
-    /// BuildKit's `trimContinuationCharacter`: the escape followed only by spaces and tabs ends a continued line; it is
-    /// removed with them and nothing is put in its place.
+    /// BuildKit's `trimContinuationCharacter`, whose rule is the regular expression `([^X])X[ \t]*$|^X[ \t]*$` for
+    /// the escape `X` (`setEscapeToken`, the same from v0.8.0 to `master`; the classic builder imports it): the escape
+    /// followed only by spaces and tabs continues the line when it is the line's first character or follows any
+    /// character other than the escape. It is removed with the blanks after it and nothing is put in its place. A run
+    /// of two or more escapes (`RUN echo \\`) is an escaped escape: the instruction ends there (AF11, GW01).
     static func trimContinuation(_ line: String, escape: Unicode.Scalar) -> (String, ended: Bool) {
         var view = Substring(line).unicodeScalars
         while view.last == " " || view.last == "\t" { view = view.dropLast() }
         guard view.last == escape else { return (line, true) }
-        return (String(String.UnicodeScalarView(view.dropLast())), false)
+        let body = view.dropLast()
+        if let before = body.last, before == escape { return (line, true) }
+        return (String(String.UnicodeScalarView(body)), false)
     }
 
     /// The reading with heredocs is BelloCode's reading of the file as Docker parses it: there an uncertain character

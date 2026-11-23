@@ -18,7 +18,13 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. `--include`/`--exclude`
   rules apply in order with the last match winning, as grep applies them, and a brace expansion, a glob the shell
   would expand in an option or the pattern, or an operand that cannot be examined also asks. The risk policy version
-  is `bellocode-auto-4` (AF14, GV03).
+  is `bellocode-auto-5` (AF14, GV03, GW02).
+- **Auto reads options the way programs do.** An abbreviated long option (`git grep --op=CMD`, `sort --out=FILE`,
+  `grep --rec`), a clustered or attached short option (`sort -ro FILE`, `sort -oFILE`) and `grep --color -r` are now
+  the option they spell, so they are no longer allowed as read-only commands, and a recursive spelling gets the
+  secret-file preflight. `diff -r`, `git diff --no-index` and `git grep --no-index`/`--untracked` get the same
+  preflight. `git stash` with no subcommand, and `git branch`/`tag`/`remote` with anything but listing options, now
+  go to the reviewer (GW02, AF14).
 - **Workspace containers run as a verified numeric user.** The image's user is resolved from its own account files
   without running it, root and unknown names are refused before anything starts, and every exec (commands,
   terminals, MCP servers, probes, port relays, secret commands) uses the numeric `uid:gid`. An existing workspace that
@@ -155,6 +161,18 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   traps the app (AV2-03); the author, path, job name, stage and issue title in Add to Agent Context, Send to Agent and
   Start Thread from Issue are redacted too, and every GitLab tool result and error gets a final exact-token pass
   (AV2-05).
+- **Third verification round (R3a,** [Astra](reviews/v1.0.1-astra-verification-2.md),
+  [GLM](reviews/v1.0.1-glm-verification-2.md)**):** the Dockerfile reader the image policy relies on, and the build
+  instrumenter that adds the trust roots to every stage, continue a line only as BuildKit does: a trailing escaped
+  escape (`RUN echo \\`) ends the instruction, so the next line's `FROM` is a stage whose base is checked and
+  instrumented; the instrumenter also splits CRLF files into lines, honours `# escape=` and no longer takes a comment
+  ending in the escape for a continuation (AF11, GW01).
+  The plugin's repository instructions are bound to the session's checkout: a session folder that is, or comes to
+  be, a link inside a checkout, or that leads into the middle of another checkout, hands over no instructions, and
+  each session keeps the root its first prompt found (AF08).
+  Edit from Here's rewound prompt reaches every open composer of its thread, in any window, so a second window no
+  longer saves over it, and when no window shows the thread it goes in front of the saved draft with that draft's
+  mentions and attachments kept (AV2-02).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,

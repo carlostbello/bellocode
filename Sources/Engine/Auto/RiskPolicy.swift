@@ -10,7 +10,7 @@ import Foundation
 /// escalated or reviewed, never allowed deterministically.
 public enum RiskPolicy {
     /// Bumped whenever a list or rule changes. Every Auto decision and audit entry records it.
-    public static let version = "bellocode-auto-4"
+    public static let version = "bellocode-auto-5"
 
     /// Where the session works, and what it must never touch.
     public struct Context: Sendable, Equatable {
@@ -131,14 +131,17 @@ public enum RiskPolicy {
     /// Entries a `grep -r` tree check reads before it gives up (and escalates).
     static let searchScanLimit = 20_000
 
-    /// `grep -r` reads every file under the folders it searches, hidden, ignored and dependency folders (`.git`,
-    /// `node_modules`) included (N05, AF14): when one of them looks like a secret (`.env`, keys, credentials), or the
-    /// tree is too large to tell, the person decides. `--include`/`--exclude`/`--exclude-dir` (and BSD
+    /// Recursive reads (N05, AF14): `grep -r` reads every file under the folders it searches, hidden, ignored and
+    /// dependency folders (`.git`, `node_modules`) included; so do `diff -r`, `git diff --no-index` and a `git grep`
+    /// told to search untracked or ignored files. When one of them looks like a secret (`.env`, keys, credentials), or
+    /// the tree is too large to tell, the person decides. For grep, `--include`/`--exclude`/`--exclude-dir` (and BSD
     /// `--include-dir`) are applied in order, the last matching rule winning, as GNU and BSD grep both do; a file
-    /// counts as read when either implementation would read it. Links are followed as grep follows them. Operands the
-    /// shell would glob are expanded; anything whose effect cannot be established statically (a variable, a brace
-    /// expansion, a glob the shell would expand in an option or the pattern, an operand or folder that cannot be
-    /// examined) is a finding of its own, so the person decides (GV03). Bounded.
+    /// counts as read when either implementation would read it. The command is read with both implementations'
+    /// option grammars, abbreviations included, and an option neither knows counts as recursive with and without a
+    /// value (GW02, AF14). Links are followed as grep follows them. Operands the shell would glob are expanded;
+    /// anything whose effect cannot be established statically (a variable, a brace expansion, a glob the shell would
+    /// expand in an option or the pattern, an operand or folder that cannot be examined) is a finding of its own, so
+    /// the person decides (GV03). Bounded.
     static func recursiveSearchFindings(_ action: Action, in context: Context) -> [RiskFinding] {
         let lines = action.command.map { [$0] } ?? action.resources
         var found: [RiskFinding] = []
@@ -151,7 +154,13 @@ public enum RiskPolicy {
                     cwd = args.first(where: { !$0.hasPrefix("-") }).map { Paths.canonical($0, base: cwd, home: context.home) } ?? context.home
                     continue
                 }
-                guard ["grep", "egrep", "fgrep"].contains(name), let search = GrepSearch(args) else { continue }
+                if let finding = otherRecursiveReadFinding(name, args, command: command, cwd: cwd, in: context) {
+                    found.append(finding)
+                    continue
+                }
+                guard ["grep", "egrep", "fgrep"].contains(name) else { continue }
+                let readings = GrepSearch.readings(args)
+                guard !readings.isEmpty else { continue }
                 if command.expandsVariables {
                     // Unknown words could be operands or options: what it reads cannot be established.
                     found.append(RiskFinding(.secretRead, "grep -r with a shell variable (secret files could not be ruled out)"))
@@ -162,38 +171,83 @@ public enum RiskPolicy {
                     found.append(RiskFinding(.secretRead, "grep -r with a brace expansion (secret files could not be ruled out)"))
                     continue
                 }
-                // Word indices in `args` are one less than in `words` (the program is word 0).
-                let globArgs = Set(command.globWords.filter { $0 > 0 }.map { $0 - 1 })
-                var roots: [(path: String, spelled: [String])] = []
-                var unknown: String?
-                for index in globArgs.sorted() where !search.operandIndices.contains(index) {
-                    // A glob in an option, its value or the pattern: the shell may replace it with file names and shift
-                    // every word after it.
-                    let pattern = Paths.canonical(args[index], base: cwd, home: context.home)
-                    if expandGlob(pattern, dotfiles: false) != [pattern] { unknown = "grep -r with an option or pattern the shell expands to file names (secret files could not be ruled out)" }
-                }
-                let operands = search.operandIndices.isEmpty ? [(index: -1, text: ".")] : search.operandIndices.map { (index: $0, text: args[$0]) }
-                for operand in operands {
-                    let path = Paths.canonical(operand.text, base: cwd, home: context.home)
-                    if globArgs.contains(operand.index) {
-                        // As the shell expands it, and (in case `dotglob` is set) with hidden names as well.
-                        for match in expandGlob(path, dotfiles: true) { roots.append((match, [match])) }
-                    } else {
-                        roots.append((path, [operand.text, path]))
+                // Every reading must be clean: the first finding of any of them is the command's.
+                for search in readings {
+                    if let finding = grepFinding(search, args: args, command: command, cwd: cwd, in: context) {
+                        found.append(finding)
+                        break
                     }
                 }
-                if let unknown {
-                    found.append(RiskFinding(.secretRead, unknown))
-                    continue
-                }
-                if let hit = secretFile(under: roots, search: search, context: context) { found.append(RiskFinding(.secretRead, hit)) }
             }
         }
         return found
     }
 
-    /// The parts of a recursive grep that decide what it reads.
-    struct GrepSearch {
+    /// What one reading of a recursive grep reads that the person must decide on, if anything.
+    static func grepFinding(_ search: GrepSearch, args: [String], command: ShellAnalysis.Command, cwd: String, in context: Context) -> RiskFinding? {
+        // Word indices in `args` are one less than in `words` (the program is word 0).
+        let globArgs = Set(command.globWords.filter { $0 > 0 }.map { $0 - 1 })
+        for index in globArgs.sorted() where !search.operandIndices.contains(index) {
+            // A glob in an option, its value or the pattern: the shell may replace it with file names and shift every
+            // word after it.
+            let pattern = Paths.canonical(args[index], base: cwd, home: context.home)
+            if expandGlob(pattern, dotfiles: false) != [pattern] {
+                return RiskFinding(.secretRead, "grep -r with an option or pattern the shell expands to file names (secret files could not be ruled out)")
+            }
+        }
+        var roots: [(path: String, spelled: [String])] = []
+        let operands = search.operandIndices.isEmpty ? [(index: -1, text: ".")] : search.operandIndices.map { (index: $0, text: args[$0]) }
+        for operand in operands {
+            let path = Paths.canonical(operand.text, base: cwd, home: context.home)
+            if globArgs.contains(operand.index) {
+                // As the shell expands it, and (in case `dotglob` is set) with hidden names as well.
+                for match in expandGlob(path, dotfiles: true) { roots.append((match, [match])) }
+            } else {
+                roots.append((path, [operand.text, path]))
+            }
+        }
+        return secretFile(under: roots, search: search, context: context).map { RiskFinding(.secretRead, $0) }
+    }
+
+    /// `diff -r`, `git diff --no-index` and `git grep --no-index`/`--untracked`/`--no-exclude-standard` read whole
+    /// trees, untracked and ignored files included: a secret-looking file in them asks (AF14's class). Every word that
+    /// names an existing path counts as a tree (a superset of the operands), and for `git grep` the current folder too.
+    static func otherRecursiveReadFinding(_ name: String, _ args: [String], command: ShellAnalysis.Command, cwd: String, in context: Context) -> RiskFinding? {
+        let recursive: Bool
+        var includeCurrent = false
+        switch name {
+        case "diff":
+            recursive = args.contains { OptionSyntax.cluster($0, contains: ["r"]) || OptionSyntax.abbreviates($0, ["recursive"]) }
+        case "git":
+            guard let sub = args.first else { return nil }
+            let tail = args.dropFirst()
+            if sub == "diff" {
+                recursive = tail.contains { OptionSyntax.abbreviates($0, ["no-index"]) }
+            } else if sub == "grep" {
+                recursive = tail.contains { OptionSyntax.abbreviates($0, ["no-index", "untracked", "no-exclude-standard"]) }
+                includeCurrent = true
+            } else {
+                return nil
+            }
+        default:
+            return nil
+        }
+        guard recursive else { return nil }
+        if command.expandsVariables || !command.braceWords.isEmpty || command.hasGlob {
+            return RiskFinding(.secretRead, "\(name) over a tree with words the shell rewrites (secret files could not be ruled out)")
+        }
+        var roots: [(path: String, spelled: [String])] = includeCurrent ? [(cwd, [cwd])] : []
+        for arg in args where !arg.hasPrefix("-") {
+            let path = Paths.canonical(arg, base: cwd, home: context.home)
+            if FileManager.default.fileExists(atPath: path) { roots.append((path, [arg, path])) }
+        }
+        var search = GrepSearch()
+        search.followsLinks = name == "diff"  // GNU diff follows links unless told not to
+        return secretFile(under: roots, search: search, context: context).map { RiskFinding(.secretRead, $0) }
+    }
+
+    /// The parts of a recursive grep that decide what it reads, in one reading of its arguments.
+    struct GrepSearch: Equatable {
         /// An `--include`/`--exclude` (files) or `--include-dir`/`--exclude-dir` (folders) rule, in command-line order.
         /// A nil glob never matches: `--exclude-from` rules this check does not read (they can only exclude more).
         struct Rule: Equatable {
@@ -214,61 +268,116 @@ public enum RiskPolicy {
         /// follows only links named on the command line.
         var followsLinks = false
 
-        /// Nil when the command is not recursive.
-        init?(_ args: [String]) {
+        /// How far one reading has got.
+        private struct Reading {
+            var index = 0
             var recursive = false
             var patternGiven = false
             var positional: [Int] = []
-            var index = 0
-            let valued: Set<String> = ["-e", "-f", "-m", "-A", "-B", "-C", "-d", "-D", "--regexp", "--file", "--max-count", "--context", "--include",
-                                       "--exclude", "--exclude-dir", "--include-dir", "--exclude-from", "--directories", "--devices", "--label",
-                                       "--color", "--colour", "--after-context", "--before-context", "--binary-files"]
-            while index < args.count {
-                let arg = args[index]
-                let next = index + 1 < args.count ? args[index + 1] : nil
-                if arg == "--" { positional += Array((index + 1)..<args.count); break }
-                if arg.hasPrefix("--") {
-                    let option = String(arg.prefix { $0 != "=" })
-                    let value = arg.contains("=") ? String(arg.drop { $0 != "=" }.dropFirst()) : (valued.contains(option) ? next : nil)
-                    switch option {
-                    case "--recursive": recursive = true
-                    case "--dereference-recursive":
-                        recursive = true
-                        followsLinks = true
-                    case "--directories": if value == "recurse" { recursive = true }
-                    case "--regexp", "--file": patternGiven = true
-                    case "--include": fileRules.append(Rule(include: true, glob: value))
-                    case "--exclude": fileRules.append(Rule(include: false, glob: value))
-                    case "--exclude-from": fileRules.append(Rule(include: false, glob: nil))
-                    case "--exclude-dir": folderRules.append(Rule(include: false, glob: value))
-                    case "--include-dir": folderRules.append(Rule(include: true, glob: value))
-                    default: break
-                    }
-                    index += (!arg.contains("=") && valued.contains(option)) ? 2 : 1
-                    continue
+            var search = GrepSearch()
+
+            mutating func apply(_ option: String, _ value: String?) {
+                switch option {
+                case "recursive", "r": recursive = true
+                case "dereference-recursive", "R":
+                    recursive = true
+                    search.followsLinks = true
+                case "S": search.followsLinks = true
+                // GNU accepts an abbreviation of `recurse`, BSD any case: anything but `read` or `skip` may recurse.
+                case "directories", "d": if !["read", "skip"].contains(value?.lowercased() ?? "") { recursive = true }
+                case "regexp", "file", "e", "f": patternGiven = true
+                case "include": search.fileRules.append(Rule(include: true, glob: value))
+                case "exclude": search.fileRules.append(Rule(include: false, glob: value))
+                case "exclude-from": search.fileRules.append(Rule(include: false, glob: nil))
+                case "exclude-dir": search.folderRules.append(Rule(include: false, glob: value))
+                case "include-dir": search.folderRules.append(Rule(include: true, glob: value))
+                default: break
                 }
-                if arg.hasPrefix("-"), arg.count > 1 {
-                    let letters = Array(arg.dropFirst())
-                    if letters.contains("r") || letters.contains("R") { recursive = true }
-                    if letters.contains("R") || letters.contains("S") { followsLinks = true }
-                    // The first letter taking a value consumes the rest of the word or the next word.
-                    if let position = letters.firstIndex(where: { "efmABCdD".contains($0) }) {
-                        let letter = letters[position]
-                        let attached = position + 1 < letters.count ? String(letters[(position + 1)...]) : nil
-                        let value = attached ?? next
-                        if letter == "e" || letter == "f" { patternGiven = true }
-                        if letter == "d", value == "recurse" { recursive = true }
-                        index += attached == nil ? 2 : 1
-                        continue
-                    }
-                    index += 1
-                    continue
-                }
-                positional.append(index)
-                index += 1
             }
-            guard recursive else { return nil }
-            operandIndices = patternGiven ? positional : Array(positional.dropFirst())
+        }
+
+        /// Readings beyond which the command is not worth telling apart: it is read as searching everything.
+        static let readingLimit = 64
+
+        /// Every way grep could read `args` that searches recursively; empty when none does. Each implementation's
+        /// grammar (GNU, BSD) gives one reading; an option a grammar does not know, or abbreviates ambiguously, is read
+        /// both with and without a value, and as recursive (another version could know it).
+        static func readings(_ args: [String]) -> [GrepSearch] {
+            var results: [GrepSearch] = []
+            func add(_ search: GrepSearch) { if !results.contains(search) { results.append(search) } }
+            for grammar in [GrepGrammar.gnu, .bsd] {
+                var pending = [Reading()]
+                var processed = 0
+                while var reading = pending.popLast() {
+                    processed += 1
+                    if processed > readingLimit {
+                        // Too many unknown options to follow: every word could be an operand, and links are followed.
+                        var everything = GrepSearch()
+                        everything.operandIndices = args.indices.filter { !args[$0].hasPrefix("-") }
+                        everything.followsLinks = true
+                        add(everything)
+                        break
+                    }
+                    while reading.index < args.count {
+                        let arg = args[reading.index]
+                        let next = reading.index + 1 < args.count ? args[reading.index + 1] : nil
+                        if arg == "--" {
+                            reading.positional += Array((reading.index + 1)..<args.count)
+                            break
+                        }
+                        if let name = OptionSyntax.longName(arg) {
+                            let attached = arg.firstIndex(of: "=").map { String(arg[arg.index(after: $0)...]) }
+                            let candidates = grammar.resolve(name)
+                            guard candidates.count == 1 else {
+                                reading.recursive = true
+                                reading.search.followsLinks = true
+                                if attached == nil, next != nil {
+                                    var withValue = reading
+                                    withValue.index += 2
+                                    pending.append(withValue)
+                                }
+                                reading.index += 1
+                                continue
+                            }
+                            let option = candidates[0]
+                            if attached == nil, option.value == .required {
+                                reading.apply(option.meaning, next)
+                                reading.index += 2
+                            } else {
+                                reading.apply(option.meaning, attached)
+                                reading.index += 1
+                            }
+                            continue
+                        }
+                        if OptionSyntax.isShortCluster(arg) {
+                            let letters = Array(arg.dropFirst())
+                            var width = 1
+                            for (position, letter) in letters.enumerated() {
+                                let rest = position + 1 < letters.count ? String(letters[(position + 1)...]) : nil
+                                if grammar.shortRequired.contains(letter) {
+                                    if rest == nil { width = 2 }
+                                    reading.apply(String(letter), rest ?? next)
+                                    break
+                                }
+                                if grammar.shortOptional.contains(letter) {
+                                    reading.apply(String(letter), rest)
+                                    break
+                                }
+                                reading.apply(String(letter), nil)
+                            }
+                            reading.index += width
+                            continue
+                        }
+                        reading.positional.append(reading.index)
+                        reading.index += 1
+                    }
+                    guard reading.recursive else { continue }
+                    var search = reading.search
+                    search.operandIndices = reading.patternGiven ? reading.positional : Array(reading.positional.dropFirst())
+                    add(search)
+                }
+            }
+            return results
         }
 
         /// The last matching rule's verdict (include or not), or nil when none matches any of `candidates`.
@@ -630,7 +739,16 @@ public enum RiskPolicy {
                 let value = arg.hasPrefix("-") ? (arg.split(separator: "=", maxSplits: 1).dropFirst().first.map(String.init) ?? "") : arg
                 if value.hasPrefix("@") { found += argPathFindings(String(value.dropFirst()), cwd: cwd, in: context, writes: mayWrite) }
                 else if looksLikePath(value) || policyName(value) { found += argPathFindings(value, cwd: cwd, in: context, writes: mayWrite) }
+                // A value attached to a short option (`grep -f.env`, `-o.git/config`): where the option ends is not
+                // known, so only what such a path could never be is kept (a secret, a protected store, a policy file).
+                if OptionSyntax.isShortCluster(arg), !arg.contains("="), arg.count > 2 {
+                    let attached = String(arg.dropFirst(2))
+                    if looksLikePath(attached) || policyName(attached) {
+                        found += argPathFindings(attached, cwd: cwd, in: context, writes: mayWrite).filter { $0.category != .outsidePath }
+                    }
+                }
             }
+            for path in writtenPaths(name, args) { found += argPathFindings(path, cwd: cwd, in: context, writes: true) }
             found += searchFindings(name, args, command: command)
             for redirect in command.redirects { found += redirectFindings(redirect, cwd: cwd, in: context) }
             if name == "cd", let target = args.first(where: { !$0.hasPrefix("-") }) {
@@ -660,16 +778,53 @@ public enum RiskPolicy {
         return argPathFindings(redirect.target, cwd: cwd, in: context, writes: redirect.op.contains(">"))
     }
 
-    /// Uses of read-only programs that write a file.
+    /// Uses of read-only programs that write a file. Options are matched in every spelling the program reads (GW02):
+    /// any abbreviation of a long option (`sort --out=FILE`), and a short option anywhere in a cluster (`sort -ro FILE`).
     static func writingReadOnlyUse(_ name: String, _ args: [String]) -> Bool {
         switch name {
-        case "sort": args.contains { $0 == "-o" || $0.hasPrefix("--output") }
-        case "tree": args.contains { $0 == "-o" }
+        case "sort": args.contains { OptionSyntax.cluster($0, contains: ["o"]) || OptionSyntax.abbreviates($0, ["output"]) }
+        // `-R` reruns tree into `00Tree.html` files in every folder.
+        case "tree": args.contains { OptionSyntax.cluster($0, contains: ["o", "R"]) }
         case "uniq": args.filter { !$0.hasPrefix("-") }.count >= 2
-        case "file": args.contains { $0 == "-C" }
-        case "xxd": args.contains("-r") || args.filter { !$0.hasPrefix("-") }.count >= 2
+        case "file": args.contains { OptionSyntax.cluster($0, contains: ["C"]) || OptionSyntax.abbreviates($0, ["compile"]) }
+        // xxd matches its options by prefix, with one dash or two (`-r`, `-revert`, `--r`).
+        case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || args.filter { !$0.hasPrefix("-") }.count >= 2
         default: false
         }
+    }
+
+    /// The files a read-only program's writing options name (`sort -oFILE`, `sort -ro FILE`, `sort --out=FILE`): each
+    /// is checked as a write, so a policy file or a protected store asks or is refused however it is spelled.
+    static func writtenPaths(_ name: String, _ args: [String]) -> [String] {
+        switch name {
+        case "sort": OptionSyntax.shortValues(args, "o") + OptionSyntax.longValues(args, ["output"])
+        case "tree": OptionSyntax.shortValues(args, "o")
+        default: []
+        }
+    }
+
+    /// Uses of read-only programs that change the system: setting the clock (`date -s`, `date --se=…`, or an operand
+    /// that is not a `+format`, which both GNU and BSD date read as the time to set).
+    static func changingReadOnlyUse(_ name: String, _ args: [String]) -> Bool {
+        guard name == "date" else { return false }
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if OptionSyntax.cluster(arg, contains: ["s"]) || OptionSyntax.abbreviates(arg, ["set"]) { return true }
+            if arg == "--" { return args[(index + 1)...].contains { !$0.hasPrefix("+") } }
+            if OptionSyntax.isShortCluster(arg) {
+                // `-d STRING`, `-f FILE`, `-r FILE` (GNU) and `-f FMT`, `-r SECONDS`, `-v ADJ`, `-z ZONE` (BSD) take the next word.
+                index += (arg.last.map { "dfrvz".contains($0) } ?? false) && arg.count == 2 ? 2 : 1
+                continue
+            }
+            if OptionSyntax.longName(arg) != nil {
+                index += !arg.contains("=") && OptionSyntax.abbreviates(arg, ["date", "file", "reference"]) ? 2 : 1
+                continue
+            }
+            if !arg.hasPrefix("+") { return true }
+            index += 1
+        }
+        return false
     }
 
     /// A bare policy-file name (`opencode.json`), which `looksLikePath` does not take for a path.
@@ -687,16 +842,19 @@ public enum RiskPolicy {
     /// Searches that read secret files' contents (N05): `rg`/`ag` told to search hidden or ignored files (where `.env`
     /// and keys live), and hidden-file globs given to content readers. (`grep -r` is checked against the tree it
     /// searches, in `decide`: `recursiveSearchFindings`.)
+    /// Options are matched in every spelling (GW02): ag's getopt_long takes abbreviations, and rg's are matched the
+    /// same way in case a version does.
     static func searchFindings(_ name: String, _ args: [String], command: ShellAnalysis.Command) -> [RiskFinding] {
         var found: [RiskFinding] = []
-        let shortFlags = args.filter { $0.hasPrefix("-") && !$0.hasPrefix("--") }.joined()
         switch name {
         case "rg":
-            if shortFlags.contains("u") || shortFlags.contains(".") || args.contains(where: { ["--unrestricted", "--hidden", "--no-ignore", "--no-ignore-vcs", "--no-ignore-dot", "--no-ignore-files", "--no-ignore-global", "--no-ignore-parent", "--no-ignore-exclude"].contains($0) }) {
+            let long = ["unrestricted", "hidden", "no-ignore", "no-ignore-vcs", "no-ignore-dot", "no-ignore-files", "no-ignore-global", "no-ignore-parent", "no-ignore-exclude"]
+            if args.contains(where: { OptionSyntax.cluster($0, contains: ["u", "."]) || OptionSyntax.abbreviates($0, long) }) {
                 found.append(RiskFinding(.secretRead, "rg over hidden or ignored files (such as .env)"))
             }
         case "ag":
-            if shortFlags.contains("u") || shortFlags.contains("U") || args.contains(where: { ["--unrestricted", "--hidden", "--skip-vcs-ignores", "--all-text", "-t"].contains($0) }) {
+            let long = ["unrestricted", "hidden", "skip-vcs-ignores", "all-text", "all-types"]
+            if args.contains(where: { OptionSyntax.cluster($0, contains: ["u", "U", "t", "a"]) || OptionSyntax.abbreviates($0, long) }) {
                 found.append(RiskFinding(.secretRead, "ag over hidden or ignored files (such as .env)"))
             }
         default:
@@ -725,7 +883,7 @@ public enum RiskPolicy {
             found += gitFindings(args, cwd: cwd, in: context)
         case "rm", "unlink", "rmdir":
             let flags = args.filter { $0.hasPrefix("-") }.joined()
-            if name == "rm", flags.contains("r") || flags.contains("R") || flags.contains("f") || args.contains("--recursive") || args.contains("--force") || command.hasGlob {
+            if name == "rm", flags.contains("r") || flags.contains("R") || flags.contains("f") || args.contains(where: { OptionSyntax.abbreviates($0, ["recursive", "force"]) }) || command.hasGlob {
                 found.append(RiskFinding(.irreversibleDelete, "rm " + args.filter { $0.hasPrefix("-") }.joined(separator: " ")))
             } else if positional.count > 3 {
                 found.append(RiskFinding(.irreversibleDelete, "rm of \(positional.count) files"))
@@ -806,7 +964,12 @@ public enum RiskPolicy {
         }
         guard let sub = rest.first else { return found }
         let tail = Array(rest.dropFirst())
-        let has = { (flags: [String]) in tail.contains { arg in flags.contains(arg) || flags.contains { $0.hasPrefix("--") && arg.hasPrefix($0 + "=") } } }
+        // git's parse-options takes any unique abbreviation of a long option (GW02): `reset --har` is `--hard`.
+        let has = { (flags: [String]) in
+            tail.contains { arg in
+                flags.contains(arg) || OptionSyntax.abbreviates(arg, flags.filter { $0.hasPrefix("--") }.map { String($0.dropFirst(2)) })
+            }
+        }
         let short = { (letter: Character) in tail.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains(letter) } }
         switch sub {
         case "reset" where has(["--hard", "--merge", "--keep"]): found.append(RiskFinding(.destructiveGit, "reset --hard"))
@@ -822,7 +985,7 @@ public enum RiskPolicy {
         case "stash" where tail.first == "drop" || tail.first == "clear": found.append(RiskFinding(.destructiveGit, "stash \(tail.first!)"))
         case "filter-branch", "filter-repo": found.append(RiskFinding(.destructiveGit, sub))
         case "reflog" where tail.first == "expire" || tail.first == "delete": found.append(RiskFinding(.destructiveGit, "reflog \(tail.first!)"))
-        case "gc" where tail.contains(where: { $0.hasPrefix("--prune") }): found.append(RiskFinding(.destructiveGit, "gc --prune"))
+        case "gc" where has(["--prune"]): found.append(RiskFinding(.destructiveGit, "gc --prune"))
         case "update-ref" where short("d"): found.append(RiskFinding(.destructiveGit, "update-ref -d"))
         case "rebase" where has(["--root"]) || tail.contains("-i") == false && has(["--onto"]): found.append(RiskFinding(.destructiveGit, "rebase"))
         case "worktree" where tail.first == "remove" && (short("f") || has(["--force"])): found.append(RiskFinding(.destructiveGit, "worktree remove --force"))
@@ -844,12 +1007,22 @@ public enum RiskPolicy {
             target = args.first { !$0.hasPrefix("-") && $0.contains("@") }.map { String($0.split(separator: ":").first ?? "") } ?? name
         }
         let lower = args.map { $0.lowercased() }
+        // `--head` is curl's own option (-I), not an abbreviation of `--header`.
+        let header = { (flag: String) in flag == "-h" || OptionSyntax.abbreviates(flag, ["header"], exact: ["head"]) }
         let credentialHeader = zip(lower, lower.dropFirst()).contains { flag, value in
-            (flag == "-h" || flag == "--header") && ["authorization", "token", "api-key", "apikey", "x-api-key", "cookie", "private-token", "x-auth"].contains { value.contains($0) }
-        } || lower.contains { $0.hasPrefix("--header=") && ["authorization", "token", "api-key", "cookie"].contains(where: $0.contains) }
-        let userFlag = args.contains { ["-u", "--user", "--oauth2-bearer", "--netrc", "--netrc-file", "-b", "--cookie", "--http-user", "--http-password", "--password", "--header=Authorization"].contains($0) }
+            header(flag) && !flag.contains("=") && ["authorization", "token", "api-key", "apikey", "x-api-key", "cookie", "private-token", "x-auth"].contains { value.contains($0) }
+        } || lower.contains { header($0) && $0.contains("=") && ["authorization", "token", "api-key", "cookie"].contains(where: $0.contains) }
+        // curl before 8 and wget take unique abbreviations of long options (GW02).
+        let userFlag = args.contains { ["-u", "-b", "--header=Authorization"].contains($0) || OptionSyntax.abbreviates($0, ["user", "oauth2-bearer", "netrc", "netrc-file", "cookie", "http-user", "http-password", "password"]) }
+        let fileFlag = { (flag: String) in flag == "-T" || OptionSyntax.abbreviates(flag, ["upload-file", "post-file", "body-file"]) }
+        let dataFlag = { (flag: String) in
+            ["-d", "-F"].contains(flag) || OptionSyntax.abbreviates(flag, ["data", "data-ascii", "data-binary", "data-raw", "data-urlencode", "form"])
+        }
         let upload = zip(args, args.dropFirst()).contains { flag, value in
-            (["-d", "--data", "--data-binary", "--data-raw", "--data-urlencode", "-F", "--form", "-T", "--upload-file", "--post-file", "--body-file"].contains(flag)) && (value.hasPrefix("@") || value.contains("=@") || flag == "-T" || flag == "--upload-file" || flag == "--post-file" || flag == "--body-file")
+            !flag.contains("=") && ((dataFlag(flag) && (value.hasPrefix("@") || value.contains("=@"))) || fileFlag(flag))
+        } || args.contains { flag in
+            guard flag.contains("="), let value = flag.split(separator: "=", maxSplits: 1).last.map(String.init) else { return false }
+            return fileFlag(flag) || (dataFlag(flag) && (value.hasPrefix("@") || value.contains("=@")))
         }
         let urlCredential = args.contains { $0.contains("://") && urlCarriesCredentials($0) }
         if credentialHeader || userFlag || urlCredential { found.append(RiskFinding(.credentialNetwork, target)) }
@@ -910,45 +1083,76 @@ public enum RiskPolicy {
             guard let name = command.program, command.assignments.isEmpty else { return false }
             if command.redirects.contains(where: { !($0.op.hasSuffix("&") || $0.target == "/dev/null") }) { return false }
             if command.expandsVariables { return false }
+            let args = command.arguments
             if name == "git" {
-                let positional = command.arguments.filter { !$0.hasPrefix("-") }
-                guard let sub = positional.first else { return false }
-                if command.arguments.first?.hasPrefix("-") == true { return false }
-                if sub == "branch" || sub == "tag" || sub == "remote" || sub == "stash" {
-                    guard positional.count == 1 || (sub == "stash" && positional.dropFirst().first == "list") else { return false }
-                    if command.arguments.contains(where: { ["-d", "-D", "--delete", "-m", "-M", "-c", "-C", "--set-upstream-to", "-u"].contains($0) }) { return false }
-                    continue
-                }
-                if !readOnlyGit.contains(sub) { return false }
-                if sub == "reflog", positional.dropFirst().first.map({ ["expire", "delete"].contains($0) }) == true { return false }
-                if command.arguments.contains(where: { $0.hasPrefix("--output") || $0 == "-o" }) { return false }
-                // Options that run a program (N05): `git grep --open-files-in-pager=./x.sh`/`-O`, external diff and
-                // text conversion drivers.
-                if command.arguments.contains(where: { arg in
-                    ["--open-files-in-pager", "--ext-diff", "--textconv", "--upload-pack", "--exec"].contains { arg == $0 || arg.hasPrefix($0 + "=") }
-                        || (sub == "grep" && arg.hasPrefix("-O"))
-                        || (arg.hasPrefix("-") && !arg.hasPrefix("--") && sub == "grep" && arg.dropFirst().contains("O"))
-                }) { return false }
+                guard readOnlyGitUse(args) else { return false }
                 continue
             }
             if !readOnlyPrograms.contains(name) { return false }
-            if name == "find", command.arguments.contains(where: { ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls", "-fprint0"].contains($0) }) { return false }
-            if writingReadOnlyUse(name, command.arguments) { return false }
+            if name == "find", args.contains(where: { ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls", "-fprint0"].contains($0) }) { return false }
+            if writingReadOnlyUse(name, args) || changingReadOnlyUse(name, args) { return false }
             // Options that run another program (N05): `rg --pre ./x.sh`, `sort --compress-program=./x.sh`.
-            if command.arguments.contains(where: { arg in Self.runsProgram(name, arg) }) { return false }
-            if name == "date", command.arguments.contains(where: { $0 == "-s" || $0.hasPrefix("--set") }) { return false }
+            if args.contains(where: { arg in Self.runsProgram(name, arg) }) { return false }
         }
         return true
     }
 
-    /// Options of read-only programs that run another program.
+    /// git options of the read-only subcommands that write a file or run a program (N05), in any abbreviation
+    /// (GW02): `--output`, `git grep --open-files-in-pager` (`--op=CMD` runs CMD through the shell), external diff,
+    /// text conversion and filter drivers. `exact` are other options' exact spellings that abbreviate one of them.
+    static let gitDangerousOptions = ["output", "open-files-in-pager", "ext-diff", "textconv", "filters", "upload-pack", "exec"]
+    static let gitExactOptions: Set<String> = ["text", "filter"]
+
+    /// Options `git branch`, `git tag` and `git remote` take when they only list (anything else, or a name, may
+    /// create, delete, rename or reconfigure): exact spellings, `name=value` for the ones that take a value, and
+    /// clusters of the listed letters.
+    static let gitListingOptions: [String: (exact: Set<String>, valued: Set<String>, letters: Set<Character>)] = [
+        "branch": (["--all", "--remotes", "--verbose", "--list", "--show-current", "--color", "--no-color", "--column", "--no-column",
+                    "--ignore-case", "--no-abbrev", "--merged", "--no-merged", "--contains", "--no-contains", "--points-at"],
+                   ["--color", "--column", "--sort", "--format", "--abbrev", "--merged", "--no-merged", "--contains", "--no-contains", "--points-at"],
+                   ["a", "r", "v", "l", "i"]),
+        "tag": (["--list", "--column", "--no-column", "--color", "--no-color", "--ignore-case", "--merged", "--no-merged", "--contains",
+                 "--no-contains", "--points-at"],
+                ["--sort", "--format", "--color", "--column", "--merged", "--no-merged", "--contains", "--no-contains", "--points-at"],
+                ["l", "i", "n"]),
+        "remote": (["--verbose"], [], ["v"]),
+    ]
+
+    /// Whether a git command only reads. Global options before the subcommand (`-c`, `-C`, `--exec-path`) are not.
+    static func readOnlyGitUse(_ args: [String]) -> Bool {
+        guard let sub = args.first, !sub.hasPrefix("-") else { return false }
+        let tail = Array(args.dropFirst())
+        let positional = tail.filter { !$0.hasPrefix("-") }
+        if let listing = gitListingOptions[sub] {
+            guard positional.isEmpty else { return false }
+            return tail.allSatisfy { arg in
+                if listing.exact.contains(arg) { return true }
+                if let equals = arg.firstIndex(of: "="), listing.valued.contains(String(arg[..<equals])) { return true }
+                if sub == "tag", arg.range(of: #"^-n[0-9]*$"#, options: .regularExpression) != nil { return true }
+                return OptionSyntax.isShortCluster(arg) && arg.dropFirst().allSatisfy { listing.letters.contains($0) }
+            }
+        }
+        if sub == "stash" {
+            // `git stash` alone stashes; `list` and `show` read (and take log and diff options, checked below).
+            guard let action = tail.first, action == "list" || action == "show" else { return false }
+        } else {
+            guard readOnlyGit.contains(sub) else { return false }
+        }
+        if sub == "reflog", positional.first.map({ ["expire", "delete", "drop"].contains($0) }) == true { return false }
+        return !tail.contains { arg in
+            arg == "-o" || OptionSyntax.abbreviates(arg, gitDangerousOptions, exact: gitExactOptions)
+                || (sub == "grep" && OptionSyntax.cluster(arg, contains: ["O"]))
+        }
+    }
+
+    /// Options of read-only programs that run another program, in any abbreviation (GW02).
     static func runsProgram(_ name: String, _ arg: String) -> Bool {
-        let option = String(arg.prefix { $0 != "=" })
         switch name {
-        case "rg": return ["--pre", "--pre-glob", "--search-zip", "-z"].contains(option)
-        case "sort": return option == "--compress-program"
-        case "find": return ["-exec", "-execdir", "-ok", "-okdir"].contains(option)
-        case "tail", "head": return false
+        // `--search-zip`/`-z` runs decompressors; `--hostname-bin` runs a program for hyperlinks.
+        case "rg": return OptionSyntax.abbreviates(arg, ["pre", "pre-glob", "search-zip", "hostname-bin"]) || OptionSyntax.cluster(arg, contains: ["z"])
+        case "sort": return OptionSyntax.abbreviates(arg, ["compress-program"])
+        case "ag": return OptionSyntax.abbreviates(arg, ["pager"])
+        case "find": return ["-exec", "-execdir", "-ok", "-okdir"].contains(String(arg.prefix { $0 != "=" }))
         default: return false
         }
     }

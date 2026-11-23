@@ -101,6 +101,13 @@ two layers:
      tests run, a chain of folder descriptors), and the folder identities (device and inode) from the repository root
      down must agree before the open and after the read, with the leaf being the opened file. A file with other hard
      links is refused too, and any platform without such an open reads nothing (fail closed; v1.0.1 AF08).
+     The repository root itself is found so that a link cannot redirect it (`sessionCheckout`, `instructionLookup`):
+     the session's folder is refused when a component of its path is a link inside a checkout (one an agent working
+     there could make; links above every checkout, such as macOS `/var` or a code folder on another volume, are
+     followed), or when the root found lies above the last link's target; each session is pinned to the root its
+     first lookup found, so a folder that comes to point elsewhere mid-session hands over nothing; and the checkout is
+     examined again after the reads. A refused lookup removes the entry (AF08, third round). Not covered: a session
+     folder outside any checkout replaced by a link before a server restart (the plugin keeps no pin across restarts).
    - **Trusted projects only** ("Trust this project's opencode config", per project, default off): the repository's
      `.opencode/agent(s)/*.md`, `.opencode/command(s)/*.md`, `.opencode/skill(s)/*/SKILL.md` and `.agents/skills` are
      added to that project's location through the per-location transforms. Agents support `description`, `mode`,

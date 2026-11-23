@@ -73,6 +73,64 @@ public final class ComposerController {
                 controller.adoptFailedSend(draft, submission: submission, owner: owner, message: message)
             }
         }
+
+        /// A prompt recovered for `owner`'s draft outside any composer (AV2-02): every live composer of that draft
+        /// whose stored draft has loaded takes it in front of what it shows and saves the result. Returns how many
+        /// took it (a composer still loading shows the stored draft, which the caller then updates).
+        @discardableResult
+        public func placeRecovered(_ draft: ComposerDraft, owner: ObjectIdentifier, except sender: ComposerController? = nil) -> Int {
+            var placed = 0
+            for controller in live.allObjects where controller !== sender {
+                if controller.adoptRecovered(draft, owner: owner) { placed += 1 }
+            }
+            return placed
+        }
+    }
+
+    /// How `placeRecovered` placed a prompt.
+    public enum RecoveredPlacement: Equatable, Sendable {
+        /// Into this many live composers of the draft (each saved it through its host).
+        case composers(Int)
+        /// Into the stored draft through the host, in front of its text with its tokens and attachments kept.
+        case storedDraft
+        /// The stored draft did not load in time: nothing was saved (the caller keeps the text another way).
+        case unloadedDraft
+    }
+
+    /// Puts a prompt recovered outside the composer (Edit from Here's rewind, NV09, AV2-02) into `host`'s draft
+    /// without losing anything: every live composer of the draft (any window) takes it in front of what it shows, so
+    /// none of them later saves over it; with none showing it, it goes in front of the stored draft through the host,
+    /// so the draft's tokens and attachments are kept (`ComposerDraft.merging`). The stored draft is awaited first
+    /// (bounded by `timeout`), and the composers are asked again then, since one may have mounted meanwhile.
+    public static func placeRecovered(
+        _ draft: ComposerDraft, into host: any ComposerHost, except sender: ComposerController? = nil,
+        registry: Registry = .shared, timeout: Duration = .seconds(10)
+    ) async -> RecoveredPlacement {
+        if let owner = host.draftOwner {
+            let placed = registry.placeRecovered(draft, owner: owner, except: sender)
+            if placed > 0 { return .composers(placed) }
+        }
+        if !host.isDraftLoaded {
+            let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let observation = host.observe { continuation.yield() }
+            let deadline = ContinuousClock.now + timeout
+            let timer = Task {
+                try? await Task.sleep(until: deadline, clock: .continuous)
+                continuation.yield()
+            }
+            for await _ in changes where host.isDraftLoaded || ContinuousClock.now >= deadline { break }
+            timer.cancel()
+            observation.cancel()
+            continuation.finish()
+            if let owner = host.draftOwner {
+                let placed = registry.placeRecovered(draft, owner: owner, except: sender)
+                if placed > 0 { return .composers(placed) }
+            }
+        }
+        // Saving over a draft that never loaded would replace its rich record: the caller keeps the text instead.
+        guard host.isDraftLoaded else { return .unloadedDraft }
+        host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft()))
+        return .storedDraft
     }
 
     private let registry: Registry
@@ -287,6 +345,19 @@ public final class ComposerController {
         sendError = message
         announce("Not sent. \(message)")
         onStateChange()
+    }
+
+    /// A prompt recovered outside the composer (see `Registry.placeRecovered`): shown in front of the current edit and
+    /// saved through this composer's host. False when this composer shows another draft or its draft is loading.
+    func adoptRecovered(_ draft: ComposerDraft, owner: ObjectIdentifier) -> Bool {
+        guard let host, host.draftOwner == owner, !awaitingDraft else { return false }
+        saveTask?.cancel()
+        saveTask = nil
+        let merged = ComposerDraft.merging(failed: draft, current: currentDraft())
+        applyDraft(merged)
+        host.saveDraft(merged)
+        onStateChange()
+        return true
     }
 
     /// Stops the running turn (wired by the host to a menu item and to the Stop button).

@@ -60,7 +60,8 @@ Its `FROM`, `COPY --from`, `RUN --mount=from=` and `# syntax=`/`BUILDKIT_SYNTAX`
 directive rules, heredocs only for unquoted `<<WORD` in RUN/COPY/ADD, an unclosed heredoc refused, and a second no-heredoc
 reading so a parser disagreement cannot hide a FROM; global `ARG`s, their defaults and `buildargs` expanded; unresolvable refused; read as BuildKit's
 parser reads it: LF lines with every trailing CR dropped, a byte-order mark dropped from the first line, Go's blanks before
-an instruction, continuations joined with nothing between, builder flags byte by byte, `--mount` options as CSV; a nameless
+an instruction, continuations joined with nothing between and only by BuildKit's rule (a trailing escape continues
+unless it follows another escape: `RUN echo \\` ends there; v1.0.1 GW01), builder flags byte by byte, `--mount` options as CSV; a nameless
 global `ARG` is refused, and so is a file BelloCode cannot be sure it reads as Docker does: invalid UTF-8, a blank other
 than space or tab or a control character in an instruction or in a comment before the first one, a `//syntax=` or JSON
 directive form, a quoted reference or a variable in a `COPY --from`/mount `from=`; v1.0.1 AF11, AF12, GV01) are

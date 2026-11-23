@@ -46,6 +46,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private(set) var terminals: TerminalSurfaces?
     /// The window's "Changes" tab (M2-C; MainWindowController+Changes.swift).
     private(set) var changes: ChangesSurfaces?
+    /// A thread's draft outside any composer (`ShellSurfaces.draftHost`; Edit from Here, AV2-02).
+    let draftHost: @MainActor (ThreadModel) -> any ComposerHost
     /// Git parity: the git actions models and open popovers (MainWindowController+Git.swift).
     let gitUI = GitUIState()
     /// The window's built-in browser ("Browser" tab).
@@ -64,6 +66,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         self.workspace = workspace
         self.configuration = configuration
         let surfaces = configuration.surfaces
+        draftHost = surfaces.draftHost
         sidebar = SidebarViewController(workspace: workspace)
         container = ThreadContainerViewController(workspace: workspace, surfaces: surfaces)
         rightPanel = RightPanelViewController(tabs: surfaces.rightPanelTabs, selectedID: workspace.state.rightPanelTab)

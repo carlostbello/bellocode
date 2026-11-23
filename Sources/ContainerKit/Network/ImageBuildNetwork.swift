@@ -93,34 +93,42 @@ public struct ImageBuildNetwork: Sendable, Equatable {
         guard !lines.isEmpty else { return dockerfile }
         var output: [String] = []
         var continuing = false
+        var stage = false
         var heredoc: String?
-        for line in dockerfile.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+        // Lines and continuations as BuildKit reads them (AF11, GW01): split at LF scalars (a CR LF is one Swift
+        // `Character`), the file's escape, an escaped escape ending the instruction, and comment or empty lines inside
+        // a continuation skipped.
+        let escape = DockerfileBases.Directives(DockerfileBases.physicalLines(dockerfile)).escape
+        for line in dockerfile.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map({ String(String.UnicodeScalarView($0)) }) {
             output.append(line)
             if let end = heredoc {
-                if line.trimmingCharacters(in: .whitespaces) == end { heredoc = nil }
+                if line.trimmingCharacters(in: .whitespacesAndNewlines) == end { heredoc = nil }
                 continue
             }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let wasContinuing = continuing
-            continuing = trimmed.hasSuffix("\\")
-            if let marker = Self.heredocMarker(trimmed) { heredoc = marker }
+            let token = DockerfileBases.trimLeading(line)
+            if token.isEmpty || DockerfileBases.first(token) == "#" { continue }
+            if !continuing {
+                // A new instruction: is it a stage?
+                let keyword = token.unicodeScalars.prefix { !DockerfileBases.isGoSpace($0) && $0 != escape }
+                stage = String(String.UnicodeScalarView(keyword)).uppercased() == "FROM"
+            }
+            continuing = Self.continues(line, escape: escape)
+            if let marker = Self.heredocMarker(token.trimmingCharacters(in: .whitespacesAndNewlines)) { heredoc = marker }
             // The end of a FROM instruction (possibly continued over several lines).
-            if !continuing, Self.instructionStartsFrom(output, wasContinuing: wasContinuing) {
+            if !continuing, stage {
                 output += lines
+                stage = false
             }
         }
         return output.joined(separator: "\n")
     }
 
-    /// Whether the instruction that just ended (the last line, plus continued lines before it) is a `FROM`.
-    static func instructionStartsFrom(_ lines: [String], wasContinuing: Bool) -> Bool {
-        var index = lines.count - 1
-        if wasContinuing {
-            while index > 0, lines[index - 1].trimmingCharacters(in: .whitespaces).hasSuffix("\\") { index -= 1 }
-        }
-        let first = lines[index].trimmingCharacters(in: .whitespaces)
-        guard !first.hasPrefix("#") else { return false }
-        return first.uppercased().hasPrefix("FROM ") || first.uppercased() == "FROM"
+    /// Whether `line` continues onto the next, by BuildKit's rule (`DockerfileBases.trimContinuation`; trailing CRs are
+    /// dropped first, as BuildKit drops them).
+    static func continues(_ line: String, escape: Unicode.Scalar) -> Bool {
+        var view = Substring(line).unicodeScalars
+        while view.last == "\r" { view = view.dropLast() }
+        return !DockerfileBases.trimContinuation(String(String.UnicodeScalarView(view)), escape: escape).ended
     }
 
     /// `RUN <<EOF` / `COPY <<-'EOT' …`: the word ending the heredoc.
