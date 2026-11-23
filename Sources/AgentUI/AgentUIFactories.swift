@@ -87,17 +87,18 @@ public enum AgentUIFactories {
         style: AgentUIStyle = .standard, catalogTimedOut: Bool = true, onFinish: @escaping (OnboardingOutcome) -> Void
     ) -> NSViewController {
         let catalog: @MainActor () -> OnboardingCatalog = { [weak engine] in
-            let current = engine?.root.catalog.current
-            return .from(catalogLoaded: current != nil, freeModels: (current?.models ?? []).filter(\.isFree).map(\.name), timedOut: catalogTimedOut)
+            .from(catalog: engine?.root.catalog.current, hidden: engine?.modelPreferences.value.hidden ?? [], timedOut: catalogTimedOut)
         }
         return controller(OnboardingView(auth: auth, catalog: catalog, importSource: importSource, onFinish: onFinish), style: style)
     }
 
     /// Settings ▸ Accounts.
+    /// `freeModelsOffered`: whether opencode's free models can be chosen now (the empty state promises them only then).
     public static func accountsSettings(
-        auth: AuthService, importSource: CredentialImportSource? = .userInstall(), style: AgentUIStyle = .standard
+        auth: AuthService, importSource: CredentialImportSource? = .userInstall(), style: AgentUIStyle = .standard,
+        freeModelsOffered: (@MainActor () -> Bool)? = nil
     ) -> NSViewController {
-        controller(AccountsSettingsView(auth: auth, importSource: importSource), style: style)
+        controller(AccountsSettingsView(auth: auth, importSource: importSource, freeModelsOffered: freeModelsOffered), style: style)
     }
 
     /// Provider list and sign-in form on its own (for "Connect…" from the model picker).

@@ -47,6 +47,19 @@ public enum BackgroundModelResolver {
         return catalog.models.filter { $0.enabled && $0.status != "deprecated" && !disabled.contains($0.providerID) }
     }
 
+    /// The free models the person can choose now: usable (enabled, not deprecated, provider not disabled) and not
+    /// hidden in the model picker. What the draft hint, onboarding and Settings ▸ Accounts promise (NF24, NV14).
+    public static func offeredFreeModels(_ catalog: Catalog?, hidden: Set<String> = []) -> [ModelEntry] {
+        usable(catalog).filter { $0.isFree && !hidden.contains($0.id) }
+    }
+
+    /// Whether opencode's free models are all that is on offer: some can be chosen, and no usable model of the
+    /// person's own provider is shown.
+    public static func offersOnlyFreeModels(_ catalog: Catalog?, hidden: Set<String> = []) -> Bool {
+        let offered = usable(catalog).filter { !hidden.contains($0.id) }
+        return !offered.isEmpty && offered.allSatisfy(\.isFree)
+    }
+
     public static func availability(of selection: ModelSelection, in catalog: Catalog?) -> Availability {
         guard let catalog else { return .unknown }
         guard let entry = catalog.models.first(where: { $0.providerID == selection.providerID && $0.modelID == selection.modelID }) else {

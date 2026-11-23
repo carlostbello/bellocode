@@ -67,7 +67,19 @@ import Testing
         #expect(ThreadContainerViewController.draftModelHint(catalog([free, paid])) == neutral, "a provider of the person's own")
         var disabled = free
         disabled.enabled = false
-        #expect(ThreadContainerViewController.draftModelHint(catalog([disabled])) == neutral, "free models hidden in Settings")
+        #expect(ThreadContainerViewController.draftModelHint(catalog([disabled])) == neutral, "free models disabled in opencode")
+        // v1.0.1 NF24 residual: the same usability rules as the model picker and the background resolver.
+        var deprecated = free
+        deprecated.status = "deprecated"
+        #expect(ThreadContainerViewController.draftModelHint(catalog([deprecated])) == neutral, "deprecated free models")
+        var providerOff = catalog([free])
+        providerOff.providers = [ProviderEntry(id: "opencode", name: "opencode", activation: "disabled")]
+        #expect(ThreadContainerViewController.draftModelHint(providerOff) == neutral, "the free provider is disabled")
+        #expect(ThreadContainerViewController.draftModelHint(catalog([free]), hidden: [free.id]) == neutral, "hidden with Hide Model")
+        let otherFree = ModelEntry(providerID: "opencode", modelID: "free-2", name: "Free 2", isFree: true)
+        #expect(ThreadContainerViewController.draftModelHint(catalog([free, otherFree]), hidden: [free.id]) == promise, "another free model is shown")
+        #expect(ThreadContainerViewController.draftModelHint(catalog([free, paid]), hidden: [paid.id]) == promise,
+                "only free models are shown")
     }
 
     @Test func gitLabCommandsValidateFromTheTabsState() {

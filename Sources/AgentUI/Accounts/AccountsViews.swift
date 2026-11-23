@@ -146,6 +146,12 @@ public enum OnboardingCatalog: Hashable, Sendable {
     case noFreeModels
     case free([String])
 
+    /// From a catalog: only free models that can be chosen now count (usable and not hidden in the model picker, NV14).
+    public static func from(catalog: Catalog?, hidden: Set<String>, timedOut: Bool) -> OnboardingCatalog {
+        from(catalogLoaded: catalog != nil, freeModels: BackgroundModelResolver.offeredFreeModels(catalog, hidden: hidden).map(\.name),
+             timedOut: timedOut)
+    }
+
     public static func from(catalogLoaded: Bool, freeModels: [String], timedOut: Bool) -> OnboardingCatalog {
         if !catalogLoaded { return timedOut ? .unavailable : .loading }
         return freeModels.isEmpty ? .noFreeModels : .free(freeModels)
@@ -339,6 +345,8 @@ public struct AccountsSettingsView: View {
     @Environment(\.agentUIStyle) private var style
     @Bindable var auth: AuthService
     let importSource: CredentialImportSource?
+    /// Whether opencode's free models can be chosen now; nil when unknown (the copy then promises nothing).
+    let freeModelsOffered: (@MainActor () -> Bool)?
 
     enum Mode: Equatable {
         case list
@@ -351,9 +359,17 @@ public struct AccountsSettingsView: View {
     @StateObject private var renameText = ViewState("")
     @StateObject private var confirmRemoval = ViewState<CredentialItem?>(nil)
 
-    public init(auth: AuthService, importSource: CredentialImportSource? = nil) {
+    public init(auth: AuthService, importSource: CredentialImportSource? = nil, freeModelsOffered: (@MainActor () -> Bool)? = nil) {
         self.auth = auth
         self.importSource = importSource
+        self.freeModelsOffered = freeModelsOffered
+    }
+
+    /// The empty list's line: the free-models promise only when they can be chosen now (NV14).
+    static func emptyAccountsMessage(freeModelsOffered: Bool) -> String {
+        freeModelsOffered
+            ? "BelloCode uses opencode’s free models until you connect a provider."
+            : "Connect a provider to use your own models."
     }
 
     public var body: some View {
@@ -463,7 +479,7 @@ public struct AccountsSettingsView: View {
                 if connected.isEmpty {
                     VStack(alignment: .leading, spacing: style.spacing * 2) {
                         Text("No accounts yet").font(style.bodyFont.weight(.medium))
-                        Text("BelloCode uses opencode’s free models until you connect a provider.")
+                        Text(Self.emptyAccountsMessage(freeModelsOffered: freeModelsOffered?() ?? false))
                             .font(style.smallFont).foregroundStyle(style.secondaryText)
                     }
                     .padding(style.spacing * 4)
