@@ -76,6 +76,59 @@ struct SecretEgressVerificationTests {
         #expect(relaunched.manager.secret(row.account)?.uses[binding.id] ?? 0 == 0, "the unsent request used up the binding after a relaunch")
     }
 
+    /// AV13 (third round): the first refund's write is suspended while the second reservation is released; the
+    /// second refund then runs. The database, the record and a relaunch all end at zero (no use charged).
+    @Test func concurrentRefundsLeaveTheSameCountInTheStoreAndInMemory() async throws {
+        let f = try await Light.make()
+        let secret = try await f.manager.create(label: "Refunded", value: SecretValue("sk_refunded_0123456789"), mode: .placeholder, bindings: [Self.binding])
+        let use = SubstitutionUse(account: secret.account, bindingID: Self.binding.id, sessionID: "ses", placeholder: "")
+        #expect(f.manager.useLedger.reserve([use]) { _ in 5 })
+        #expect(f.manager.useLedger.reserve([use]) { _ in 5 })
+        #expect(await f.manager.recordUses([use]))
+        #expect(f.manager.secret(secret.account)?.uses[Self.binding.id] == 2)
+
+        let gate = SecretWriteGate(at: 1)
+        await f.store.setWriteHook { try await gate.hook($0) }
+        f.manager.useLedger.release([use])
+        let first = Task { @MainActor in await f.manager.releaseUses([use]) }
+        try await waitUntil("first refund writing") { gate.entered }
+        // The second request is refused while the first refund's write is in flight.
+        f.manager.useLedger.release([use])
+        gate.release(proceed: true)
+        await first.value
+        await f.store.setWriteHook(nil)
+        await f.manager.releaseUses([use])
+
+        let stored = try await f.store.managedSecretRows().secrets.first { $0.account == secret.account }
+        #expect(stored?.uses[Self.binding.id] ?? 0 == f.manager.secret(secret.account)?.uses[Self.binding.id] ?? 0, "database and memory disagree")
+        #expect(f.manager.secret(secret.account)?.uses[Self.binding.id] ?? 0 == 0)
+        let relaunched = try await Light.make(store: f.store, vault: f.vault)
+        #expect(relaunched.manager.secret(secret.account)?.uses[Self.binding.id] ?? 0 == 0, "a refused use came back after a relaunch")
+    }
+
+    /// Many requests reserve, store and are refused at once (each refund racing the others' reservations and
+    /// refunds): every count ends equal in the ledger, the record and the database, and nothing is charged.
+    @Test func manyConcurrentReservationsAndRefundsAgree() async throws {
+        let f = try await Light.make()
+        let secret = try await f.manager.create(label: "Busy", value: SecretValue("sk_busy_0123456789"), mode: .placeholder, bindings: [Self.binding])
+        let use = SubstitutionUse(account: secret.account, bindingID: Self.binding.id, sessionID: "ses", placeholder: "")
+        let manager = f.manager
+        let requests = (0..<40).map { _ in
+            Task { @MainActor in
+                guard manager.useLedger.reserve([use], limit: { _ in 1_000 }) else { return }
+                _ = await manager.recordUses([use])
+                await Task.yield()
+                manager.useLedger.release([use])
+                await manager.releaseUses([use])
+            }
+        }
+        for request in requests { await request.value }
+        let stored = try await f.store.managedSecretRows().secrets.first { $0.account == secret.account }
+        #expect(manager.useLedger.count(account: secret.account, bindingID: Self.binding.id) == 0)
+        #expect(manager.secret(secret.account)?.uses[Self.binding.id] ?? 0 == 0)
+        #expect(stored?.uses[Self.binding.id] ?? 0 == 0, "the database kept a refunded use")
+    }
+
     // MARK: AF15
 
     /// The revocation's snapshot is superseded by a newer refresh while both read the Keychain: the revocation returns
@@ -179,6 +232,70 @@ struct SecretEgressVerificationTests {
         manager.environmentSendHook = nil
         #expect(!(await fixture.harness.server.environmentText.contains(value)), "the stale replacement landed after the revocation's")
         #expect(manager.pendingEnvironmentSessions.isEmpty)
+    }
+
+    /// AF26 (third round): two visible secrets of one thread are revoked while an earlier replacement is in flight. The
+    /// first revocation's replacement is superseded by the second's before it is sent; the first revocation returns only
+    /// once the second's replacement (which removes both values) has been answered.
+    @Test func aSupersededRevocationWaitsForTheReplacementThatRemovesItsValue() async throws {
+        let fixture = try await SecretCommandApprovalTests.Fixture.start()
+        defer { Task { await fixture.stop() } }
+        let manager = try #require(fixture.engine.secretManager)
+        let session = try await fixture.engine.createThread(in: SecretCommandApprovalTests.project, title: "env")
+        let id = session.id.rawValue
+        let first = "zz-ENV-first-\(UUID().uuidString.prefix(8))"
+        let second = "zz-ENV-second-\(UUID().uuidString.prefix(8))"
+        let a = try await manager.create(label: "First key", value: SecretValue(first), mode: .visible, confirmVisible: true)
+        let b = try await manager.create(label: "Second key", value: SecretValue(second), mode: .visible, confirmVisible: true)
+        try await manager.grant(account: a.account, sessionID: session.id, projectDirectory: SecretCommandApprovalTests.project)
+        try await manager.grant(account: b.account, sessionID: session.id, projectDirectory: SecretCommandApprovalTests.project)
+        let delivered = await fixture.harness.server.environmentText
+        #expect(delivered.contains(first) && delivered.contains(second), "delivered")
+
+        let gate = SendGateSequence()
+        manager.environmentSendHook = { _ in await gate.hold() }
+        let loop = Task { @MainActor in await manager.applyEnvironment(id) }
+        try await waitUntil("an earlier replacement held") { gate.arrived == 1 }
+        let revokedFirst = OnceFlag()
+        let revokeFirst = Task { @MainActor in try await manager.revoke(account: a.account); _ = revokedFirst.set() }
+        try await waitUntil("first revocation queued") { manager.waitingEnvironmentWriters(id) == 1 }
+        let revokeSecond = Task { @MainActor in try await manager.revoke(account: b.account) }
+        try await waitUntil("second revocation queued") { manager.waitingEnvironmentWriters(id) == 2 }
+        gate.release(1)
+        await loop.value
+        // The first revocation's replacement was superseded; the second's is computed and held before it is sent.
+        try await waitUntil("second revocation's replacement held") { gate.arrived == 2 }
+        try await waitUntil("first revocation returned or waiting") { revokedFirst.isSet || manager.waitingEnvironmentSettlements(id) == 1 }
+        #expect(!revokedFirst.isSet, "the first revocation returned before any replacement removing its value was answered")
+        #expect(await fixture.harness.server.environmentText.contains(first), "precondition: the server still has the value")
+        gate.release(2)
+        try await revokeFirst.value
+        try await revokeSecond.value
+        manager.environmentSendHook = nil
+        let after = await fixture.harness.server.environmentText
+        #expect(!after.contains(first) && !after.contains(second))
+        #expect(manager.pendingEnvironmentSessions.isEmpty)
+        #expect(manager.waitingEnvironmentSettlements(id) == 0)
+    }
+}
+
+/// Holds every environment send until its number is released (main actor; numbered from 1 by arrival).
+@MainActor
+final class SendGateSequence {
+    private(set) var arrived = 0
+    private var released: Set<Int> = []
+    private var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func hold() async {
+        arrived += 1
+        let number = arrived
+        guard !released.contains(number) else { return }
+        await withCheckedContinuation { waiting[number] = $0 }
+    }
+
+    func release(_ number: Int) {
+        released.insert(number)
+        waiting.removeValue(forKey: number)?.resume()
     }
 }
 

@@ -174,7 +174,8 @@ public final class EgressProxy: Sendable {
     private struct Dispatch: Sendable {
         var original: OutboundRequest
         var uses: [SubstitutionUse]
-        var admitsProject: @Sendable (String) -> Bool
+        /// The gateway scope's token: the scope's membership is looked up as it is now at every re-check (AV2-04).
+        var scopeToken: String
         var wire: WireConnection
         var cancelled = false
     }
@@ -244,8 +245,45 @@ public final class EgressProxy: Sendable {
         connections.forEach { $0.cancel() }
     }
 
-    public func setScopes(_ scopes: [EgressScope]) {
-        state.withLock { $0.scopes = Dictionary(scopes.map { ($0.token, $0) }, uniquingKeysWith: { _, new in new }) }
+    /// Replaces the gateway scopes. What a scope admits is read from here at every request and at every dispatch, so a
+    /// kept-alive connection is judged by its scope as it is now, never by the one it was opened under (AV2-04). A
+    /// request already being written upstream that the new scopes no longer authorize (a project removed from the
+    /// shared workspace, a scope withdrawn) has its connection cancelled; `drain` waits until those writes have ended.
+    @discardableResult
+    public func setScopes(_ scopes: [EgressScope]) -> EgressDrain {
+        let ledger = self.ledger
+        let (wires, ids) = state.withLock { state -> ([WireConnection], Set<UUID>) in
+            state.scopes = Dictionary(scopes.map { ($0.token, $0) }, uniquingKeysWith: { _, new in new })
+            return Self.withdrawUnauthorizedDispatches(&state, ledger: ledger)
+        }
+        wires.forEach { $0.cancel() }
+        return EgressDrain(ids: ids)
+    }
+
+    /// `setScopes` then `drain`: when this returns, nothing the new scopes withdrew is still being sent.
+    public func publishScopes(_ scopes: [EgressScope]) async {
+        await drain(setScopes(scopes))
+    }
+
+    /// What a withdrawn scope admits.
+    private static let admitsNothing: @Sendable (String) -> Bool = { _ in false }
+
+    /// The scope `token` names now (nil: withdrawn).
+    func currentScope(_ token: String) -> EgressScope? { state.withLock { $0.scopes[token] } }
+
+    /// Marks cancelled every dispatch the state's snapshot and scopes no longer authorize; their wires and ids.
+    private static func withdrawUnauthorizedDispatches(_ state: inout State, ledger: SecretUseLedger) -> ([WireConnection], Set<UUID>) {
+        var wires: [WireConnection] = []
+        var ids = Set<UUID>()
+        for (id, dispatch) in state.dispatches {
+            let admits = state.scopes[dispatch.scopeToken]?.admitsProject ?? Self.admitsNothing
+            if case .failure = reauthorize(dispatch.original, uses: dispatch.uses, admitsProject: admits, snapshot: state.snapshot, ledger: ledger) {
+                state.dispatches[id]?.cancelled = true
+                wires.append(dispatch.wire)
+                ids.insert(id)
+            }
+        }
+        return (wires, ids)
     }
 
     /// Publishes a new snapshot. Every request substituted afterwards is judged by it; a request already being written
@@ -256,17 +294,7 @@ public final class EgressProxy: Sendable {
         let ledger = self.ledger
         let (wires, ids) = state.withLock { state -> ([WireConnection], Set<UUID>) in
             state.snapshot = snapshot
-            var wires: [WireConnection] = []
-            var ids = Set<UUID>()
-            for (id, dispatch) in state.dispatches {
-                if case .failure = Self.reauthorize(dispatch.original, uses: dispatch.uses, admitsProject: dispatch.admitsProject,
-                                                    snapshot: snapshot, ledger: ledger) {
-                    state.dispatches[id]?.cancelled = true
-                    wires.append(dispatch.wire)
-                    ids.insert(id)
-                }
-            }
-            return (wires, ids)
+            return Self.withdrawUnauthorizedDispatches(&state, ledger: ledger)
         }
         wires.forEach { $0.cancel() }
         return EgressDrain(ids: ids)
@@ -514,6 +542,9 @@ public final class EgressProxy: Sendable {
     var dispatchCount: Int { state.withLock { $0.dispatches.count } }
     var dispatchCancelledCount: Int { state.withLock { $0.dispatches.values.filter(\.cancelled).count } }
 
+    /// Tests: the tokens of the registered scopes.
+    var scopeTokensForTesting: [String] { state.withLock { Array($0.scopes.keys) } }
+
     /// Tunnels waiting for (or using) their inspection connection (tests: none may be left behind).
     var pendingTunnelCount: Int { state.withLock { $0.pendingTunnels.count } }
 
@@ -601,8 +632,9 @@ public final class EgressProxy: Sendable {
     }
 
     /// Serves requests on one client connection (inside a TLS tunnel, or plain absolute-form), keeping upstream
-    /// connections alive while the destination stays the same.
-    private func serveRequests(client: WireConnection, first: (HTTPHead, Data)?, context: TunnelContext?, scope: EgressScope) async throws {
+    /// connections alive while the destination stays the same. Each request is judged by the connection's scope as it
+    /// is when the request arrives (AV2-04): a withdrawn scope ends the connection, a changed one applies at once.
+    private func serveRequests(client: WireConnection, first: (HTTPHead, Data)?, context: TunnelContext?, scope opened: EgressScope) async throws {
         var upstream: Upstream?
         var pending = first
         defer { upstream?.wire.cancel() }
@@ -621,6 +653,11 @@ public final class EgressProxy: Sendable {
             }
             guard head.version == "HTTP/1.1" || head.version == "HTTP/1.0" else {
                 try await client.send(Self.plainResponse(505, "HTTP Version Not Supported", "BelloCode's proxy speaks HTTP/1.1 only."))
+                return
+            }
+            guard let scope = currentScope(opened.token) else {
+                emit(.connectionRefused(reason: "a request on a connection whose gateway scope was withdrawn"))
+                try await client.send(Self.plainResponse(403, "Forbidden", "This workspace's network access was withdrawn. Retry the request."))
                 return
             }
             let keepGoing = try await handle(head, client: client, context: context, scope: scope, upstream: &upstream)
@@ -979,9 +1016,12 @@ public final class EgressProxy: Sendable {
         let ledger = self.ledger
         return state.withLock { state in
             let snapshot = state.snapshot
-            switch Self.reauthorize(original, uses: uses, admitsProject: scope.admitsProject, snapshot: snapshot, ledger: ledger) {
+            // The scope as it is now, in the same step as the registration (AV2-04): one changed or withdrawn since the
+            // request was admitted is what decides.
+            let admits = state.scopes[scope.token]?.admitsProject ?? Self.admitsNothing
+            switch Self.reauthorize(original, uses: uses, admitsProject: admits, snapshot: snapshot, ledger: ledger) {
             case .success(let current):
-                state.dispatches[id] = Dispatch(original: original, uses: uses, admitsProject: scope.admitsProject, wire: wire)
+                state.dispatches[id] = Dispatch(original: original, uses: uses, scopeToken: scope.token, wire: wire)
                 return .success((current, snapshot))
             case .failure(let refusal):
                 return .failure(refusal)
@@ -1005,7 +1045,8 @@ public final class EgressProxy: Sendable {
     }
 
     private func reauthorize(_ original: OutboundRequest, uses: [SubstitutionUse], scope: EgressScope) -> Result<OutboundRequest, Reauthorization> {
-        Self.reauthorize(original, uses: uses, admitsProject: scope.admitsProject, snapshot: state.withLock { $0.snapshot }, ledger: ledger)
+        let (snapshot, admits) = state.withLock { state in (state.snapshot, state.scopes[scope.token]?.admitsProject ?? Self.admitsNothing) }
+        return Self.reauthorize(original, uses: uses, admitsProject: admits, snapshot: snapshot, ledger: ledger)
     }
 
     /// `original` substituted under `snapshot`: the request to send when it makes exactly the same uses (secrets,

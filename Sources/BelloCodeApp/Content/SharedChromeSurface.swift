@@ -673,9 +673,12 @@ struct SharedChromePlaceholder: View {
         }
     }
 
-    /// A failed start or an unconfirmed stop may leave the container running: Stop checks and stops it (AF23).
-    private var showsStop: Bool {
-        switch service.phase {
+    private var showsStop: Bool { Self.offersStop(service.phase) }
+
+    /// A failed start or an unconfirmed stop may leave the container running: the placeholder offers Stop, which checks
+    /// and stops it (AF23). Running phases have Stop in the toolbar, Settings and the menu.
+    static func offersStop(_ phase: BrowserPhase) -> Bool {
+        switch phase {
         case .failed, .stopUnconfirmed: true
         default: false
         }
@@ -770,20 +773,26 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
     }
 
     static func run(_ command: SharedChromeMenu.Command, in window: MainWindowController?) {
-        let service = window?.workspace.engine.sharedBrowser
+        run(command, in: window, service: window?.workspace.engine.sharedBrowser)
+    }
+
+    /// Runs `command` for `service` (the window's); the service's own work (start, stop, give back) is the returned task.
+    @discardableResult
+    static func run(_ command: SharedChromeMenu.Command, in window: MainWindowController?, service: SharedBrowserService?) -> Task<Void, Never>? {
         switch command {
         case .show: window?.showSharedChromePanel()
         case .openWindow: window?.sharedChrome?.openWindow()
         case .takeOver:
             // The detached window when it is open, else the panel (NF17).
-            guard let window else { return }
+            guard let window else { return nil }
             window.sharedChrome?.takeOver(showPanel: { window.showSharedChromePanel() })
         case .giveBack:
             // The service's state; every open viewer follows it (NF17).
-            Task { await service?.giveBack("*") }
-        case .start: Task { await service?.startBrowser() }
-        case .stop: Task { await service?.stopBrowser() }
+            return Task { await service?.giveBack("*") }
+        case .start: return Task { await service?.startBrowser() }
+        case .stop: return Task { await service?.stopBrowser() }
         }
+        return nil
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
