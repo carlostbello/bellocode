@@ -89,6 +89,8 @@ public final class OrchestrationService {
     @ObservationIgnored private weak var engine: Engine?
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var hosts: [String: ClientMCPHost] = [:]
+    /// The server every host in `hosts` dials.
+    @ObservationIgnored private var hostsConnection: ServerConnection?
     @ObservationIgnored private var started = false
 
     /// The client-MCP server name: tools appear to the agent as `bellocode_app_<tool>`.
@@ -123,6 +125,7 @@ public final class OrchestrationService {
         tasks.cancelAll()
         let all = Array(hosts.values)
         hosts.removeAll()
+        hostsConnection = nil
         for host in all { await host.stop() }
         started = false
     }
@@ -280,6 +283,13 @@ public final class OrchestrationService {
             await host.stop()
         }
         guard let client = try? await core.currentClient() else { return }
+        // A host keeps dialling the server it was made for; after a restart (new port and password) replace them all.
+        if hostsConnection != client.connection {
+            let stale = hosts
+            hosts = [:]
+            hostsConnection = client.connection
+            for host in stale.values { await host.stop() }
+        }
         for directory in wanted where hosts[directory] == nil {
             let host = ClientMCPHost(
                 name: Self.appServerName, directory: directory, dialer: WebSocketClientMCPDialer(connection: client.connection),
