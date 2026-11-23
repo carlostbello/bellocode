@@ -27,6 +27,8 @@ export type Overrides = {
   models?: any[]
   /** Transform reloads that reject ("skill", "agent", "command"). */
   failingReloads?: string[]
+  /** `ctx.agent.list` entries (default: opencode's general, build and plan). */
+  agents?: Array<{ id: string; mode: string }>
 }
 
 export async function makePlugin(overrides: Overrides = {}, options: Record<string, unknown> = {}) {
@@ -72,7 +74,16 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     options,
     location: { directory: overrides.location ?? "/repo" },
     skill: transform("skill"),
-    agent: { ...transform("agent"), list: async () => ({ data: [{ id: "general", mode: "subagent" }] }) },
+    agent: {
+      ...transform("agent"),
+      list: async () => ({
+        data: overrides.agents ?? [
+          { id: "general", mode: "subagent" },
+          { id: "build", mode: "primary" },
+          { id: "plan", mode: "primary" },
+        ],
+      }),
+    },
     command: transform("command"),
     session: {
       hook: addHook("session"),
