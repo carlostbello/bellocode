@@ -35,6 +35,8 @@ final class EnvironmentBannerHost: NSView {
     isolated deinit { loop?.cancel() }
 
     var isShowing: Bool { notice != nil }
+    /// The directory whose project the banner follows now (tests).
+    var currentDirectory: String? { directory() }
 
     private var notice: (EnvironmentNotice, ProjectEnvironment)? {
         let service = engine.environments

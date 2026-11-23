@@ -190,8 +190,7 @@ final class ThreadContainerViewController: NSViewController {
             unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             unconfirmedSends = unconfirmed
-            let directory = context.directory
-            let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })
+            let environment = Self.makeEnvironmentBanner(engine: workspace.engine, context: context)
             environmentBanner = environment
             environmentView = environment
             let interrupted = InterruptedBanner(thread: thread)
@@ -261,6 +260,12 @@ final class ThreadContainerViewController: NSViewController {
         attachedTray?.render(visible: hasTray)
         trayToRequests.constant = hasTray ? -overlap : 0
         requestsToComposer.constant = hasRequests ? -overlap : 0
+    }
+
+    /// The blocked-command banner reads the context's directory live (NV10): a thread shown before its session
+    /// hydrated (directory unknown) gets its container notices once the session's directory is known.
+    static func makeEnvironmentBanner(engine: Engine, context: ThreadSurfaceContext) -> EnvironmentBannerHost {
+        EnvironmentBannerHost(engine: engine, directory: { [weak context] in context?.directory })
     }
 
     /// The draft's model line: free built-in models are mentioned only when the catalog offers some that can be used
