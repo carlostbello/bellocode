@@ -1,3 +1,4 @@
+import BelloCore
 import ContainerKit
 import Foundation
 import OpenCodeKit
@@ -572,5 +573,63 @@ struct BrowseMCPClientTests {
         for _ in 0..<1000 { await Task.yield() }
         await transport.close()
         await #expect(throws: BrowseMCPClient.Failure.closed) { _ = try await pending.value }
+    }
+}
+
+/// v1.0.1 NF11: "Close a thread's tabs when it is done" closes a finished thread's own, unshared tabs in a browser
+/// already running, never starts it for that, and never closes under the person's control.
+@Suite("Shared browser: tabs of finished threads", .timeLimit(.minutes(3)))
+struct SharedBrowserDoneTabsTests {
+    func call(_ broker: SharedBrowserBroker, _ tool: String, _ args: [String: JSONValue], session: String) async -> ClientMCPResult {
+        await broker.call(ClientMCPCall(tool: tool, arguments: .object(args), sessionID: session, directory: "/p/atlas"))
+    }
+
+    @Test func closesTheThreadsTabsInTheRunningBrowserOnly() async throws {
+        let host = FakeSharedBrowserHost()
+        await host.approve("/p/atlas")
+        let broker = SharedBrowserBroker(host: host)
+        let group = BrowserNaming.group(sessionID: "ses_a")
+        // Not running for this client: nothing is started to close tabs.
+        #expect(await broker.closeTabs(["\(group)-main"], session: "ses_a", group: group).isEmpty)
+        #expect(await host.begins == 0)
+        #expect(host.calls.all.isEmpty)
+        _ = await call(broker, "navigate", ["url": .string("https://x")], session: "ses_a")
+        let closed = await broker.closeTabs(["\(group)-main", "\(group)-2"], session: "ses_a", group: group)
+        #expect(closed == ["\(group)-main", "\(group)-2"])
+        let close = try #require(host.calls.all.last)
+        #expect(close.tool == "tabs" && close.args["action"]?.stringValue == "close")
+        #expect(close.args["tabs"]?.arrayValue?.compactMap(\.stringValue) == ["\(group)-main", "\(group)-2"])
+        // The main tab is opened again on the thread's next call.
+        _ = await call(broker, "navigate", ["url": .string("https://y")], session: "ses_a")
+        #expect(host.calls.all.suffix(2).first?.args["action"]?.stringValue == "new")
+        // Under the person's control nothing closes.
+        _ = await broker.takeOver("*")
+        #expect(await broker.closeTabs(["\(group)-main"], session: "ses_a", group: group).isEmpty)
+    }
+
+    @Test func sharedTabsStayOpen() {
+        var binding = BrowserBinding(sessionID: "ses_a", project: "/p/atlas", group: BrowserNaming.group(sessionID: "ses_a"))
+        binding.remember("\(binding.group)-2")
+        binding.remember("\(binding.group)-3")
+        let now = Date()
+        let shares = [
+            BrowserShare(ownerSession: "ses_a", granteeSession: "ses_b", tab: "\(binding.group)-2", created: now, expires: now.addingTimeInterval(600)),
+            BrowserShare(ownerSession: "ses_a", granteeSession: "ses_b", tab: "\(binding.group)-3", created: now, expires: now.addingTimeInterval(-1)),
+        ]
+        #expect(SharedBrowserService.tabsToClose(binding, shares: shares, now: now) == [binding.mainTab, "\(binding.group)-3"])
+    }
+
+    @Test func archivedOrDeletedThreadsEndOnce() {
+        func session(_ id: String, archived: Bool) -> Session {
+            Session(id: SessionID(id), projectID: ProjectID("p"), title: id, directory: "/p", created: Timestamp(milliseconds: 0),
+                    updated: Timestamp(milliseconds: 0), archivedAt: archived ? Timestamp(milliseconds: 1) : nil)
+        }
+        var tracker = ThreadEndTracker()
+        #expect(tracker.ended(sessions: [session("a", archived: false), session("b", archived: true), session("c", archived: false)], removed: []).isEmpty,
+                "first sight only records (b was archived before)")
+        #expect(tracker.ended(sessions: [session("a", archived: true)], removed: []) == [SessionID("a")])
+        #expect(tracker.ended(sessions: [session("a", archived: true)], removed: []).isEmpty, "once")
+        #expect(tracker.ended(sessions: [], removed: [SessionID("c")]) == [SessionID("c")], "deleted")
+        #expect(tracker.ended(sessions: [], removed: [SessionID("a")]).isEmpty, "already ended when archived")
     }
 }

@@ -113,6 +113,10 @@ public final class SharedBrowserService {
     @ObservationIgnored private var previewFront: PreviewProxyFront?
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var noticeCounter = 0
+    @ObservationIgnored var threadEnds = ThreadEndTracker()
+    @ObservationIgnored private var followingThreadEnds = false
+    /// Test seam: closes a finished thread's tabs (default: the broker, in the running browser).
+    @ObservationIgnored var closeThreadTabs: (([String], String, String) async -> [String])?
     @ObservationIgnored let log = Logger(subsystem: "app.bellocode", category: "shared-browser")
     nonisolated static let maxForwards = 32
     nonisolated static let toolsCacheKey = "browser.shared.tools"
@@ -172,6 +176,7 @@ public final class SharedBrowserService {
 
     func start() async {
         await loadState()
+        followThreadEnds()
         guard let configuration, let environments, environments.isEnabled else { return }
         let runtime = DockerBrowserRuntime(
             socketPath: environments.activeRuntime.socketPath,
@@ -216,6 +221,43 @@ public final class SharedBrowserService {
         let label = account == keyAccount ? "BelloCode shared browser extension packing key" : "BelloCode shared browser extension packing key (development)"
         try vault.store(account: account, label: label, value: SecretValue(pem))
         return pem
+    }
+
+    /// Archived or deleted threads are done: their tabs close when the setting says so (NF11).
+    private func followThreadEnds() {
+        guard !followingThreadEnds else { return }
+        followingThreadEnds = true
+        let lineage = store.observe(.lineage)
+        tasks.set(
+            "thread-ends",
+            Task { [weak self] in
+                for await change in lineage {
+                    guard let self else { return }
+                    let ended = self.threadEnds.ended(sessions: Array(change.sessions.values), removed: change.removedSessions)
+                    for session in ended { await self.threadEnded(session.rawValue) }
+                }
+            })
+    }
+
+    /// A thread is done (archived or deleted). With "Close a thread's tabs when it is done" on, the tabs it opened
+    /// close, except those it shares with another thread; nothing starts the browser for it (NF11).
+    func threadEnded(_ session: String) async {
+        guard settings.closeTabsWhenDone, var binding = bindings[session] else { return }
+        let closing = Self.tabsToClose(binding, shares: shares, now: .now)
+        let closed = Set(await (closeThreadTabs ?? broker.closeTabs)(closing, session, binding.group))
+        guard !closed.isEmpty, let current = bindings[session], current.group == binding.group else { return }
+        binding = current
+        binding.tabs = [binding.mainTab] + binding.tabs.filter { $0 != binding.mainTab && !closed.contains($0) }
+        if closed.contains(binding.selectedTab) { binding.selectedTab = binding.mainTab }
+        await save(binding)
+    }
+
+    /// The tabs a finished thread closes: its own, minus those it currently shares with another thread.
+    nonisolated static func tabsToClose(_ binding: BrowserBinding, shares: [BrowserShare], now: Date) -> [String] {
+        let shared = Set(shares.filter { $0.ownerSession == binding.sessionID && $0.isActive(at: now) }.map(\.tab))
+        var own = binding.tabs
+        if !own.contains(binding.mainTab) { own.insert(binding.mainTab, at: 0) }
+        return own.filter { !shared.contains($0) }
     }
 
     private func loadState() async {

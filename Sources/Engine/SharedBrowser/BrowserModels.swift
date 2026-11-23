@@ -1,3 +1,4 @@
+import BelloCore
 import CryptoKit
 import Foundation
 
@@ -122,7 +123,7 @@ public struct SharedBrowserSettings: Codable, Sendable, Equatable {
     public var profileLimitGiB: Int = 4
     /// The compact 1024×640 display (36% fewer pixels per full redraw), on request.
     public var compactDisplay: Bool = false
-    /// Close a thread's disposable tabs when it ends (not shared or lent ones).
+    /// Close the tabs a thread opened when it is done (archived or deleted); tabs it shares with another thread stay.
     public var closeTabsWhenDone: Bool = true
 
     public init() {}
@@ -140,4 +141,22 @@ public struct SharedBrowserSettings: Codable, Sendable, Equatable {
 
     public var idle: Duration { .seconds(max(1, idleMinutes) * 60) }
     public var screen: (width: Int, height: Int) { compactDisplay ? (1024, 640) : (1280, 800) }
+}
+
+/// Which threads just ended (NF11): archived since last seen, or deleted. A thread seen for the first time only
+/// records its state (one already archived at launch is not "just done"). Bounded by the threads opencode lists.
+struct ThreadEndTracker {
+    private var archived: [SessionID: Bool] = [:]
+
+    mutating func ended(sessions: [Session], removed: Set<SessionID>) -> [SessionID] {
+        var ended: [SessionID] = []
+        for session in sessions {
+            let was = archived.updateValue(session.isArchived, forKey: session.id)
+            if was == false, session.isArchived { ended.append(session.id) }
+        }
+        for id in removed {
+            if let was = archived.removeValue(forKey: id), !was { ended.append(id) }
+        }
+        return ended
+    }
 }

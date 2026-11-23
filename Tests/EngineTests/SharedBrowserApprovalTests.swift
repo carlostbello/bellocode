@@ -158,4 +158,51 @@ struct SharedBrowserApprovalTests {
         SharedBrowserService.saveCachedTools([Self.navigate], to: fixture.defaults)
         #expect(SharedBrowserService.loadCachedTools(from: fixture.defaults).map(\.name) == ["navigate"])
     }
+
+    /// NF11: archiving a thread closes the tabs it opened (not the one it shares) when the setting is on; off, nothing.
+    @Test func archivingAThreadClosesItsTabs() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        let service = await fixture.service()
+        let closing = Mutex<[[String]]>([])
+        let (closed, closedNow) = AsyncStream.makeStream(of: Void.self)
+        service.closeThreadTabs = { tabs, _, _ in
+            closing.withLock { $0.append(tabs) }
+            closedNow.yield()
+            return tabs
+        }
+        var binding = BrowserBinding(sessionID: "ses_a", project: Self.directory, group: BrowserNaming.group(sessionID: "ses_a"))
+        binding.remember("\(binding.group)-2")
+        binding.remember("\(binding.group)-3")
+        binding.selectedTab = "\(binding.group)-2"
+        await service.save(binding)
+        await service.share(tab: "\(binding.group)-3", from: "ses_a", to: "ses_b")
+        func session(_ id: String, archived: Bool) -> Session {
+            Session(id: SessionID(id), projectID: ProjectID("p"), directory: Self.directory, created: Timestamp(milliseconds: 0),
+                    updated: Timestamp(milliseconds: archived ? 2 : 1), archivedAt: archived ? Timestamp(milliseconds: 2) : nil)
+        }
+        var batch = StoreBatch()
+        batch.sessions = [session("ses_a", archived: false)]
+        try await fixture.store.apply(batch)
+        batch.sessions = [session("ses_a", archived: true)]
+        try await fixture.store.apply(batch)
+        var events = closed.makeAsyncIterator()
+        _ = await events.next()  // archived: the tabs are being closed
+        #expect(closing.withLock { $0 } == [[binding.mainTab, "\(binding.group)-2"]])
+        // The binding is saved right after (the same main-actor step once the close returns).
+        for _ in 0..<1_000 where service.bindings["ses_a"]?.tabs.count == 3 { await Task.yield() }
+        #expect(service.bindings["ses_a"]?.tabs == [binding.mainTab, "\(binding.group)-3"])
+        #expect(service.bindings["ses_a"]?.selectedTab == binding.mainTab)
+        // Turned off: an archived thread keeps its tabs.
+        var settings = service.settings
+        settings.closeTabsWhenDone = false
+        await service.update(settings)
+        batch.sessions = [session("ses_c", archived: false)]
+        try await fixture.store.apply(batch)
+        await service.save(BrowserBinding(sessionID: "ses_c", project: Self.directory, group: BrowserNaming.group(sessionID: "ses_c")))
+        batch.sessions = [session("ses_c", archived: true)]
+        try await fixture.store.apply(batch)
+        await service.threadEnded("ses_c")
+        #expect(closing.withLock { $0.count } == 1)
+    }
 }

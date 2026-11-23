@@ -44,7 +44,8 @@ struct SharedChromeSettingsGroup: View {
                 }
                 SettingsToggleRow("Compact display (1024 × 640)", detail: "36% fewer pixels per full redraw; pages lay out for a smaller window. Restarts the browser.",
                                   isOn: binding(\.compactDisplay))
-                SettingsToggleRow("Close a thread's tabs when it is done", detail: "Shared or lent tabs stay open.", isOn: binding(\.closeTabsWhenDone))
+                SettingsToggleRow("Close a thread's tabs when it is done", detail: "When a thread is archived or deleted. Tabs it shares with another thread stay open.",
+                                  isOn: binding(\.closeTabsWhenDone))
             }
             SettingsGroup("Projects allowed to use it", footer: "Allowed with “Always” on the approval card. Revoking removes the tools from that project's threads.") {
                 if service.approvedProjects.isEmpty, service.pendingRevocations.isEmpty {
