@@ -62,7 +62,7 @@ struct LiveSharedBrowserTests {
                 let id = "\(target.container)|\(target.host)|\(target.port)"
                 if let existing = forwards.withLock({ $0[id] }) { return .dial(EgressDial(endpoint: HostPort(host: "127.0.0.1", port: existing.hostPort), terminatesTLS: true)) }
                 guard let forwarder = try? PortForwarder(client: EngineClient(socketPath: socketPath), container: target.container,
-                                                         containerPort: target.port, containerHost: target.host) else { return nil }
+                                                         containerPort: target.port, containerHost: target.host, workspace: true) else { return nil }
                 forwards.withLock { $0[id] = forwarder }
                 Task { await forwarder.run() }
                 return .dial(EgressDial(endpoint: HostPort(host: "127.0.0.1", port: forwarder.hostPort), terminatesTLS: true))

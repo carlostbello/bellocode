@@ -218,7 +218,7 @@ extension EnvironmentService {
 
     /// Roots whose marker file, written on the Mac, is not visible in the container (Rancher Desktop does not share
     /// the folder with its VM, or shares a stale view). Markers are removed at once.
-    nonisolated static func invisibleRoots(_ roots: [String], container: String, user: String, runtime: any WorkspaceRuntime) async -> [String] {
+    nonisolated static func invisibleRoots(_ roots: [String], container: String, runtime: any WorkspaceRuntime) async -> [String] {
         let name = ".bellocode-root-check-\(UUID().uuidString.prefix(8))"
         var markers: [String: String] = [:]
         for root in roots {
@@ -230,7 +230,7 @@ extension EnvironmentService {
         let ordered = markers.sorted { $0.key < $1.key }
         let script = #"for f; do if [ -e "$f" ]; then echo 1; else echo 0; fi; done"#
         guard let result = try? await runtime.run(container: container, argv: ["/bin/sh", "-c", script, "check"] + ordered.map(\.value),
-                                                  workingDir: nil, environment: [:], user: user, timeout: .seconds(10)) else { return [] }
+                                                  workingDir: nil, environment: [:], timeout: .seconds(10)) else { return [] }
         let flags = String(decoding: result.stdout, as: UTF8.self).split(separator: "\n")
         guard flags.count == ordered.count else { return [] }
         return zip(ordered, flags).filter { $0.1 == "0" }.map(\.0.key)
@@ -250,7 +250,7 @@ extension EnvironmentService {
             for model in shared { model.lastActivity = Date() }
             return
         }
-        _ = try? await runtimeRef.reap(container: id, user: "\(getuid()):\(getgid())")
+        _ = try? await runtimeRef.reap(container: id)
         try? await runtimeRef.stop(container: id)
         for model in shared {
             stopBridge(model)

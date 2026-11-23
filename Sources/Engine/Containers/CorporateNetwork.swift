@@ -327,7 +327,7 @@ extension EnvironmentService {
         if let model, let container = model.record.containerID, let spec = workspaceSpec(model) {
             run.project = (model.directory as NSString).lastPathComponent
             do {
-                run.container = try await activeRuntime.diagnose(container: container, user: spec.user, urls: urls)
+                run.container = try await activeRuntime.diagnose(container: container, urls: urls)
             } catch {
                 run.containerProblem = "The probe could not run in \(run.project ?? "the container"): \(Self.describe(error))"
             }

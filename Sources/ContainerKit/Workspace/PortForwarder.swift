@@ -19,7 +19,10 @@ public final class PortForwarder: Sendable {
     public let container: String
     public let containerPort: Int
     public let containerHost: String
-    public let user: String?
+    /// A workspace container: each relay runs as the container's verified numeric `uid:gid`
+    /// (`WorkspaceManager.execTarget`), never as a name, and a container without one gets no relay. Otherwise (a
+    /// compose-stack service) the relay runs as that container's own user.
+    public let workspace: Bool
     public let maxConnections: Int
     private let listener: FileStream
     public let hostPort: Int
@@ -50,14 +53,14 @@ public final class PortForwarder: Sendable {
     ///   - containerHost: where the relay connects inside the container (`127.0.0.1`, or `::1` for an IPv6 listener).
     ///   - hostPort: 0 picks a free port; otherwise the same port number is tried (keeps URLs stable).
     public convenience init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
-                            hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64,
+                            hostPort: Int = 0, workspace: Bool, maxConnections: Int = 64,
                             prepare: (@Sendable () async -> Bool)? = nil) throws {
         try self.init(client: client, container: container, containerPort: containerPort, containerHost: containerHost, hostPort: hostPort,
-                      user: user, maxConnections: maxConnections, relay: nil, afterSpawn: nil, onEnded: nil, prepare: prepare)
+                      workspace: workspace, maxConnections: maxConnections, relay: nil, afterSpawn: nil, onEnded: nil, prepare: prepare)
     }
 
     init(client: EngineClient, container: String, containerPort: Int, containerHost: String = "127.0.0.1",
-         hostPort: Int = 0, user: String? = nil, maxConnections: Int = 64,
+         hostPort: Int = 0, workspace: Bool = true, maxConnections: Int = 64,
          relay: (@Sendable (PortForwarder, FileStream) async -> Void)?, afterSpawn: (@Sendable () async -> Void)?,
          onEnded: (@Sendable () async -> Void)? = nil, prepare: (@Sendable () async -> Bool)? = nil) throws {
         self.prepare = prepare
@@ -68,7 +71,7 @@ public final class PortForwarder: Sendable {
         self.container = container
         self.containerPort = containerPort
         self.containerHost = containerHost
-        self.user = user
+        self.workspace = workspace
         self.maxConnections = maxConnections
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketError.system(operation: "socket", errno: errno) }
@@ -160,10 +163,11 @@ public final class PortForwarder: Sendable {
     private func relayConnection(_ peer: FileStream) async {
         let state = signposter.beginInterval("connection")
         defer { signposter.endInterval("connection", state) }
-        guard let session = try? await ExecSession.start(
-            client: client, container: container, argv: ContainerProbes.relayScript(host: containerHost, port: containerPort),
-            workingDir: nil, environment: [:], user: user, tty: false)
-        else {
+        let argv = ContainerProbes.relayScript(host: containerHost, port: containerPort)
+        let started: ExecSession? = workspace
+            ? try? await WorkspaceManager(client: client).start(container: container, argv: argv, workingDir: nil, environment: [:], tty: false).session
+            : try? await ExecSession.start(client: client, container: container, argv: argv, workingDir: nil, environment: [:], user: nil, tty: false)
+        guard let session = started else {
             peer.cancel()
             return
         }

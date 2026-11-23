@@ -211,16 +211,16 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
         ]
     }
     func runningExecs(container: String) async -> Int { 1 }
-    func listeningPorts(container: String, user: String) async throws -> [ListeningPort] {
+    func listeningPorts(container: String) async throws -> [ListeningPort] {
         [ListeningPort(port: 5173, address: "127.0.0.1", pid: 412, process: "node (vite)"),
          ListeningPort(port: 5432, address: "0.0.0.0", pid: 77, process: "postgres")]
     }
-    func reap(container: String, user: String) async throws -> Int { 0 }
-    func inventory(container: String, user: String) async throws -> ContainerProbes.ToolInventory {
+    func reap(container: String) async throws -> Int { 0 }
+    func inventory(container: String) async throws -> ContainerProbes.ToolInventory {
         .init(os: "Debian GNU/Linux 12", arch: "aarch64", tools: ["bash", "git", "node", "npm", "pnpm", "python3"])
     }
-    func touch(container: String, user: String, paths: [String]) async throws {}
-    func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
+    func touch(container: String, paths: [String]) async throws {}
+    func run(container: String, argv: [String], workingDir: String?, environment: [String: String],
              timeout: Duration) async throws -> ExecResult {
         // The isolation probes read their markers here: answer as the container would.
         ExecResult(exitCode: 0, stdout: Data("container Linux\n".utf8), stderr: Data())
@@ -233,7 +233,7 @@ final class SnapshotWorkspaceRuntime: WorkspaceRuntime {
     }
     func logs(container: String, tail: Int) async throws -> Data { Data("VITE v6.0.3  ready in 412 ms\n".utf8) }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }
-    func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
+    func makeForwarder(container: String, port: ListeningPort, hostPort: Int) throws -> PortForwarder {
         throw ContainerError.notFound("no forwarding in snapshots")
     }
 }

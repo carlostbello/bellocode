@@ -350,9 +350,9 @@ extension EnvironmentService {
         }
         let forwarder: PortForwarder
         do {
-            forwarder = try activeRuntime.makeServiceForwarder(workspace: id, service: name, port: port, hostPort: port, user: spec.user)
+            forwarder = try activeRuntime.makeServiceForwarder(workspace: id, service: name, port: port, hostPort: port)
         } catch {
-            forwarder = try activeRuntime.makeServiceForwarder(workspace: id, service: name, port: port, hostPort: 0, user: spec.user)
+            forwarder = try activeRuntime.makeServiceForwarder(workspace: id, service: name, port: port, hostPort: 0)
         }
         let forwardID = "\(name):\(port)"
         serviceForwarders[model.directory, default: [:]][forwardID] = forwarder

@@ -90,13 +90,13 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     func removeContainer(_ id: String) async throws {}
     func managedContainers() async throws -> [ContainerSummary] { [] }
     func runningExecs(container: String) async -> Int { 0 }
-    func listeningPorts(container: String, user: String) async throws -> [ListeningPort] { [] }
-    func reap(container: String, user: String) async throws -> Int { 0 }
-    func inventory(container: String, user: String) async throws -> ContainerProbes.ToolInventory {
+    func listeningPorts(container: String) async throws -> [ListeningPort] { [] }
+    func reap(container: String) async throws -> Int { 0 }
+    func inventory(container: String) async throws -> ContainerProbes.ToolInventory {
         .init(os: "Debian", arch: "aarch64", tools: ["bash", "git"])
     }
-    func touch(container: String, user: String, paths: [String]) async throws {}
-    func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
+    func touch(container: String, paths: [String]) async throws {}
+    func run(container: String, argv: [String], workingDir: String?, environment: [String: String],
              timeout: Duration) async throws -> ExecResult {
         state.withLock { s in
             s.execs.append(Exec(argv: argv, workingDir: workingDir, environment: environment))
@@ -121,7 +121,7 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     }
     func logs(container: String, tail: Int) async throws -> Data { Data() }
     func events() -> AsyncStream<EngineMonitorEvent> { AsyncStream { _ in } }
-    func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
+    func makeForwarder(container: String, port: ListeningPort, hostPort: Int) throws -> PortForwarder {
         throw ContainerError.notFound("no forwarding in the fake")
     }
 
@@ -142,7 +142,7 @@ final class FakeWorkspaceRuntime: WorkspaceRuntime {
     func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] { projectContainers.withLock { $0 } }
     func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
         try PortForwarder(client: EngineClient(socketPath: "/nonexistent-bellocode-test.sock"), container: container, containerPort: port,
-                          hostPort: hostPort, prepare: prepare)
+                          hostPort: hostPort, workspace: false, prepare: prepare)
     }
 }
 

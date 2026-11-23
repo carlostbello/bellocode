@@ -23,13 +23,13 @@ public protocol WorkspaceRuntime: Sendable {
     func removeContainer(_ id: String) async throws
     func managedContainers() async throws -> [ContainerSummary]
     func runningExecs(container: String) async -> Int
-    func listeningPorts(container: String, user: String) async throws -> [ListeningPort]
-    func reap(container: String, user: String) async throws -> Int
-    func inventory(container: String, user: String) async throws -> ContainerProbes.ToolInventory
-    func touch(container: String, user: String, paths: [String]) async throws
+    func listeningPorts(container: String) async throws -> [ListeningPort]
+    func reap(container: String) async throws -> Int
+    func inventory(container: String) async throws -> ContainerProbes.ToolInventory
+    func touch(container: String, paths: [String]) async throws
     /// Runs one command (non-interactive, wrapped so cancellation stops its group). `environment` is set for this exec
     /// only (secrets); output is bounded.
-    func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
+    func run(container: String, argv: [String], workingDir: String?, environment: [String: String],
              timeout: Duration) async throws -> ExecResult
     /// Runs a command that receives a secret in a one-shot sibling container (`WorkspaceManager.runSecretCommand`).
     func runSecretCommand(
@@ -41,7 +41,7 @@ public protocol WorkspaceRuntime: Sendable {
     /// The last `tail` lines of the container's own output (bounded), for display only.
     func logs(container: String, tail: Int) async throws -> Data
     func events() -> AsyncStream<EngineMonitorEvent>
-    func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder
+    func makeForwarder(container: String, port: ListeningPort, hostPort: Int) throws -> PortForwarder
 
     // MARK: Project services (ServiceManager)
 
@@ -57,7 +57,7 @@ public protocol WorkspaceRuntime: Sendable {
     func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool)
     /// Forwards a service's port to the Mac's loopback through a relay in the workspace container (services publish
     /// nothing).
-    func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder
+    func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int) throws -> PortForwarder
 
     // MARK: Caches
     func cacheVolumes() async throws -> [CacheVolume]
@@ -82,7 +82,7 @@ public protocol WorkspaceRuntime: Sendable {
     /// Removes stopped image-server containers and those of servers that no longer exist.
     func removeMCPLeftovers(knownIDs: Set<String>) async
     /// Fetches `urls` from inside a container (network diagnostics); nil when the container cannot run the probe.
-    func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult]
+    func diagnose(container: String, urls: [String]) async throws -> [NetworkProbeResult]
 }
 
 extension WorkspaceRuntime {
@@ -96,7 +96,7 @@ extension WorkspaceRuntime {
     public func serviceVolumes(projectKey: String, service: ServiceDefinition) async throws -> [String] { [] }
     public func deleteServiceData(projectKey: String, service: String, volumes: [String]) async throws {}
     public func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool) { ("", false) }
-    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
+    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int) throws -> PortForwarder {
         throw ContainerError.notFound("service forwarding is not available here")
     }
     public func cacheVolumes() async throws -> [CacheVolume] { [] }
@@ -111,7 +111,7 @@ extension WorkspaceRuntime {
     public func mcpContainers() async throws -> [ContainerSummary] { [] }
     public func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] { [] }
     public func removeMCPLeftovers(knownIDs: Set<String>) async {}
-    public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] { [] }
+    public func diagnose(container: String, urls: [String]) async throws -> [NetworkProbeResult] { [] }
     public func prunePlan(keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PrunePlan { PrunePlan() }
     public func prune(_ plan: PrunePlan, keepProjectKeys: Set<String>, pulledImageIDs: Set<String>) async throws -> PruneResult { PruneResult() }
 }
@@ -148,20 +148,21 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
         guard let inspect = try? await client.inspectContainer(container) else { return 0 }
         return await manager.runningExecs(WorkspaceStatus(phase: .running, containerID: container, execIDs: inspect.execIDs ?? []))
     }
-    public func listeningPorts(container: String, user: String) async throws -> [ListeningPort] {
-        try await manager.listeningPorts(container: container, user: user)
+    public func listeningPorts(container: String) async throws -> [ListeningPort] {
+        try await manager.listeningPorts(container: container)
     }
-    public func reap(container: String, user: String) async throws -> Int { try await manager.reap(container: container, user: user) }
-    public func inventory(container: String, user: String) async throws -> ContainerProbes.ToolInventory {
-        try await manager.inventory(container: container, user: user)
+    public func reap(container: String) async throws -> Int { try await manager.reap(container: container) }
+    public func inventory(container: String) async throws -> ContainerProbes.ToolInventory {
+        try await manager.inventory(container: container)
     }
-    public func touch(container: String, user: String, paths: [String]) async throws {
-        try await manager.touch(container: container, user: user, paths: paths)
+    public func touch(container: String, paths: [String]) async throws {
+        try await manager.touch(container: container, paths: paths)
     }
-    public func run(container: String, argv: [String], workingDir: String?, environment: [String: String], user: String,
+    public func run(container: String, argv: [String], workingDir: String?, environment: [String: String],
                     timeout: Duration) async throws -> ExecResult {
-        try await ExecSession.run(client: client, container: container, argv: argv, workingDir: workingDir, environment: environment,
-                                  user: user, wrap: true, limit: 256 * 1024, timeout: timeout)
+        // As the container's verified numeric user, never a name (WorkspaceManager.execTarget).
+        try await manager.run(container: container, argv: argv, workingDir: workingDir, environment: environment,
+                              wrap: true, limit: 256 * 1024, timeout: timeout)
     }
     public func runSecretCommand(
         _ spec: WorkspaceSpec, shell: String, command: String, workingDir: String, name: String, secret: Data, policy: SecretCommandPolicy,
@@ -182,9 +183,9 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func events() -> AsyncStream<EngineMonitorEvent> {
         EngineEventMonitor(client: client, labels: ["\(WorkspaceSpec.labelWorkspace)=1"]).stream()
     }
-    public func makeForwarder(container: String, port: ListeningPort, hostPort: Int, user: String) throws -> PortForwarder {
+    public func makeForwarder(container: String, port: ListeningPort, hostPort: Int) throws -> PortForwarder {
         try PortForwarder(client: client, container: container, containerPort: port.port, containerHost: port.relayHost,
-                          hostPort: hostPort, user: user)
+                          hostPort: hostPort, workspace: true)
     }
 
     var services: ServiceManager { ServiceManager(client: client) }
@@ -207,8 +208,8 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
     public func serviceLogs(container: String, tail: Int, limit: Int) async throws -> (text: String, truncated: Bool) {
         try await services.logs(container: container, tail: tail, limit: limit)
     }
-    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int, user: String) throws -> PortForwarder {
-        try PortForwarder(client: client, container: workspace, containerPort: port, containerHost: service, hostPort: hostPort, user: user)
+    public func makeServiceForwarder(workspace: String, service: String, port: Int, hostPort: Int) throws -> PortForwarder {
+        try PortForwarder(client: client, container: workspace, containerPort: port, containerHost: service, hostPort: hostPort, workspace: true)
     }
     public func cacheVolumes() async throws -> [CacheVolume] { try await manager.cacheVolumes() }
     public func cleanCache(_ name: String) async throws { try await manager.cleanCache(name) }
@@ -224,16 +225,17 @@ public struct LiveWorkspaceRuntime: WorkspaceRuntime {
             .run(project: project, files: files, workingDirectory: workingDirectory, command: command, timeout: timeout)
     }
     public func makeStackForwarder(container: String, port: Int, hostPort: Int, prepare: @escaping @Sendable () async -> Bool) throws -> PortForwarder {
-        try PortForwarder(client: client, container: container, containerPort: port, containerHost: "127.0.0.1", hostPort: hostPort, prepare: prepare)
+        try PortForwarder(client: client, container: container, containerPort: port, containerHost: "127.0.0.1", hostPort: hostPort, workspace: false,
+                          prepare: prepare)
     }
     public func mcpContainers() async throws -> [ContainerSummary] { try await ImageMCPRunner(client: client).containers() }
     public func composeProjectContainers(_ project: String) async throws -> [ContainerSummary] {
         try await client.listContainers(labels: ["com.docker.compose.project=\(project)"])
     }
     public func removeMCPLeftovers(knownIDs: Set<String>) async { await ImageMCPRunner(client: client).removeLeftovers(knownIDs: knownIDs) }
-    public func diagnose(container: String, user: String, urls: [String]) async throws -> [NetworkProbeResult] {
-        let result = try await ExecSession.run(client: client, container: container, argv: NetworkProbe.script(urls: urls), user: user,
-                                               wrap: true, limit: 256 * 1024, timeout: .seconds(20 + 12 * urls.count))
+    public func diagnose(container: String, urls: [String]) async throws -> [NetworkProbeResult] {
+        let result = try await manager.run(container: container, argv: NetworkProbe.script(urls: urls),
+                                           wrap: true, limit: 256 * 1024, timeout: .seconds(20 + 12 * urls.count))
         return NetworkProbe.parse(String(decoding: result.stdout, as: UTF8.self), urls: urls)
     }
 }

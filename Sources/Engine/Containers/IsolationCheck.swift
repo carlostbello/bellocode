@@ -139,24 +139,24 @@ public enum IsolationCheck {
     static func probeCommand(_ name: String) -> String { "\(ContainerExecution.probe) > \(marker(name))" }
 
     /// Reads a marker inside the container and on the Mac, then removes both.
-    static func outcome(of name: String, runtime: any WorkspaceRuntime, container: String, user: String, path: String) async -> IsolationReport.Outcome {
+    static func outcome(of name: String, runtime: any WorkspaceRuntime, container: String, path: String) async -> IsolationReport.Outcome {
         let hostMarker = "/private" + marker(name)
         defer { try? FileManager.default.removeItem(atPath: hostMarker) }
         if let text = try? String(contentsOfFile: hostMarker, encoding: .utf8), !text.isEmpty {
             return .host("\(path) ran on this Mac (\(text.trimmingCharacters(in: .whitespacesAndNewlines)))")
         }
         let result = try? await runtime.run(container: container, argv: ["/bin/sh", "-c", "cat \(marker(name)) 2>/dev/null; rm -f \(marker(name))"],
-                                            workingDir: nil, environment: [:], user: user, timeout: .seconds(10))
+                                            workingDir: nil, environment: [:], timeout: .seconds(10))
         let text = result.map { String(decoding: $0.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         if text.hasPrefix("container") { return .container("\(path): \(text)") }
         if text.hasPrefix("host") { return .host("\(path) reported \(text)") }
         return .failed("\(path) left no answer (it did not run, or ran somewhere unexpected)")
     }
 
-    static func clear(_ names: [String], runtime: any WorkspaceRuntime, container: String, user: String) async {
+    static func clear(_ names: [String], runtime: any WorkspaceRuntime, container: String) async {
         for name in names { try? FileManager.default.removeItem(atPath: "/private" + marker(name)) }
         _ = try? await runtime.run(container: container, argv: ["/bin/sh", "-c", "rm -f " + names.map(marker).joined(separator: " ")],
-                                   workingDir: nil, environment: [:], user: user, timeout: .seconds(10))
+                                   workingDir: nil, environment: [:], timeout: .seconds(10))
     }
 
     /// Scans the loaded configuration for anything that would run on the host.
@@ -341,7 +341,7 @@ public enum IsolationCheck {
         }
         let runtime = service.activeRuntime
         let names = ["shell", "pty", "mcp", "command", "schedule", "terminal"]
-        await clear(names, runtime: runtime, container: container, user: spec.user)
+        await clear(names, runtime: runtime, container: container)
 
         // 1. Shell job: the agent shell tool, /api/shell and /session/{id}/shell share this path.
         do {
@@ -354,7 +354,7 @@ public enum IsolationCheck {
             if current.shell != context.helperPath {
                 checks.append(.init("Shell tool (/api/shell)", .host("the job ran with \(current.shell), not bellocode-exec")))
             } else {
-                var result = await outcome(of: "shell", runtime: runtime, container: container, user: spec.user, path: "shell job")
+                var result = await outcome(of: "shell", runtime: runtime, container: container, path: "shell job")
                 if case .failed(let text) = result {
                     // Only the helper's own message (never the command's output) explains the failure.
                     let output = (try? await client.shellJobOutput(job.id, directory: directory))?.output ?? ""
@@ -373,7 +373,7 @@ public enum IsolationCheck {
             var result = IsolationReport.Outcome.failed("no answer")
             for _ in 0..<40 {
                 try await Task.sleep(for: .milliseconds(150))
-                result = await outcome(of: "pty", runtime: runtime, container: container, user: spec.user, path: "PTY ($SHELL)")
+                result = await outcome(of: "pty", runtime: runtime, container: container, path: "PTY ($SHELL)")
                 if case .failed = result { continue }
                 break
             }
@@ -397,7 +397,7 @@ public enum IsolationCheck {
             try await client.addMCPServer(verifyMCPName, config: config, directory: directory)
             var result = IsolationReport.Outcome.failed("no answer")
             for _ in 0..<40 {
-                result = await outcome(of: "mcp", runtime: runtime, container: container, user: spec.user, path: "MCP server (stdio)")
+                result = await outcome(of: "mcp", runtime: runtime, container: container, path: "MCP server (stdio)")
                 if case .failed = result { try? await Task.sleep(for: .milliseconds(150)); continue }
                 break
             }
@@ -411,13 +411,13 @@ public enum IsolationCheck {
         checks.append(.init("Global MCP server (image)", await imageServerCheck(
             client: client, context: context, service: service, directory: directory, image: spec.image)))
 
-        if full { checks += await sessionChecks(client: client, context: context, directory: directory, runtime: runtime, container: container, user: spec.user) }
+        if full { checks += await sessionChecks(client: client, context: context, directory: directory, runtime: runtime, container: container) }
         return IsolationReport(date: Date(), directory: directory, full: full, checks: checks)
     }
 
     /// Command template, schedule condition and BelloCode's terminal, in a scratch thread deleted afterwards.
     static func sessionChecks(client: OpenCodeClient, context: Context, directory: String, runtime: any WorkspaceRuntime,
-                              container: String, user: String) async -> [IsolationReport.Check] {
+                              container: String) async -> [IsolationReport.Check] {
         var checks: [IsolationReport.Check] = []
         let session: SessionInfo
         do {
@@ -438,7 +438,7 @@ public enum IsolationCheck {
         }
         var command = IsolationReport.Outcome.failed("no answer")
         for _ in 0..<30 {
-            command = await outcome(of: "command", runtime: runtime, container: container, user: user, path: "command template")
+            command = await outcome(of: "command", runtime: runtime, container: container, path: "command template")
             if case .failed = command { try? await Task.sleep(for: .milliseconds(200)); continue }
             break
         }
@@ -452,7 +452,7 @@ public enum IsolationCheck {
             checks.append(automation)
         } else {
             checks.append(await scheduleCheck(client: client, session: session.id, directory: directory, runtime: runtime,
-                                              container: container, user: user))
+                                              container: container))
         }
 
         // 5. BelloCode's terminal: a persistent PTY with the helper as its command (TerminalLaunch).
@@ -463,7 +463,7 @@ public enum IsolationCheck {
             var result = IsolationReport.Outcome.failed("no answer")
             for _ in 0..<40 {
                 try await Task.sleep(for: .milliseconds(150))
-                result = await outcome(of: "terminal", runtime: runtime, container: container, user: user, path: "terminal")
+                result = await outcome(of: "terminal", runtime: runtime, container: container, path: "terminal")
                 if case .failed = result { continue }
                 break
             }
@@ -495,13 +495,13 @@ public enum IsolationCheck {
 
     /// opencode 2.3.0: a schedule condition due in a second that never wakes the thread.
     static func scheduleCheck(client: OpenCodeClient, session: String, directory: String, runtime: any WorkspaceRuntime,
-                              container: String, user: String) async -> IsolationReport.Check {
+                              container: String) async -> IsolationReport.Check {
         do {
             let schedule = try await client.createProbeSchedule(sessionID: session, directory: directory, run: probeCommand("schedule"), after: 1)
             var result = IsolationReport.Outcome.failed("the condition did not run within 20 s")
             for _ in 0..<80 {
                 try await Task.sleep(for: .milliseconds(250))
-                let answer = await outcome(of: "schedule", runtime: runtime, container: container, user: user, path: "schedule condition")
+                let answer = await outcome(of: "schedule", runtime: runtime, container: container, path: "schedule condition")
                 if case .failed = answer { continue }
                 result = answer
                 break

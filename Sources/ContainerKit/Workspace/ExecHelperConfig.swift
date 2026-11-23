@@ -47,6 +47,9 @@ public struct ExecHelperConfig: Codable, Sendable, Equatable {
         public var roots: [String]
         /// The container's name (`WorkspaceSpec.containerName`).
         public var container: String
+        /// The configured user, for display only. Commands never run as it: the helper execs as the numeric uid:gid the
+        /// container was created with (`WorkspaceManager.execTarget`), since Docker resolves a name from the container's
+        /// own /etc/passwd at each exec.
         public var user: String?
         /// Shell inside the container, e.g. `/bin/sh`.
         public var shell: String

@@ -111,7 +111,7 @@ struct LiveWorkspaceTests {
         defer { background.closeStdin() }
         var ports: [ListeningPort] = []
         for _ in 0..<40 {
-            ports = try await manager.listeningPorts(container: id, user: spec.user)
+            ports = try await manager.listeningPorts(container: id)
             if ports.count >= 3 { break }
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -119,7 +119,7 @@ struct LiveWorkspaceTests {
         #expect(ports.allSatisfy { $0.process == "node" && $0.pid != nil })
         for port in ports {
             let forwarder = try PortForwarder(client: client, container: id, containerPort: port.port, containerHost: port.relayHost,
-                                              user: spec.user)
+                                              workspace: true)
             let task = Task { await forwarder.run() }
             let (data, _) = try await URLSession.shared.data(from: forwarder.url)
             #expect(String(decoding: data, as: UTF8.self).hasPrefix("hello"))
@@ -146,10 +146,10 @@ struct LiveWorkspaceTests {
         let id = try await manager.ensureRunning(spec)
         // A command that escapes its process group, as the spike found.
         _ = try await sh(id, "setsid sleep 300 >/dev/null 2>&1 < /dev/null & sleep 0.2", spec: spec)
-        let before = try await manager.processes(container: id, user: spec.user)
+        let before = try await manager.processes(container: id)
         #expect(before.contains { $0.command.hasPrefix("sleep 300") })
-        #expect(try await manager.reap(container: id, user: spec.user) >= 1)
-        let after = try await manager.processes(container: id, user: spec.user)
+        #expect(try await manager.reap(container: id) >= 1)
+        let after = try await manager.processes(container: id)
         #expect(!after.contains { $0.command.hasPrefix("sleep 300") })
         #expect(after.contains { $0.command.hasPrefix("sleep infinity") }, "the keep-alive survives")
 
@@ -165,7 +165,7 @@ struct LiveWorkspaceTests {
                                                   environment: [:], user: spec.user, tty: false)
         try await Task.sleep(for: .milliseconds(500))
         let mtime = try FileManager.default.attributesOfItem(atPath: spec.projectRoot + "/watched.txt")[.modificationDate] as? Date
-        try await manager.touch(container: id, user: spec.user, paths: [spec.projectRoot + "/watched.txt", spec.projectRoot + "/gone.txt"])
+        try await manager.touch(container: id, paths: [spec.projectRoot + "/watched.txt", spec.projectRoot + "/gone.txt"])
         var out = Data()
         for try await chunk in session.output() where chunk.stream == .stdout { out += chunk.bytes }
         #expect(String(decoding: out, as: UTF8.self).contains("events 1") || String(decoding: out, as: UTF8.self).contains("events 2"))
@@ -311,6 +311,104 @@ struct LiveWorkspaceTests {
             let left = try await client.listContainers(labels: ["\(WorkspaceSpec.labelProjectKey)=\(spec.projectKey)"])
             #expect(left.isEmpty, "no container of the project is left: \(left.map(\.name))")
         }
+        }
+    }
+
+    /// The `bellocode-exec` this test run built (next to the test bundle in `.build/<config>/`), or the one
+    /// `BELLOCODE_TEST_EXEC_HELPER` names (to check that an older helper fails these tests).
+    static func builtHelper() -> String? {
+        if let path = ProcessInfo.processInfo.environment["BELLOCODE_TEST_EXEC_HELPER"] { return path }
+        let packageRoot = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return ["debug", "release"].map { packageRoot.appending(path: ".build/\($0)/bellocode-exec").path }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// AF10 follow-up (live): the workspace user can rewrite /etc/passwd (an image that leaves it writable) and maps its
+    /// own name to uid 0. Docker would now run an exec *by name* as root (the control below); every BelloCode path, the
+    /// manager's, a terminal's and the real `bellocode-exec` helper's, still runs the next command as 1000:1000.
+    @Test func aRewrittenPasswdCannotMakeTheNextCommandRoot() async throws {
+        let helper = try #require(Self.builtHelper(), "needs .build/debug/bellocode-exec (swift build)")
+        try await withTestImage("RUN chmod 666 /etc/passwd /etc/group") { tag in
+        try await withProject { root, original in
+            var spec = original
+            spec.image = tag
+            spec.user = "node"
+            let id = try await manager.ensureRunning(spec)
+            func text(_ result: ExecResult) -> String { String(decoding: result.stdout, as: UTF8.self) }
+            #expect(text(try await manager.run(container: id, argv: ["id", "-u"], wrap: false)) == "1000\n")
+
+            // As the workspace user: rewrite the account file in place (/etc itself is not writable) so `node` is uid 0.
+            let rewrite = #"p=$(sed 's/^node:x:1000:1000:/node:x:0:0:/' /etc/passwd) && printf '%s\n' "$p" > /etc/passwd && grep '^node:' /etc/passwd"#
+            let rewritten = try await manager.run(container: id, argv: ["/bin/sh", "-c", rewrite], wrap: false)
+            #expect(text(rewritten).hasPrefix("node:x:0:0:"), "the user rewrote /etc/passwd: \(text(rewritten))")
+            // Control: an exec by name now runs as root (what the helper and the engine used to send).
+            let byName = try await ExecSession.run(client: client, container: id, argv: ["id", "-u"], user: "node", wrap: false)
+            #expect(text(byName) == "0\n", "the attack is real in this runtime: \(text(byName))")
+
+            // The manager's commands (probes, diagnostics, dev-container lifecycle, isolation checks).
+            #expect(text(try await manager.run(container: id, argv: ["/bin/sh", "-c", "id -u; id -g"])) == "1000\n1000\n")
+            // A terminal (TTY) exec.
+            let (terminal, _) = try await manager.start(container: id, argv: ["/bin/sh", "-c", "id -u"], workingDir: nil, environment: [:], tty: true)
+            var output = Data()
+            for try await chunk in terminal.output() { output.append(chunk.bytes) }
+            terminal.close()
+            #expect(String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "1000")
+
+            // The helper itself (the agent's shell tool, terminals, local MCP servers), with the configured name.
+            let directory = URL(filePath: NSTemporaryDirectory()).appending(path: "bc-helper-\(UUID().uuidString.prefix(8))")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let configURL = directory.appending(path: "exec.json")
+            let workspace = ExecHelperConfig.Workspace(roots: [root], container: spec.containerName, user: "node", spec: spec,
+                                                       mountIdentity: spec.mountIdentity())
+            let config = ExecHelperConfig(socket: NSHomeDirectory() + "/.rd/docker.sock", workspaces: [workspace], epoch: "live-test", generation: 1)
+            try ExecHelperConfig.writeAtomically(try ExecHelperConfig.Requirement(epoch: "live-test", generation: 1).encoded(),
+                                                 to: ExecHelperConfig.Requirement.url(forConfig: configURL))
+            try ExecHelperConfig.writeAtomically(try config.encoded(), to: configURL)
+            let process = Process()
+            process.executableURL = URL(filePath: helper)
+            process.arguments = ["-c", "id -u; id -g"]
+            process.environment = ["PATH": "/usr/bin:/bin", "BELLOCODE_EXEC_CONFIG": configURL.path]
+            process.currentDirectoryURL = URL(filePath: root)
+            process.standardInput = FileHandle.nullDevice
+            let result = try await ChildProcess.run(process, ChildProcess.Options(timeout: .seconds(60)))
+            #expect(result.status == 0, "\(String(decoding: result.stderr, as: UTF8.self))")
+            #expect(String(decoding: result.stdout, as: UTF8.self) == "1000\n1000\n", "the helper's command ran as \(String(decoding: result.stdout, as: UTF8.self))")
+        }
+        }
+    }
+
+    /// AF10 follow-up (live): a workspace container created with a name (an earlier version) gets no exec from BelloCode,
+    /// whatever its passwd says; the helper refuses with the reason.
+    @Test func aContainerCreatedWithANameGetsNoExec() async throws {
+        let helper = try #require(Self.builtHelper(), "needs .build/debug/bellocode-exec (swift build)")
+        try await requireImage()
+        try await withProject { root, spec in
+            var body = spec.createBody(imageID: nil)
+            body.user = "node"
+            let id = try await client.createContainer(name: spec.containerName, body)
+            try await client.startContainer(id)
+            await #expect(throws: WorkspaceError.unverifiedUser(container: id, user: "node")) {
+                _ = try await manager.run(container: id, argv: ["id", "-u"])
+            }
+            let directory = URL(filePath: NSTemporaryDirectory()).appending(path: "bc-helper-\(UUID().uuidString.prefix(8))")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let configURL = directory.appending(path: "exec.json")
+            // No spec: the helper cannot recreate it, so it must refuse rather than exec as the name.
+            let workspace = ExecHelperConfig.Workspace(roots: [root], container: spec.containerName, user: "node")
+            let config = ExecHelperConfig(socket: NSHomeDirectory() + "/.rd/docker.sock", workspaces: [workspace], epoch: "live-test", generation: 1)
+            try ExecHelperConfig.writeAtomically(try ExecHelperConfig.Requirement(epoch: "live-test", generation: 1).encoded(),
+                                                 to: ExecHelperConfig.Requirement.url(forConfig: configURL))
+            try ExecHelperConfig.writeAtomically(try config.encoded(), to: configURL)
+            let process = Process()
+            process.executableURL = URL(filePath: helper)
+            process.arguments = ["-c", "id -u"]
+            process.environment = ["PATH": "/usr/bin:/bin", "BELLOCODE_EXEC_CONFIG": configURL.path]
+            process.currentDirectoryURL = URL(filePath: root)
+            process.standardInput = FileHandle.nullDevice
+            let result = try await ChildProcess.run(process, ChildProcess.Options(timeout: .seconds(60)))
+            #expect(result.status == 125)
+            #expect(result.stdout.isEmpty, "nothing ran: \(String(decoding: result.stdout, as: UTF8.self))")
+            #expect(String(decoding: result.stderr, as: UTF8.self).contains("not as a verified numeric non-root user"))
         }
     }
 

@@ -48,9 +48,9 @@ struct LiveContainerServicesTests {
     }
 
     func exec(_ service: EnvironmentService, _ project: String, _ script: String) async throws -> String {
-        let (id, spec, _) = try await service.readyContainer(project)
+        let (id, _, _) = try await service.readyContainer(project)
         let result = try await service.activeRuntime.run(container: id, argv: ["/bin/sh", "-c", script], workingDir: project, environment: [:],
-                                                         user: spec.user, timeout: .seconds(60))
+                                                         timeout: .seconds(60))
         return String(decoding: result.stdout + result.stderr, as: UTF8.self)
     }
 
