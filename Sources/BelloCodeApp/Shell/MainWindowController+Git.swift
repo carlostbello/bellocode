@@ -394,7 +394,7 @@ extension MainWindowController {
             plan: { revert in try await engine.planRewind(id, to: last.id, directory: directory, revertFiles: revert) },
             perform: { [weak self] plan in
                 let applied = try await engine.rewind(plan)
-                self?.changesComposer?.insert(text: content.text)
+                self?.placeRewoundPrompt(content.text, thread: id)
                 if !applied.written.isEmpty {
                     _ = self?.workspace.undo.perform(ReversibleAction(
                         name: "Restore Files", message: "Restored \(applied.written.count) file\(applied.written.count == 1 ? "" : "s") to the checkpoint",
@@ -406,6 +406,18 @@ extension MainWindowController {
                 }
             })
         showGitPanel(RewindView(model: model, close: { [weak self] _ in self?.closeGitPanel() }), title: "Edit from Here")
+    }
+
+    /// The rewound prompt goes back to its own thread (NV09): into the visible composer while the window still shows
+    /// that thread, else into that thread's draft (in front of what is there), never into another thread's composer.
+    func placeRewoundPrompt(_ text: String, thread id: SessionID) {
+        if container.context?.thread?.sessionID == id, let composer = changesComposer {
+            composer.insert(text: text)
+            return
+        }
+        let thread = workspace.engine.openThread(id)
+        thread.draft = thread.draft.isEmpty ? text : text + "\n\n" + thread.draft
+        thread.close()
     }
 
     /// Undo of a rewind's file restore. A failure (a restored file changed since, so nothing is overwritten, or a
