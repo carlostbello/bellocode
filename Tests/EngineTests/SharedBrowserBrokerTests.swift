@@ -233,6 +233,23 @@ struct BrowserCallPolicyTests {
         }
     }
 
+    /// v1.0.1 AV11: numbers the host integer cannot hold (or fractional ones) are unknown tabs, never a trap.
+    @Test func outOfRangeNumericTabsAreRefusedNotTrapped() {
+        for number in [1e30, -1e30, 9.3e18, 1.5] {
+            guard case .refuse(let message) = plan("click", ["tab": .number(number)], numeric: [1: "bc-aaaa0001-main"]) else {
+                Issue.record("\(number) allowed")
+                continue
+            }
+            #expect(message.contains("string ID"))
+            guard case .refuse = plan("tabs", ["action": .string("close"), "tabs": .array([.number(number)])], numeric: [1: "bc-aaaa0001-main"]) else {
+                Issue.record("\(number) allowed in an array")
+                continue
+            }
+        }
+        let text = #"[{"tab":1e30,"id":"bc-aaaa0001-main"},{"tab":2.5,"id":"bc-aaaa0001-x"},{"tab":7,"id":"bc-aaaa0001-y"}]"#
+        #expect(BrowserCallPolicy.learnTabIDs(from: text) == [7: "bc-aaaa0001-y"])
+    }
+
     @Test func globalToolsAreNotOffered() {
         guard case .refuse = plan("settings", ["set": .object([:])]) else {
             Issue.record("settings allowed")

@@ -14,6 +14,13 @@ public enum ContainerTools {
 
     /// Most lines and bytes `service_logs` returns.
     public static let maxLines = 500
+
+    /// The `lines` argument, clamped as a Double first: an out-of-range number from an agent must not trap the app.
+    static func logLines(_ value: JSONValue?) -> Int {
+        let requested = value?.numberValue ?? 100
+        guard requested.isFinite else { return 100 }
+        return Int(min(max(requested, 1), Double(maxLines)))
+    }
     public static let maxBytes = 16 * 1024
 
     static func object(_ properties: [String: JSONValue], required: [String] = []) -> JSONValue {
@@ -93,7 +100,7 @@ extension Engine {
                 model.services, source: model.servicesSource, parse: model.servicesParse, workspaceReady: model.phase == .ready))
         case ContainerTools.serviceLogs:
             guard let service = call.arguments["service"]?.stringValue else { return .error("Give service.") }
-            let lines = min(max(Int(call.arguments["lines"]?.numberValue ?? 100), 1), ContainerTools.maxLines)
+            let lines = ContainerTools.logLines(call.arguments["lines"])
             do {
                 let (text, truncated) = try await environments.serviceLogs(model.directory, name: service, tail: lines, limit: ContainerTools.maxBytes)
                 let header = "Last \(lines) lines of \(service)" + (truncated ? " (older output cut at \(ContainerTools.maxBytes / 1024) KB)" : "") + ":\n"

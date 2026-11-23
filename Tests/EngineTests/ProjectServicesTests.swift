@@ -1,6 +1,7 @@
 import BelloCore
 import ContainerKit
 import Foundation
+import OpenCodeKit
 import Testing
 
 @testable import Engine
@@ -28,6 +29,15 @@ struct ProjectServicesTests {
         service.worktreeParent = { [root] _ in root.appending(path: "worktrees").path }
         await service.start()
         return service
+    }
+
+    /// v1.0.1 AV11 (same class): an agent's out-of-range `lines` is clamped, never a trap.
+    @Test func serviceLogLinesAreClampedWithoutTrapping() {
+        #expect(ContainerTools.logLines(nil) == 100)
+        #expect(ContainerTools.logLines(.number(1e300)) == ContainerTools.maxLines)
+        #expect(ContainerTools.logLines(.number(-1e300)) == 1)
+        #expect(ContainerTools.logLines(.number(.infinity)) == 100)
+        #expect(ContainerTools.logLines(.number(42.7)) == 42)
     }
 
     @Test func aComposeFileDefinesServicesAndTheWorkspaceJoinsTheirNetwork() async throws {
