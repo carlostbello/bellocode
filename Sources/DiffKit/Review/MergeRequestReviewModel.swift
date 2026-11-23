@@ -185,7 +185,7 @@ public final class MergeRequestReviewModel {
         case "agent":
             guard let discussion = state?.discussions.first(where: { $0.id == annotation.id }) else { return }
             guard let insert = insertIntoComposer else { return show("Open the thread's composer to add the thread as context.", error: true) }
-            insert(service.agentContext(discussion, ref: ref))
+            insert(await service.agentContext(discussion, ref: ref))
             show("The thread is in the composer, quoted as GitLab content: review it and send.", error: false)
         case "open":
             if let url = URL(string: ref.url + (state?.discussions.contains { $0.id == annotation.id } == true ? "#note_\(firstNoteID(annotation.id) ?? 0)" : "")) { openURL(url) }

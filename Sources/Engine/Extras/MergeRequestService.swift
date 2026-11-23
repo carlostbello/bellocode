@@ -704,16 +704,18 @@ public final class MergeRequestService {
         record.deferredUntil = nil
         // A failed pipeline brings a bounded, sanitised excerpt of its first failing job's log.
         var failing: (job: PipelineJob, excerpt: JobLogExcerpt)?
+        let known = await knownSecrets(ref.instance)
+        guard isCurrent(key, generation) else { return }
         if events.contains(where: \.isPipelineFailure), let job = snapshot.pipeline?.failedJobs.first, let instance = GitLabInstance(baseURL: ref.instance) {
             let project = ForgeProject(instance: instance, projectPath: ref.projectPath)
             if let chunk = try? await provider.jobLog(project, jobID: job.id, maxBytes: Self.excerptBytes, tryRange: capabilities(ref.instance).support(.jobLogRange).mayTry) {
                 if let honoured = chunk.rangeHonoured { recordProbe(ref.instance, .jobLogRange, honoured) }
-                failing = (job, JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: knownSecrets(ref.instance)))
+                failing = (job, JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: known))
             }
             guard isCurrent(key, generation) else { return }
         }
         let wakeID = "w_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
-        let text = MergeRequestWakeText.message(snapshot, events: events, wakeID: wakeID, failingJob: failing, known: knownSecrets(ref.instance))
+        let text = MergeRequestWakeText.message(snapshot, events: events, wakeID: wakeID, failingJob: failing, known: known)
         record.pending = PendingWake(id: wakeID, text: text, summary: summary, next: next, terminal: terminal, created: clock.now())
         watches[key] = record
         try? await store.saveMergeRequestWatch(record)
@@ -723,8 +725,14 @@ public final class MergeRequestService {
     /// Bytes of a failing job's log read for an excerpt.
     static let excerptBytes = 64 << 10
 
-    /// Values never shown to a model even if GitLab echoes them (the instance's token).
-    public func knownSecrets(_ baseURL: String) -> [String] {
+    /// Values never shown to a model even if GitLab echoes them (the instance's token). Read off the main actor (a
+    /// Keychain read can stall while the daemon is busy, GF12); callers read it once per result, not per item.
+    public func knownSecrets(_ baseURL: String) async -> [String] {
+        await Self.readKnownSecrets(tokens, baseURL)
+    }
+
+    @concurrent
+    nonisolated static func readKnownSecrets(_ tokens: any SecretVault, _ baseURL: String) async -> [String] {
         guard let token = try? tokens.read(account: baseURL), !token.isEmpty else { return [] }
         return [String(decoding: token.utf8, as: UTF8.self)]
     }

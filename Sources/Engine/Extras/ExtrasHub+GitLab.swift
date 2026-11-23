@@ -54,12 +54,14 @@ extension ExtrasHub {
 
     func handleGitLab(_ call: ClientMCPCall, caller: ExtrasCaller) async throws -> ClientMCPResult {
         let arguments = call.arguments
-        let known = { (ref: MergeRequestRef) in self.mergeRequests.knownSecrets(ref.instance) }
+        // The instance's token, read once per call off the main actor (GF12), never per note or file.
+        func known(_ ref: MergeRequestRef) async -> [String] { await mergeRequests.knownSecrets(ref.instance) }
         switch call.tool {
         case GitLabTools.readMergeRequest:
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             let description = (try? await mergeRequests.provider.mergeRequestDescription(ref)) ?? ""
+            let known = await known(ref)
             var lines = [sourceLine(snapshot)]
             lines.append("Title: \(snapshot.title)")
             lines.append("State: \(snapshot.stateLabel); \(snapshot.sourceBranch) → \(snapshot.targetBranch); author @\(snapshot.author)")
@@ -68,19 +70,20 @@ extension ExtrasHub {
             if let reviewers = snapshot.reviewers { lines.append("Reviewers: \(reviewers.isEmpty ? "none" : reviewers.map { "@\($0)" }.joined(separator: ", "))") }
             if let status = snapshot.mergeStatus { lines.append("Merge status: \(status)") }
             if let note = snapshot.truncationNote { lines.append(note) }
-            lines.append(UntrustedText.block("description of \(ref)", description.isEmpty ? "(empty)" : UntrustedText.sanitise(description, limit: 6_000, known: known(ref))))
+            lines.append(UntrustedText.block("description of \(ref)", description.isEmpty ? "(empty)" : UntrustedText.sanitise(description, limit: 6_000, known: known)))
             return ClientMCPResult(text: lines.joined(separator: "\n"))
         case GitLabTools.readChanges:
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             var changes = try await mergeRequests.provider.changes(ref)
+            let known = await known(ref)
             if let filter = arguments["path"]?.stringValue, !filter.isEmpty {
                 changes.files = changes.files.filter { $0.newPath.contains(filter) || $0.oldPath.contains(filter) }
             }
             let body: String = changes.files.map { file -> String in
                 let name = file.renamedFile ? "\(file.oldPath) → \(file.newPath)" : file.newPath
                 let flags = [file.newFile ? "new" : nil, file.deletedFile ? "deleted" : nil, file.tooLarge ? "too large: content not returned" : nil, file.truncated ? "cut" : nil].compactMap { $0 }
-                return "=== \(name)\(flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))")\n\(UntrustedText.redact(file.diff, known: known(ref)).text)"
+                return "=== \(name)\(flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))")\n\(UntrustedText.redact(file.diff, known: known).text)"
             }.joined(separator: "\n")
             let note = changes.incomplete ? "Incomplete: more files or bytes than BelloCode returns (60 files, 64 KB)." : "Complete."
             let parts: [String] = [sourceLine(snapshot), "\(changes.files.count) file(s). \(note)", UntrustedText.block("diff of \(ref)", body)]
@@ -91,10 +94,11 @@ extension ExtrasHub {
             let unresolvedOnly = arguments["unresolvedOnly"]?.boolValue ?? true
             let list = (snapshot.discussions ?? []).filter { !$0.isSystem && (!unresolvedOnly || $0.isUnresolved) }
             let shown = list.suffix(30)
+            let known = await known(ref)
             let body: String = shown.map { discussion -> String in
                 let head = "discussion \(discussion.id) [\(discussion.isUnresolved ? "unresolved" : discussion.isResolvable ? "resolved" : "comment")]\(discussion.position.map { " on \($0)" } ?? "")"
                 let notes: [String] = discussion.notes.filter { !$0.system }.map { note in
-                    let body: String = UntrustedText.sanitise(note.body, limit: 1_500, known: known(ref)).replacingOccurrences(of: "\n", with: "\n    ")
+                    let body: String = UntrustedText.sanitise(note.body, limit: 1_500, known: known).replacingOccurrences(of: "\n", with: "\n    ")
                     return String("  note \(note.id) by @\(note.author): ") + body
                 }
                 return ([head] + notes).joined(separator: "\n")
@@ -129,7 +133,7 @@ extension ExtrasHub {
             }
             switch await mergeRequests.jobLog(ref, jobID: jobID, maxBytes: 64 << 10) {
             case .success(let chunk):
-                let excerpt = JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: known(ref))
+                let excerpt = JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: await known(ref))
                 return ClientMCPResult(
                     text: [
                         sourceLine(snapshot), "Job \(job.id) \(job.name) (stage \(job.stage)): \(job.status). \(job.webURL ?? "")",

@@ -3,6 +3,7 @@ import Foundation
 import GRDB
 import MockOpenCode
 import OpenCodeKit
+import Synchronization
 import Testing
 
 @testable import Engine
@@ -19,7 +20,7 @@ struct GitLabToolTests {
         let server: FakeGitLabServer
         let directory: String
 
-        static func start() async throws -> Fixture {
+        static func start(tokens: (any SecretVault)? = nil) async throws -> Fixture {
             let root = FileManager.default.temporaryDirectory.appending(path: "bc-gitlab-tools-\(UUID().uuidString)", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let directory = root.path
@@ -45,7 +46,7 @@ struct GitLabToolTests {
             }
             configuration.secretVault = InMemorySecretVault()
             configuration.forgeTransport = server
-            configuration.forgeTokens = GitLabWorld.tokens()
+            configuration.forgeTokens = tokens ?? GitLabWorld.tokens()
             configuration.wallClock = ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000))
             let engine = try Engine(configuration: configuration)
             await engine.start()
@@ -125,6 +126,37 @@ struct GitLabToolTests {
         #expect(refused.isError && refused.text.contains("outside this thread's GitLab project"))
         _ = await fixture.call(ExtrasTools.linkMergeRequests, ["refs": .array([.string(otherURL)])], session)
         #expect(!(await fixture.call(GitLabTools.readMergeRequest, ["ref": .string(otherURL)], session)).isError)
+    }
+
+    /// GF12: the token a result is redacted with is read off the main actor, once per call, never per note or file.
+    @Test func readsTakeTheTokenOffTheMainActorOncePerCall() async throws {
+        let vault = RecordingVault(GitLabWorld.tokens())
+        let fixture = try await Fixture.start(tokens: vault)
+        defer { Task { await fixture.stop() } }
+        let session = try await fixture.thread()
+        // Warm the snapshot so the calls below read only what they redact with.
+        _ = await fixture.call(GitLabTools.readMergeRequest, ["ref": "!42"], session)
+        for tool in [GitLabTools.listDiscussions, GitLabTools.readChanges] {
+            vault.reset()
+            let result = await fixture.call(tool, ["ref": "!42", "unresolvedOnly": false], session)
+            #expect(!result.isError, "\(tool): \(result.text)")
+            #expect(vault.mainThreadReads == 0, "\(tool) read the Keychain on the main thread \(vault.mainThreadReads) time(s)")
+        }
+    }
+
+    /// A vault that counts reads made on the main thread (a Keychain read there stalls the UI).
+    final class RecordingVault: SecretVault {
+        let inner: InMemorySecretVault
+        let counts = Mutex(0)
+        init(_ inner: InMemorySecretVault) { self.inner = inner }
+        var mainThreadReads: Int { counts.withLock { $0 } }
+        func reset() { counts.withLock { $0 = 0 } }
+        func store(account: String, label: String, value: SecretValue) throws { try inner.store(account: account, label: label, value: value) }
+        func read(account: String) throws -> SecretValue? {
+            if Thread.isMainThread { counts.withLock { $0 += 1 } }
+            return try inner.read(account: account)
+        }
+        func delete(account: String) throws { try inner.delete(account: account) }
     }
 
     @Test func writesNeedTheSwitchAndACardWithTheExactPayload() async throws {

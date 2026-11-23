@@ -209,7 +209,7 @@ public final class MergeRequestPanelModel {
         defer { excerptLoading.remove(job.id) }
         switch await service.jobLog(ref, jobID: job.id, maxBytes: 64 << 10) {
         case .success(let chunk):
-            excerpts[job.id] = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: service.knownSecrets(ref.instance))
+            excerpts[job.id] = await Self.excerpt(chunk.text, headOmitted: chunk.headOmitted, known: await service.knownSecrets(ref.instance))
         case .failure(let error):
             message = "The log of \(job.name) could not be read: \(error.description)"
         }

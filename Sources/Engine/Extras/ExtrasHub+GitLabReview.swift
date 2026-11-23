@@ -38,7 +38,7 @@ extension ExtrasHub {
     func readIssueTool(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
         let (project, iid) = try await toolIssue(arguments, caller)
         let issue = try await gitLabWork.loadIssue(project, iid: iid)
-        let known = mergeRequests.knownSecrets(project.instance.baseURL)
+        let known = await mergeRequests.knownSecrets(project.instance.baseURL)
         var lines = ["Source: \(issue.webURL) · \(project.instance.baseURL) · \(issue.reference) · read \(Self.dateText(Date()))"]
         lines.append("State: \(issue.stateLabel); author @\(issue.author); assignees: \(issue.assignees.isEmpty ? "none" : issue.assignees.map { "@\($0)" }.joined(separator: ", "))")
         if !issue.labels.isEmpty { lines.append("Labels: \(issue.labels.joined(separator: ", "))") }
@@ -82,7 +82,7 @@ extension ExtrasHub {
         let (ref, _) = try await toolRef(arguments, caller)
         guard let state = await reviews.load(ref) else { throw ExtrasError(Self.reviewProblem(reviews.phases[ref.url])) }
         let unresolvedOnly = arguments["unresolvedOnly"]?.boolValue ?? false
-        let known = mergeRequests.knownSecrets(ref.instance)
+        let known = await mergeRequests.knownSecrets(ref.instance)
         let anchored = state.anchored.filter { !unresolvedOnly || ($0.discussion.isResolvable && !$0.discussion.isResolved) }
         let shown = anchored.suffix(Self.maxToolDiscussions)
         let body = shown.map { entry -> String in

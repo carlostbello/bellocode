@@ -57,6 +57,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private(set) var autoAudit: AutoAuditSurfaces?
     /// The shared Chromium's live view ("Chrome" tab).
     private(set) var sharedChrome: SharedChromeSurfaces?
+    /// Start Thread from Issue in progress (reads the token to redact off the main actor); cancelled with the window.
+    var issueThreadTask: Task<Void, Never>?
 
     init(workspace: WorkspaceController, configuration: Configuration = Configuration()) {
         self.workspace = workspace
@@ -312,6 +314,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     func windowWillClose(_ notification: Notification) {
         workspace.saveNow()
         changes?.saveOptions()
+        issueThreadTask?.cancel()
         if let browser { Task { await browser.close() } }
     }
 
