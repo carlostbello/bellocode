@@ -15,6 +15,33 @@ struct PackageCacheTests {
         #expect(PackageCache.declared(byImageLabels: nil).isEmpty)
     }
 
+    /// AF09: a cache path from an image label must be plain and absolute, and not over `$HOME`, `/`, BelloCode's own
+    /// mounts or the kernel's file systems; Docker would clean `..` away and mount somewhere else.
+    @Test func onlyPlainSafeCachePathsAreTaken() {
+        for path in ["/opt/pip-cache", "/usr/local/cargo/registry", "/go/pkg/mod", "/home/bellocode/.npm", "/root/.m2"] {
+            #expect(CacheMount.isAllowedPath(path), "\(path)")
+        }
+        for path in ["/", "", "relative", "/home", "/home/bellocode", "/home/bellocode/../../usr/local/sbin", "/opt/./x", "//opt",
+                     "/opt/x/", "/etc", "/etc/bellocode/certs", "/etc/bellocode/certs/x", "/tmp", "/tmp/.bellocode", "/proc/self",
+                     "/sys", "/dev/shm", "/opt/a\u{0}b"] {
+            #expect(!CacheMount.isAllowedPath(path), "\(path)")
+        }
+        let declared = PackageCache.declared(byImageLabels: [
+            PackageCache.imageLabel: "npm", PackageCache.pathLabel(.npm): "/home/bellocode/../../usr/local/sbin", PackageCache.pathLabel(.pip): "/",
+        ])
+        #expect(declared == [.npm: PackageCache.npm.defaultPath])
+        #expect(CacheMount(cache: .pnpm, path: PackageCache.pnpm.defaultPath).homeRelativePath == ".local/share/pnpm/store")
+        #expect(CacheMount(cache: .pip, path: "/opt/pip").homeRelativePath == nil)
+        // A cache over, in or above a mounted folder (the project) is not mounted; nor a second one at the same path.
+        var spec = WorkspaceSpec(projectRoot: "/Users/a/p", image: "node:22")
+        spec.cacheMounts = [CacheMount(cache: .npm, path: "/Users/a/p/node_modules/.cache"), CacheMount(cache: .pip, path: "/Users"),
+                            CacheMount(cache: .go, path: "/opt/x/../../bin"), CacheMount(cache: .cargo, path: "/opt/cargo"),
+                            CacheMount(cache: .maven, path: "/opt/cargo")]
+        #expect(spec.effectiveCacheMounts == [CacheMount(cache: .cargo, path: "/opt/cargo")])
+        let targets = spec.createBody(imageID: nil).hostConfig?.mounts?.map(\.target) ?? []
+        #expect(!targets.contains("/Users") && !targets.contains("/opt/x/../../bin") && targets.filter { $0 == "/opt/cargo" }.count == 1)
+    }
+
     @Test func mountsAreProjectScopedUnlessShared() throws {
         var spec = WorkspaceSpec(projectRoot: "/Users/a/p", image: "node:22")
         spec.cacheMounts = [CacheMount(cache: .npm, path: PackageCache.npm.defaultPath),

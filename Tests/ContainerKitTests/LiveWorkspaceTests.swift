@@ -297,6 +297,43 @@ struct LiveWorkspaceTests {
         }
     }
 
+    /// AF09 residual (live): a cache whose image-chosen path covers a program folder of the setup helper (/usr/local/sbin
+    /// is first on its PATH), already populated with programs named like the helper's tools, never runs as root: the
+    /// helper mounts every volume at a fixed path of its own and runs absolute programs. The nested cache folders in
+    /// `$HOME` still belong to the user, and so does the root of a cache outside `$HOME`.
+    @Test func aPopulatedCacheNeverCoversTheSetupHelpersPrograms() async throws {
+        try await requireImage()
+        try await withProject { _, original in
+            var spec = original
+            spec.user = "1000:1000"
+            let covering = CacheMount(cache: .npm, path: "/usr/local/sbin")
+            spec.cacheMounts = [covering, CacheMount(cache: .pip, path: WorkspaceSpec.home + "/.cache/pip")]
+            let volume = covering.volumeName(projectKey: spec.projectKey)
+            try await client.createVolume(name: volume, labels: covering.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey)
+                .merging(spec.extraLabels) { a, _ in a })
+            // Populated as a workspace could have left it on an earlier run.
+            let tools = #"for t in chown mkdir dirname sh id; do printf '#!/bin/sh\ntouch "/home/bellocode/ran-%s-$(/usr/bin/id -u)" 2>/dev/null\nexec /usr/bin/%s "$@"\n' "$t" "$t" > "/v/$t"; chmod 755 "/v/$t"; done"#
+            var body = ContainerCreate(image: Self.image)
+            body.entrypoint = ["/bin/sh", "-c", tools]
+            body.user = "0:0"
+            body.labels = ["app.bellocode.test": "1"]
+            var host = HostConfig()
+            host.networkMode = "none"
+            host.mounts = [Mount(type: .volume, source: volume, target: "/v")]
+            body.hostConfig = host
+            let filler = try await client.createContainer(name: nil, body)
+            try await client.startContainer(filler)
+            #expect(try await client.waitContainer(filler) == 0)
+            try? await client.removeContainer(filler, force: true)
+
+            let id = try await manager.ensureRunning(spec)
+            let (code, out, _) = try await sh(id, "/bin/ls -a \"$HOME\" | /bin/grep -- '-0$' || true; /usr/bin/stat -c %u \"$HOME\" \"$HOME/.cache\" \"$HOME/.cache/pip\" /usr/local/sbin", spec: spec)
+            #expect(code == 0)
+            #expect(!out.contains("ran-"), "a program from the cache ran as root while the workspace was prepared: \(out)")
+            #expect(out == "1000\n1000\n1000\n1000\n", "\(out)")
+        }
+    }
+
     /// AF10 (live): an image that maps a plausible name to uid 0, and whose `id` says 1000, is refused before any
     /// container of it starts; no container of the project is left.
     @Test func aNameMappedToRootIsRefusedWhateverTheImageReports() async throws {

@@ -215,7 +215,7 @@ public struct WorkspaceManager: Sendable {
                 WorkspaceSpec.labelProjectKey: spec.projectKey,
             ].merging(spec.extraLabels) { a, _ in a }, required: [WorkspaceSpec.labelWorkspace: "1", WorkspaceSpec.labelProjectKey: spec.projectKey])
         }
-        for cache in spec.cacheMounts ?? [] {
+        for cache in spec.effectiveCacheMounts {
             let labels = cache.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey)
             try await client.ensureOwnedVolume(
                 name: cache.volumeName(projectKey: spec.projectKey), labels: labels.merging(spec.extraLabels) { a, _ in a },
@@ -307,11 +307,23 @@ public struct WorkspaceManager: Sendable {
         }
     }
 
-    /// AF09: `$HOME` (a fresh volume belongs to root) and the folders from each cache nested in it up to `$HOME` are
-    /// given to the user by BelloCode's own image, never the project's: the egress gateway's image (a base pinned by
-    /// digest, built by this process and run by its ID, with no program of a project in it). It runs as root with only
-    /// the home and cache volumes mounted, no network and a read-only root, and is removed when done. The workspace
-    /// itself then runs as the user with no capabilities, and nothing in it runs as root.
+    /// Where the setup helper mounts the home volume and each cache volume (AF09): fixed folders of BelloCode's own
+    /// image, never a path a project's image names, and never one nested in a volume, so no volume content (a link, a
+    /// populated cache) can cover a folder of the helper's programs or redirect a mount.
+    static let setupHome = "/bellocode-setup/home"
+    static func setupCache(_ index: Int) -> String { "/bellocode-setup/cache-\(index)" }
+
+    /// AF09: `$HOME` and the caches are given to the user by BelloCode's own image, never the project's: the egress
+    /// gateway's image (a base pinned by digest, built by this process and run by its ID, with no program of a project
+    /// in it), with no network, a read-only root and the volumes only, removed when done. In two steps:
+    ///
+    /// 1. As root with only `CAP_CHOWN`: the root folder of the home volume and of each cache volume, mounted at fixed
+    ///    paths (`setupHome`, `setupCache`), is given to the user. Nothing is looked up inside a volume, so nothing a
+    ///    workspace wrote there (a link, a program in a cache) is followed or run.
+    /// 2. As the user, with no capabilities: the folders of the caches nested in `$HOME` are made in the home volume
+    ///    (`mkdir -p`), so the workspace finds them its own when the daemon mounts the caches there.
+    ///
+    /// The workspace itself then runs as the user with no capabilities, and nothing in it runs as root.
     func prepareVolumes(_ spec: WorkspaceSpec, user: WorkspaceUser) async throws {
         let image: String
         do {
@@ -319,35 +331,49 @@ public struct WorkspaceManager: Sendable {
         } catch {
             throw ContainerError.http(status: 500, message: "BelloCode prepares the workspace's home folder with its own helper image, which is not available: \(error)")
         }
-        // Not recursively: a shared cache keeps its contents' owners. `-h`: a link in the home volume is not followed.
-        let caches = (spec.cacheMounts ?? []).map(\.path).filter { $0.hasPrefix(WorkspaceSpec.home + "/") }
-        let owner = user.numeric
-        let script = #"mkdir -p "$HOME" && chown -h \#(owner) "$HOME" && for p; do d=$p; while [ "$d" != "$HOME" ] && [ "$d" != "/" ]; do chown -h \#(owner) "$d"; d=$(dirname "$d"); done; done"#
+        let caches = spec.effectiveCacheMounts.sorted { $0.path < $1.path }
+        var ownership = [Mount(type: .volume, source: spec.volumeName("home"), target: Self.setupHome)]
+        for (index, cache) in caches.enumerated() {
+            ownership.append(Mount(type: .volume, source: cache.volumeName(projectKey: spec.projectKey), target: Self.setupCache(index)))
+        }
+        // `-h`: never through a link (these are mount points, folders of the volumes themselves).
+        try await runSetup(spec, image: image, user: "0:0", capabilities: ["CHOWN"], mounts: ownership,
+                           argv: ["/bin/chown", "-h", user.numeric] + ownership.map(\.target), step: "giving $HOME to the user")
+        let nested = caches.compactMap(\.homeRelativePath)
+        guard !nested.isEmpty else { return }
+        let script = #"cd "$0" || exit 1; for p; do mkdir -p -- "$p" || exit 1; done"#
+        try await runSetup(spec, image: image, user: user.numeric, capabilities: [],
+                           mounts: [Mount(type: .volume, source: spec.volumeName("home"), target: Self.setupHome)],
+                           argv: ["/bin/sh", "-c", script, Self.setupHome] + nested, step: "making the cache folders in $HOME")
+    }
+
+    /// One short-lived setup container of BelloCode's helper image: no network, read-only root, `capabilities` only,
+    /// `mounts` only; removed when done, pass or fail.
+    private func runSetup(_ spec: WorkspaceSpec, image: String, user: String, capabilities: [String], mounts: [Mount],
+                          argv: [String], step: String) async throws {
         var body = ContainerCreate(image: image)
-        body.entrypoint = ["/bin/sh", "-c", script, "prepare-home"] + caches
-        body.user = "0:0"
-        body.env = ["HOME=\(WorkspaceSpec.home)"]
+        body.entrypoint = argv
+        body.user = user
+        body.env = ["PATH=/usr/bin:/bin"]
         body.labels = setupLabels(spec)
         var host = HostConfig()
         host.privileged = false
         host.capDrop = ["ALL"]
-        host.capAdd = ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+        host.capAdd = capabilities.isEmpty ? nil : capabilities
         host.securityOpt = ["no-new-privileges:true"]
         host.readonlyRootfs = true
         host.networkMode = "none"
         host.pidsLimit = 64
         host.memory = 128 << 20
-        // The same volumes at the same paths as the workspace (the daemon creates the nested caches' parents here).
-        host.mounts = [Mount(type: .volume, source: spec.volumeName("home"), target: WorkspaceSpec.home)]
-            + (spec.cacheMounts ?? []).sorted { $0.path < $1.path }.map { Mount(type: .volume, source: $0.volumeName(projectKey: spec.projectKey), target: $0.path) }
+        host.mounts = mounts
         body.hostConfig = host
         let id = try await client.createContainer(name: nil, body)
         let client = self.client
         do {
             try await client.startContainer(id)
-            let status = try await withDeadline(.seconds(120), operation: "preparing $HOME") { try await client.waitContainer(id) }
+            let status = try await withDeadline(.seconds(120), operation: step) { try await client.waitContainer(id) }
             try? await client.removeContainer(id, force: true)
-            if status != 0 { throw ContainerError.http(status: 500, message: "preparing $HOME failed (exit \(status))") }
+            if status != 0 { throw ContainerError.http(status: 500, message: "preparing the workspace failed while \(step) (exit \(status))") }
         } catch {
             try? await client.removeContainer(id, force: true)
             throw error

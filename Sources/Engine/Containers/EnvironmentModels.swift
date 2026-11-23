@@ -85,6 +85,8 @@ public struct ProjectEnvironmentSettings: Codable, Sendable, Equatable {
     /// at the image's path when it names one; per project unless shared was chosen for that cache.
     public func cacheMounts(imageDeclared: [PackageCache: String]) -> [CacheMount] {
         var mounts: [PackageCache: CacheMount] = [:]
+        // AF09: a declared path recorded by an older build is checked again; one not allowed falls back to the default.
+        let imageDeclared = Dictionary(uniqueKeysWithValues: imageDeclared.map { ($0.key, CacheMount.isAllowedPath($0.value) ? $0.value : $0.key.defaultPath) })
         for (cache, path) in imageDeclared { mounts[cache] = CacheMount(cache: cache, path: path) }
         for selection in caches {
             if selection.enabled {

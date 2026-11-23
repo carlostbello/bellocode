@@ -141,6 +141,18 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
     /// Folders commands may run in: the project and its worktrees (user mounts are data, not workspaces).
     public var workspaceRoots: [String] { [projectRoot] + extraMounts }
 
+    /// AF09: the cache mounts actually made: each at an allowed path (`CacheMount.isAllowedPath`) that is not over, in
+    /// or above a mounted folder, and the first one at each path.
+    public var effectiveCacheMounts: [CacheMount] {
+        var seen = Set<String>()
+        return (cacheMounts ?? []).filter { cache in
+            guard CacheMount.isAllowedPath(cache.path), seen.insert(cache.path).inserted else { return false }
+            return !mountedRoots.contains { root in
+                cache.path == root || cache.path.hasPrefix(root + "/") || root.hasPrefix(cache.path + "/")
+            }
+        }
+    }
+
     /// Device and inode of every mounted host directory. A bind mount keeps referring to the directory it was created
     /// from, so a project folder that was deleted and re-created needs a new container.
     public func mountIdentity() -> String {
@@ -211,7 +223,7 @@ public struct WorkspaceSpec: Sendable, Equatable, Codable {
         mounts += caches.sorted { $0.key < $1.key }.map { Mount(type: .volume, source: volumeName($0.key), target: $0.value) }
         mounts.append(Mount(type: .volume, source: volumeName("home"), target: Self.home))
         // Nested in the home volume where the tools expect them (the daemon mounts parents first).
-        mounts += (cacheMounts ?? []).sorted { $0.path < $1.path }.map { Mount(type: .volume, source: $0.volumeName(projectKey: projectKey), target: $0.path) }
+        mounts += effectiveCacheMounts.sorted { $0.path < $1.path }.map { Mount(type: .volume, source: $0.volumeName(projectKey: projectKey), target: $0.path) }
         host.mounts = mounts
         if network == .bridge, serviceNetwork == nil, !publishedPorts.isEmpty {
             body.exposedPorts = Dictionary(uniqueKeysWithValues: publishedPorts.map { ("\($0)/tcp", EmptyObject()) })
