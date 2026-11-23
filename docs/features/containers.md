@@ -162,8 +162,12 @@ non-CA certificates never offered; default: admin-domain self-signed CAs) to `<d
 (`enterprise-roots.pem`; `ca-bundle.pem` = the Mac's built-in roots plus them). Every BelloCode container mounts it
 read-only at `/etc/bellocode/certs` (roots also in `/usr/local/share/ca-certificates/`, `/etc/pki/ca-trust/source/`)
 with `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`, `CURL_CA_BUNDLE` (bundle), `NODE_EXTRA_CA_CERTS`
-(roots); a workspace also gets the bundle read-only at the compiled bundle paths (`/etc/ssl/certs/ca-certificates.crt`,
-`/etc/pki/tls/certs/ca-bundle.crt`), so nothing of its image runs as root for it; opencode gets `NODE_EXTRA_CA_CERTS`
+(roots); a workspace also gets the bundle read-only at each distribution's default bundle file (Debian, Ubuntu, Alpine,
+Arch `/etc/ssl/certs/ca-certificates.crt`; Alpine `/etc/ssl/cert.pem`; the RHEL family `/etc/pki/tls/certs/ca-bundle.crt`,
+`/etc/pki/tls/cert.pem`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`; openSUSE `/etc/ssl/ca-bundle.pem`,
+`/var/lib/ca-certificates/ca-bundle.pem`; a link in the image is resolved by the daemon; GV09), so nothing of its image
+runs as root for it (a program that reads only a hashed certificate folder, or Java's `cacerts`, does not see the
+enterprise roots); opencode gets `NODE_EXTRA_CA_CERTS`
 at each launch (Bun reads neither the Keychain nor macOS proxies). **Proxies:** `HTTP(S)_PROXY`/`NO_PROXY` from an
 administrator, else the Mac (environment, then System Settings; no PAC), to containers and opencode; `NO_PROXY` always
 adds loopback and service names; a Mac-loopback proxy becomes `host.docker.internal`. **Network diagnostics** fetches
@@ -187,7 +191,9 @@ Desktop's VM, which imports the Mac's roots): verify on the corporate network.
 
 npm `~/.npm`, pnpm `~/.local/share/pnpm/store`, pip `~/.cache/pip`, Cargo `~/.cargo/registry`, Go `~/go/pkg/mod`,
 Gradle `~/.gradle/caches`, Maven `~/.m2/repository` (home `/home/bellocode`), or the image's (`app.bellocode.caches`,
-`app.bellocode.cache.<kind>=/path`): named volumes nested in home, the project's own (`bellocode-<key>-cache-<kind>`)
+`app.bellocode.cache.<kind>=/path`; a label path must be absolute and plain, without `.` or `..`, and not `/`, `$HOME` or
+above it, `/etc/bellocode`, `/tmp/.bellocode`, `/proc`, `/sys` or `/dev`, else the default is used; a cache over a mounted
+folder or a second cache at one path is not mounted; AF09): named volumes nested in home, the project's own (`bellocode-<key>-cache-<kind>`)
 unless shared (`bellocode-shared-cache-<kind>`). Project Settings ▸ Environment ▸ Caches turns them on, off or shared;
 Settings ▸ Containers ▸ Caches lists sizes and empties one after confirming (refused while a running container uses one).
 
@@ -208,7 +214,11 @@ One container per project (`bellocode-ws-<key>`), project and worktrees at the s
 `no-new-privileges`, `init`; saved policy in force first (S3). A dev container's named `remoteUser` is resolved to its
 uid:gid from the image's `/etc/passwd` (read from a never-started container) and refused if root or undefined (a bare
 uid gets its group the same way, so the group is always recorded); `$HOME` and nested caches are given to the user by
-BelloCode's own image (the egress gateway's), never the project's, and nothing runs as root in the workspace. Every
+BelloCode's own image (the egress gateway's), never the project's, and nothing runs as root in the workspace. That
+helper mounts the home and cache volumes at fixed folders of its own (never at a path the image names, never nested in
+a volume), chowns only their root folders as root with `CAP_CHOWN` alone, and makes the cache folders nested in `$HOME`
+in a second run as the user with no capabilities, so nothing a workspace left in a volume (a link, a program in a
+populated or shared cache) is followed or run by it (v1.0.1 AF09). Every
 exec into it (helper commands, terminals, relayed MCP servers, probes, diagnostics, port relays, the shared browser's
 routes) runs as the container's recorded numeric uid:gid against its inspected ID, never as a name Docker would
 resolve from the container's own (writable) `/etc/passwd`; a container whose user is not a nonzero numeric uid:gid gets

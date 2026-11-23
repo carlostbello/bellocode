@@ -58,8 +58,12 @@ through an earlier link, names leaving the context, sparse files, malformed numb
 the end marker are refused; gzip through zlib, concatenated members decoded, trailing bytes refused; bzip2/xz/zstd refused).
 Its `FROM`, `COPY --from`, `RUN --mount=from=` and `# syntax=`/`BUILDKIT_SYNTAX` frontend images (`DockerfileBases`: BuildKit's
 directive rules, heredocs only for unquoted `<<WORD` in RUN/COPY/ADD, an unclosed heredoc refused, and a second no-heredoc
-reading so a parser disagreement cannot hide a FROM; global `ARG`s and `buildargs` expanded; unresolvable refused; physical lines read from Unicode scalars, so a CRLF
-Dockerfile cannot hide its instructions, and a nameless global `ARG` is refused; v1.0.1 AF11, AF12) are
+reading so a parser disagreement cannot hide a FROM; global `ARG`s, their defaults and `buildargs` expanded; unresolvable refused; read as BuildKit's
+parser reads it: LF lines with every trailing CR dropped, a byte-order mark dropped from the first line, Go's blanks before
+an instruction, continuations joined with nothing between, builder flags byte by byte, `--mount` options as CSV; a nameless
+global `ARG` is refused, and so is a file BelloCode cannot be sure it reads as Docker does: invalid UTF-8, a blank other
+than space or tab or a control character in an instruction or in a comment before the first one, a `//syntax=` or JSON
+directive form, a quoted reference or a variable in a `COPY --from`/mount `from=`; v1.0.1 AF11, AF12, GV01) are
 checked against the image policy unless the scope built them. BuildKit through the endpoint (`/session`, `/build?version=2` or
 `session=`) is refused. Streamed bodies (build, `docker cp`) may be up to 4 GiB; JSON bodies 4 MiB (N07); a chunk size must be hex digits that
 fit the remaining body budget before it is used (400 otherwise; AF13). Under enforced egress,
@@ -77,11 +81,14 @@ credentials), company CA (keep TLS verification), never fall back to the host, h
 
 Opt-in per project ([pane](../snapshots/exec-devcontainer-light.png)), `.devcontainer/devcontainer.json` with comments.
 Supported: `image`; `build` (`dockerfile`, `context`, `args`, `target`, inside the project with links resolved) built by BelloCode with
-Rancher's `docker buildx build --load` (right before each build the canonical context and the Dockerfile, opened
-without following a link, are verified inside the project again; A18: the kept context is then copied (APFS clones, links as
+Rancher's `docker buildx build --load` (right before each build the canonical context is verified inside the project
+again and the Dockerfile is read through the project folder's own descriptor, each folder on its path opened `O_NOFOLLOW`
+relative to the one before, so a folder swapped for a link fails the read and those bytes are what the policy checks and the
+builder gets (v1.0.1 AV06); A18: the kept context is then copied (APFS clones, links as
 links) into a private folder, walking pinned folder descriptors (each folder opened `O_NOFOLLOW` relative to its open
 parent and checked against what was listed, each file cloned from its own descriptor; a folder changed mid-copy fails
-the copy; v1.0.1 AF07), with the Dockerfile, `.dockerignore` and digested files opened non-blocking so a FIFO is refused
+the copy; v1.0.1 AF07; iterative, at most 128 folders deep, an unreadable folder or running out of descriptors named as
+such, GV06), with the Dockerfile, `.dockerignore` and digested files opened non-blocking so a FIFO is refused
 rather than hanging (AF25); the CLI builds that copy with the Dockerfile on stdin, and the tag is the digest of the copy, so a
 save during the build cannot put new bytes under an old tag; under enforced egress `RUN` steps get `--network none`, because
 BuildKit's builder cannot join the egress network, N09); the image tag is the content tag of what the build sends (Dockerfile, arguments, target and every
