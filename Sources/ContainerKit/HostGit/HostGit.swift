@@ -215,16 +215,19 @@ public enum HostGit {
     /// - a linked worktree's gitdir must be `<commondir>/worktrees/<name>`, and its `gitdir` back-reference must name
     ///   this checkout's `.git`;
     /// - a submodule's gitdir must be inside `<superproject>/.git/modules/` of a folder that contains this checkout;
-    /// - a `commondir` is honoured only for such a linked worktree.
+    /// - a `commondir` is honoured only for such a linked worktree;
+    /// - `.git` itself must be a real directory or file, never a link (AV03): a link named `.git` to another checkout's
+    ///   `.git` directory (or `.git` file) would otherwise pass every check above as that checkout's own metadata.
     /// Anything else returns nothing (git then cannot write there and fails, closed).
     static func gitDirectories(from directory: String?) -> [String] {
         guard var current = directory.map(canonical) else { return [] }
-        let fileManager = FileManager.default
         while true {
             let dotGit = current + "/.git"
-            var isDirectory: ObjCBool = false
-            if fileManager.fileExists(atPath: dotGit, isDirectory: &isDirectory) {
-                guard !isDirectory.boolValue else {
+            var info = stat()
+            if lstat(dotGit, &info) == 0 {
+                let kind = info.st_mode & S_IFMT
+                guard kind == S_IFDIR || kind == S_IFREG else { return [] }
+                guard kind != S_IFDIR else {
                     // An ordinary repository: its own `.git`. A `commondir` inside it would point git (and the sandbox)
                     // at another repository's metadata: not followed.
                     return [canonical(dotGit)]
