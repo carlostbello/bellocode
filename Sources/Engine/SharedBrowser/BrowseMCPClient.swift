@@ -228,7 +228,7 @@ public actor BrowseMCPClient {
 
     private func receive(_ line: Data) {
         guard let message = try? JSONValue.parse(line), let id = message["id"]?.numberValue else { return }  // notifications/logs: ignored
-        guard let continuation = pending.removeValue(forKey: Int(id)) else { return }
+        guard let key = Int(exactly: id), let continuation = pending.removeValue(forKey: key) else { return }  // a non-integral or huge id from the child is ignored, not trapped
         if let error = message["error"] {
             continuation.resume(throwing: Failure.protocolError(error["message"]?.stringValue ?? "unknown"))
         } else {
