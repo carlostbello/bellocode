@@ -290,13 +290,74 @@ export function readInside(root: string, path: string, limit: number, fs: FS = n
   return read ?? { refused: "not a regular file" }
 }
 
-/** `AGENTS.md` files from the repository root down to `directory` (opencode's own order: outer first). Each must be a
- * regular file inside the repository; links that leave it, FIFOs and devices are ignored. */
-export function instructionFiles(directory: string | undefined, fs: FS = nodeFS): { path: string; content: string }[] {
-  if (!directory) return []
+/** Whether the canonical `path` is inside a checkout: it or a folder above it holds `.git`. */
+function insideCheckout(path: string, fs: FS): boolean {
+  let current = normalise(path)
+  for (let depth = 0; depth < 64; depth++) {
+    if (fs.kind(join(current, ".git")) !== undefined) return true
+    const parent = dirname(current)
+    if (parent === current) return false
+    current = parent
+  }
+  return true
+}
+
+export type SessionCheckout = { real: string; root: string }
+
+/**
+ * Where a session's instructions come from (AF08): its directory resolved, and the repository root above it, found
+ * so that a link the session itself could have made cannot redirect the lookup into another checkout. The directory
+ * is taken as the session records it (absolute, no `.` or `..`), and refused when
+ *  - a component of it is a link whose folder is inside a checkout (a link inside a repository, which an agent
+ *    working there can create; links above it, such as macOS `/var` or a code folder kept on another volume, are
+ *    the person's own layout), or
+ *  - the root found above the resolved directory lies above the target of the last link on the way (a link may only
+ *    lead into a checkout, never into the middle of one whose upper folders the link does not name).
+ * Undefined when refused or when the directory cannot be resolved.
+ */
+export function sessionCheckout(directory: string, fs: FS = nodeFS): SessionCheckout | undefined {
+  if (!directory.startsWith(sep)) return undefined
+  const parts = directory.split(sep).filter((part) => part !== "")
+  if (parts.some((part) => part === "." || part === "..")) return undefined
+  let lexical = sep
+  let lastTarget: string | undefined
+  for (const part of parts) {
+    const next = join(lexical, part)
+    const kind = fs.kind(next)
+    if (kind === undefined) return undefined
+    if (kind === "symlink") {
+      const folder = fs.realpath(lexical)
+      if (!folder || insideCheckout(folder, fs)) return undefined
+      lastTarget = fs.realpath(next)
+      if (!lastTarget) return undefined
+    }
+    lexical = next
+  }
   const real = fs.realpath(directory)
-  if (!real || fs.kind(real) !== "directory") return []
+  if (!real || fs.kind(real) !== "directory") return undefined
   const root = projectRoot(real, fs)
+  if (lastTarget !== undefined && !inside(lastTarget, root)) return undefined
+  return { real, root }
+}
+
+/**
+ * `AGENTS.md` files from the repository root down to `directory` (opencode's own order: outer first), and the root
+ * they come from. Each must be a regular file inside the repository; links that leave it, FIFOs and devices are
+ * ignored. The root is found by `sessionCheckout`; with `pinned` (the root a session's first lookup found), a root
+ * outside it is refused, so a session folder that comes to point elsewhere mid-session hands over nothing. The
+ * checkout is examined again after the reads and must not have changed, so a link put in place and removed around
+ * them is refused too (AF08). Undefined when refused.
+ */
+export function instructionLookup(
+  directory: string | undefined,
+  fs: FS = nodeFS,
+  pinned?: string,
+): { root: string; files: { path: string; content: string }[] } | undefined {
+  if (!directory) return undefined
+  const checkout = sessionCheckout(directory, fs)
+  if (!checkout) return undefined
+  const { real, root } = checkout
+  if (pinned !== undefined && !(inside(pinned, root) && inside(pinned, real))) return undefined
   const chain: string[] = []
   let current = real
   for (let depth = 0; depth < 64; depth++) {
@@ -319,7 +380,14 @@ export function instructionFiles(directory: string | undefined, fs: FS = nodeFS)
     total += content.length
     files.push({ path, content })
   }
-  return files
+  const after = sessionCheckout(directory, fs)
+  if (!after || after.real !== real || after.root !== root) return undefined
+  return { root, files }
+}
+
+/** `instructionLookup`'s files, or none when it refuses. */
+export function instructionFiles(directory: string | undefined, fs: FS = nodeFS): { path: string; content: string }[] {
+  return instructionLookup(directory, fs)?.files ?? []
 }
 
 /** The instruction entry's text (opencode's own wording, so the model reads it the same way), or undefined. */

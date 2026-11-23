@@ -34,6 +34,9 @@ const cascading = new Map<string, number>()
 const guided = new Set<string>()
 /** The repository instruction text last written per session (rewritten only when the files change). */
 const projectInstructionsWritten = new Map<string, string>()
+/** The repository root each session's first instruction lookup found, per session directory (AF08): later lookups
+ * must stay inside it. */
+const projectInstructionRoots = new Map<string, { directory: string; root: string }>()
 const CASCADE_WINDOW_MS = 15_000
 /** Session list page size, pages per parent and sessions per tree walk (beyond these a walk reports incomplete). */
 const PAGE_SIZE = 200
@@ -205,7 +208,14 @@ export default {
       if (projectConfig?.mode !== "bellocode") return
       let text: string
       try {
-        text = P.instructionsText(P.instructionFiles(directory)) ?? ""
+        // Bound to the root the session's first lookup found (AF08); a refused lookup hands over nothing.
+        const pin = projectInstructionRoots.get(sessionID)
+        const lookup = P.instructionLookup(directory, P.nodeFS, pin?.directory === directory ? pin.root : undefined)
+        if (lookup && pin?.directory !== directory) {
+          projectInstructionRoots.set(sessionID, { directory, root: lookup.root })
+          if (projectInstructionRoots.size > 4_000) projectInstructionRoots.delete(projectInstructionRoots.keys().next().value as string)
+        }
+        text = P.instructionsText(lookup?.files ?? []) ?? ""
       } catch {
         return
       }

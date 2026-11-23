@@ -140,6 +140,9 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   escape (`RUN echo \\`) ends the instruction, so the next line's `FROM` is a stage whose base is checked and
   instrumented; the instrumenter also splits CRLF files into lines, honours `# escape=` and no longer takes a comment
   ending in the escape for a continuation (AF11, GW01).
+  The plugin's repository instructions are bound to the session's checkout: a session folder that is, or comes to
+  be, a link inside a checkout, or that leads into the middle of another checkout, hands over no instructions, and
+  each session keeps the root its first prompt found (AF08).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,
