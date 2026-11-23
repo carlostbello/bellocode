@@ -305,7 +305,7 @@ public enum EnvironmentPhase: Sendable, Equatable {
             .init(message: "The project's container image is still downloading (\(progress.detail)). Retry when it finishes.")
         case .pullFailed(let message, let needsSignIn):
             needsSignIn
-                ? .init(message: "Pulling the project's image failed: the registry needs you to sign in (\(message)). Sign in to the registry in Project Settings ▸ Environment.",
+                ? .init(message: "Pulling the project's image failed: the registry needs you to sign in (\(message)). Sign in to the registry in Settings ▸ Containers.",
                         fix: EnvironmentFix.signIn.title)
                 : .init(message: "Pulling the project's image failed (\(message)). Check the image name or the network, then retry the pull.",
                         fix: EnvironmentFix.retry.title)
