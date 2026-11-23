@@ -193,6 +193,8 @@ final class BrowserSurfaces {
 
     func setViewport(_ preset: ViewportPreset?) { pane?.setViewport(preset) }
 
+    var isPanelShown: Bool { shell?.isBrowserPanelShown ?? false }
+
     var focusIsInBrowser: Bool {
         guard let view = pane?.view, let responder = view.window?.firstResponder as? NSView else { return false }
         return responder.isDescendant(of: view)
@@ -343,6 +345,17 @@ enum BrowserMenu {
         return menu
     }
 
+    /// Shortcuts that also mean something to a text field, the terminal or a page (⌘L, ⌘R, ⇧⌘R, ⌘=, ⌘-, ⌘0, ⇧⌘C,
+    /// ⌃⇥, ⌃⇧⇥): typed, they reach the browser only while it is shown and has focus, and otherwise stay with the focused
+    /// view (NV05). The explicit ⌃⌘ browser shortcuts stay global; every item still works from the menu itself.
+    static let focusScoped: Set<BrowserPaneCommand> = Set(
+        items.flatMap { $0 }.filter { !$0.key.isEmpty && !$0.modifiers.isSuperset(of: [.command, .control]) }.map(\.command))
+
+    static func allowsShortcut(_ command: BrowserPaneCommand, fromKeyboard: Bool, browserShown: Bool, focusInBrowser: Bool) -> Bool {
+        guard fromKeyboard, focusScoped.contains(command) else { return true }
+        return browserShown && focusInBrowser
+    }
+
     /// Every shortcut the Browser menu uses ("key-modifiers"), for the uniqueness test.
     static var shortcuts: [String] {
         (items.flatMap { $0 }.filter { !$0.key.isEmpty }.map { "\($0.key)-\($0.modifiers.rawValue)" })
@@ -375,6 +388,12 @@ final class BrowserMenuRouter: NSObject, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        validate(menuItem, surfaces: surfaces, event: NSApp.currentEvent)
+    }
+
+    /// `event`: what is being handled now; a key-down means the item is matched as a key equivalent, not chosen in the
+    /// menu. A disabled match is not consumed, so the focused view gets the key.
+    func validate(_ menuItem: NSMenuItem, surfaces: BrowserSurfaces?, event: NSEvent?) -> Bool {
         if menuItem.action == #selector(showBrowser(_:)) { return surfaces != nil }
         if menuItem.action == #selector(setViewport(_:)) {
             let current = surfaces?.pane?.selectedTab?.viewport
@@ -397,6 +416,10 @@ final class BrowserMenuRouter: NSObject, NSMenuItemValidation {
         default:
             break
         }
+        let fromKeyboard = event?.type == .keyDown
+        guard BrowserMenu.allowsShortcut(command, fromKeyboard: fromKeyboard, browserShown: surfaces.isPanelShown,
+                                         focusInBrowser: surfaces.focusIsInBrowser)
+        else { return false }
         return surfaces.canPerform(command)
     }
 }
