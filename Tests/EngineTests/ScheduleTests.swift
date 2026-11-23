@@ -153,6 +153,31 @@ struct SchedulerServiceTests {
         return (service, clock, runner, store)
     }
 
+    /// Names that differ only in case sort by ID whatever the input order (NF23: the tie-break compared names
+    /// case-sensitively, so the comparator was not a strict weak ordering).
+    @Test func caseOnlyDuplicateNamesSortByID() {
+        let created = Date(timeIntervalSince1970: 0)
+        func task(_ name: String, _ id: String) -> ScheduledTask {
+            ScheduledTask(id: id, name: name, prompt: "p", rule: .interval(minutes: 30), directory: "/r", created: created)
+        }
+        let tasks = [task("abc", "0"), task("ABC", "1"), task("abc", "2"), task("Abc", "3")]
+        for a in tasks {
+            for b in tasks { #expect(!(SchedulerService.order(a, b) && SchedulerService.order(b, a))) }
+        }
+        // Every input order gives the same result.
+        func permutations(_ items: [ScheduledTask]) -> [[ScheduledTask]] {
+            guard items.count > 1 else { return [items] }
+            return items.indices.flatMap { index -> [[ScheduledTask]] in
+                var rest = items
+                let head = rest.remove(at: index)
+                return permutations(rest).map { [head] + $0 }
+            }
+        }
+        for order in permutations(tasks) {
+            #expect(order.sorted(by: SchedulerService.order).map(\.id) == ["0", "1", "2", "3"])
+        }
+    }
+
     @Test func intervalTaskRunsWhenDueAndRecordsTheThread() async throws {
         let start = ScheduleCalendarTests.date("2026-11-16 09:00", ScheduleCalendarTests.madrid)
         let (service, clock, runner, _) = try make(start)

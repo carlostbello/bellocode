@@ -374,8 +374,11 @@ public final class SchedulerService {
         tasks.sort(by: Self.order)
     }
 
-    private static func order(_ lhs: ScheduledTask, _ rhs: ScheduledTask) -> Bool {
-        lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending || (lhs.name == rhs.name && lhs.id < rhs.id)
+    /// Name (case-insensitive), then ID. The tie-break uses the same equality as the primary key, so names that differ
+    /// only in case still form a strict weak ordering.
+    static func order(_ lhs: ScheduledTask, _ rhs: ScheduledTask) -> Bool {
+        let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+        return comparison == .orderedAscending || (comparison == .orderedSame && lhs.id < rhs.id)
     }
 
     static func runTitle(_ date: Date, timeZone: TimeZone) -> String {
