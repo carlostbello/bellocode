@@ -201,60 +201,106 @@ public enum HostGit {
         if let temporary = environment["TMPDIR"], temporary.hasPrefix("/") { roots.append(temporary) }
         if let explicit = environment["GIT_DIR"] { roots.append(resolve(explicit, against: directory)) }
         if let tree = environment["GIT_WORK_TREE"] { roots.append(resolve(tree, against: directory)) }
+        var seen: Set<String> = []
+        roots = roots.map(canonical)
+        // Already the real paths of the opened folders (AV03): resolving their names again could follow a link that
+        // replaced one of them meanwhile.
         for discovered in gitDirectories(from: environment["GIT_DIR"] == nil ? directory : nil) where isDotGit(discovered) {
             roots.append(discovered)
         }
-        var seen: Set<String> = []
-        return roots.map(canonical).filter { $0 != "/" && seen.insert($0).inserted }
+        return roots.filter { $0 != "/" && seen.insert($0).inserted }
     }
 
     /// The gitdir and common dir for a working directory, read from `.git` (directory or `gitdir:` file) and
     /// `commondir` without running git. Only metadata that provably belongs to this checkout is returned (R27): a
     /// repository can write its own `.git` file or `commondir`, so a pointer copied from another checkout must not
     /// extend the sandbox into that checkout's index and refs.
-    /// - a linked worktree's gitdir must be `<commondir>/worktrees/<name>`, and its `gitdir` back-reference must name
-    ///   this checkout's `.git`;
+    /// - a linked worktree's gitdir must be `<commondir>/worktrees/<name>` (the same folder, by identity), and its
+    ///   `gitdir` back-reference must name this checkout's `.git` file (the same file, by identity);
     /// - a submodule's gitdir must be inside `<superproject>/.git/modules/` of a folder that contains this checkout;
     /// - a `commondir` is honoured only for such a linked worktree;
     /// - `.git` itself must be a real directory or file, never a link (AV03): a link named `.git` to another checkout's
     ///   `.git` directory (or `.git` file) would otherwise pass every check above as that checkout's own metadata.
+    ///
+    /// Every check and every returned path come from the same open descriptors (AV03): `.git` is opened once, without
+    /// following a link, its type is read from that descriptor, a `.git` file's text is read through it, and a granted
+    /// folder's path is the current path of the opened folder (`F_GETPATH`), never a second lookup of the name. A
+    /// `.git` swapped for a link after it was opened cannot redirect the grant to where the link points: the opened
+    /// folder must still be `<checkout>/.git`, or nothing is returned. `afterOpening` runs once `.git` is open (tests).
     /// Anything else returns nothing (git then cannot write there and fails, closed).
-    static func gitDirectories(from directory: String?) -> [String] {
+    static func gitDirectories(from directory: String?, afterOpening: (() -> Void)? = nil) -> [String] {
         guard var current = directory.map(canonical) else { return [] }
         while true {
-            let dotGit = current + "/.git"
-            var info = stat()
-            if lstat(dotGit, &info) == 0 {
-                let kind = info.st_mode & S_IFMT
-                guard kind == S_IFDIR || kind == S_IFREG else { return [] }
-                guard kind != S_IFDIR else {
-                    // An ordinary repository: its own `.git`. A `commondir` inside it would point git (and the sandbox)
-                    // at another repository's metadata: not followed.
-                    return [canonical(dotGit)]
-                }
-                guard let text = try? String(contentsOfFile: dotGit, encoding: .utf8), text.hasPrefix("gitdir:") else { return [] }
-                let path = text.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
-                let gitDirectory = canonical(resolve(path, against: current))
-                if let common = try? String(contentsOfFile: gitDirectory + "/commondir", encoding: .utf8) {
-                    let commonDirectory = canonical(resolve(common.trimmingCharacters(in: .whitespacesAndNewlines), against: gitDirectory))
-                    guard isLinkedWorktree(gitDirectory, common: commonDirectory, checkout: dotGit) else { return [] }
-                    return [gitDirectory, commonDirectory]
-                }
-                guard isSubmodule(gitDirectory, checkout: current) else { return [] }
-                return [gitDirectory]
+            let folder = open(current, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard folder >= 0 else { return [] }
+            defer { close(folder) }
+            let dotGit = openat(folder, ".git", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            if dotGit < 0 {
+                // Not here (or not a folder): look in the parent. A link (ELOOP) or anything unreadable: nothing.
+                guard errno == ENOENT || errno == ENOTDIR else { return [] }
+                if current == "/" || current.isEmpty { return [] }
+                current = (current as NSString).deletingLastPathComponent
+                continue
             }
-            if current == "/" || current.isEmpty { return [] }
-            current = (current as NSString).deletingLastPathComponent
+            defer { close(dotGit) }
+            afterOpening?()
+            var info = stat()
+            guard fstat(dotGit, &info) == 0, let checkout = DevContainerBuildInputs.path(of: folder) else { return [] }
+            let kind = info.st_mode & S_IFMT
+            if kind == S_IFDIR {
+                // An ordinary repository: its own `.git`, still in place. A `commondir` inside it would point git (and
+                // the sandbox) at another repository's metadata: not followed.
+                guard let path = DevContainerBuildInputs.path(of: dotGit), path == checkout + "/.git" else { return [] }
+                return [path]
+            }
+            // A hard link to another checkout's `.git` file would pass the back-reference check below as this one.
+            guard kind == S_IFREG, info.st_nlink == 1 else { return [] }
+            let bytes = (try? FileHandle(fileDescriptor: dotGit, closeOnDealloc: false).read(upToCount: 4096)) ?? Data()
+            let text = String(decoding: bytes, as: UTF8.self)
+            guard text.hasPrefix("gitdir:") else { return [] }
+            let pointer = text.dropFirst(7).trimmingCharacters(in: .whitespacesAndNewlines)
+            let gitFolder = open(resolve(pointer, against: checkout), O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard gitFolder >= 0 else { return [] }
+            defer { close(gitFolder) }
+            guard let gitDirectory = DevContainerBuildInputs.path(of: gitFolder) else { return [] }
+            if let common = DevContainerBuildInputs.readRegularFile("commondir", in: gitFolder, limit: 4096) {
+                let commonPath = resolve(String(decoding: common, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), against: gitDirectory)
+                let commonFolder = open(commonPath, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+                guard commonFolder >= 0 else { return [] }
+                defer { close(commonFolder) }
+                guard let commonDirectory = DevContainerBuildInputs.path(of: commonFolder),
+                      isLinkedWorktree(gitFolder, path: gitDirectory, common: commonFolder, checkout: dotGit)
+                else { return [] }
+                return [gitDirectory, commonDirectory]
+            }
+            guard isSubmodule(gitDirectory, checkout: checkout) else { return [] }
+            return [gitDirectory]
         }
     }
 
-    /// `gitDirectory` is `<common>/worktrees/<name>` and its `gitdir` file points back at `checkout` (this `.git` file).
-    static func isLinkedWorktree(_ gitDirectory: String, common: String, checkout: String) -> Bool {
-        let parent = (gitDirectory as NSString).deletingLastPathComponent
-        guard (parent as NSString).lastPathComponent == "worktrees", (parent as NSString).deletingLastPathComponent == common else { return false }
-        guard let back = try? String(contentsOfFile: gitDirectory + "/gitdir", encoding: .utf8) else { return false }
-        let target = back.trimmingCharacters(in: .whitespacesAndNewlines)
-        return canonical(resolve(target, against: gitDirectory)) == canonical(checkout)
+    /// The open folder `gitFolder` (at `path`) is `<common>/worktrees/<name>` and its `gitdir` file points back at
+    /// `checkout` (this `.git` file), each compared by identity (device and inode), not by name.
+    static func isLinkedWorktree(_ gitFolder: Int32, path: String, common: Int32, checkout: Int32) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        guard !name.isEmpty, name != "..", name != "." else { return false }
+        let listed = openat(common, "worktrees/" + name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard listed >= 0 else { return false }
+        defer { close(listed) }
+        guard sameObject(listed, gitFolder) else { return false }
+        guard let back = DevContainerBuildInputs.readRegularFile("gitdir", in: gitFolder, limit: 4096) else { return false }
+        let target = String(decoding: back, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = open(resolve(target, against: path), O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard named >= 0 else { return false }
+        defer { close(named) }
+        return sameObject(named, checkout)
+    }
+
+    /// Two descriptors name the same file or folder.
+    static func sameObject(_ first: Int32, _ second: Int32) -> Bool {
+        var a = stat()
+        var b = stat()
+        guard fstat(first, &a) == 0, fstat(second, &b) == 0 else { return false }
+        return a.st_dev == b.st_dev && a.st_ino == b.st_ino
     }
 
     /// `gitDirectory` is inside `<superproject>/.git/modules/` and the superproject contains `checkout`.
