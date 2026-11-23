@@ -199,7 +199,8 @@ public enum OpenCodeCLI {
 
     /// Finds BelloCode's server for one command. Takes the data lock first: holding it means no BelloCode server
     /// exists or is starting (`.offline`, and the returned lock must be kept across `execve`). Otherwise the server
-    /// must be published and hand over its password; a lock without a server is `.busy`.
+    /// must be published and the app must hand over its address and password, the address matching the connection
+    /// file's; a lock without a server is `.busy`.
     public static func discover(_ directories: OpenCodeDirectories) -> (Result<ServerAvailability, Refusal>, OpenCodeDataLock?) {
         let lock: OpenCodeDataLock?
         do {
@@ -217,12 +218,18 @@ public enum OpenCodeCLI {
             default: return (.failure(Refusal(message: error.description)), nil)
             }
         }
+        let served: (url: URL, password: String)
         do {
-            let password = try CLIPasswordClient.password(directories: directories, pid: file.pid)
-            return (.success(.running(url: file.url, password: password)), nil)
+            served = try CLIPasswordClient.server(directories: directories, pid: file.pid)
         } catch {
             return (.failure(Refusal(message: error.description)), nil)
         }
+        // The password goes only to the address the app vouches for; a connection file naming another one was changed
+        // by someone else and is not followed (AF02).
+        guard served.url == file.url else {
+            return (.failure(Refusal(message: "BelloCode's connection file (\(directories.connectionFile.path)) names a different address from its running server, so the password is not sent. Restart BelloCode.")), nil)
+        }
+        return (.success(.running(url: served.url, password: served.password)), nil)
     }
 
     /// The opencode binary to run: the one bundled beside this helper. `BELLOCODE_OPENCODE_BINARY` (development and

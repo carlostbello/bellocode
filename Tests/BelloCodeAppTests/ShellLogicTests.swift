@@ -34,13 +34,20 @@ import Testing
         try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
         let bundle = try #require(Bundle(url: root))
         let server = AppRuntime.bundledServerConfiguration(bundle: bundle, dataRoot: root.appending(path: "data"))
-        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/opencode", "Contents/Helpers/bellocode-exec"])) {
+        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/opencode", "Contents/Helpers/bellocode-exec",
+                                                                 "Contents/Helpers/bellocode-opencode"])) {
             try AppRuntime.requireBundledRuntime(server)
         }
         let opencode = helpers.appending(path: "opencode")
         FileManager.default.createFile(atPath: opencode.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
-        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/bellocode-exec"])) { try AppRuntime.requireBundledRuntime(server) }
+        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/bellocode-exec", "Contents/Helpers/bellocode-opencode"])) {
+            try AppRuntime.requireBundledRuntime(server)
+        }
         FileManager.default.createFile(atPath: helpers.appending(path: "bellocode-exec").path, contents: Data("#!/bin/sh\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        // AF18: without the command-line helper the password broker could not tell it from any other process.
+        #expect(throws: AppRuntime.LaunchError.incompleteBundle(["Contents/Helpers/bellocode-opencode"])) { try AppRuntime.requireBundledRuntime(server) }
+        FileManager.default.createFile(atPath: helpers.appending(path: "bellocode-opencode").path, contents: Data("#!/bin/sh\n".utf8),
                                        attributes: [.posixPermissions: 0o755])
         try AppRuntime.requireBundledRuntime(server)
         var noContainers = server

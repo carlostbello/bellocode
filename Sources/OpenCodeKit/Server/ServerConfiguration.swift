@@ -41,13 +41,17 @@ public struct ServerConfiguration: Sendable {
     /// Coordinate with `bellocode-opencode`: hold the data root's lease (`OpenCodeDataLock`) while a server runs,
     /// publish its address (`CLIConnectionFile`, 0600, no secret) and hand its password over `CLIPasswordBroker`.
     public var publishesCLIConnection = true
-    /// The executables allowed to fetch the password: the bundled `bellocode-opencode` when it is next to opencode
-    /// (nil, any process of this user, in development runs without it).
-    public var cliPeerExecutables: Set<String>? {
+    /// Tests only: any process of this user may fetch the password (no bundled helper to check against). Never set by
+    /// the app (AF18).
+    public var allowsAnyCLIPeer = false
+    /// Who may fetch the password: the bundled `bellocode-opencode` next to opencode. Nil when it is missing or not
+    /// executable: no password is handed out at all (fail closed, AF18), never "any process of this user".
+    public var cliPeers: CLIPasswordBroker.Peers? {
+        if allowsAnyCLIPeer { return .anyProcessOfThisUser }
         guard let helpers = helpersDirectory else { return nil }
         let helper = helpers.appending(path: "bellocode-opencode").path
         guard FileManager.default.isExecutableFile(atPath: helper) else { return nil }
-        return [CLIPasswordBroker.canonical(helper)]
+        return .executables([CLIPasswordBroker.canonical(helper)])
     }
 
     /// Limit for the ready line plus a verified `GET /api/info`.

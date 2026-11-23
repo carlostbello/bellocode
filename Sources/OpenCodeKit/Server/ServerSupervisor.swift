@@ -393,14 +393,19 @@ public actor ServerSupervisor {
     // MARK: - CLI connection (docs/features/opencode-config.md)
 
     /// Starts the password broker, then writes `run/server.json` (0600, no secret) so `bellocode-opencode` uses this
-    /// server; failures only disable the CLI path.
+    /// server; failures only disable the CLI path. Without the bundled helper to admit, no broker runs: the CLI is
+    /// refused rather than any process of this user getting the password (AF18).
     private func publishCLIConnection(endpoint: ServerEndpoint, credentials: ServerCredentials, pid: Int32) {
         guard configuration.publishesCLIConnection else { return }
         passwordBroker?.stop()
         passwordBroker = nil
         do {
-            passwordBroker = try CLIPasswordBroker(
-                directories: configuration.directories, pid: pid, password: credentials.password, allowedPeers: configuration.cliPeerExecutables)
+            if let peers = configuration.cliPeers {
+                passwordBroker = try CLIPasswordBroker(
+                    directories: configuration.directories, pid: pid, url: endpoint.baseURL, password: credentials.password, peers: peers)
+            } else {
+                Instrumentation.serverLog.error("no bundled bellocode-opencode: the command-line tool cannot use this server")
+            }
             try CLIConnectionFile(url: endpoint.baseURL, pid: pid, version: endpoint.version).write(to: configuration.directories.connectionFile)
         } catch {
             Instrumentation.serverLog.error("could not publish the CLI connection: \(String(describing: error), privacy: .public)")
