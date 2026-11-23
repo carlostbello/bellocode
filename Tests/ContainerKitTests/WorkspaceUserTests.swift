@@ -139,6 +139,14 @@ struct WorkspaceUserTests {
             #expect((object["Labels"] as? [String: String])?[WorkspaceSpec.labelWorkspace] == nil, "never taken for the workspace")
         }
         #expect(requests.contains { $0.method == "DELETE" && $0.path.contains("/containers/") }, "removed")
+        // The one-shot secret-command container (same image and user) is refused the same way, before it exists.
+        await #expect(throws: WorkspaceError.rootUser("dev")) {
+            _ = try await WorkspaceManager(client: server.client).runSecretCommand(
+                spec, shell: "/bin/sh", command: "true", workingDir: root, name: "TOKEN", secret: Data("s".utf8), policy: SecretCommandPolicy())
+        }
+        #expect(!server.requests.withLock { $0 }.contains { $0.method == "POST" && $0.path.hasSuffix("/start") })
+        #expect(server.requests.withLock { $0 }.filter { $0.method == "POST" && $0.path.hasSuffix("/containers/create") }.count == 2,
+                "only the account-file containers")
         // A name the image does not define cannot be shown not to be root.
         spec.user = "ghost"
         await #expect(throws: WorkspaceError.unknownUser("ghost")) { try await WorkspaceManager(client: server.client).ensureRunning(spec) }
