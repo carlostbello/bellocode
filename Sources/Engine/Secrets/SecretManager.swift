@@ -98,6 +98,10 @@ public final class SecretManager {
     /// sent, typically while cleaning up after a revocation). Kept independently of their remaining grants, retried at
     /// every reconnect until the server acknowledges it, and shown in Settings ▸ Secrets meanwhile (AF26).
     public private(set) var pendingEnvironmentSessions: Set<String> = []
+    /// Brokered or placeholder secrets whose stored value is shorter than the response scanner can find reliably (saved
+    /// by a release that did not check, AF16). Unusable in their hidden mode (no placeholder substitution, no brokered
+    /// request) until rotated to a longer value or made Visible; shown in Settings ▸ Secrets.
+    public internal(set) var shortValueAccounts: Set<String> = []
 
     nonisolated public static let authorityService = "app.bellocode.egress-ca"
     nonisolated static let authorityAccount = "authority-key"
@@ -130,6 +134,14 @@ public final class SecretManager {
     @ObservationIgnored private var rowWriters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Increases with every proxy snapshot built; an older one finishing late is never applied over a newer one.
     @ObservationIgnored private var snapshotGeneration = 0
+    /// The newest generation published to the proxy (and drained), and the refreshes waiting for it: a refresh a newer
+    /// one superseded returns only once that newer snapshot is in the proxy (AF15).
+    @ObservationIgnored private var publishedGeneration = 0
+    @ObservationIgnored private var snapshotWaiters: [(generation: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    /// Per thread: the newest environment replacement asked for, and the one running (AF26, GV04). Replacements of one
+    /// thread are sent one at a time, each computed when its turn comes; one a newer request superseded is skipped.
+    @ObservationIgnored private var environmentGeneration: [String: Int] = [:]
+    @ObservationIgnored private var environmentWriters: [String: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
     /// Tests: extra TLS roots for the brokered tool's loopback servers (added to the configuration's).
     @ObservationIgnored var extraBrokerAnchors: [Data] = []
@@ -175,6 +187,7 @@ public final class SecretManager {
         tasks.cancelAll()
         proxy?.stop()
         proxy = nil
+        resumeAllSnapshotWaiters()
         egressStatus = .off
         started = false
         let keys = Array(scopes.keys)
@@ -254,6 +267,9 @@ public final class SecretManager {
         }
         secrets = loaded.filter { $0.incomplete != true }.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         useLedger.seed(secrets)
+        // A hidden value saved before the length check (AF16) is never activated in its hidden mode.
+        let hidden = secrets.filter { $0.mode != .visible }
+        shortValueAccounts = await Self.shortValues(vault, accounts: hidden.map { ($0.account, $0.activeValueAccount) })
         // Grants that no longer fit their secret (a deletion that failed earlier: revoked, other mode, narrower scope or
         // code roots) are not brought back; their rows are removed again (N13).
         let stored = (try? await store.placeholderGrants()) ?? []
@@ -442,6 +458,7 @@ public final class SecretManager {
             }
             // A new mode, name, confirmation or scope retires the grants threads hold under the old policy (AF04);
             // threads keeping theirs get the new value, as after a rotation.
+            if saved.mode == .visible || value.utf8.count >= Self.minimumHiddenValueBytes { shortValueAccounts.remove(saved.account) }
             await retireGrants(from: previous, to: saved)
             if saved.mode == .visible { await reapplyEnvironments(account: saved.account) }
         } else {
@@ -636,6 +653,7 @@ public final class SecretManager {
             }
         }, edit)
         guard let next = secret(changed.account) else { return }
+        if next.mode == .visible { shortValueAccounts.remove(next.account) }
         await retireGrants(from: current, to: next)
         await refreshProxySnapshot()
     }
@@ -661,6 +679,8 @@ public final class SecretManager {
         }
         let now = clock.now()
         secret = try await replaceValue(of: account, with: value, label: nil) { $0.rotated = Self.nextRotation(after: $0.rotated, now: now) }
+        // The new value passed the length check for the mode it was activated under.
+        if secret.mode == .visible || value.utf8.count >= Self.minimumHiddenValueBytes { shortValueAccounts.remove(account) }
         await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .rotated, detail: "New value; placeholders unchanged"))
         await refreshProxySnapshot()
         if secret.mode == .visible { await reapplyEnvironments(account: account) }
@@ -704,6 +724,7 @@ public final class SecretManager {
             return
         }
         secrets.removeAll { $0.account == account }
+        shortValueAccounts.remove(account)
         if quarantinedAccounts.remove(account) != nil, quarantinedAccounts.isEmpty { metadataProblem = nil }
         await refreshProxySnapshot()
     }
@@ -724,6 +745,10 @@ public final class SecretManager {
     /// The shortest value a hidden mode accepts: the response scanner's base64 patterns need this many bytes.
     nonisolated static let minimumHiddenValueBytes = 8
     nonisolated static let shortValueMessage = "Values shorter than 8 bytes cannot be detected reliably in responses; such a value can only be Visible."
+
+    nonisolated public static func shortStoredValueMessage(_ label: String) -> String {
+        "“\(label)” has a value shorter than 8 bytes, which BelloCode cannot find reliably in responses, so it is not used in its current mode. Rotate it to a longer value or make it Visible in Settings ▸ Secrets."
+    }
 
 
     private func persist(_ secret: ManagedSecret) async throws {
@@ -751,6 +776,7 @@ public final class SecretManager {
     @discardableResult
     func grant(account: String, sessionID: SessionID, projectDirectory: String) async throws -> PlaceholderGrant {
         guard let secret = secret(account), !secret.revoked else { throw ExtrasError("That secret is revoked or gone.") }
+        if secret.mode != .visible, shortValueAccounts.contains(account) { throw ExtrasError(Self.shortStoredValueMessage(secret.label)) }
         guard secret.scope.admits(projectDirectory: projectDirectory, codeRoots: codeRoots()) else {
             throw ExtrasError("“\(secret.label)” is not available to this project (its scope is \(secret.scope.title)).")
         }
@@ -852,21 +878,61 @@ public final class SecretManager {
 
     /// Replaces the thread's command environment on the server. Until the server acknowledges it the thread stays in
     /// `pendingEnvironmentSessions` (with or without grants left), retried at the next reconnect (AF26).
+    ///
+    /// Replacements of one thread are ordered (GV04): each waits until the previous one has been answered, then computes
+    /// the variables from the state as it is then; a replacement a newer one superseded while it waited is skipped (the
+    /// newer one sends the current state). So a request computed before a revocation can never reach the server after
+    /// the revocation's own replacement, and the last replacement the server applies is always the newest state.
     func applyEnvironment(_ session: String) async {
         guard let engine, engine.configuration.containers != nil else { return }
+        let generation = (environmentGeneration[session] ?? 0) + 1
+        environmentGeneration[session] = generation
+        await acquireEnvironment(session)
+        defer { releaseEnvironment(session) }
+        guard environmentGeneration[session] == generation else { return }
         guard let client = try? await engine.core.currentClient() else {
             pendingEnvironmentSessions.insert(session)
             return
         }
         let variables = await environmentVariables(for: session)
+        // Superseded while the values were read: the newer replacement (waiting for this turn) sends the newer state.
+        guard environmentGeneration[session] == generation else { return }
+        if let hold = environmentSendHook { await hold(session) }
         do {
             try await client.setSessionEnvironment(sessionID: session, variables: variables)
-            pendingEnvironmentSessions.remove(session)
+            if environmentGeneration[session] == generation { pendingEnvironmentSessions.remove(session) }
         } catch {
             pendingEnvironmentSessions.insert(session)
             log.error("session environment not applied: \(String(describing: type(of: error)), privacy: .public)")
         }
     }
+
+    /// Tests: runs right before a thread's environment request is sent.
+    @ObservationIgnored var environmentSendHook: (@MainActor (String) async -> Void)?
+
+    /// Waits until no other environment replacement of `session` runs, then holds it (first come, first served).
+    private func acquireEnvironment(_ session: String) async {
+        guard environmentWriters[session] != nil else {
+            environmentWriters[session] = []
+            return
+        }
+        await withCheckedContinuation { environmentWriters[session, default: []].append($0) }
+    }
+
+    private func releaseEnvironment(_ session: String) {
+        guard var waiters = environmentWriters[session], !waiters.isEmpty else {
+            environmentWriters[session] = nil
+            // Nothing queued: the counter is no longer needed (bounded by the threads with a replacement running).
+            environmentGeneration[session] = nil
+            return
+        }
+        let next = waiters.removeFirst()
+        environmentWriters[session] = waiters
+        next.resume()
+    }
+
+    /// Tests: environment replacements of `session` waiting for their turn.
+    func waitingEnvironmentWriters(_ session: String) -> Int { environmentWriters[session]?.count ?? 0 }
 
     private func reapplyEnvironments(account: String) async {
         for session in Set(grants.values.filter { $0.account == account }.map(\.sessionID)) { await applyEnvironment(session) }
@@ -894,6 +960,15 @@ public final class SecretManager {
 
     nonisolated static func read(_ vault: any SecretVault, account: String) async -> SecretValue? {
         try? vault.read(account: account)
+    }
+
+    /// The accounts whose value (read from the Keychain account given for it) is shorter than a hidden mode accepts.
+    nonisolated static func shortValues(_ vault: any SecretVault, accounts: [(account: String, valueAccount: String)]) async -> Set<String> {
+        var out = Set<String>()
+        for (account, valueAccount) in accounts {
+            if let value = try? vault.read(account: valueAccount), !value.isEmpty, value.utf8.count < minimumHiddenValueBytes { out.insert(account) }
+        }
+        return out
     }
 
     /// Values by secret account, each read from the Keychain account given for it (the value of its current policy).
@@ -945,6 +1020,28 @@ public final class SecretManager {
         return stored
     }
 
+    /// Lowers the persisted counts of these uses to the ledger's after they were released (refused before anything was
+    /// sent, AV13): a relaunch, which seeds the ledger from the persisted counts, does not count them. A failed write
+    /// leaves the higher count (fail-closed: a use may be over-counted, never under-counted).
+    func releaseUses(_ uses: [SubstitutionUse]) async {
+        let ledger = useLedger
+        for account in Set(uses.map(\.account)) {
+            guard let current = secret(account) else { continue }
+            let bindings = Set(uses.filter { $0.account == account }.map(\.bindingID))
+            guard bindings.contains(where: { (current.uses[$0] ?? 0) > ledger.count(account: account, bindingID: $0) }) else { continue }
+            do {
+                try await mutate(account) { secret in
+                    for binding in bindings {
+                        guard let stored = secret.uses[binding] else { continue }
+                        secret.uses[binding] = min(stored, ledger.count(account: account, bindingID: binding))
+                    }
+                }
+            } catch {
+                log.error("released secret use not lowered in the store")
+            }
+        }
+    }
+
     public var lastUse: [String: SecretAuditEntry] {
         var out: [String: SecretAuditEntry] = [:]
         for entry in recentAudit where [.substituted, .brokered, .revealed].contains(entry.outcome) && out[entry.account] == nil { out[entry.account] = entry }
@@ -955,6 +1052,13 @@ public final class SecretManager {
 // MARK: - Egress
 
 extension SecretManager {
+    /// The proxy persists reservations of limited bindings before sending, and lowers them again when a request is
+    /// refused before anything was sent (R12, AV13).
+    func connectUseAccounting(_ proxy: EgressProxy) {
+        proxy.setUseRecorder { [weak self] uses in await self?.recordUses(uses) ?? false }
+        proxy.setUseReleaser { [weak self] uses in await self?.releaseUses(uses) }
+    }
+
     func startEgress(_ configuration: SecretManagerConfiguration) async {
         egressStatus = .starting
         do {
@@ -963,7 +1067,7 @@ extension SecretManager {
             var proxyConfiguration = configuration.proxy
             if let routerOverride { proxyConfiguration.router = routerOverride(proxyConfiguration.router) }
             let proxy = EgressProxy(authority: authority, configuration: proxyConfiguration, ledger: useLedger)
-            proxy.setUseRecorder { [weak self] uses in await self?.recordUses(uses) ?? false }
+            connectUseAccounting(proxy)
             let port = try await proxy.start()
             self.proxy = proxy
             try await writeCertificates(configuration, authority: authority)
@@ -1167,18 +1271,54 @@ extension SecretManager {
     }
 
     /// Gives the proxy the current secrets, grants and (in memory) values of placeholder secrets.
+    ///
+    /// Returns once the proxy has this snapshot or a newer one, and no request it withdrew is still being written
+    /// upstream (AF15): after a revocation's refresh returns, nothing carrying the revoked value can leave.
     func refreshProxySnapshot() async {
         guard let proxy else { return }
         snapshotGeneration += 1
         let generation = snapshotGeneration
         let hidden = secrets.filter { $0.mode == .placeholder && !$0.revoked }
-        let values = await Self.readAll(vault, accounts: hidden.map { ($0.account, $0.activeValueAccount) })
-        // A newer snapshot (a revocation, a narrower scope, a new value) was built while this one read the Keychain.
-        guard generation == snapshotGeneration, self.proxy === proxy else { return }
+        var values = await Self.readAll(vault, accounts: hidden.map { ($0.account, $0.activeValueAccount) })
+        guard self.proxy === proxy else {
+            // This proxy is gone: nothing more will be published to it.
+            resumeAllSnapshotWaiters()
+            return
+        }
+        // A newer snapshot (a revocation, a narrower scope, a new value) was built while this one read the Keychain:
+        // this refresh is done once that one is published.
+        guard generation == snapshotGeneration else {
+            if publishedGeneration < generation { await withCheckedContinuation { snapshotWaiters.append((generation, $0)) } }
+            return
+        }
+        // A value too short to scan for is never substituted (AF16: one saved before the check).
+        for (account, value) in values where value.utf8.count < Self.minimumHiddenValueBytes {
+            values[account] = nil
+            shortValueAccounts.insert(account)
+        }
+        for secret in hidden where values[secret.account] != nil { shortValueAccounts.remove(secret.account) }
         let placeholderGrants = grants.filter { Placeholder.isPlaceholder($0.key) }
-        proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }),
-                                    values: values, codeRoots: codeRoots()))
+        let drain = proxy.update(EgressSnapshot(grants: placeholderGrants, secrets: Dictionary(hidden.map { ($0.account, $0) }, uniquingKeysWith: { a, _ in a }),
+                                                values: values, codeRoots: codeRoots()))
+        await proxy.drain(drain)
+        resumeSnapshotWaiters(upTo: generation)
     }
+
+    private func resumeSnapshotWaiters(upTo generation: Int) {
+        publishedGeneration = max(publishedGeneration, generation)
+        let ready = snapshotWaiters.filter { $0.generation <= publishedGeneration }
+        snapshotWaiters.removeAll { $0.generation <= publishedGeneration }
+        ready.forEach { $0.continuation.resume() }
+    }
+
+    private func resumeAllSnapshotWaiters() {
+        let all = snapshotWaiters
+        snapshotWaiters = []
+        all.forEach { $0.continuation.resume() }
+    }
+
+    /// Tests: refreshes waiting for a newer snapshot to be published.
+    var waitingSnapshotRefreshes: Int { snapshotWaiters.count }
 
     /// One proxy event → the audit (and use counts).
     func consume(_ event: EgressEvent) async {

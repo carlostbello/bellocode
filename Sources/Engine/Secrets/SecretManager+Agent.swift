@@ -111,6 +111,11 @@ extension SecretManager {
             guard let value = await Self.read(vault, account: secret.activeValueAccount) else {
                 return ClientMCPResult(text: "“\(secret.label)” is not in the Keychain any more.", isError: true)
             }
+            // A value too short to find in the response is never sent (AF16: one saved before the length check).
+            guard value.utf8.count >= Self.minimumHiddenValueBytes else {
+                shortValueAccounts.insert(secret.account)
+                return ClientMCPResult(text: Self.shortStoredValueMessage(secret.label), isError: true)
+            }
             resolved[name] = (secret, value)
         }
         // Uses count against the binding in the ledger the proxy shares, reserved before each hop is sent (R12). Every
@@ -120,6 +125,7 @@ extension SecretManager {
         var broker = SecretBroker(extraAnchors: (engine?.configuration.brokerAnchors ?? []) + extraBrokerAnchors, ledger: useLedger) { [weak self] uses in
             await self?.recordUses(uses) ?? false
         }
+        broker.releaseUses = { [weak self] uses in await self?.releaseUses(uses) }
         broker.stillAuthorized = { [weak self] in await self?.brokerStillAuthorized(resolvedState, projectDirectory: project) ?? false }
         let outcome = await broker.perform(request, secrets: resolved, sessionID: caller.sessionID.rawValue, projectDirectory: caller.projectDirectory)
         for entry in outcome.audit { await record(entry) }
