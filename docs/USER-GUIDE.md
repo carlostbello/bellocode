@@ -160,8 +160,9 @@ Submit Answer (⌥⌘↩), and Previous/Next Request (⌥⌘[ / ⌥⌘]).
 **Auto** never lets a model override its rules. It refuses access to BelloCode's and opencode's own data, the Keychain
 and the Docker socket. It always asks you about secret-looking files and credential folders, environment dumps,
 searches over hidden or ignored files, recursive searches whose tree contains a secret-looking file (policy
-`bellocode-auto-4` follows every folder grep would enter, including `.git` and `node_modules`, and asks when the shell
-would change the words grep receives, such as a brace expansion), paths outside the
+`bellocode-auto-5` follows every folder grep would enter, including `.git` and `node_modules`, reads options in every
+spelling grep accepts, abbreviations included, and asks when the shell would change the words grep receives, such as a
+brace expansion), paths outside the
 project and code roots, other projects, agent and MCP configuration, credential-bearing network requests, destructive
 git, irreversible deletes, publishing and deploying, package installs and commands it cannot analyse. Reads,
 searches, read-only commands and ordinary edits inside the project and your code roots are allowed, and so is anything

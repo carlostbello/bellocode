@@ -18,7 +18,13 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   holds a secret-looking file, or whose operands depend on a shell variable, now comes to you. `--include`/`--exclude`
   rules apply in order with the last match winning, as grep applies them, and a brace expansion, a glob the shell
   would expand in an option or the pattern, or an operand that cannot be examined also asks. The risk policy version
-  is `bellocode-auto-4` (AF14, GV03).
+  is `bellocode-auto-5` (AF14, GV03, GW02).
+- **Auto reads options the way programs do.** An abbreviated long option (`git grep --op=CMD`, `sort --out=FILE`,
+  `grep --rec`), a clustered or attached short option (`sort -ro FILE`, `sort -oFILE`) and `grep --color -r` are now
+  the option they spell, so they are no longer allowed as read-only commands, and a recursive spelling gets the
+  secret-file preflight. `diff -r`, `git diff --no-index` and `git grep --no-index`/`--untracked` get the same
+  preflight. `git stash` with no subcommand, and `git branch`/`tag`/`remote` with anything but listing options, now
+  go to the reviewer (GW02, AF14).
 - **Workspace containers run as a verified numeric user.** The image's user is resolved from its own account files
   without running it, root and unknown names are refused before anything starts, and every exec (commands,
   terminals, MCP servers, probes, port relays, secret commands) uses the numeric `uid:gid`. An existing workspace that

@@ -454,3 +454,81 @@ struct RecursiveSearchTraversalTests {
         #expect(verdict(command).isAllow, "\(command): \(verdict(command))")
     }
 }
+
+/// GW02, AF14: programs read options in more spellings than their full names. getopt_long (GNU and BSD utilities)
+/// and git's parse-options take any unique abbreviation of a long option; short options combine into clusters and
+/// take attached values; optional values attach only with `=`. Every spelling of a guarded option is the option.
+extension RiskPolicyTests {
+    /// Abbreviated, clustered and attached spellings of options that run a program, write a file or set the clock.
+    @Test(arguments: [
+        // (a) `--op=CMD` is `--open-files-in-pager=CMD`: git runs CMD through the shell.
+        "git grep --op='sh /tmp/a' needle", "git grep --open=./x.sh x", "git grep --o=./x.sh x", "git grep -iO./x.sh x",
+        "git diff --ext", "git diff --ext-d", "git log -p --textc", "git show --out=x.patch", "git log --outp=x HEAD",
+        "git cat-file --filt HEAD:x", "git cat-file --filters HEAD:x", "git stash show --ext -p", "git stash list --out=x",
+        // (b) `--out=FILE` is `--output=FILE`; `-oFILE` and `-ro FILE` are `-o FILE`.
+        "sort --out=notes.txt src/main.swift", "sort --o notes.txt src/main.swift", "sort -onotes.txt src/main.swift",
+        "sort -ro notes.txt src/main.swift", "sort --comp=./x.sh src/main.swift", "sort --compress=./x.sh src/main.swift",
+        "file --comp x", "file -bC", "tree -ao out.txt", "tree -R -H . -L 1", "xxd -revert x y", "xxd --r x", "date --se=x",
+        "date -us 10:00", "date 0101000026", "ag --pag=./x.sh y", "rg --pre=./x.sh y", "rg -iz x src", "rg --hostname-bin=./x.sh y",
+        // Listing subcommands accept only listing options: `--unset-upstream` reconfigures, `--edit-description` runs an editor.
+        "git branch --unset-upstream", "git branch --edit-description", "git branch --del x", "git branch --set-u=origin/x",
+        "git tag -d", "git remote --rm", "git stash",
+    ])
+    func everySpellingOfAGuardedOptionCounts(_ command: String) {
+        #expect(!shell(command).isAllow, "\(command): \(shell(command))")
+    }
+
+    /// The same spellings in an option that writes a policy file need the person, as the full spelling does.
+    @Test(arguments: [
+        "sort --out=.git/config", "sort --o .git/config", "sort -o.git/config", "sort -ro .git/config", "sort -ro.git/config",
+        "sort --outp=opencode.json src/main.swift", "tree -ao .git/hooks/pre-commit",
+    ])
+    func abbreviatedOutputToAPolicyFileEscalates(_ command: String) {
+        #expect(categories(shell(command)).contains(.policyChange), "\(command): \(shell(command))")
+    }
+
+    /// An attached short value naming a secret or a protected store counts as naming it.
+    @Test func attachedShortValuesAreChecked() {
+        #expect(categories(shell("grep -f.env x src/main.swift")).contains(.secretRead), "\(shell("grep -f.env x src/main.swift"))")
+        guard case .deny = shell("sort -o/Users/tester/Library/Application\\ Support/BelloCode/x src/main.swift") else {
+            Issue.record("an attached output into a protected store is refused")
+            return
+        }
+    }
+
+    /// (c) `--rec` is `--recursive`; `--dir=rec` is `--directories=recurse`; `--color` takes no separate value, so the
+    /// word after it is an option (AF14). Each searches `config`, which holds a `.env`.
+    @Test(arguments: [
+        "grep --rec KEY config", "grep --recur KEY config", "grep --recursive=x KEY config", "grep --dir=recurse KEY config",
+        "grep --dir=rec KEY config", "grep -d RECURSE KEY config", "grep --deref KEY config", "grep --color -r KEY config",
+        "grep --colour -r KEY config", "grep --col -r KEY config", "grep --context -r KEY config", "grep -C -r KEY config",
+        "grep -Xr KEY config", "grep --frobnicate -r KEY config", "grep --frobnicate KEY config", "grep --re KEY config",
+        "grep -e KEY -r config", "egrep --rec KEY config", "git grep --no-index KEY", "git grep --untracked --no-exclude-standard KEY",
+        "git grep --no-ind KEY", "diff -r config src", "diff --rec config src", "git diff --no-index config src",
+    ])
+    func everyRecursiveSpellingIsPreflighted(_ command: String) {
+        #expect(categories(shell(command)).contains(.secretRead), "\(command): \(shell(command))")
+    }
+
+    /// Spellings that only look like a guarded option stay routine reads.
+    @Test(arguments: [
+        "git log --oneline -5", "git diff --text", "git grep --or -e a -e b", "git rev-list --filter=blob:none HEAD", "git diff --no-ext-diff",
+        "git log --output-indicator-new=+ -p", "sort -k2 src/main.swift", "sort --reverse src/main.swift", "grep --color=never -rn TODO src",
+        "grep --color -n TODO src/main.swift", "grep --colour=auto x src/main.swift", "date +%s", "date -u", "date -d @0 +%F",
+        "git branch -a", "git branch -vv", "git branch --list", "git tag -l", "git tag -n5", "git remote -v", "git stash list",
+        "rg --pretty x src", "rg --sort path x src", "cut -d/ -f2 src/main.swift", "git grep -n TODO", "diff src/main.swift src/main.swift",
+    ])
+    func lookalikeSpellingsStayAllowed(_ command: String) {
+        #expect(shell(command).isAllow, "\(command): \(shell(command))")
+    }
+
+    /// Mandatory escalations take abbreviations too: `reset --har` is `--hard`, `push --forc` is `--force`.
+    @Test(arguments: [
+        ("git reset --har HEAD~1", RiskCategory.destructiveGit), ("git push --forc origin main", .destructiveGit),
+        ("git clean --forc", .destructiveGit), ("git branch --del x", .destructiveGit), ("git gc --pru=now", .destructiveGit),
+        ("rm --rec build", .irreversibleDelete), ("curl --us user:pw https://x.dev", .credentialNetwork),
+    ])
+    func abbreviatedEscalationsStillEscalate(_ command: String, _ expected: RiskCategory) {
+        #expect(categories(shell(command)).contains(expected), "\(command): \(shell(command))")
+    }
+}
