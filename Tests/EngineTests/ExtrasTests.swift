@@ -4,6 +4,7 @@ import Foundation
 import GRDB
 import MockOpenCode
 import OpenCodeKit
+import Synchronization
 import Testing
 
 @testable import Engine
@@ -730,5 +731,68 @@ struct ExtrasToolTests {
         let missing = await fixture.call("html_render", ["title": "x"], session: session.id)
         #expect(missing.isError)
         try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+/// v1.0.1 GF11: the per-instance gate hands a released slot to the next waiter (never more than `limit` in flight),
+/// and a caller that waited through a 429 is refused like any other while the instance is throttled.
+@Suite(.timeLimit(.minutes(3)))
+struct ForgeGateTests {
+    final class Clock: Sendable {
+        let value = Mutex(Date(timeIntervalSince1970: 1_000_000))
+        func now() -> Date { value.withLock { $0 } }
+        func advance(by seconds: TimeInterval) { value.withLock { $0 = $0.addingTimeInterval(seconds) } }
+    }
+
+    static func waitUntil(_ condition: () async -> Bool) async -> Bool {
+        for _ in 0..<20_000 {
+            if await condition() { return true }
+            await Task.yield()
+        }
+        return false
+    }
+
+    @Test func aReleasedSlotGoesToTheWaiterNotANewcomer() async throws {
+        let gate = ForgeGate(limit: 1)
+        try await gate.acquire("i")
+        let waiter = Task { try await gate.acquire("i") }
+        #expect(await Self.waitUntil { await gate.waiting("i") == 1 })
+        await gate.release("i")
+        #expect(await gate.inFlight("i") == 1, "the slot was handed over, not freed")
+        let newcomer = Task { try await gate.acquire("i") }
+        #expect(await Self.waitUntil { await gate.waiting("i") == 1 }, "a new caller waits for the handed-over slot")
+        try await waiter.value
+        #expect(await gate.inFlight("i") == 1)
+        await gate.release("i")
+        try await newcomer.value
+        #expect(await gate.inFlight("i") == 1)
+        await gate.release("i")
+        #expect(await gate.inFlight("i") == 0)
+    }
+
+    @Test func waitersAreRefusedWhileTheInstanceIsThrottled() async throws {
+        let clock = Clock()
+        let gate = ForgeGate(limit: 1, now: { clock.now() })
+        try await gate.acquire("i")
+        let first = Task { try await gate.acquire("i") }
+        let second = Task { try await gate.acquire("i") }
+        #expect(await Self.waitUntil { await gate.waiting("i") == 2 })
+        // The request in flight gets a 429.
+        await gate.throttle("i", after: 60)
+        await gate.release("i")
+        for waiter in [first, second] {
+            do {
+                try await waiter.value
+                Issue.record("a waiter was sent inside the throttle window")
+                await gate.release("i")  // let the next one through instead of hanging
+            } catch {
+                #expect(error is ForgeError)
+            }
+        }
+        #expect(await gate.inFlight("i") == 0, "refused waiters hold no slot")
+        #expect(await gate.waiting("i") == 0)
+        clock.advance(by: 61)
+        try await gate.acquire("i")
+        #expect(await gate.inFlight("i") == 1)
     }
 }

@@ -27,27 +27,42 @@ actor ForgeGate {
         self.now = now
     }
 
-    /// Waits for a slot; throws `rateLimited` (with the remaining wait) while the instance is throttled.
+    /// Waits for a slot; throws `rateLimited` (with the remaining wait) while the instance is throttled, including
+    /// when a 429 arrived while this caller waited (GF11).
     func acquire(_ instance: String) async throws {
-        if let until = throttledUntil[instance] {
-            let remaining = until.timeIntervalSince(now())
-            if remaining > 0 { throw ForgeError.rateLimited(retryAfter: max(1, remaining.rounded(.up))) }
-            throttledUntil[instance] = nil
+        try checkThrottle(instance)
+        guard active[instance, default: 0] >= limit else {
+            active[instance, default: 0] += 1
+            return
         }
-        if active[instance, default: 0] >= limit {
-            await withCheckedContinuation { waiters[instance, default: []].append($0) }
+        // `release` hands its slot to this waiter (the count stays), so no other caller can take it in between.
+        await withCheckedContinuation { waiters[instance, default: []].append($0) }
+        do { try checkThrottle(instance) } catch {
+            release(instance)  // passes the slot on: the next waiter re-checks too
+            throw error
         }
-        active[instance, default: 0] += 1
+    }
+
+    private func checkThrottle(_ instance: String) throws {
+        guard let until = throttledUntil[instance] else { return }
+        let remaining = until.timeIntervalSince(now())
+        if remaining > 0 { throw ForgeError.rateLimited(retryAfter: max(1, remaining.rounded(.up))) }
+        throttledUntil[instance] = nil
     }
 
     func release(_ instance: String) {
-        active[instance, default: 1] -= 1
         if var queue = waiters[instance], !queue.isEmpty {
             let next = queue.removeFirst()
-            waiters[instance] = queue
+            waiters[instance] = queue.isEmpty ? nil : queue
             next.resume()
+        } else {
+            active[instance] = max(0, active[instance, default: 0] - 1)
         }
     }
+
+    /// Requests holding a slot, and callers waiting for one (tests).
+    func inFlight(_ instance: String) -> Int { active[instance, default: 0] }
+    func waiting(_ instance: String) -> Int { waiters[instance]?.count ?? 0 }
 
     /// A 429: the instance waits `after` seconds, or a doubling backoff when GitLab gave none.
     @discardableResult
