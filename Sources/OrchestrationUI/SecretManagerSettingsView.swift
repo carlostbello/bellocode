@@ -32,6 +32,7 @@ public struct SecretManagerSettingsView: View {
         VStack(alignment: .leading, spacing: DS.Space.s10) {
             header
             if let problem = manager.metadataProblem { metadataProblem(problem) }
+            if !manager.pendingEnvironmentSessions.isEmpty { pendingEnvironments(manager.pendingEnvironmentSessions.count) }
             if state.adding { SecretEditorForm(manager: manager, state: state) }
             if manager.secrets.isEmpty && !state.adding {
                 Text("No secrets yet. Agents ask for one with a card, or add one here.")
@@ -60,6 +61,14 @@ public struct SecretManagerSettingsView: View {
         .task {
             if let selected = state.selected, state.audit.isEmpty { state.audit = await manager.audit(account: selected, limit: 20) }
         }
+    }
+
+    /// AF26: a thread's command environment could not be replaced yet (after a revocation, it may still hold the old
+    /// value): stated with glyph and words until the server acknowledges the replacement.
+    private func pendingEnvironments(_ count: Int) -> some View {
+        Label("\(count == 1 ? "One thread's" : "\(count) threads'") command environment could not be updated yet, so new commands there may still receive a secret you changed or revoked. BelloCode retries when it reconnects to its server.",
+              systemImage: "exclamationmark.triangle.fill")
+            .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.warningText).fixedSize(horizontal: false, vertical: true)
     }
 
     /// Unreadable settings (R09): stated with glyph and words; each quarantined secret can be deleted (confirmed).

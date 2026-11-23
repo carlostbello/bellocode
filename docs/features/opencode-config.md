@@ -143,8 +143,11 @@ app's support folder). The file is created 0600 (atomic, O_EXCL) in a 0700 folde
 with fstat and refuse group or other access, another owner, a link, a non-loopback or non-HTTP URL, a pid ≤ 0 or a dead
 pid. The per-launch password is handed over by the app (`CLIPasswordBroker`) on a 0600 unix socket in the per-user
 temporary folder (`confstr(_CS_DARWIN_USER_TEMP_DIR)`, name derived from the data root), only to peers with this
-user's uid and, in a bundled build, only to the bundled `bellocode-opencode` (`LOCAL_PEERPID` + `proc_pidpath`); the
-wrapper checks the server's uid and that the answer is for the pid in the file. **One server per data root** (A13): the
+user's uid that run the bundled `bellocode-opencode` (`LOCAL_PEERPID` + `proc_pidpath`). Without that helper no broker
+runs and the app refuses to start from such a bundle; admitting any process of the user is a test-only setting (v1.0.1
+AF18). The broker's answer names the server's pid and address with the password; the wrapper checks the server's uid,
+that the answer is for the pid in the file, and that the file's address is the broker's, and only then sends the
+password, to the broker's address (AF02). **One server per data root** (A13): the
 app holds an `flock` lease (`<data>/run/opencode.lock`) from before it launches its server until that server has exited;
 a standalone command takes the same lease and keeps it across `execve` while its private server runs. A command that
 finds the lease held but no published server is refused ("starting or stopping, or another command"), and the app waits

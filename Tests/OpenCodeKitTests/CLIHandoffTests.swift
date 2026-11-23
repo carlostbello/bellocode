@@ -109,23 +109,75 @@ struct CLIHandoffTests {
 
     // MARK: Password broker (A03)
 
+    static let served = URL(string: "http://127.0.0.1:50123")!
+
     @Test func thePasswordComesFromTheAppsSocketToAllowedPeersOnly() throws {
         defer { cleanUp() }
-        let broker = try CLIPasswordBroker(directories: directories, pid: 4242, password: "per-launch-secret", allowedPeers: nil)
-        #expect(try CLIPasswordClient.password(directories: directories, pid: 4242) == "per-launch-secret")
+        let broker = try CLIPasswordBroker(directories: directories, pid: 4242, url: Self.served, password: "per-launch-secret", peers: .anyProcessOfThisUser)
+        let handed = try CLIPasswordClient.server(directories: directories, pid: 4242)
+        #expect(handed.password == "per-launch-secret" && handed.url == Self.served)
         // A socket is not a file: reading it as one yields nothing.
         #expect((try? Data(contentsOf: URL(fileURLWithPath: broker.socketPath))) == nil)
         var info = stat()
         #expect(lstat(broker.socketPath, &info) == 0 && info.st_mode & 0o777 == 0o600)
         // Another server's password is never accepted for this pid.
-        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.password(directories: directories, pid: 1) }
+        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.server(directories: directories, pid: 1) }
         broker.stop()
         #expect(lstat(broker.socketPath, &info) != 0)
 
         // Only the bundled helper may ask when one is configured: this test process is not it.
-        let strict = try CLIPasswordBroker(directories: directories, pid: 4242, password: "per-launch-secret", allowedPeers: ["/Applications/BelloCode.app/Contents/Helpers/bellocode-opencode"])
-        defer { strict.stop() }
-        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.password(directories: directories, pid: 4242) }
+        let strict = try CLIPasswordBroker(directories: directories, pid: 4242, url: Self.served, password: "per-launch-secret",
+                                           peers: .executables(["/Applications/BelloCode.app/Contents/Helpers/bellocode-opencode"]))
+        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.server(directories: directories, pid: 4242) }
+        strict.stop()
+        // An empty allowlist admits nobody.
+        let none = try CLIPasswordBroker(directories: directories, pid: 4242, url: Self.served, password: "per-launch-secret", peers: .executables([]))
+        defer { none.stop() }
+        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.server(directories: directories, pid: 4242) }
+    }
+
+    /// AF02: the password and the address come from the same authority. A connection file whose address was changed
+    /// while the genuine server runs is not followed: the password is never sent to the other listener.
+    @Test func aConnectionFileNamingAnotherAddressIsNotFollowed() throws {
+        defer { cleanUp() }
+        let cli = try #require(try OpenCodeDataLock.tryAcquire(directories))  // stands for the app's lease on the data
+        defer { cli.release() }
+        let broker = try CLIPasswordBroker(directories: directories, pid: getpid(), url: Self.served, password: "per-launch-secret", peers: .anyProcessOfThisUser)
+        defer { broker.stop() }
+        try CLIConnectionFile(url: URL(string: "http://127.0.0.1:50999")!, pid: getpid(), version: "2.3.2").write(to: directories.connectionFile)
+        let (planted, _) = OpenCodeCLI.discover(directories)
+        guard case .failure(let refusal) = planted else { Issue.record("followed a planted address: \(planted)"); return }
+        #expect(refusal.message.contains("different address"))
+        // The genuine file: the broker's address is used.
+        try CLIConnectionFile(url: Self.served, pid: getpid(), version: "2.3.2").write(to: directories.connectionFile)
+        let (genuine, _) = OpenCodeCLI.discover(directories)
+        #expect(try genuine.get() == .running(url: Self.served, password: "per-launch-secret"))
+    }
+
+    /// AF18: a bundle without its `bellocode-opencode` never runs a broker that admits any process of this user.
+    @Test func withoutTheBundledHelperNoProcessGetsThePassword() async throws {
+        defer { cleanUp() }
+        let helpers = root.appending(path: "Helpers", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+        let launcher = FakeLauncher(pidBase: getpid())
+        var configuration = ServerConfiguration(
+            executableURL: URL(fileURLWithPath: "/usr/bin/true"), dataRoot: root, helpersDirectory: helpers,
+            startTimeout: .seconds(20), stopGracePeriod: .seconds(3),
+            restartBackoff: BackoffPolicy(initial: .milliseconds(200), maximum: .seconds(30), jitter: 0.2), maxConsecutiveFailures: 2,
+            healthyAfter: .seconds(30))
+        #expect(configuration.cliPeers == nil, "no helper: no peer policy at all")
+        let helper = helpers.appending(path: "bellocode-opencode")
+        FileManager.default.createFile(atPath: helper.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o644])
+        #expect(configuration.cliPeers == nil, "a helper that is not executable is not one")
+        try FileManager.default.removeItem(at: helper)
+        let supervisor = ServerSupervisor(configuration: configuration, launcher: launcher, probe: FakeProbe(launcher: launcher))
+        await supervisor.start()
+        _ = try await within(.seconds(10)) { try await supervisor.awaitReady() }
+        #expect(throws: CLIPasswordClient.FetchError.self) { try CLIPasswordClient.server(directories: directories, pid: getpid()) }
+        guard case .failure = OpenCodeCLI.discover(directories).0 else { Issue.record("the CLI got the password without its helper"); return }
+        await supervisor.stop()
+        configuration.allowsAnyCLIPeer = true
+        #expect(configuration.cliPeers == .anyProcessOfThisUser, "only by the explicit test-only switch")
     }
 
     // MARK: One server per data root (A13)
@@ -148,11 +200,12 @@ struct CLIHandoffTests {
         defer { cleanUp() }
         let cli = try #require(try OpenCodeDataLock.tryAcquire(directories))
         let launcher = FakeLauncher(pidBase: getpid())
-        let configuration = ServerConfiguration(
+        var configuration = ServerConfiguration(
             executableURL: URL(fileURLWithPath: "/usr/bin/true"), dataRoot: root, helpersDirectory: URL(fileURLWithPath: "/opt/helpers"),
             startTimeout: .seconds(20), stopGracePeriod: .seconds(3),
             restartBackoff: BackoffPolicy(initial: .milliseconds(200), maximum: .seconds(30), jitter: 0.2), maxConsecutiveFailures: 2,
             healthyAfter: .seconds(30))
+        configuration.allowsAnyCLIPeer = true  // this test process stands for bellocode-opencode
         let supervisor = ServerSupervisor(configuration: configuration, launcher: launcher, probe: FakeProbe(launcher: launcher))
         await supervisor.start()
         let waiting = try await within(.seconds(10)) {

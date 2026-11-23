@@ -94,6 +94,10 @@ public final class SecretManager {
     public private(set) var metadataProblem: String?
     /// Accounts whose metadata row exists but cannot be read: quarantined (no use of any kind) until deleted.
     public private(set) var quarantinedAccounts: Set<String> = []
+    /// Threads whose command environment on the server still has to be replaced (the request failed or could not be
+    /// sent, typically while cleaning up after a revocation). Kept independently of their remaining grants, retried at
+    /// every reconnect until the server acknowledges it, and shown in Settings ▸ Secrets meanwhile (AF26).
+    public private(set) var pendingEnvironmentSessions: Set<String> = []
 
     nonisolated public static let authorityService = "app.bellocode.egress-ca"
     nonisolated static let authorityAccount = "authority-key"
@@ -120,6 +124,10 @@ public final class SecretManager {
     @ObservationIgnored private var savingAccounts: Set<String> = []
     /// Labels being saved for the first time (lowercased), so two saves never make two secrets with one label.
     @ObservationIgnored private var savingLabels: Set<String> = []
+    /// Accounts with a row write in progress, each with the writers waiting for it (AF03): one account's row writes run
+    /// one at a time, each built from the state the previous one left, so the last durable row is the latest state
+    /// (a use count never writes back a policy a concurrent revocation replaced).
+    @ObservationIgnored private var rowWriters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Increases with every proxy snapshot built; an older one finishing late is never applied over a newer one.
     @ObservationIgnored private var snapshotGeneration = 0
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
@@ -301,10 +309,16 @@ public final class SecretManager {
     func grantFits(_ grant: PlaceholderGrant, codeRoots roots: [String]) -> Bool {
         guard let secret = secret(grant.account), !secret.revoked,
               secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: roots) else { return false }
+        return Self.grantKindFits(grant, secret)
+    }
+
+    /// Whether the grant is of the kind the secret's mode delivers: a placeholder for placeholder mode, a visibility
+    /// grant for visible mode, none for brokered. A thread given a placeholder never receives the value (AF04).
+    nonisolated static func grantKindFits(_ grant: PlaceholderGrant, _ secret: ManagedSecret) -> Bool {
         switch secret.mode {
-        case .placeholder: return Placeholder.isPlaceholder(grant.placeholder)
-        case .visible: return grant.placeholder.hasPrefix("visible_")
-        case .brokered: return false
+        case .placeholder: Placeholder.isPlaceholder(grant.placeholder)
+        case .visible: grant.placeholder.hasPrefix("visible_")
+        case .brokered: false
         }
     }
 
@@ -420,12 +434,16 @@ public final class SecretManager {
         }
         let saved: ManagedSecret
         if let existing = legacy.account(forLabel: trimmed) {
-            guard self.secret(existing) != nil else { throw ExtrasError("“\(trimmed)” is still being set up. Try again in a moment.") }
+            guard let previous = self.secret(existing) else { throw ExtrasError("“\(trimmed)” is still being set up. Try again in a moment.") }
             // A new value under an existing label is a rotation: outstanding command references and approvals end (R03).
             saved = try await replaceValue(of: existing, with: value, label: trimmed) { secret in
                 apply(&secret)
                 secret.rotated = Self.nextRotation(after: secret.rotated, now: now)
             }
+            // A new mode, name, confirmation or scope retires the grants threads hold under the old policy (AF04);
+            // threads keeping theirs get the new value, as after a rotation.
+            await retireGrants(from: previous, to: saved)
+            if saved.mode == .visible { await reapplyEnvironments(account: saved.account) }
         } else {
             saved = try await createFirstValue(account: Self.newAccount(), label: trimmed, value: value, apply: apply)
         }
@@ -495,7 +513,13 @@ public final class SecretManager {
             if let label, label != current.label {
                 try await legacy.recordLabel(account: account, label: label)
             }
-            try await mutate(account) { secret in
+            // The value is checked against the mode it is activated under, which a concurrent mode change may have set
+            // after this save was validated (AF16).
+            try await mutate(account, require: { latest in
+                var after = latest
+                change(&after)
+                if after.mode != .visible, value.utf8.count < Self.minimumHiddenValueBytes { throw ExtrasError(Self.shortValueMessage) }
+            }) { secret in
                 change(&secret)
                 if let label { secret.label = label }
                 secret.retiredValueAccounts = ((secret.retiredValueAccounts ?? []) + [secret.activeValueAccount]).filter { $0 != valueAccount }
@@ -523,9 +547,14 @@ public final class SecretManager {
     }
 
     /// Applies `change` to the secret's row and writes it; the in-memory record gets the same change applied to its
-    /// state after the write (so changes made meanwhile, such as use counts, are kept).
-    private func mutate(_ account: String, _ change: (inout ManagedSecret) -> Void) async throws {
+    /// state after the write. Row writes of one account are serialized (AF03), so each starts from the state the
+    /// previous one left and none writes back a policy, revocation or count another one replaced. `require` is checked
+    /// on that state before anything is written (a change bound to what it was validated against).
+    private func mutate(_ account: String, require: ((ManagedSecret) throws -> Void)? = nil, _ change: (inout ManagedSecret) -> Void) async throws {
+        await acquireRow(account)
+        defer { releaseRow(account) }
         guard var next = secret(account) else { throw ExtrasError("That secret no longer exists.") }
+        try require?(next)
         change(&next)
         try await store.saveManagedSecret(next)
         if let index = secrets.firstIndex(where: { $0.account == account }) {
@@ -533,6 +562,29 @@ public final class SecretManager {
             change(&latest)
             secrets[index] = latest
         }
+    }
+
+    /// Waits until no other row write of `account` runs, then holds it (released by `releaseRow`, first come first served).
+    private func acquireRow(_ account: String) async {
+        guard rowWriters[account] != nil else {
+            rowWriters[account] = []
+            return
+        }
+        await withCheckedContinuation { rowWriters[account, default: []].append($0) }
+    }
+
+    /// Tests: writers waiting for the account's row.
+    func waitingRowWriters(_ account: String) -> Int { rowWriters[account]?.count ?? 0 }
+
+    /// Hands the account's row to the next waiting writer, or frees it.
+    private func releaseRow(_ account: String) {
+        guard var waiters = rowWriters[account], !waiters.isEmpty else {
+            rowWriters[account] = nil
+            return
+        }
+        let next = waiters.removeFirst()
+        rowWriters[account] = waiters
+        next.resume()
     }
 
     /// Saves a value from the legacy card ("Approved command" without a managed choice): a new commands-only secret, or
@@ -554,6 +606,17 @@ public final class SecretManager {
     public func update(_ changed: ManagedSecret, confirmVisible: Bool = false) async throws {
         guard let current = secret(changed.account) else { throw ExtrasError("That secret no longer exists.") }
         try validate(mode: changed.mode, bindings: changed.bindings, value: nil, confirmVisible: confirmVisible || current.visibleConfirmed && changed.mode == .visible)
+        // Entering a hidden mode: the active value must be long enough for the response scanner to find it (AF16),
+        // checked on the very value this edit commits with (a rotation meanwhile makes the edit fail, not slip through).
+        var checkedValue: String?
+        if changed.mode != current.mode, changed.mode != .visible {
+            let valueAccount = current.activeValueAccount
+            guard let value = await Self.read(vault, account: valueAccount) else {
+                throw ExtrasError("BelloCode could not read “\(current.label)” from the Keychain, so its mode was not changed.")
+            }
+            try validate(mode: changed.mode, bindings: changed.bindings, value: value, confirmVisible: false)
+            checkedValue = valueAccount
+        }
         guard ManagedSecret.isValidHandle(changed.name) else { throw ExtrasError("“\(changed.name)” cannot be a name.") }
         if let other = secret(named: changed.name), other.account != changed.account { throw ExtrasError("Another secret is already named \(changed.name).") }
         // Only the editable settings come from `changed` (a Settings copy may be stale): use counts, rotation,
@@ -567,17 +630,25 @@ public final class SecretManager {
             secret.operation = changed.operation
             secret.visibleConfirmed = visibleConfirmed
         }
-        var next = current
-        edit(&next)
-        try await mutate(changed.account, edit)
-        if current.mode != next.mode || current.name != next.name {
+        try await mutate(changed.account, require: { latest in
+            if let checkedValue, latest.activeValueAccount != checkedValue {
+                throw ExtrasError("“\(latest.label)” got a new value while its mode was being changed. Change the mode again.")
+            }
+        }, edit)
+        guard let next = secret(changed.account) else { return }
+        await retireGrants(from: current, to: next)
+        await refreshProxySnapshot()
+    }
+
+    /// After a policy change: a new mode, name or withdrawn confirmation ends every grant of the old policy (AF04); a
+    /// narrower scope (R13) ends those of projects it no longer admits. The affected threads' environments are replaced.
+    private func retireGrants(from previous: ManagedSecret, to next: ManagedSecret) async {
+        if previous.mode != next.mode || previous.name != next.name || (previous.visibleConfirmed && !next.visibleConfirmed) {
             await dropGrants(account: next.account)
-        } else if current.scope != next.scope {
-            // Narrowed scope (R13): threads of projects it no longer admits lose their placeholder or visible value now.
+        } else if previous.scope != next.scope {
             let roots = codeRoots()
             await dropGrants(account: next.account) { !next.scope.admits(projectDirectory: $0.projectDirectory, codeRoots: roots) }
         }
-        await refreshProxySnapshot()
     }
 
     /// Replaces the value; placeholders stay the same (programs and files keep working).
@@ -597,18 +668,16 @@ public final class SecretManager {
 
     /// Stops every use at once (placeholders refused, brokered calls refused); the value stays until deleted.
     public func revoke(account: String) async throws {
-        guard var secret = secret(account) else { return }
-        secret.revoked = true
-        try await persist(secret)
+        guard secret(account) != nil else { return }
+        try await mutate(account) { $0.revoked = true }
         await dropGrants(account: account)
         await record(SecretAuditEntry(account: account, at: clock.now(), destination: "", outcome: .revoked, detail: "Revoked in Settings"))
         await refreshProxySnapshot()
     }
 
     public func restore(account: String) async throws {
-        guard var secret = secret(account) else { return }
-        secret.revoked = false
-        try await persist(secret)
+        guard secret(account) != nil else { return }
+        try await mutate(account) { $0.revoked = false }
         await refreshProxySnapshot()
     }
 
@@ -649,10 +718,13 @@ public final class SecretManager {
         for binding in bindings {
             if let problem = binding.validationProblems().first { throw ExtrasError("\(binding.origin): \(problem)") }
         }
-        if mode != .visible, let value, value.utf8.count < 8 {
-            throw ExtrasError("Values shorter than 8 bytes cannot be detected reliably in responses; such a value can only be Visible.")
-        }
+        if mode != .visible, let value, value.utf8.count < Self.minimumHiddenValueBytes { throw ExtrasError(Self.shortValueMessage) }
     }
+
+    /// The shortest value a hidden mode accepts: the response scanner's base64 patterns need this many bytes.
+    nonisolated static let minimumHiddenValueBytes = 8
+    nonisolated static let shortValueMessage = "Values shorter than 8 bytes cannot be detected reliably in responses; such a value can only be Visible."
+
 
     private func persist(_ secret: ManagedSecret) async throws {
         try await store.saveManagedSecret(secret)
@@ -682,10 +754,21 @@ public final class SecretManager {
         guard secret.scope.admits(projectDirectory: projectDirectory, codeRoots: codeRoots()) else {
             throw ExtrasError("“\(secret.label)” is not available to this project (its scope is \(secret.scope.title)).")
         }
-        if let existing = grants.values.first(where: { $0.account == account && $0.sessionID == sessionID.rawValue }) { return existing }
+        // Only a grant of the kind the mode delivers is reused; one left from another mode goes (AF04).
+        if let existing = grants.values.first(where: { $0.account == account && $0.sessionID == sessionID.rawValue && Self.grantKindFits($0, secret) }) {
+            return existing
+        }
+        await dropGrants(account: account) { $0.sessionID == sessionID.rawValue }
         let marker = secret.mode == .placeholder ? Placeholder.make() : "visible_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let grant = PlaceholderGrant(placeholder: marker, account: account, sessionID: sessionID.rawValue, projectDirectory: projectDirectory, created: clock.now())
         try await store.savePlaceholderGrant(grant)
+        // The policy may have changed while the grant was written (its old grants were dropped without this one): a
+        // grant that no longer fits is withdrawn, never kept (AF04).
+        guard let now = self.secret(account), !now.revoked, Self.grantKindFits(grant, now),
+              now.scope.admits(projectDirectory: projectDirectory, codeRoots: codeRoots()) else {
+            do { try await store.deletePlaceholderGrants(placeholders: [marker]) } catch { grantDeletionFailed(error) }
+            throw ExtrasError("“\(secret.label)” changed while it was being given to this thread. Ask for it again.")
+        }
         grants[marker] = grant
         await refreshProxySnapshot()
         await applyEnvironment(sessionID.rawValue)
@@ -722,6 +805,7 @@ public final class SecretManager {
     /// Threads deleted: their placeholders go.
     func removed(sessions: [SessionID]) async {
         let ids = Set(sessions.map(\.rawValue))
+        pendingEnvironmentSessions.subtract(ids)
         guard grants.values.contains(where: { ids.contains($0.sessionID) }) else { return }
         grants = grants.filter { !ids.contains($0.value.sessionID) }
         try? await store.deletePlaceholderGrants(sessionIDs: Array(ids))
@@ -749,7 +833,7 @@ public final class SecretManager {
         var variables: [String: String] = [:]
         let roots = codeRoots()
         for grant in grants.values where grant.sessionID == session {
-            guard let secret = secret(grant.account), !secret.revoked,
+            guard let secret = secret(grant.account), !secret.revoked, Self.grantKindFits(grant, secret),
                   secret.scope.admits(projectDirectory: grant.projectDirectory, codeRoots: roots) else { continue }
             switch secret.mode {
             case .placeholder: variables[secret.name] = grant.placeholder
@@ -766,12 +850,20 @@ public final class SecretManager {
         return variables
     }
 
+    /// Replaces the thread's command environment on the server. Until the server acknowledges it the thread stays in
+    /// `pendingEnvironmentSessions` (with or without grants left), retried at the next reconnect (AF26).
     func applyEnvironment(_ session: String) async {
-        guard engine?.configuration.containers != nil, let client = try? await engine?.core.currentClient() else { return }
+        guard let engine, engine.configuration.containers != nil else { return }
+        guard let client = try? await engine.core.currentClient() else {
+            pendingEnvironmentSessions.insert(session)
+            return
+        }
         let variables = await environmentVariables(for: session)
         do {
             try await client.setSessionEnvironment(sessionID: session, variables: variables)
+            pendingEnvironmentSessions.remove(session)
         } catch {
+            pendingEnvironmentSessions.insert(session)
             log.error("session environment not applied: \(String(describing: type(of: error)), privacy: .public)")
         }
     }
@@ -780,9 +872,12 @@ public final class SecretManager {
         for session in Set(grants.values.filter { $0.account == account }.map(\.sessionID)) { await applyEnvironment(session) }
     }
 
-    /// After a reconnect (the server may have restarted, losing session environments).
+    /// After a reconnect (the server may have restarted, losing session environments): threads with grants, and first
+    /// those whose replacement is still unacknowledged, even if they have no grant left (AF26).
     func reapplyAllEnvironments() async {
-        for session in Set(grants.values.map(\.sessionID)).sorted().prefix(500) { await applyEnvironment(session) }
+        let pending = pendingEnvironmentSessions
+        let granted = Set(grants.values.map(\.sessionID)).subtracting(pending)
+        for session in (pending.sorted() + granted.sorted()).prefix(500) { await applyEnvironment(session) }
     }
 
     /// Snapshot harness only: shows the proxy as running (mock mode has no containers) so the UI's placeholder states
@@ -828,14 +923,24 @@ public final class SecretManager {
 
     /// Persists the ledger's counts for these uses (idempotent: counts only rise to the ledger's). False when a count
     /// could not be stored, which refuses a request on a limited binding (R12).
+    ///
+    /// Counts go through the account's serialized row writes (AF03): applied to the row as it is when this write's turn
+    /// comes, so a count never writes back the policy a concurrent revocation or edit replaced.
     func recordUses(_ uses: [SubstitutionUse]) async -> Bool {
         var stored = true
+        let ledger = useLedger
         for account in Set(uses.map(\.account)) {
-            guard let index = secrets.firstIndex(where: { $0.account == account }) else { stored = false; continue }
-            for use in uses where use.account == account {
-                secrets[index].uses[use.bindingID] = max(secrets[index].uses[use.bindingID] ?? 0, useLedger.count(account: account, bindingID: use.bindingID))
+            guard secret(account) != nil else { stored = false; continue }
+            let bindings = Set(uses.filter { $0.account == account }.map(\.bindingID))
+            do {
+                try await mutate(account) { secret in
+                    for binding in bindings {
+                        secret.uses[binding] = max(secret.uses[binding] ?? 0, ledger.count(account: account, bindingID: binding))
+                    }
+                }
+            } catch {
+                stored = false
             }
-            do { try await store.saveManagedSecret(secrets[index]) } catch { stored = false }
         }
         return stored
     }

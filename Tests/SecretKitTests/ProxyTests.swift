@@ -41,7 +41,7 @@ struct ProxyTests {
         }
     }
 
-    static func makeFixture(binding: SecretBinding? = nil) async throws -> Fixture {
+    static func makeFixture(binding: SecretBinding? = nil, router: (any EgressRouter)? = nil) async throws -> Fixture {
         let proxyCA = try CertificateAuthority(commonName: "Test egress CA")
         let serverCA = try CertificateAuthority(commonName: "Test servers CA")
         let bound = try await EchoServer(name: "bound.test", authority: serverCA)
@@ -50,7 +50,7 @@ struct ProxyTests {
             extraAnchors: [serverCA.certificateDER],
             resolverOverrides: ["bound.test": HostPort(host: "127.0.0.1", port: Int(bound.port)),
                                 "attacker.test": HostPort(host: "127.0.0.1", port: Int(attacker.port))],
-            inspectedResponseTime: .seconds(3)))
+            inspectedResponseTime: .seconds(3), router: router ?? InternetRouter()))
         let proxyPort = try await proxy.start()
         let token = UUID().uuidString
         proxy.setScopes([EgressScope(id: "test", token: token) { $0 == "/project" }])
@@ -87,6 +87,24 @@ struct ProxyTests {
             if ["base64", "hex", "zstd"].contains(encoding) { #expect(status == 502, "\(encoding) should be blocked") }
         }
         #expect(!Self.leaked(f.attacker.receivedBytes), "the attacker received the canary")
+    }
+
+    /// AF15: the owner revokes the secret while the upstream connection is still being set up (after the substitution
+    /// was decided). The revocation wins: the request is refused and the retained value is never sent.
+    @Test func aRevocationDuringConnectionSetupRefusesTheRetainedValue() async throws {
+        let router = HeldRouter()
+        let f = try await Self.makeFixture(router: router)
+        defer { router.release(); f.stop() }
+        let request = Task { try await f.client.get("https://bound.test/v1/echo", headers: ["Authorization": "Bearer \(f.placeholder)"]) }
+        await router.waitUntilHeld()
+        // What SecretManager publishes for a revoked secret: neither it nor its grants are in the snapshot any more.
+        f.proxy.update(EgressSnapshot())
+        router.release()
+        let (status, headers, body) = try await request.value
+        #expect(status == 403, "sent after the revocation")
+        #expect(!Self.leaked(f.bound.receivedBytes), "the retained value reached the destination after the revocation")
+        #expect(f.proxy.ledger.count(account: f.secret.account, bindingID: f.secret.bindings[0].id) == 0, "nothing sent: the use is given back")
+        f.expectClean(status, headers, body)
     }
 
     @Test func unboundAndAttackerPathsAreRefused() async throws {
@@ -230,5 +248,55 @@ struct RoutingTests {
         }
         #expect(!ProxyTests.leaked(devServer.receivedBytes), "the routed server never received the value")
         #expect(ByteSearch.count(bound.receivedBytes, Data(ProxyTests.canary.utf8)) == 2, "both clients' requests were substituted")
+    }
+}
+
+/// Holds every route decision (the start of an upstream connection) until released.
+final class HeldRouter: EgressRouter, Sendable {
+    private struct State {
+        var held = false
+        var heldWaiters: [CheckedContinuation<Void, Never>] = []
+        var released = false
+        var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    func route(scheme: String, destination: HostPort, scope: String) async -> EgressRoute {
+        let waiting = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.held = true
+            defer { state.heldWaiters = [] }
+            return state.heldWaiters
+        }
+        waiting.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            let go = state.withLock { state -> Bool in
+                if state.released { return true }
+                state.releaseWaiters.append(continuation)
+                return false
+            }
+            if go { continuation.resume() }
+        }
+        return .internet
+    }
+
+    func waitUntilHeld() async {
+        await withCheckedContinuation { continuation in
+            let now = state.withLock { state -> Bool in
+                if state.held { return true }
+                state.heldWaiters.append(continuation)
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.released = true
+            defer { state.releaseWaiters = [] }
+            return state.releaseWaiters
+        }
+        waiters.forEach { $0.resume() }
     }
 }

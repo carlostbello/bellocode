@@ -26,7 +26,8 @@ program, `security` included, prompts the person). Never in the store, a log, pr
 offers Placeholder / Brokered / Visible / Approved command with the binding fields, "This project only", the claim and
 its popover; the agent is woken with a handle or placeholder, never the value (unless Visible). Placeholder mode is
 shown only while the proxy runs (never silently downgraded). Values shorter than 8 bytes can only be Visible (too short
-to detect in responses). Secrets saved before modes appear as "Commands only". `bellocode_app_list_secrets` lists
+to detect in responses), whether saved, rotated or moved to a hidden mode in Settings; the check is bound to the value
+the change commits with (v1.0.1 AF16). Secrets saved before modes appear as "Commands only". `bellocode_app_list_secrets` lists
 handles and this thread's placeholders. Rotate replaces the value and keeps placeholders; Revoke stops every use at
 once (placeholders become unknown to the proxy); Delete removes the Keychain item and every record (confirmed).
 
@@ -38,6 +39,14 @@ revisions include the value account, and every reader (approved commands, refere
 environment, the proxy snapshot, the brokered tool) reads the account of the revision it was authorized at. At launch,
 an unfinished first save is discarded (shown), orphaned new or retired values are removed, and grants that no longer
 fit their secret are dropped. Settings edits patch only the editable fields onto the current record.
+
+**Changes stay in force (v1.0.1 AF03, AF04, AF15, AF26).** One secret's row writes run one at a time, each from the state
+the previous one left; use counts go through the same path, so a count never writes back a policy a revocation
+replaced. A new mode, name or withdrawn confirmation (from Settings or a save under the same label from a card) retires
+every thread's grant of the old policy, and delivery requires the grant kind the mode gives (a placeholder grant never
+yields the value). The proxy substitutes again against the current snapshot at the handoff to the send, so a revocation
+published while the connection opens refuses the request. A thread whose environment replacement fails stays pending
+(shown in Settings ▸ Secrets) and is retried at every reconnect, with or without grants left.
 
 **Built-in brokered uses (unchanged guarantees).** The GitLab token and git's HTTPS credentials already never reach the
 agent: GitLab REST from the app, git through `bellocode-exec --git-credential` answering only BelloCode's git. They are

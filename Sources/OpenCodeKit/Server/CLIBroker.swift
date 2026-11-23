@@ -12,12 +12,24 @@ import Synchronization
 ///   the data root, so both sides find it without reading anything an agent could write;
 /// - the socket is 0600; a file tool cannot read a socket, and connecting needs code, which the agent only runs in
 ///   containers that do not mount this folder;
-/// - each connection's peer must have this user's uid, and in a bundled build be the bundled `bellocode-opencode`
-///   (its executable path, `LOCAL_PEERPID` + `proc_pidpath`); the client checks the server's uid in turn.
+/// - each connection's peer must have this user's uid and be the bundled `bellocode-opencode` (its executable path,
+///   `LOCAL_PEERPID` + `proc_pidpath`); admitting any process of this user is an explicit test-only choice (AF18);
+///   the client checks the server's uid in turn.
+///
+/// The reply names the server's pid and address together with its password, so the client sends the password only to
+/// the address the app vouches for; the connection file is a discovery hint that must agree with it (AF02).
 public final class CLIPasswordBroker: Sendable {
+    /// Which processes of this user may fetch the password.
+    public enum Peers: Sendable, Equatable {
+        /// Only these executables (canonical paths): the bundled `bellocode-opencode`.
+        case executables(Set<String>)
+        /// Any process of this user. Tests only: never what a bundled app uses (AF18).
+        case anyProcessOfThisUser
+    }
+
     public let socketPath: String
     private let reply: Data
-    private let allowedPeers: Set<String>?
+    private let peers: Peers
     private let listener: Int32
     private let queue = DispatchQueue(label: "dev.bellocode.cli-password")
     private let source: any DispatchSourceRead
@@ -30,13 +42,12 @@ public final class CLIPasswordBroker: Sendable {
         public var description: String { switch self { case .socket(let why): "CLI password socket: \(why)" } }
     }
 
-    /// Starts listening for `directories`. `allowedPeers`: canonical executable paths allowed to connect (nil: any
-    /// process of this user).
-    public init(directories: OpenCodeDirectories, pid: Int32, password: String, allowedPeers: Set<String>?) throws(BrokerError) {
+    /// Starts listening for `directories`: hands `password` of the server with `pid` listening at `url` to `peers`.
+    public init(directories: OpenCodeDirectories, pid: Int32, url: URL, password: String, peers: Peers) throws(BrokerError) {
         guard let path = Self.socketPath(for: directories) else { throw .socket("no per-user temporary folder") }
         socketPath = path
-        self.allowedPeers = allowedPeers
-        var encoded = (try? JSONSerialization.data(withJSONObject: ["pid": Int(pid), "password": password])) ?? Data()
+        self.peers = peers
+        var encoded = (try? JSONSerialization.data(withJSONObject: ["pid": Int(pid), "url": url.absoluteString, "password": password])) ?? Data()
         encoded.append(0x0A)
         reply = encoded
         // A leftover socket (a crash) or a file planted at the path: remove it if it is ours, never follow a link.
@@ -102,16 +113,21 @@ public final class CLIPasswordBroker: Sendable {
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var noSigpipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, socklen_t(MemoryLayout<Int32>.size))
-        guard Self.peerAllowed(fd, allowedPeers: allowedPeers) else { return }
+        guard Self.peerAllowed(fd, peers: peers) else { return }
         _ = reply.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
     }
 
-    /// The peer has this user's uid and, when `allowedPeers` is set, runs one of those executables.
-    static func peerAllowed(_ fd: Int32, allowedPeers: Set<String>?) -> Bool {
+    /// The peer has this user's uid and runs one of the allowed executables (any, only with `.anyProcessOfThisUser`).
+    static func peerAllowed(_ fd: Int32, peers: Peers) -> Bool {
         var uid: uid_t = 0
         var gid: gid_t = 0
         guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { return false }
-        guard let allowedPeers else { return true }
+        let allowedPeers: Set<String>
+        switch peers {
+        case .anyProcessOfThisUser: return true
+        case .executables(let paths): allowedPeers = paths
+        }
+        guard !allowedPeers.isEmpty else { return false }
         var peer: pid_t = 0
         var length = socklen_t(MemoryLayout<pid_t>.size)
         guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peer, &length) == 0, peer > 0,
@@ -170,8 +186,8 @@ public enum CLIPasswordClient {
         public var description: String { switch self { case .unavailable(let why): "BelloCode did not hand over its server's password (\(why))" } }
     }
 
-    /// The password of the server with `pid`, from the running app.
-    public static func password(directories: OpenCodeDirectories, pid: Int32) throws(FetchError) -> String {
+    /// The address and password of the server with `pid`, from the running app (one authority for both, AF02).
+    public static func server(directories: OpenCodeDirectories, pid: Int32) throws(FetchError) -> (url: URL, password: String) {
         guard let path = CLIPasswordBroker.socketPath(for: directories), var address = CLIPasswordBroker.unixAddress(path) else {
             throw .unavailable("no socket path")
         }
@@ -198,10 +214,14 @@ public enum CLIPasswordClient {
             data.append(contentsOf: chunk[0..<count])
         }
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let password = object["password"] as? String, !password.isEmpty, let served = object["pid"] as? Int
+              let password = object["password"] as? String, !password.isEmpty, let served = object["pid"] as? Int,
+              let address = object["url"] as? String, let url = URL(string: address)
         else { throw .unavailable("refused") }
         guard served == Int(pid) else { throw .unavailable("it serves another server") }
-        return password
+        guard url.scheme == "http", let host = url.host(), CLIConnectionFile.loopbackHosts.contains(host) else {
+            throw .unavailable("it named an address that is not on this Mac's loopback")
+        }
+        return (url, password)
     }
 }
 

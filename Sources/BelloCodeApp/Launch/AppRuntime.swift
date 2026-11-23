@@ -61,7 +61,7 @@ final class AppRuntime {
             switch self {
             case .developmentOnly(let what): "\(what) is available only in development builds."
             case .incompleteBundle(let missing):
-                "The app bundle is incomplete (missing \(missing.joined(separator: ", "))). BelloCode runs commands only through its bundled server and container helper, so it does not start without them. Reinstall BelloCode."
+                "The app bundle is incomplete (missing \(missing.joined(separator: ", "))). BelloCode runs commands only through its bundled server and helpers, so it does not start without them. Reinstall BelloCode."
             }
         }
     }
@@ -91,8 +91,9 @@ final class AppRuntime {
             defaults: .standard, autosaveSuffix: "", mockServer: nil, temporaryDirectory: nil)
     }
 
-    /// The shipped app runs only the bundled, supervised server with its container helper: a bundle missing either
-    /// does not start (never a host fallback).
+    /// The shipped app runs only the bundled, supervised server with its container helper and command-line helper: a
+    /// bundle missing any of them does not start (never a host fallback, never a password broker that cannot tell its
+    /// helper from any other process, AF18).
     nonisolated static func requireBundledRuntime(_ server: ServerConfiguration) throws {
         var missing: [String] = []
         if !FileManager.default.isExecutableFile(atPath: server.executableURL.path) { missing.append("Contents/Helpers/opencode") }
@@ -101,6 +102,7 @@ final class AppRuntime {
         } else {
             missing.append("container execution")
         }
+        if server.publishesCLIConnection, server.cliPeers == nil { missing.append("Contents/Helpers/bellocode-opencode") }
         if !missing.isEmpty { throw LaunchError.incompleteBundle(missing) }
     }
 
