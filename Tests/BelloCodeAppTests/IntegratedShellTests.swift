@@ -180,6 +180,43 @@ import Testing
         #expect(restored.tokens.map(\.token.text) == ["@README.md"])
     }
 
+    /// NF04: the first send from a new-thread draft creates the thread (the shell switches to it) and then fails: the
+    /// thread's composer shows the prompt again, so the next keystroke cannot overwrite it.
+    @Test func aFailedFirstSendFromADraftComesBackInTheThreadsComposer() async throws {
+        let shell = try await Shell.start()
+        defer { Task { await shell.stop() } }
+        let driver = shell.driver
+        let project = try #require(shell.engine.root.projects.first)
+        #expect(await driver.select(.draft(directory: project.directory)))
+        let composer = try #require(driver.composer)
+        composer.insert(text: "A long prompt that must survive")
+        // The thread is created; the prompt is held until the thread's own composer has loaded its (empty) draft, then
+        // refused.
+        await shell.server.injectHTTPFault(HTTPFault(method: "POST", pathPrefix: "/api/session/ses_", action: .holdRequest(gate: "prompt")))
+        driver.send()
+        let docked = await waitUntil(timeout: .seconds(10)) {
+            if case .thread = shell.controller.workspace.selection, driver.composer?.style.minimumLines == 1,
+                driver.composer?.controller.awaitingDraft == false
+            {
+                return true
+            }
+            return false
+        }
+        #expect(docked)
+        guard case .thread(let id) = shell.controller.workspace.selection else { return }
+        let thread = shell.controller.workspace.threadModel(id)
+        #expect(driver.composer?.currentDraft().text == "", "the thread's composer mounted empty")
+        await shell.server.injectHTTPFault(.status(400, method: "POST", pathPrefix: "/api/session/ses_", message: "Provider refused"))
+        await shell.server.releaseResponses(gate: "prompt")
+        #expect(await waitUntil(timeout: .seconds(10)) { driver.composer?.currentDraft().text == "A long prompt that must survive" },
+                "shown: \(driver.composer?.currentDraft().text ?? "nil")")
+        #expect(thread.draft == "A long prompt that must survive")
+        // Typing now edits the restored prompt instead of replacing it.
+        driver.composer?.insert(text: " (edited)")
+        driver.composer?.controller.flushDraft()
+        #expect(await waitUntil(timeout: .seconds(5)) { thread.draft.hasPrefix("A long prompt that must survive") })
+    }
+
     @Test func draftSendsAttachmentsAndMentionsThenDocks() async throws {
         let shell = try await Shell.start()
         defer { Task { await shell.stop() } }

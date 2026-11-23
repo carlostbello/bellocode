@@ -366,7 +366,8 @@ final class DraftAgentSource: AgentModeSource {
 
 /// The composer host for a new-thread draft: keeps the text in the project's draft, and on the first send creates the
 /// thread (with the draft's agent, model and mode), then sends through that thread's host. After creation every
-/// call goes to the thread, so a failed first send restores the text into the new thread's composer.
+/// call goes to the thread, so a failed first send restores the text into the new thread's draft, and (through the
+/// shared `draftOwner`) into the thread's composer the shell switched to meanwhile (NF04).
 @MainActor
 final class DraftComposerHost: ComposerHost {
     let context: ThreadSurfaceContext
@@ -388,6 +389,8 @@ final class DraftComposerHost: ComposerHost {
     }
 
     var draftKey: String { created?.draftKey ?? "draft:" + context.projectDirectory }
+    /// The created thread's model, so a failed first send reaches the thread's own composer (NF04).
+    var draftOwner: ObjectIdentifier? { created?.draftOwner }
 
     func loadDraft() -> ComposerDraft {
         if let created { return created.loadDraft() }
