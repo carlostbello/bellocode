@@ -41,7 +41,7 @@ extension ExtrasHub {
     /// The header every read result starts with: where it came from and how fresh it is.
     func sourceLine(_ snapshot: MergeRequestSnapshot) -> String {
         let stale = mergeRequests.failureKinds[snapshot.ref.url].map { " (\($0.label): cached data from \(Self.dateText(snapshot.fetched)))" } ?? ""
-        return "Source: \(snapshot.webURL) · \(snapshot.ref.instance) · \(snapshot.ref) · head \(snapshot.sha.prefix(12)) · read \(Self.dateText(snapshot.fetched))\(stale)"
+        return "Source: \(UntrustedText.field(snapshot.webURL)) · \(snapshot.ref.instance) · \(snapshot.ref) · head \(UntrustedText.field(String(snapshot.sha.prefix(12)))) · read \(Self.dateText(snapshot.fetched))\(stale)"
     }
 
     func freshSnapshot(_ ref: MergeRequestRef) async throws -> MergeRequestSnapshot {
@@ -62,13 +62,15 @@ extension ExtrasHub {
             let snapshot = try await freshSnapshot(ref)
             let description = (try? await mergeRequests.provider.mergeRequestDescription(ref)) ?? ""
             let known = await known(ref)
+            // Header fields come from GitLab too: cleaned, on one line, redacted (GF13).
+            let field = { (text: String) in UntrustedText.field(text, known: known) }
             var lines = [sourceLine(snapshot)]
-            lines.append("Title: \(snapshot.title)")
-            lines.append("State: \(snapshot.stateLabel); \(snapshot.sourceBranch) → \(snapshot.targetBranch); author @\(snapshot.author)")
-            lines.append("Pipeline: \(snapshot.pipelineSummary.text)\(snapshot.pipeline.map { " (#\($0.id))" } ?? ""); approvals: \(snapshot.approvals.label); \(snapshot.unresolvedText)")
-            if let labels = snapshot.labels, !labels.isEmpty { lines.append("Labels: \(labels.joined(separator: ", "))") }
-            if let reviewers = snapshot.reviewers { lines.append("Reviewers: \(reviewers.isEmpty ? "none" : reviewers.map { "@\($0)" }.joined(separator: ", "))") }
-            if let status = snapshot.mergeStatus { lines.append("Merge status: \(status)") }
+            lines.append("Title: \(field(snapshot.title))")
+            lines.append("State: \(snapshot.stateLabel); \(field(snapshot.sourceBranch)) → \(field(snapshot.targetBranch)); author @\(field(snapshot.author))")
+            lines.append("Pipeline: \(snapshot.pipelineSummary.text)\(snapshot.pipeline.map { " (#\($0.id))" } ?? ""); approvals: \(field(snapshot.approvals.label)); \(snapshot.unresolvedText)")
+            if let labels = snapshot.labels, !labels.isEmpty { lines.append("Labels: \(labels.map(field).joined(separator: ", "))") }
+            if let reviewers = snapshot.reviewers { lines.append("Reviewers: \(reviewers.isEmpty ? "none" : reviewers.map { "@\(field($0))" }.joined(separator: ", "))") }
+            if let status = snapshot.mergeStatus { lines.append("Merge status: \(field(status))") }
             if let note = snapshot.truncationNote { lines.append(note) }
             lines.append(UntrustedText.block("description of \(ref)", description.isEmpty ? "(empty)" : UntrustedText.sanitise(description, limit: 6_000, known: known)))
             return ClientMCPResult(text: lines.joined(separator: "\n"))
@@ -81,7 +83,7 @@ extension ExtrasHub {
                 changes.files = changes.files.filter { $0.newPath.contains(filter) || $0.oldPath.contains(filter) }
             }
             let body: String = changes.files.map { file -> String in
-                let name = file.renamedFile ? "\(file.oldPath) → \(file.newPath)" : file.newPath
+                let name = file.renamedFile ? "\(UntrustedText.field(file.oldPath, known: known)) → \(UntrustedText.field(file.newPath, known: known))" : UntrustedText.field(file.newPath, known: known)
                 let flags = [file.newFile ? "new" : nil, file.deletedFile ? "deleted" : nil, file.tooLarge ? "too large: content not returned" : nil, file.truncated ? "cut" : nil].compactMap { $0 }
                 return "=== \(name)\(flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))")\n\(UntrustedText.redact(file.diff, known: known).text)"
             }.joined(separator: "\n")
@@ -96,10 +98,10 @@ extension ExtrasHub {
             let shown = list.suffix(30)
             let known = await known(ref)
             let body: String = shown.map { discussion -> String in
-                let head = "discussion \(discussion.id) [\(discussion.isUnresolved ? "unresolved" : discussion.isResolvable ? "resolved" : "comment")]\(discussion.position.map { " on \($0)" } ?? "")"
+                let head = "discussion \(UntrustedText.field(discussion.id)) [\(discussion.isUnresolved ? "unresolved" : discussion.isResolvable ? "resolved" : "comment")]\(discussion.position.map { " on \(UntrustedText.field($0, known: known))" } ?? "")"
                 let notes: [String] = discussion.notes.filter { !$0.system }.map { note in
                     let body: String = UntrustedText.sanitise(note.body, limit: 1_500, known: known).replacingOccurrences(of: "\n", with: "\n    ")
-                    return String("  note \(note.id) by @\(note.author): ") + body
+                    return String("  note \(note.id) by @\(UntrustedText.field(note.author, known: known)): ") + body
                 }
                 return ([head] + notes).joined(separator: "\n")
             }.joined(separator: "\n")
@@ -111,13 +113,16 @@ extension ExtrasHub {
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             guard let pipeline = snapshot.pipeline else { return ClientMCPResult(text: sourceLine(snapshot) + "\nNo pipeline for the head commit.") }
-            var lines = [sourceLine(snapshot), "Pipeline #\(pipeline.id): \(snapshot.pipelineSummary.text)\(pipeline.sha.map { " at \($0.prefix(12))" } ?? ""). \(pipeline.webURL ?? "")"]
+            let known = await known(ref)
+            let field = { (text: String) in UntrustedText.field(text, known: known) }
+            var lines = [sourceLine(snapshot), "Pipeline #\(pipeline.id): \(snapshot.pipelineSummary.text)\(pipeline.sha.map { " at \(field(String($0.prefix(12))))" } ?? ""). \(field(pipeline.webURL ?? ""))"]
             for stage in pipeline.stages {
-                lines.append("Stage \(stage.name):")
+                // A contributor's branch can name jobs and stages anything in .gitlab-ci.yml (GF13).
+                lines.append("Stage \(field(stage.name)):")
                 for job in stage.jobs {
-                    var line = "  job \(job.id) \(job.name): \(job.status)"
+                    var line = "  job \(job.id) \(field(job.name)): \(field(job.status))"
                     if job.allowFailure == true { line += " (failure allowed)" }
-                    if let reason = job.failureReason { line += ", \(reason)" }
+                    if let reason = job.failureReason { line += ", \(field(reason))" }
                     if job.isManual { line += " (manual: running it needs the user's approval)" }
                     lines.append(line)
                 }
@@ -133,11 +138,13 @@ extension ExtrasHub {
             }
             switch await mergeRequests.jobLog(ref, jobID: jobID, maxBytes: 64 << 10) {
             case .success(let chunk):
-                let excerpt = JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: await known(ref))
+                let known = await known(ref)
+                let field = { (text: String) in UntrustedText.field(text, known: known) }
+                let excerpt = JobLogExcerpt(log: chunk.text, headOmitted: chunk.headOmitted, known: known)
                 return ClientMCPResult(
                     text: [
-                        sourceLine(snapshot), "Job \(job.id) \(job.name) (stage \(job.stage)): \(job.status). \(job.webURL ?? "")",
-                        UntrustedText.block("log excerpt of job \(job.name) #\(job.id)", excerpt.text),
+                        sourceLine(snapshot), "Job \(job.id) \(field(job.name)) (stage \(field(job.stage))): \(field(job.status)). \(field(job.webURL ?? ""))",
+                        UntrustedText.block("log excerpt of job \(field(job.name)) #\(job.id)", excerpt.text),
                     ].joined(separator: "\n"))
             case .failure(let error):
                 throw ExtrasError(error.description)
@@ -146,11 +153,13 @@ extension ExtrasHub {
             let (ref, _) = try await toolRef(arguments, caller)
             let snapshot = try await freshSnapshot(ref)
             await mergeRequests.loadApprovalRules(ref)
-            var lines = [sourceLine(snapshot), "Approvals: \(snapshot.approvals.label)."]
-            if !snapshot.approvals.approvedBy.isEmpty { lines.append("Approved by: \(snapshot.approvals.approvedBy.map { "@\($0)" }.joined(separator: ", "))") }
+            let known = await known(ref)
+            let field = { (text: String) in UntrustedText.field(text, known: known) }
+            var lines = [sourceLine(snapshot), "Approvals: \(field(snapshot.approvals.label))."]
+            if !snapshot.approvals.approvedBy.isEmpty { lines.append("Approved by: \(snapshot.approvals.approvedBy.map { "@\(field($0))" }.joined(separator: ", "))") }
             if let rules = mergeRequests.approvalRules[ref.url], !rules.isEmpty {
                 for rule in rules {
-                    lines.append("Rule \(rule.isCodeOwner ? "Code Owners" : rule.name)\(rule.section.map { " (\($0))" } ?? ""): \(rule.approvedBy.count) of \(rule.required)\(rule.approved ? ", satisfied" : "")")
+                    lines.append("Rule \(rule.isCodeOwner ? "Code Owners" : field(rule.name))\(rule.section.map { " (\(field($0)))" } ?? ""): \(rule.approvedBy.count) of \(rule.required)\(rule.approved ? ", satisfied" : "")")
                 }
             } else {
                 lines.append("Required approval rules: not reported by this instance (Free has optional approvals only).")
