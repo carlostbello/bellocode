@@ -231,7 +231,19 @@ describe("thread_interrupt", () => {
     })
     const result = await plugin.run("thread_send", { threadID: "ses_target", message: "hi", delivery: "steer" })
     expect(plugin.calls.prompts[0].delivery).toBe("queue")
+    // GF02: admitted without waking it; a run would deliver the parked queue and clear the hold.
+    expect(plugin.calls.prompts[0].resume).toBe(false)
     expect(result.content).toContain("waits until the user resumes")
+    await plugin.dispose()
+  })
+
+  test("thread_send to a thread that is not held wakes it as usual", async () => {
+    const plugin = await makePlugin()
+    plugin.add({ id: "ses_caller" })
+    plugin.add({ id: "ses_target", time: idle })
+    await plugin.run("thread_send", { threadID: "ses_target", message: "hi" })
+    expect(plugin.calls.prompts[0].delivery).toBe("queue")
+    expect("resume" in plugin.calls.prompts[0]).toBe(false)
     await plugin.dispose()
   })
 })

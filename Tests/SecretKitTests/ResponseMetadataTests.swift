@@ -35,9 +35,15 @@ struct ResponseMetadataTests {
             secrets: [secret.account: secret], values: [secret.account: SecretValue(Self.canary)]))
         let gateway = try await TestGateway(proxyPort: proxyPort, token: "meta-token")
         defer { gateway.stop() }
+        // The event stream outlives `stop()`: collect until both blocked routes are audited (bounded below).
         let collector = Task { () -> [EgressEvent] in
             var out: [EgressEvent] = []
-            for await event in proxy.events { out.append(event) }
+            var blocked = 0
+            for await event in proxy.events {
+                out.append(event)
+                if case .responseBlocked = event { blocked += 1 }
+                if blocked == 2 { break }
+            }
             return out
         }
 
@@ -65,8 +71,11 @@ struct ResponseMetadataTests {
             collector.cancel()
             return first ?? []
         }
-        for event in events {
-            if case .responseBlocked(_, _, _, let reason, _) = event { #expect(!Self.leaked(Data(reason.utf8)), "audit reason carries the value") }
+        let reasons = events.compactMap { event -> String? in
+            if case .responseBlocked(_, _, _, let reason, _) = event { reason } else { nil }
         }
+        // The two blocked routes (unsolicited-upgrade, reflect-encoding) are audited.
+        #expect(reasons.count >= 2, "blocked responses audited: \(reasons.count)")
+        for reason in reasons { #expect(!Self.leaked(Data(reason.utf8)), "audit reason carries the value") }
     }
 }

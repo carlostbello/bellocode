@@ -290,7 +290,7 @@ struct StoreOpenOffMainTests {
         migrator.registerMigration("v3-test-slow") { _ in
             started.signal()
             // Times out (and records it) if the main actor is the one running this migration.
-            let ok = proceed.wait(timeout: .now() + 5) == .success
+            let ok = proceed.wait(wallTimeout: .now() + 5) == .success
             signalledByMain.withLock { $0 = ok }
         }
         let opening = Task { @MainActor in
@@ -299,7 +299,7 @@ struct StoreOpenOffMainTests {
         // Wait for the migration to start without blocking the main actor's executor.
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
-                _ = started.wait(timeout: .now() + 10)
+                _ = started.wait(wallTimeout: .now() + 10)
                 continuation.resume()
             }
         }

@@ -36,14 +36,6 @@ final class EnvironmentBannerHost: NSView {
 
     var isShowing: Bool { notice != nil }
 
-    /// Re-reads the directory (the displayed thread changed) and observes the new project.
-    func refresh() {
-        loop?.cancel()
-        // A thread of the project is shown: register the MCP servers set up for all projects there (once).
-        if let directory = directory() { engine.environments.projectInUse(directory) }
-        loop = ObservationLoop { [weak self] in self?.render() }
-    }
-
     private var notice: (EnvironmentNotice, ProjectEnvironment)? {
         let service = engine.environments
         guard service.isEnabled, let directory = directory(), let environment = service.project(containing: directory) else { return nil }

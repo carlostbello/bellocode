@@ -89,6 +89,11 @@ public final class OrchestrationService {
     @ObservationIgnored private weak var engine: Engine?
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var hosts: [String: ClientMCPHost] = [:]
+    /// The server every host in `hosts` dials.
+    @ObservationIgnored private var hostsConnection: ServerConnection?
+    /// How many times opencode listed the app tools (each live MCP session does once): diagnostics, and proof in tests
+    /// that a host reached the server.
+    @ObservationIgnored private(set) var appToolListings = 0
     @ObservationIgnored private var started = false
 
     /// The client-MCP server name: tools appear to the agent as `bellocode_app_<tool>`.
@@ -123,6 +128,7 @@ public final class OrchestrationService {
         tasks.cancelAll()
         let all = Array(hosts.values)
         hosts.removeAll()
+        hostsConnection = nil
         for host in all { await host.stop() }
         started = false
     }
@@ -280,6 +286,13 @@ public final class OrchestrationService {
             await host.stop()
         }
         guard let client = try? await core.currentClient() else { return }
+        // A host keeps dialling the server it was made for; after a restart (new port and password) replace them all.
+        if hostsConnection != client.connection {
+            let stale = hosts
+            hosts = [:]
+            hostsConnection = client.connection
+            for host in stale.values { await host.stop() }
+        }
         for directory in wanted where hosts[directory] == nil {
             let host = ClientMCPHost(
                 name: Self.appServerName, directory: directory, dialer: WebSocketClientMCPDialer(connection: client.connection),
@@ -290,6 +303,8 @@ public final class OrchestrationService {
     }
 
     public var hostedDirectories: [String] { Array(hosts.keys).sorted() }
+
+    func appToolsListed() { appToolListings += 1 }
 
     /// Runs one app tool call. Calls must be attributed to a session; targets must be in the caller's project.
     public func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
@@ -383,6 +398,9 @@ public enum AppTools {
 struct AppToolProvider: ClientMCPToolProvider {
     let service: OrchestrationService
 
-    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions + ContainerTools.definitions }
+    func tools(directory: String) async -> [ClientMCPTool] {
+        await service.appToolsListed()
+        return AppTools.definitions + ExtrasTools.definitions + ContainerTools.definitions
+    }
     func call(_ call: ClientMCPCall) async -> ClientMCPResult { await service.handleAppTool(call) }
 }

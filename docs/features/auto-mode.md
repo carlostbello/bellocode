@@ -29,7 +29,7 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
   still ask for everything except saved grants (reviewed only once the plugin loads).
 - Non-waking synthetic input (`resume: false`) is parked in the **inbox** until the next run (probe).
 
-## Policy (`RiskPolicy`, version `bellocode-auto-2`, pure and unit-tested; precedence below, a model can override none)
+## Policy (`RiskPolicy`, version `bellocode-auto-3`, pure and unit-tested; precedence below, a model can override none)
 1. **opencode's configured denies** (never reach BelloCode).
 2. **Hard deny** (reply `reject` with the reason): BelloCode/opencode data and config (`~/.config/opencode`,
    `~/.local/share|state/opencode`, `~/Library/Application Support/BelloCode`, `bellocode-exec.json`), `~/Library/Keychains`,
@@ -39,8 +39,9 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
    keychains) and credential dirs (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker/config.json`, gcloud, azure, gh);
    secret-like env vars (`$*TOKEN*`, `$*SECRET*`, …, `printenv NAME`) and environment dumps (`env`, `jq env`/`$ENV`);
    searches over hidden or ignored files (`rg -u`/`--hidden`/`--no-ignore`, `ag -u`, hidden-file globs such as `cat .*`) and
-   a `grep -r` whose tree holds a secret-looking file (bounded scan honouring `--include`/`--exclude`; over 20 000 entries
-   counts as one; N05); paths outside the project and its worktrees
+   a `grep -r` whose tree holds a secret-looking file (bounded scan of every folder grep enters, `.git` and
+   `node_modules` included, honouring `--include`/`--exclude`/`--exclude-dir`, following links as `-r`/`-R` do, glob
+   operands expanded; a shell variable in the command, or over 20 000 entries, counts as one; N05, AF14); paths outside the project and its worktrees
    after `~`, `..`, `cd` and symlink resolution (`/tmp` exempt for container commands); cross-project
    (`bellocode_other_project`); agent/MCP/isolation config (`opencode.json*`, `.opencode/`, `.mcp.json`, `.devcontainer/`,
    `.git/hooks`, `.git/config`, `git config`, proxy/TLS env vars, firewall tools; written by output redirections or by any

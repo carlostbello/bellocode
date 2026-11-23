@@ -168,3 +168,38 @@ describe("delegate_task and the owner's default model", () => {
     file.cleanup()
   })
 })
+
+describe("create_threads agent", () => {
+  // GF14: the agent is checked like delegate_task's, before any thread or worktree exists.
+  test("an unknown agent is refused before anything is created", async () => {
+    const plugin = await makePlugin()
+    plugin.add({ id: "ses_caller" })
+    const error = await plugin.run("create_threads", { threads: [{ title: "One" }, { title: "Two", agent: "biuld" }] }).then(
+      () => undefined,
+      (failure: Error) => failure,
+    )
+    expect(error?.message).toContain('Unknown agent "biuld"')
+    expect(plugin.calls.creates).toEqual([])
+    await plugin.dispose()
+  })
+
+  test("a sub-agent cannot run a top-level thread", async () => {
+    const plugin = await makePlugin()
+    plugin.add({ id: "ses_caller" })
+    const error = await plugin.run("create_threads", { threads: [{ title: "One", agent: "general" }] }).then(
+      () => undefined,
+      (failure: Error) => failure,
+    )
+    expect(error?.message).toContain("is a sub-agent")
+    expect(plugin.calls.creates).toEqual([])
+    await plugin.dispose()
+  })
+
+  test("a primary agent is passed through", async () => {
+    const plugin = await makePlugin()
+    plugin.add({ id: "ses_caller" })
+    await plugin.run("create_threads", { threads: [{ title: "One", agent: " plan " }] })
+    expect(plugin.calls.creates[0].agent).toBe("plan")
+    await plugin.dispose()
+  })
+})

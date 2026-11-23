@@ -92,6 +92,35 @@ struct OrchestrationRealBinaryTests {
         #expect(keys.contains(OrchestrationContract.guidanceKey))
     }
 
+    /// NF01, no prompt: opencode opens an MCP session with the app's tools for the first project, and again on the
+    /// restarted server (new port and password) after a supervised restart, without the app being relaunched.
+    @Test func appToolsAreHostedAgainAfterASupervisedRestart() async throws {
+        let sandbox = try await Sandbox.start("restart")
+        defer { Task { await sandbox.stop() } }
+        let orchestration = try #require(sandbox.engine.orchestration)
+        func waitListed(after count: Int, _ what: String) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now + .seconds(60)
+            while orchestration.appToolListings <= count {
+                guard clock.now < deadline else {
+                    Issue.record("\(what): opencode never listed the app tools (hosted \(orchestration.hostedDirectories))")
+                    throw CancellationError()
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        try await waitListed(after: 0, "first project")
+        let before = try #require(await sandbox.supervisor.endpoint)
+        // Counted before the restart: only a host dialling the new server can list them again.
+        let listed = orchestration.appToolListings
+        #expect(await sandbox.engine.core.restartServer())
+        let after = try #require(await sandbox.supervisor.endpoint)
+        #expect(after.generation == before.generation + 1)
+        #expect(after.connection != before.connection)
+        try await waitListed(after: listed, "after the restart")
+        #expect(orchestration.hostedDirectories == [sandbox.project.path])
+    }
+
     @Test func delegatedChildRunsAndWakesTheParentOnce() async throws {
         let sandbox = try await Sandbox.start("delegate")
         defer { Task { await sandbox.stop() } }

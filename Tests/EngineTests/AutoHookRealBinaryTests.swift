@@ -395,24 +395,25 @@ struct AutoHookRealBinaryTests {
         // Nobody approved anything: no permission request was raised in the caller.
         #expect(try await client.permissions(sessionID: caller.id.rawValue).isEmpty)
         // The stopped thread's attributed note is parked in its inbox (non-waking input waits for the next run, verified
-        // by probeSyntheticWithoutResume) and it is not running again.
+        // by inputAdmittedWithoutResumeWaitsInTheInbox) and it is not running again.
         let inbox = try await client.inbox(sessionID: target.id.rawValue)
         #expect(inbox.contains { ($0.text ?? "").hasPrefix("[BelloCode interrupt]") && ($0.text ?? "").contains("supervisor") })
         #expect(engine.orchestration.status(of: target.id)?.isActive != true)
     }
 
-    /// No prompt: where a non-waking synthetic note lands (message list or inbox) on an idle session.
-    @Test func probeSyntheticWithoutResume() async throws {
+    /// No model: input admitted with `resume: false` (the interrupt note, and thread_send to a held thread, GF02) waits
+    /// in an idle session's inbox and starts no run.
+    @Test func inputAdmittedWithoutResumeWaitsInTheInbox() async throws {
         let sandbox = try await Sandbox.start("synthetic")
         defer { Task { await sandbox.stop() } }
         let client = try await sandbox.client()
         let id = try await session(sandbox, "probe", rules: [PermissionRule(action: "*", resource: "*", effect: .allow)])
         try await client.postSynthetic(sessionID: id, text: "[BelloCode interrupt] probe", resume: false)
-        try await Task.sleep(for: .seconds(1))
-        let messages = try await client.messages(sessionID: id, MessageListQuery(limit: 20)).data
-        let inbox = try await client.inbox(sessionID: id)
-        print("AUTO probe synthetic: messages \(messages.map(\.type)) inbox \(inbox.count)")
-        let busy = try await client.session(id).time.busy
-        print("AUTO probe synthetic: busy \(busy ?? -1)")
+        _ = try await client.prompt(sessionID: id, PromptRequest(text: "[Message from a test] held", delivery: .queue, resume: false))
+        let inbox = try await client.inbox(sessionID: id).compactMap(\.text)
+        #expect(inbox.contains("[BelloCode interrupt] probe"), "\(inbox)")
+        #expect(inbox.contains("[Message from a test] held"), "\(inbox)")
+        #expect(try await client.messages(sessionID: id, MessageListQuery(limit: 20)).data.isEmpty, "nothing delivered")
+        #expect(try await client.session(id).time.busy == nil, "no run started")
     }
 }

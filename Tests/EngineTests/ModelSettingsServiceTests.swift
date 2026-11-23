@@ -157,4 +157,45 @@ struct ModelSettingsServiceTests {
         #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
         #expect(service.storageProblem == nil)
     }
+
+    /// AF27: a saved choice that cannot be read leaves the plugin's copy alone and stays reported; a change waits for
+    /// a successful read, so the unread field is never replaced with a default.
+    @Test func anUnreadablePreferenceKeepsTheMirrorAndTheWarning() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ProjectionStore(location: .inMemory)
+        let defaults = root.appending(path: "bellocode-models.json")
+        let failRead = Flag()
+        func service() -> ModelSettingsService {
+            ModelSettingsService(
+                store: store, folder: nil, modelDefaultsFile: defaults, client: { throw EngineError.offline },
+                loadPreference: { store in
+                    if failRead.on { throw Failure() }
+                    return try await store.preference(ModelSettingsService.key, as: BackgroundModelSettings.self)
+                })
+        }
+        let chosen = ModelChoice.specific(ModelSelection(providerID: "openai", modelID: "gpt-x"))
+        let first = service()
+        await first.load()
+        #expect(await first.setDelegated(chosen) == nil)
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+
+        // Relaunch with the store failing to read: the mirror keeps the confirmed choice, the warning stays.
+        failRead.set(true)
+        let second = service()
+        await second.load()
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+        #expect(second.storageProblem?.contains("disk full") == true)
+        // A change while it still cannot be read is refused; nothing is saved over the unread choice.
+        #expect(await second.setGitText(.smallModel)?.contains("disk full") == true)
+        #expect(try await store.preference(ModelSettingsService.key, as: BackgroundModelSettings.self)?.delegated == chosen)
+
+        // Readable again: the change applies on top of the saved choice.
+        failRead.set(false)
+        #expect(await second.setGitText(.smallModel) == nil)
+        #expect(second.background.delegated == chosen)
+        #expect(second.background.gitText == .smallModel)
+        #expect(ModelDefaultsFile.read(from: defaults)?.delegated == chosen.token)
+        #expect(second.storageProblem == nil)
+    }
 }

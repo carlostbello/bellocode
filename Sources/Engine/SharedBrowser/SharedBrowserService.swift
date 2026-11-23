@@ -107,6 +107,8 @@ public final class SharedBrowserService {
     @ObservationIgnored public private(set) var broker: SharedBrowserBroker!
     @ObservationIgnored private var runtime: DockerBrowserRuntime?
     @ObservationIgnored private var hosts: [String: ClientMCPHost] = [:]
+    /// The server every host in `hosts` dials.
+    @ObservationIgnored private var hostsConnection: ServerConnection?
     @ObservationIgnored private let tasks = TaskBox()
     @ObservationIgnored private var forwards: [String: (forwarder: PortForwarder, task: Task<Void, Never>, project: String, used: ContinuousClock.Instant)] = [:]
     @ObservationIgnored private var viewerForward: (forwarder: PortForwarder, task: Task<Void, Never>)?
@@ -336,6 +338,7 @@ public final class SharedBrowserService {
         tasks.cancelAll()
         for host in hosts.values { await host.stop() }
         hosts = [:]
+        hostsConnection = nil
         await broker.shutdown()
         closeViewerForward()
         closeRoutes()
@@ -353,6 +356,13 @@ public final class SharedBrowserService {
         for (directory, host) in hosts where !wanted.contains(directory) {
             hosts[directory] = nil
             await host.stop()
+        }
+        // A host keeps dialling the server it was made for; after a restart (new port and password) replace them all.
+        if hostsConnection != client.connection {
+            let stale = hosts
+            hosts = [:]
+            hostsConnection = client.connection
+            for host in stale.values { await host.stop() }
         }
         for directory in wanted where hosts[directory] == nil {
             let host = ClientMCPHost(name: SharedBrowserBroker.serverName, directory: directory,

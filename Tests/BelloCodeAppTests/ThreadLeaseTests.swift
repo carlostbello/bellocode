@@ -75,4 +75,21 @@ import Testing
         #expect(shown.isClosed)
         await stop(fixture)
     }
+
+    /// NF03: showing a thread or a draft marks its project in use, which is what registers the MCP servers set up for
+    /// all projects there (nothing else in the app did).
+    @Test func showingAThreadOrDraftMarksItsProjectInUse() async throws {
+        let fixture = try await start()
+        let workspace = WorkspaceController(engine: fixture.engine, stateStore: ShellStateStore(defaults: nil))
+        var shown: [String] = []
+        workspace.projectShown = { shown.append($0) }
+        let context = try #require(workspace.makeContext(for: .thread(fixture.threads[0])))
+        #expect(!context.directory.isEmpty)
+        #expect(shown == [context.directory])
+        let project = try #require(fixture.engine.root.projects.first)
+        _ = try #require(workspace.makeContext(for: .draft(directory: project.directory)))
+        #expect(shown.last == project.directory)
+        workspace.close()
+        await stop(fixture)
+    }
 }

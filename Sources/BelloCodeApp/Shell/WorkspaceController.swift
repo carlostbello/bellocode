@@ -38,6 +38,9 @@ final class WorkspaceController {
     private(set) var grouping: SidebarGrouping = .byProject
     /// The sidebar filter (not restored: a relaunch shows everything).
     var filterText = ""
+    /// A thread or draft of this project is shown: the environment registers the MCP servers set up for all projects
+    /// there (once; cheap afterwards). Replaceable in tests.
+    @ObservationIgnored var projectShown: @MainActor (String) -> Void
     /// Back and forward through visited threads and drafts (most recent last; bounded).
     @ObservationIgnored var backStack: [ShellSelection] = []
     @ObservationIgnored var forwardStack: [ShellSelection] = []
@@ -67,6 +70,7 @@ final class WorkspaceController {
         self.engine = engine
         self.stateStore = stateStore
         self.deletions = deletions ?? .shared(for: engine)
+        projectShown = { [weak engine] directory in engine?.environments.projectInUse(directory) }
         let loaded = stateStore.load()
         state = loaded
         selection = loaded.selection
@@ -132,6 +136,12 @@ final class WorkspaceController {
 
     /// A surface context for a selection (nil when it cannot be shown, for example a removed project's draft).
     func makeContext(for selection: ShellSelection) -> ThreadSurfaceContext? {
+        guard let context = makeSurfaceContext(for: selection) else { return nil }
+        if !context.directory.isEmpty { projectShown(context.directory) }
+        return context
+    }
+
+    private func makeSurfaceContext(for selection: ShellSelection) -> ThreadSurfaceContext? {
         switch selection {
         case .thread(let id):
             let model = threadModel(id)

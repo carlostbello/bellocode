@@ -456,7 +456,8 @@ public final class ThreadModel: Identifiable {
         if phase != .deleted { phase = .ready }
     }
 
-    private func apply(_ change: ChangeSet) {
+    /// Internal (not private) so tests can drive an exact change sequence.
+    func apply(_ change: ChangeSet) {
         let signpost = EngineSignposts.publish.beginInterval("threadApply")
         defer { EngineSignposts.publish.endInterval("threadApply", signpost) }
         if change.overflowed || change.resetThreads.contains(sessionID) {
@@ -517,8 +518,9 @@ public final class ThreadModel: Identifiable {
         var listChanged = false
         for message in messages {
             if let model = models[message.id] {
-                guard message.revision > model.revision else { continue }
-                model.update(message)
+                // The model decides on the server revision: its shown `revision` runs ahead of the server's by the
+                // sub-agent decoration bumps, so comparing against that would drop the next server updates.
+                guard model.update(message) else { continue }
                 if keys[message.id] != message.sortKey {
                     keys[message.id] = message.sortKey
                     ids.removeAll { $0 == message.id }

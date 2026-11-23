@@ -182,6 +182,8 @@ public final class Engine {
     private let tasks = TaskBox()
     /// The last organisation write sent to the core; each waits for the one before, so they apply in order.
     var organisationWrite: Task<Void, Never>?
+    /// The last pass that hosts the client-MCP tools; each waits for the one before, so passes never interleave.
+    private var clientToolsPass: Task<Void, Never>?
     private var openThreads: [SessionID: ThreadModel] = [:]
     private var trackedTasks: [Int: Task<Void, Never>] = [:]
     private var nextTrackedID = 0
@@ -544,16 +546,32 @@ public final class Engine {
 
     /// On every (re)connect: check the plugin and serve the app tools for the visible projects.
     private func connectOrchestration() {
-        let directories = root.projects.map(\.directory)
-        let orchestration = self.orchestration!
-        track(
-            Task {
-                if let first = directories.first ?? self.configuration.defaultDirectory { await orchestration.checkPlugin(directory: first) }
-                await orchestration.hostAppTools(directories: directories)
-                await self.sharedBrowser.hostTools(directories: directories)
-            })
+        hostClientTools(checkPlugin: true)
         // Project MCP servers are runtime registrations: a (re)connected server has none.
         environments.serverConnected()
+    }
+
+    /// Serves the client-hosted tools (`bellocode_app`, `bellocode_chrome`) for the current projects: on every
+    /// (re)connect, and whenever the project list changes while live (a first project added after connecting). The
+    /// services replace hosts bound to a previous server (a restart moves it to a new port and password).
+    private func hostClientTools(checkPlugin: Bool) {
+        guard root.connection.isLive else { return }
+        let directories = root.projects.map(\.directory)
+        let orchestration = self.orchestration!
+        let sharedBrowser = self.sharedBrowser!
+        let fallback = configuration.defaultDirectory
+        let previous = clientToolsPass
+        let pass = Task {
+            await previous?.value
+            // Checked on connect, and again once a location exists if no check could run before.
+            if checkPlugin || orchestration.pluginStatus == .unknown, let first = directories.first ?? fallback {
+                await orchestration.checkPlugin(directory: first)
+            }
+            await orchestration.hostAppTools(directories: directories)
+            await sharedBrowser.hostTools(directories: directories)
+        }
+        clientToolsPass = pass
+        track(pass)
     }
 
     private func subscribeRoot() {
@@ -595,8 +613,10 @@ public final class Engine {
         if !change.projects.isEmpty || !change.removedProjects.isEmpty || !change.registry.isEmpty
             || !change.removedRegistry.isEmpty
         {
+            let before = root.projects.map(\.directory)
             root.apply(projectsChange: change)
             environments.projectsChanged(root.projects)
+            if root.projects.map(\.directory) != before { hostClientTools(checkPlugin: false) }
             for item in root.projects {
                 if let id = item.projectID, root.projectModels[id] == nil {
                     root.projectModels[id] = ProjectModel(projectID: id, sessions: [], statuses: [:], core: core, store: store)
@@ -616,10 +636,13 @@ public final class Engine {
                 Task { [weak self] in
                     let snapshot = await core.snapshot()
                     guard let self else { return }
+                    let wasLive = self.root.connection.isLive
                     self.root.setProjects(snapshot.projects, registry: snapshot.registry)
                     self.environments.projectsChanged(self.root.projects)
                     self.root.setAttention(snapshot.attention)
                     self.root.setConnection(snapshot.connection)
+                    // Dropped changes may have carried a reconnect or a project change.
+                    if snapshot.connection.isLive, !wasLive { self.connectOrchestration() } else { self.hostClientTools(checkPlugin: false) }
                     self.root.setSyncGaps(snapshot.syncGaps)
                     if self.root.organisation != snapshot.organisation { self.root.organisation = snapshot.organisation }
                 })

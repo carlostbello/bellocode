@@ -74,6 +74,10 @@ import Testing
         let composer = try #require(driver.composer)
         let attachment = try #require(composer.currentDraft().attachments.last)
         #expect(attachment.name == "Review Sources/App/main.swift:2.md")
-        if case .text(let text) = attachment.content { #expect(text.contains("print(3)") && text.contains("Why 3?")) }
+        guard case .text(let text) = attachment.content else {
+            Issue.record("expected a text attachment, got \(attachment.content)")
+            return
+        }
+        #expect(text.contains("print(3)") && text.contains("Why 3?"))
     }
 }

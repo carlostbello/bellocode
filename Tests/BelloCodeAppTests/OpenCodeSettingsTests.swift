@@ -1,4 +1,5 @@
 import AppKit
+import Engine
 import Foundation
 import OpenCodeKit
 import Testing
@@ -17,6 +18,23 @@ struct OpenCodeSettingsTests {
         FileManager.default.createFile(atPath: helper.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
         let bin = root.appending(path: "home/.local/bin", directoryHint: .isDirectory)
         return (CommandLineToolInstaller(helper: helper, candidates: [bin]), helper, bin)
+    }
+
+    /// NF16: Window ▸ Reload opencode Configuration with Settings closed reports its result instead of storing it in a
+    /// pane nobody sees.
+    @Test func menuReloadReportsItsResultOutsideThePane() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (installer, _, _) = try makeInstaller()
+        let service = OpenCodeConfigService(
+            store: try ProjectionStore(location: .inMemory), directories: OpenCodeDirectories(dataRoot: root.appending(path: "data")),
+            runningPolicy: .bellocode, client: { throw EngineError.offline }, restartServer: nil)
+        let actions = OpenCodeSettingsActions(confirm: { _, _, _ in true }, open: { _ in }, reveal: { _ in }, report: { _ in })
+        let model = OpenCodeSettingsModel(service: service, settings: AppSettings(defaults: nil), engine: nil, actions: actions, installer: installer)
+        let reported = await withCheckedContinuation { continuation in
+            model.reload(notify: { continuation.resume(returning: $0) })
+        }
+        #expect(reported.hasPrefix("opencode could not reload"))
+        #expect(model.message == reported)
     }
 
     @Test func installIsIdempotentAndUninstallRemovesOnlyOurLink() throws {

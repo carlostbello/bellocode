@@ -64,8 +64,12 @@ public final class ModelSettingsService {
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private let writeDefaults: @Sendable (ModelDefaultsFile, URL) throws -> Void
     @ObservationIgnored private let savePreference: @Sendable (ProjectionStore, BackgroundModelSettings) async throws -> Void
+    @ObservationIgnored private let loadPreference: @Sendable (ProjectionStore) async throws -> BackgroundModelSettings?
     /// The plugin's defaults file does not match the saved choice yet.
     @ObservationIgnored private var mirrorStale = false
+    /// The saved choice could not be read (unlike an absent one, which means the defaults): the shown defaults are a
+    /// fallback, so neither the plugin's copy nor a save is derived from them until a read succeeds.
+    @ObservationIgnored private var preferenceUnread = false
 
     static let key = "models.background"
 
@@ -74,6 +78,9 @@ public final class ModelSettingsService {
         writeDefaults: @escaping @Sendable (ModelDefaultsFile, URL) throws -> Void = { try $0.write(to: $1) },
         savePreference: @escaping @Sendable (ProjectionStore, BackgroundModelSettings) async throws -> Void = { store, value in
             try await store.setPreference("models.background", value)
+        },
+        loadPreference: @escaping @Sendable (ProjectionStore) async throws -> BackgroundModelSettings? = { store in
+            try await store.preference("models.background", as: BackgroundModelSettings.self)
         }
     ) {
         self.store = store
@@ -82,6 +89,7 @@ public final class ModelSettingsService {
         self.client = client
         self.writeDefaults = writeDefaults
         self.savePreference = savePreference
+        self.loadPreference = loadPreference
     }
 
     /// Runs `operation` after every operation queued before it.
@@ -96,18 +104,42 @@ public final class ModelSettingsService {
     }
 
     /// Reads the preferences and the configured models, and rewrites the plugin's defaults file. Call at start.
+    /// A saved choice that cannot be read keeps the plugin's copy as it is (it matches the last confirmed choice) and
+    /// stays reported; the read is retried before the next change.
     public func load() async {
         await serially { [self] in
-            do {
-                if let saved = try await store.preference(Self.key, as: BackgroundModelSettings.self) { background = saved }
-            } catch {
-                storageProblem = "Could not read the saved background-task models (\(error.localizedDescription)); the defaults are shown."
+            if await readPreference() == nil {
+                mirrorStale = true
+                _ = await writeDefaultsFile()
             }
-            mirrorStale = true
-            _ = await writeDefaultsFile()
             await performReadConfig()
             loaded = true
         }
+    }
+
+    /// Reads the saved choice (absent: the defaults). Returns the problem to show when it cannot be read.
+    private func readPreference() async -> String? {
+        do {
+            background = try await loadPreference(store) ?? .standard
+            preferenceUnread = false
+            return nil
+        } catch {
+            preferenceUnread = true
+            let text = "Could not read the saved background-task models (\(error.localizedDescription)); the defaults are shown and nothing was changed."
+            storageProblem = text
+            return text
+        }
+    }
+
+    /// Before a change: a choice that could not be read at load is read again (and mirrored), so a save never
+    /// replaces the other, unread field with a default. Returns the problem when it still cannot be read.
+    private func ensurePreferenceRead() async -> String? {
+        guard preferenceUnread else { return nil }
+        if let problem = await readPreference() { return problem }
+        storageProblem = nil
+        mirrorStale = true
+        _ = await writeDefaultsFile()
+        return nil
     }
 
     /// Re-reads `opencode.json` (the person may have edited it). Queued behind any save, so an older read never
@@ -130,6 +162,7 @@ public final class ModelSettingsService {
     @discardableResult
     public func setGitText(_ choice: ModelChoice) async -> String? {
         await serially { [self] in
+            if let problem = await ensurePreferenceRead() { return problem }
             var next = background
             next.gitText = choice
             return await save(next)
@@ -140,6 +173,7 @@ public final class ModelSettingsService {
     @discardableResult
     public func setDelegated(_ choice: ModelChoice) async -> String? {
         await serially { [self] in
+            if let problem = await ensurePreferenceRead() { return problem }
             var next = background
             next.delegated = choice
             let changed = next.delegated != background.delegated

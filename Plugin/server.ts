@@ -729,9 +729,17 @@ export default {
           const created: Array<Record<string, unknown>> = []
           const isolated = input.workspace === "worktree"
           if (isolated && !caller.projectID) fail("This thread has no project, so it cannot create worktrees.")
+          // Checked before anything is created: a typo or a sub-agent (which would run a top-level thread with a
+          // sub-agent's prompt and step limit) is refused, as delegate_task refuses a primary agent.
+          const agents = specs.some((spec: any) => spec.agent) ? list<any>(await ctx.agent.list({})) : []
           for (const spec of specs) {
             const parsed = L.parseModel(spec.model)
             if (parsed && "error" in parsed) fail(parsed.error)
+            const agentID = typeof spec.agent === "string" ? spec.agent.trim() : ""
+            if (!agentID) continue
+            const agent = agents.find((item) => item.id === agentID)
+            if (!agent) fail(`Unknown agent "${agentID}". Call orchestrator_capabilities for the list.`)
+            if (agent.mode === "subagent") fail(`Agent "${agentID}" is a sub-agent; a new thread needs a primary agent (build or plan). Use delegate_task for sub-agents.`)
           }
           // Earlier threads of this call are reported (with their worktrees) if a later one cannot be placed.
           const made = { threads: [] as string[], worktrees: [] as string[] }
@@ -744,7 +752,7 @@ export default {
             }
             const value = await ctx.session.create({
               title: L.oneLine(String(spec.title), 100),
-              ...(spec.agent ? { agent: spec.agent } : {}),
+              ...(typeof spec.agent === "string" && spec.agent.trim() ? { agent: spec.agent.trim() } : {}),
               ...(parsed ? { model: parsed } : {}),
               ...(directory ? { location: { directory } } : {}),
               // S2: top-level threads do not inherit rules; they get the caller's, confirmed before any prompt.
@@ -861,13 +869,16 @@ export default {
           const { caller, target, scope } = await reach(tool, String(input.threadID), "thread_send")
           if (scope === "self") fail("That is this thread. Answer directly instead.")
           const from = scope === "descendant" ? "your parent thread" : `thread "${caller.title ?? caller.id}" (${caller.id})`
-          // A thread another agent stopped stays stopped until the user resumes it: steering is turned into queueing.
+          // A thread another agent stopped stays stopped until the user resumes it: steering is turned into queueing,
+          // and the message is admitted without waking it (a queued prompt to an idle thread would start a run, and
+          // that run would clear the hold).
           const held = Boolean((target.metadata as any)?.bellocode_interrupt?.held)
           const delivery = input.delivery === "steer" && !held ? "steer" : "queue"
           await ctx.session.prompt({
             sessionID: target.id,
             text: `[Message from ${from}]\n${String(input.message)}`,
             delivery,
+            ...(held ? { resume: false } : {}),
           })
           return {
             content: `Sent to ${target.id} (${delivery}).${held ? " That thread was stopped by an interrupt; your message waits until the user resumes it." : ""}`,

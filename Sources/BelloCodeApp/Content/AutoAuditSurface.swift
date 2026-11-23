@@ -10,11 +10,15 @@ import SwiftUI
 @MainActor
 final class AutoAuditSurfaces {
     private let host = NSViewController()
-    private let state = AutoAuditViewState()
+    let state = AutoAuditViewState()
     private var hosting: NSHostingController<AutoAuditView>?
     private(set) var context: ThreadSurfaceContext?
+    /// Reads the displayed thread's stored log; replaced (cancelled) when another thread is displayed.
+    private var loadTask: Task<Void, Never>?
 
     init() { host.view = NSView() }
+
+    isolated deinit { loadTask?.cancel() }
 
     func makePanelController() -> NSViewController { host }
 
@@ -34,12 +38,11 @@ final class AutoAuditSurfaces {
         self.context = context
         state.thread = context?.thread
         state.expanded = nil
-        if let thread = context?.thread, let auto = context?.engine.auto {
-            Task {
-                // The session may still be loading: wait (bounded) for its ID, then read the stored log.
-                for _ in 0..<50 where thread.session == nil { try? await Task.sleep(for: .milliseconds(100)) }
-                if let id = thread.session?.id { await auto.loadAudit(id) }
-            }
+        loadTask?.cancel()
+        loadTask = nil
+        // The thread's ID is known at once (its session may still be loading): read the stored log now.
+        if let id = context?.thread?.sessionID, let auto = context?.engine.auto {
+            loadTask = Task { await auto.loadAudit(id) }
         }
     }
 }
@@ -49,7 +52,7 @@ final class AutoAuditViewState: ObservableObject {
     /// The displayed thread (observed: its session and mode load after it is shown).
     @Published var thread: ThreadModel?
     @Published var expanded: String?
-    var sessionID: SessionID? { thread?.session?.id }
+    var sessionID: SessionID? { thread?.sessionID }
     var mode: PermissionMode? { thread?.session?.permissionMode }
 }
 

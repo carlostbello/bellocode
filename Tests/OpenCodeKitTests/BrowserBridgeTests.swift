@@ -220,7 +220,9 @@ struct BrowserAttachmentTests {
         await attachment.cancelAll()
         let result = await outcome
         #expect(result.failureCode == "cancelled")
-        if case .failure(_, let message) = result { #expect(message.contains("user stopped")) }
+        if case .failure(_, let message) = result { #expect(message.contains("user stopped")) } else {
+            Issue.record("expected a failure, got \(result)")
+        }
         await attachment.stop()
         await harness.stop()
     }
