@@ -154,7 +154,9 @@ if let serviceName, !(workspace.services ?? []).contains(serviceName) {
 let targetContainer = serviceName.map {
     ServiceLabels.containerName(projectKey: WorkspaceSpec.projectKey(for: workspace.roots.first ?? ""), service: $0)
 } ?? workspace.container
-let targetUser: String? = serviceName == nil ? workspace.user : nil
+// A workspace command runs as the numeric uid:gid the container was created with (its verified `Config.User`), never
+// as `workspace.user`: Docker resolves a name from the container's own /etc/passwd at each exec, which a workspace user
+// able to rewrite it could map to uid 0 (AF10 follow-up). A service shell runs as that image's own user.
 let targetDirectory: String? = serviceName == nil ? cwd : nil
 
 let client = EngineClient(socketPath: config.socket)
@@ -174,15 +176,29 @@ let argv = stdioArgv ?? (serviceName != nil ? serviceShell : nil) ?? command.map
 let wrapped = stdioArgv != nil ? StdioRelay.wrapper(token: String(token), argv)
     : interactive ? ExecWrapper.interactive(token: String(token), argv) : ExecWrapper.nonInteractive(argv)
 
-func startSession() async throws -> ExecSession {
-    try await ExecSession.start(client: client, container: targetContainer, argv: wrapped, workingDir: targetDirectory,
-                                environment: forwarded, user: targetUser, tty: interactive,
-                                size: interactive ? windowSize() : nil)
+/// Where the command's own later execs (its kill, its PID file's removal) go: the same container, as the same user.
+struct ExecTarget: Sendable {
+    var container: String
+    var user: String?
+}
+
+func startSession() async throws -> (ExecSession, ExecTarget) {
+    if serviceName != nil {
+        let session = try await ExecSession.start(client: client, container: targetContainer, argv: wrapped, workingDir: targetDirectory,
+                                                  environment: forwarded, user: nil, tty: interactive,
+                                                  size: interactive ? windowSize() : nil)
+        return (session, ExecTarget(container: targetContainer, user: nil))
+    }
+    // Fails closed (`WorkspaceError.unverifiedUser`) for a container whose user is not a nonzero numeric uid:gid.
+    let (session, target) = try await WorkspaceManager(client: client).start(
+        container: targetContainer, argv: wrapped, workingDir: targetDirectory, environment: forwarded, tty: interactive,
+        size: interactive ? windowSize() : nil)
+    return (session, ExecTarget(container: target.containerID, user: target.user))
 }
 
 /// Creates or starts the container on first use (or after an idle stop, or when the project folder was replaced),
 /// then starts the command. Never pulls: a missing image is the app's to fetch, with progress and credentials.
-func ensureAndStart() async throws -> ExecSession {
+func ensureAndStart() async throws -> (ExecSession, ExecTarget) {
     if let serviceName {
         fail(125, "the service “\(serviceName)” is not running. It starts with the project's container; check Project Settings ▸ Environment ▸ Services.")
     }
@@ -192,18 +208,19 @@ func ensureAndStart() async throws -> ExecSession {
 }
 
 let session: ExecSession
+let execTarget: ExecTarget
 do {
     // The project folder was replaced (deleted and re-cloned) since the container was created: its bind mount pins the
     // old directory, so let ensureRunning recreate the container before running anything.
     let replaced = serviceName == nil && (workspace.spec.map { spec in workspace.mountIdentity.map { $0 != spec.mountIdentity() } ?? false } ?? false)
     if replaced {
-        session = try await ensureAndStart()
+        (session, execTarget) = try await ensureAndStart()
     } else {
         do {
-            session = try await startSession()
+            (session, execTarget) = try await startSession()
         } catch ContainerError.notFound, ContainerError.conflict {
             // Not created yet, or stopped when idle.
-            session = try await ensureAndStart()
+            (session, execTarget) = try await ensureAndStart()
         }
     }
 } catch let error as SocketError where error.isConnectionRefusedOrMissing {
@@ -247,8 +264,8 @@ for sig in [SIGTERM, SIGINT, SIGHUP, SIGWINCH] {
             // KILL a second later), then leave. The wrapper also passes the TERM to the program.
             session.closeStdin()
             Task {
-                _ = try? await ExecSession.run(client: client, container: targetContainer,
-                                               argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: targetUser,
+                _ = try? await ExecSession.run(client: client, container: execTarget.container,
+                                               argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: execTarget.user,
                                                wrap: false, timeout: .seconds(5))
                 exit(128 + sig)
             }
@@ -256,8 +273,8 @@ for sig in [SIGTERM, SIGINT, SIGHUP, SIGWINCH] {
         } else if interactive {
             // Hang up the whole session in the container, then leave.
             Task {
-                _ = try? await ExecSession.run(client: client, container: targetContainer,
-                                               argv: ExecWrapper.killSession(token: String(token)), user: targetUser, wrap: false,
+                _ = try? await ExecSession.run(client: client, container: execTarget.container,
+                                               argv: ExecWrapper.killSession(token: String(token)), user: execTarget.user, wrap: false,
                                                timeout: .seconds(5))
                 restoreTerminal()
                 exit(128 + sig)
@@ -298,8 +315,8 @@ if stdioArgv != nil {
             })
     } catch {
         // The reader went away (stdout closed) or the connection to the container dropped: stop the program there.
-        _ = try? await ExecSession.run(client: client, container: targetContainer,
-                                       argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: targetUser,
+        _ = try? await ExecSession.run(client: client, container: execTarget.container,
+                                       argv: ExecWrapper.killSession(token: String(token), signal: "TERM"), user: execTarget.user,
                                        wrap: false, timeout: .seconds(5))
         FileHandle.standardError.write(Data("BelloCode: the relayed program's stream ended unexpectedly; it was stopped in the container.\n".utf8))
         exit(125)
@@ -321,7 +338,7 @@ do {
 let code = (try? await session.exitCode()) ?? 125
 restoreTerminal()
 if interactive {
-    _ = try? await ExecSession.run(client: client, container: targetContainer, argv: ["rm", "-f", "/tmp/.bellocode/\(token).pid"],
-                                   user: targetUser, wrap: false, timeout: .seconds(5))
+    _ = try? await ExecSession.run(client: client, container: execTarget.container, argv: ["rm", "-f", "/tmp/.bellocode/\(token).pid"],
+                                   user: execTarget.user, wrap: false, timeout: .seconds(5))
 }
 exit(Int32(truncatingIfNeeded: code < 0 ? 125 : code))

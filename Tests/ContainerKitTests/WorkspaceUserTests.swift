@@ -45,11 +45,15 @@ struct WorkspaceUserTests {
     }
 
     @Test func onlyANonzeroNumericContainerUserIsVerified() {
-        for value in ["1000:1000", "501", "65534:65534"] { #expect(WorkspaceUser.isVerifiedContainerUser(value), "\(value)") }
-        for value in ["0", "0:0", "00", "root", "node", "", "1000:staff"] as [String] {
+        for value in ["1000:1000", "501:20", "65534:65534", "1000:0"] { #expect(WorkspaceUser.isVerifiedContainerUser(value), "\(value)") }
+        // A uid without its group leaves the group to the container's /etc/passwd at each exec.
+        for value in ["0", "0:0", "00", "0:1000", "root", "node", "", "1000:staff", "501", "node:1000"] as [String] {
             #expect(!WorkspaceUser.isVerifiedContainerUser(value), "\(value)")
         }
         #expect(!WorkspaceUser.isVerifiedContainerUser(nil))
+        #expect(WorkspaceUser.verifiedExecUser(" 1000:1000 ") == "1000:1000")
+        #expect(WorkspaceUser.verifiedExecUser("0001000:020") == "1000:20", "the numbers, normalised")
+        #expect(WorkspaceUser.verifiedExecUser("node") == nil)
     }
 
     @Test func theAccountFileIsReadOnlyWhenTheArchiveHoldsARegularFile() {

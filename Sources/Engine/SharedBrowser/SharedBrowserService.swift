@@ -596,7 +596,7 @@ public final class SharedBrowserService {
         guard let id = try? await runtime.ownedContainerID() else { return }
         guard viewerForward == nil, phase.isReady, viewerSubscribers > 0 else { return }
         guard let forwarder = try? PortForwarder(client: EngineClient(socketPath: runtime.socketPath), container: id,
-                                                 containerPort: BrowserContainerSpec.viewerPort, maxConnections: 8) else { return }
+                                                 containerPort: BrowserContainerSpec.viewerPort, workspace: false, maxConnections: 8) else { return }
         viewerForward = (forwarder, Task { await forwarder.run() })
         viewerURL = URL(string: "http://127.0.0.1:\(forwarder.hostPort)/bellocode.html")
     }
@@ -711,7 +711,7 @@ public final class SharedBrowserService {
             forwards[oldest] = nil
         }
         guard let forwarder = try? PortForwarder(client: EngineClient(socketPath: runtime.socketPath), container: target.container,
-                                                 containerPort: target.port, containerHost: target.host) else { return nil }
+                                                 containerPort: target.port, containerHost: target.host, workspace: true) else { return nil }
         forwards[key] = (forwarder, Task { await forwarder.run() }, target.project, .now)
         return forwarder.hostPort
     }

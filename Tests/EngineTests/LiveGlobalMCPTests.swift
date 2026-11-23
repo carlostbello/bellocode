@@ -314,7 +314,7 @@ struct LiveGlobalMCPTests {
             var trusted = ""
             for _ in 0..<20 {
                 let result = try await environments.activeRuntime.run(container: container, argv: ["node", "-e", fetch], workingDir: nil, environment: [:],
-                                                                      user: "\(getuid()):\(getgid())", timeout: .seconds(30))
+                                                                      timeout: .seconds(30))
                 trusted = String(decoding: result.stdout, as: UTF8.self)
                 if trusted.contains("status") { break }
                 try await Task.sleep(for: .milliseconds(500))
@@ -322,8 +322,7 @@ struct LiveGlobalMCPTests {
             #expect(trusted.contains("status 200"), "with the bundle: \(trusted)")
             // Control: without the variable, the same fetch fails on the certificate.
             let control = try await environments.activeRuntime.run(
-                container: container, argv: ["env", "-u", "NODE_EXTRA_CA_CERTS", "node", "-e", fetch], workingDir: nil, environment: [:],
-                user: "\(getuid()):\(getgid())", timeout: .seconds(30))
+                container: container, argv: ["env", "-u", "NODE_EXTRA_CA_CERTS", "node", "-e", fetch], workingDir: nil, environment: [:], timeout: .seconds(30))
             #expect(String(decoding: control.stdout, as: UTF8.self).contains("error"), "without the bundle the test CA is not trusted")
 
             // Network diagnostics from the container: reached, the test CA as issuer, the proxy header, interception named.

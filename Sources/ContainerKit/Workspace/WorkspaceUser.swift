@@ -40,11 +40,17 @@ public struct WorkspaceUser: Sendable, Equatable {
         return WorkspaceUser(uid: uid, gid: gid)
     }
 
-    /// Whether a container's configured user (`Config.User`) is a nonzero numeric uid: what every workspace container
-    /// BelloCode creates has, and what a container must have to be reused or adopted.
-    public static func isVerifiedContainerUser(_ value: String?) -> Bool {
-        guard let value, let user = numeric(value) else { return false }
-        return user.uid != 0
+    /// Whether a container's configured user (`Config.User`) is a nonzero numeric uid with a numeric group: what every
+    /// workspace container BelloCode creates has, and what a container must have to be reused, adopted or exec'd into.
+    public static func isVerifiedContainerUser(_ value: String?) -> Bool { verifiedExecUser(value) != nil }
+
+    /// The `uid:gid` every exec into a container whose configured user is `value` runs as, or nil when that is not a
+    /// nonzero uid with a group, all numbers. Never a name: Docker resolves a name (and a number without a group) from
+    /// the container's own `/etc/passwd` at each exec, and a workspace user who can rewrite that file could map it to
+    /// uid 0 for every later command (AF10 follow-up).
+    public static func verifiedExecUser(_ value: String?) -> String? {
+        guard let value, let user = numeric(value), user.uid != 0, let gid = user.gid else { return nil }
+        return "\(user.uid):\(gid)"
     }
 
     /// Resolves `value` as Docker (runc) does from the image's account files: a numeric user is a uid (its primary

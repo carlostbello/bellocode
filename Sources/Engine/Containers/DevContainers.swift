@@ -352,7 +352,7 @@ extension EnvironmentService {
 
     /// After the container runs: forward the file's ports and run its lifecycle commands once the person approved them
     /// (postCreate after a new container, postStart after each start).
-    func devContainerStarted(_ model: ProjectEnvironment, container: String, user: String, created: Bool, wasStopped: Bool) {
+    func devContainerStarted(_ model: ProjectEnvironment, container: String, created: Bool, wasStopped: Bool) {
         guard let plan = devContainerPlan(model) else { return }
         for port in plan.forwardPorts where !model.forwards.contains(where: { $0.containerPort == port }) {
             _ = try? forward(model.directory, port: port)
@@ -370,7 +370,7 @@ extension EnvironmentService {
         tasks.set("devlifecycle-\(model.projectKey)", Task { [weak self] in
             for command in commands {
                 let result = try? await runtimeRef.run(container: container, argv: [shell, "-c", command], workingDir: directory,
-                                                       environment: environment, user: user, timeout: .seconds(900))
+                                                       environment: environment, timeout: .seconds(900))
                 guard self != nil else { return }
                 if result?.exitCode != 0 {
                     model.lastError = "The dev container command “\(command.prefix(80))” failed (exit \(result.map { String($0.exitCode) } ?? "unknown"))."

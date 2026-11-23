@@ -61,12 +61,17 @@ public enum WorkspaceError: Error, Sendable, Equatable, CustomStringConvertible 
     case rootUser(String)
     /// A named user (or group) the image does not define (AF10), so it cannot be shown not to be root.
     case unknownUser(String)
+    /// An exec into a container whose configured user is not a nonzero numeric `uid:gid` (container, its user): it was
+    /// not created by this version of BelloCode, so nothing runs in it until it is recreated (AF10 follow-up).
+    case unverifiedUser(container: String, user: String)
 
     public var description: String {
         switch self {
         case .rootUser(let user): "The container's user “\(user)” is root in its image; BelloCode never runs commands as root. Use the image's non-root user (remoteUser), or leave it out to use your Mac user."
         case .unknownUser(let user):
             "The container's user “\(user)” is not defined in its image's /etc/passwd (or /etc/group), so BelloCode cannot show it is not root. Use a user the image defines, a numeric uid:gid, or leave remoteUser out to use your Mac user."
+        case .unverifiedUser(let container, let user):
+            "The container \(container) runs as “\(user.isEmpty ? "the image's default user" : user)”, not as a verified numeric non-root user, so BelloCode runs nothing in it. Restart the project's environment (Project Settings ▸ Environment) to recreate it."
         case .imageMissing(let image): "The image \(image) is not on this Mac yet. Pull it in Project Settings ▸ Environment."
         case .unmountable(let paths):
             "These folders cannot be mounted (missing, or not shared with Rancher Desktop): \(paths.joined(separator: ", "))"
@@ -181,8 +186,7 @@ public struct WorkspaceManager: Sendable {
         let check = ["/bin/sh", "-c", "for f; do [ -e \"$f\" ] || exit 9; done", "check"] + markers
         for attempt in 0..<8 {
             let id = try await createContainer(spec, imageID: imageID, user: user)
-            let result = try await ExecSession.run(client: client, container: id, argv: check, user: spec.user, wrap: false, limit: 1024,
-                                                   timeout: .seconds(10))
+            let result = try await run(container: id, argv: check, wrap: false, limit: 1024, timeout: .seconds(10))
             if result.exitCode == 0 { return id }
             try await client.removeContainer(id, force: true)
             try await Task.sleep(for: .milliseconds(attempt < 2 ? 500 : 900))
@@ -254,15 +258,18 @@ public struct WorkspaceManager: Sendable {
             .merging(spec.extraLabels) { a, _ in a }
     }
 
-    /// AF10: the numeric, non-root user the workspace runs as. Numbers are taken as they are; a user or group name is
-    /// resolved from the exact image's own account files, read without running anything of the image.
+    /// AF10: the numeric, non-root user the workspace runs as, always with its group. `uid:gid` is taken as it is; a
+    /// name, a group name or a uid without a group is resolved from the exact image's own account files, read without
+    /// running anything of the image (a uid the image does not list gets group 0, as Docker would give it). The group
+    /// is always recorded so that no later exec leaves it to the container's `/etc/passwd`.
     func verifiedUser(_ spec: WorkspaceSpec, imageID: String?) async throws -> WorkspaceUser {
-        let user: WorkspaceUser?
-        if let numeric = WorkspaceUser.numeric(spec.user) {
+        var user: WorkspaceUser?
+        if let numeric = WorkspaceUser.numeric(spec.user), numeric.gid != nil {
             user = numeric
         } else {
             let files = try await accountFiles(image: imageID ?? spec.image, spec: spec)
             user = WorkspaceUser.resolve(spec.user, passwd: files.passwd, group: files.group)
+            if user?.gid == nil { user?.gid = 0 }
         }
         guard let user else { throw WorkspaceError.unknownUser(spec.user) }
         guard user.uid != 0 else { throw WorkspaceError.rootUser(spec.user) }
@@ -415,37 +422,32 @@ public struct WorkspaceManager: Sendable {
 
     // MARK: Probes
 
-    public func listeningPorts(container: String, user: String) async throws -> [ListeningPort] {
-        let result = try await ExecSession.run(client: client, container: container, argv: ContainerProbes.listeningPortsScript,
-                                               user: user, wrap: false, limit: 512 * 1024)
+    public func listeningPorts(container: String) async throws -> [ListeningPort] {
+        let result = try await run(container: container, argv: ContainerProbes.listeningPortsScript, wrap: false, limit: 512 * 1024)
         return ContainerProbes.parseListeningPorts(String(decoding: result.stdout, as: UTF8.self))
     }
 
-    public func processes(container: String, user: String) async throws -> [ContainerProcess] {
-        let result = try await ExecSession.run(client: client, container: container, argv: ContainerProbes.processListScript,
-                                               user: user, wrap: false, limit: 512 * 1024)
+    public func processes(container: String) async throws -> [ContainerProcess] {
+        let result = try await run(container: container, argv: ContainerProbes.processListScript, wrap: false, limit: 512 * 1024)
         return ContainerProbes.parseProcesses(String(decoding: result.stdout, as: UTF8.self))
     }
 
     /// Kills processes left behind by finished or cancelled commands (see `ContainerProbes.reaperScript`). Returns how
     /// many were signalled.
     @discardableResult
-    public func reap(container: String, user: String) async throws -> Int {
-        let result = try await ExecSession.run(client: client, container: container, argv: ContainerProbes.reaperScript,
-                                               user: user, wrap: false, limit: 4096)
+    public func reap(container: String) async throws -> Int {
+        let result = try await run(container: container, argv: ContainerProbes.reaperScript, wrap: false, limit: 4096)
         return Int(String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
-    public func inventory(container: String, user: String) async throws -> ContainerProbes.ToolInventory {
-        let result = try await ExecSession.run(client: client, container: container, argv: ContainerProbes.toolInventoryScript,
-                                               user: user, wrap: false, limit: 64 * 1024)
+    public func inventory(container: String) async throws -> ContainerProbes.ToolInventory {
+        let result = try await run(container: container, argv: ContainerProbes.toolInventoryScript, wrap: false, limit: 64 * 1024)
         return ContainerProbes.parseInventory(String(decoding: result.stdout, as: UTF8.self))
     }
 
     /// Raises inotify events in the container for host paths that changed (`ContainerProbes.touchScript`).
-    public func touch(container: String, user: String, paths: [String]) async throws {
+    public func touch(container: String, paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        _ = try await ExecSession.run(client: client, container: container, argv: ContainerProbes.touchScript(paths),
-                                      user: user, wrap: false, limit: 4096)
+        _ = try await run(container: container, argv: ContainerProbes.touchScript(paths), wrap: false, limit: 4096)
     }
 }

@@ -344,7 +344,7 @@ struct LiveEgressRoutingTests {
             try await client.startContainer(webID)
             try await gateway.ensure(EgressGatewaySpec(scopeKey: key, proxyPort: Int(port), token: token, extraLabels: LiveEgressTests.labels))
             try await gateway.attach(scopeKey: key, network: network)
-            let relay = try PortForwarder(client: client, container: EgressGateway.containerName(key), containerPort: 8080, containerHost: "web")
+            let relay = try PortForwarder(client: client, container: EgressGateway.containerName(key), containerPort: 8080, containerHost: "web", workspace: false)
             forwarder.withLock { $0 = relay }
             Task { await relay.run() }
             spec.egress = EgressAttachment(network: EgressGateway.networkName(key), caFingerprint: proxyCA.fingerprint)

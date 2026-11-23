@@ -205,9 +205,13 @@ created by BelloCode…", naming it (`ForeignResourceError`, `ResourceOwnershipT
 
 One container per project (`bellocode-ws-<key>`), project and worktrees at the same paths, host uid:gid, no capabilities,
 `no-new-privileges`, `init`; saved policy in force first (S3). A dev container's named `remoteUser` is resolved to its
-uid:gid from the image's `/etc/passwd` (read from a never-started container) and refused if root or undefined; `$HOME`
-and nested caches are given to the user by BelloCode's own image (the egress gateway's), never the project's, and
-nothing runs as root in the workspace. Recreated when image, setting, folder identity or the
+uid:gid from the image's `/etc/passwd` (read from a never-started container) and refused if root or undefined (a bare
+uid gets its group the same way, so the group is always recorded); `$HOME` and nested caches are given to the user by
+BelloCode's own image (the egress gateway's), never the project's, and nothing runs as root in the workspace. Every
+exec into it (helper commands, terminals, relayed MCP servers, probes, diagnostics, port relays, the shared browser's
+routes) runs as the container's recorded numeric uid:gid against its inspected ID, never as a name Docker would
+resolve from the container's own (writable) `/etc/passwd`; a container whose user is not a nonzero numeric uid:gid gets
+no exec (`WorkspaceManager.execTarget`, `WorkspaceError.unverifiedUser`). Recreated when image, setting, folder identity or the
 certificate selection changes; stopped when idle; archiving only hides; volumes go only by **Delete Container and
 Data…** (lists, asks once). Every blocked state is a phase with message and fix (helper configuration, banner, status
 item, context line). Ports forward on demand to `127.0.0.1` through an exec relay. File-watch bridge: FSEvents → `touch`.

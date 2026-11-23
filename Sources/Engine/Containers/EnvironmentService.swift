@@ -706,11 +706,11 @@ public final class EnvironmentService {
                 // The shared workspace mounts code roots outside the folders Rancher Desktop is known to share: check
                 // each is really visible in the container (a marker written on the Mac), once per container.
                 if spec.isShared {
-                    let hidden = await Self.invisibleRoots(spec.workspaceRoots, container: id, user: spec.user, runtime: runtimeRef)
+                    let hidden = await Self.invisibleRoots(spec.workspaceRoots, container: id, runtime: runtimeRef)
                     if !hidden.isEmpty { throw WorkspaceError.unmountable(hidden) }
                 }
                 var inventory: ContainerProbes.ToolInventory?
-                if firstInventory { inventory = try? await runtimeRef.inventory(container: id, user: spec.user) }
+                if firstInventory { inventory = try? await runtimeRef.inventory(container: id) }
                 guard let self, self.generations[model.directory] == generation, !Task.isCancelled else { return }
                 model.record.containerID = id
                 model.record.mountIdentity = spec.mountIdentity()
@@ -725,7 +725,7 @@ public final class EnvironmentService {
                 self.scheduleConfigWrite()
                 self.syncMCPServers(model)
                 self.startServices(model)
-                self.devContainerStarted(model, container: id, user: spec.user, created: previousID != id, wasStopped: wasStopped)
+                self.devContainerStarted(model, container: id, created: previousID != id, wasStopped: wasStopped)
             } catch {
                 guard let self, self.generations[model.directory] == generation else { return }
                 if case WorkspaceError.unmountable(let paths) = error { model.phase = .unmountable(paths) } else {
@@ -940,12 +940,11 @@ public final class EnvironmentService {
                 let last = model.lastActivity ?? model.record.lastUsed ?? .distantPast
                 guard Date().timeIntervalSince(last) > TimeInterval(minutes * 60) else { continue }
                 let runtimeRef = activeRuntime
-                let user = workspaceSpec(model)?.user ?? "\(getuid()):\(getgid())"
                 guard await runtimeRef.runningExecs(container: id) == 0 else {
                     model.lastActivity = Date()
                     continue
                 }
-                _ = try? await runtimeRef.reap(container: id, user: user)
+                _ = try? await runtimeRef.reap(container: id)
                 try? await runtimeRef.stop(container: id)
                 bridges.removeValue(forKey: model.directory)?.stop()
                 stopServices(model)
@@ -961,12 +960,12 @@ public final class EnvironmentService {
     /// After a command ends (or is cancelled), once nothing runs in the container any more, kills processes that
     /// escaped their command (`setsid`, double forks). The wrapper's TERM→KILL takes 2 s, so wait 3 s first.
     private func scheduleReap(_ model: ProjectEnvironment) {
-        guard let id = model.record.containerID, let spec = workspaceSpec(model) else { return }
+        guard let id = model.record.containerID, workspaceSpec(model) != nil else { return }
         let runtimeRef = activeRuntime
         tasks.set("reap-\(model.projectKey)", Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, await runtimeRef.runningExecs(container: id) == 0 else { return }
-            guard let count = try? await runtimeRef.reap(container: id, user: spec.user) else { return }
+            guard let count = try? await runtimeRef.reap(container: id) else { return }
             if count > 0 {
                 model.lastReap = (count, Date())
                 Self.log.info("reaped \(count, privacy: .public) stray processes")
@@ -978,8 +977,8 @@ public final class EnvironmentService {
     /// Runs the reaper now (Containers view, "Clean Up Processes"). Returns how many were stopped.
     public func cleanUpProcesses(_ directory: String) async -> Int {
         let model = environment(for: directory)
-        guard let id = model.record.containerID, let spec = workspaceSpec(model) else { return 0 }
-        let count = (try? await activeRuntime.reap(container: id, user: spec.user)) ?? 0
+        guard let id = model.record.containerID, workspaceSpec(model) != nil else { return 0 }
+        let count = (try? await activeRuntime.reap(container: id)) ?? 0
         model.lastReap = (count, Date())
         return count
     }
@@ -989,12 +988,12 @@ public final class EnvironmentService {
     /// Reads what listens in the project's container (Ports list).
     public func refreshPorts(_ directory: String) async {
         let model = environment(for: directory)
-        guard model.phase == .ready, let id = model.record.containerID, let spec = workspaceSpec(model) else {
+        guard model.phase == .ready, let id = model.record.containerID, workspaceSpec(model) != nil else {
             model.ports = []
             return
         }
         do {
-            model.ports = try await activeRuntime.listeningPorts(container: id, user: spec.user)
+            model.ports = try await activeRuntime.listeningPorts(container: id)
             model.portsUpdated = Date()
         } catch {
             model.lastError = Self.describe(error)
@@ -1006,15 +1005,15 @@ public final class EnvironmentService {
     public func forward(_ directory: String, port: Int) throws -> URL {
         let model = environment(for: directory)
         if let existing = model.forwards.first(where: { $0.containerPort == port }) { return existing.url }
-        guard model.phase == .ready, let id = model.record.containerID, let spec = workspaceSpec(model) else {
+        guard model.phase == .ready, let id = model.record.containerID, workspaceSpec(model) != nil else {
             throw ContainerError.notFound("the project's container is not running")
         }
         let listener = model.ports.first { $0.port == port } ?? ListeningPort(port: port, address: "127.0.0.1")
         let forwarder: PortForwarder
         do {
-            forwarder = try activeRuntime.makeForwarder(container: id, port: listener, hostPort: port, user: spec.user)
+            forwarder = try activeRuntime.makeForwarder(container: id, port: listener, hostPort: port)
         } catch {
-            forwarder = try activeRuntime.makeForwarder(container: id, port: listener, hostPort: 0, user: spec.user)
+            forwarder = try activeRuntime.makeForwarder(container: id, port: listener, hostPort: 0)
         }
         forwarders[model.directory, default: [:]][port] = forwarder
         tasks.set("forward-\(model.projectKey)-\(port)", Task { await forwarder.run() })
@@ -1075,7 +1074,7 @@ public final class EnvironmentService {
         bridgeContainers[model.directory] = id
         let runtimeRef = activeRuntime
         let bridge = FileEventBridge(roots: spec.workspaceRoots) { paths in
-            try await runtimeRef.touch(container: id, user: spec.user, paths: paths)
+            try await runtimeRef.touch(container: id, paths: paths)
         }
         bridges[model.directory] = bridge
         bridge.start()
@@ -1142,7 +1141,7 @@ public final class EnvironmentService {
         }
         let result = try await activeRuntime.run(
             container: id, argv: [shell, "-c", script], workingDir: worktree,
-            environment: ["BELLOCODE_WORKTREE_PATH": worktree, "BELLOCODE_PROJECT_ROOT": projectDirectory], user: spec.user,
+            environment: ["BELLOCODE_WORKTREE_PATH": worktree, "BELLOCODE_PROJECT_ROOT": projectDirectory],
             timeout: .seconds(600))
         // stdout and stderr each keep their head and tail (marked when cut); the combined text keeps both ends too.
         let combined = WorktreeSetupResult.headAndTail(
