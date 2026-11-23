@@ -41,6 +41,9 @@ final class WorkspaceController {
     /// A thread or draft of this project is shown: the environment registers the MCP servers set up for all projects
     /// there (once; cheap afterwards). Replaceable in tests.
     @ObservationIgnored var projectShown: @MainActor (String) -> Void
+    /// A thread shown before its session (and so its project) is known: watched until it is, then its project is marked
+    /// shown (NF03). One per window, replaced by the next context and cancelled with the window.
+    @ObservationIgnored private var projectShownWatch: ObservationLoop?
     /// Back and forward through visited threads and drafts (most recent last; bounded).
     @ObservationIgnored var backStack: [ShellSelection] = []
     @ObservationIgnored var forwardStack: [ShellSelection] = []
@@ -137,8 +140,29 @@ final class WorkspaceController {
     /// A surface context for a selection (nil when it cannot be shown, for example a removed project's draft).
     func makeContext(for selection: ShellSelection) -> ThreadSurfaceContext? {
         guard let context = makeSurfaceContext(for: selection) else { return nil }
-        if !context.directory.isEmpty { projectShown(context.directory) }
+        projectShownWatch?.cancel()
+        projectShownWatch = nil
+        if !context.directory.isEmpty {
+            projectShown(context.directory)
+        } else if case .thread(let id) = selection {
+            watchProjectDirectory(of: id)
+        }
         return context
+    }
+
+    /// Marks the thread's project shown as soon as its session arrives (cold launch, a child or a notification opened
+    /// before its row): the view is not rebuilt for it, so nothing else would (NF03).
+    private func watchProjectDirectory(of id: SessionID) {
+        var marked = false
+        projectShownWatch = ObservationLoop { [weak self] in
+            guard let self, !marked, !self.isClosed else { return }
+            let session = self.openThreads[id]?.session ?? self.row(id)?.session
+            guard let session else { return }
+            let directory = self.projectItem(for: session)?.directory ?? session.directory
+            guard !directory.isEmpty else { return }
+            marked = true
+            self.projectShown(directory)
+        }
     }
 
     private func makeSurfaceContext(for selection: ShellSelection) -> ThreadSurfaceContext? {
@@ -439,6 +463,8 @@ final class WorkspaceController {
         deletions.unregister(self)
         saveNow()
         isClosed = true
+        projectShownWatch?.cancel()
+        projectShownWatch = nil
         for model in openThreads.values { model.close() }
         openThreads.removeAll()
         recency.removeAll()

@@ -75,7 +75,8 @@ recorded and the sync is retried with backoff): when the container is ready, aft
 ## Global MCP servers (Settings ▸ MCP Servers, Window ▸ MCP Servers…)
 
 Registered for each project in use (a thread or new-thread draft of it is shown: the window marks the project in use
-when it builds the view's context, v1.0.1 NF03), per location; Project Settings ▸ Environment turns all
+when it builds the view's context, or, for a thread shown before its session has loaded, as soon as the session
+arrives; v1.0.1 NF03), per location; Project Settings ▸ Environment turns all
 or single ones off; a project server of the same name wins. List in `mcp.global`; secret values only in the Keychain
 (`app.bellocode.mcp`, `<id>/header|env/<name>`), read at registration, sent only in opencode's runtime registration (never
 a file, the store, the helper configuration or a log; the editor shows "Saved in Keychain"; missing: not registered).
