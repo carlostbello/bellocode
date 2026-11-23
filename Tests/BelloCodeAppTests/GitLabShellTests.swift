@@ -82,11 +82,47 @@ import Testing
                 "only free models are shown")
     }
 
+    /// v1.0.1 NV02: the tab's Show commands work on a new-thread draft and in the empty state (no thread shown), and a
+    /// disabled one says why truthfully.
+    @Test func gitLabShowCommandsWorkWithoutAThread() {
+        var draft = CommandContext()
+        draft.gitLab.panelAvailable = true
+        draft.gitLab.configured = true
+        draft.gitLab.hasProject = true
+        #expect(!draft.agents.available, "no thread: the Agents state is empty")
+        #expect(draft.isEnabled(.showMergeRequests) && draft.isEnabled(.showIssues) && draft.isEnabled(.showTodos))
+        var empty = draft
+        empty.gitLab.hasProject = false
+        #expect(empty.isEnabled(.showMergeRequests) && empty.isEnabled(.showTodos))
+        #expect(!empty.isEnabled(.showIssues))
+        #expect(empty.disabledReason(for: .showIssues) == "Open a thread or a new-thread draft in a project", "GitLab is connected")
+        var unconfigured = draft
+        unconfigured.gitLab.configured = false
+        #expect(unconfigured.isEnabled(.showMergeRequests), "the tab offers Connect GitLab")
+        #expect(unconfigured.disabledReason(for: .showIssues) == "Connect GitLab in Settings ▸ GitLab")
+        #expect(unconfigured.disabledReason(for: .showTodos) == "Connect GitLab in Settings ▸ GitLab")
+        #expect(!CommandContext().isEnabled(.showMergeRequests), "no GitLab services in this window")
+    }
+
+    /// NV02 in the real window: a new-thread draft's state enables Show Merge Requests and knows its project.
+    @Test func aDraftEnablesShowMergeRequests() async throws {
+        let shell = try await IntegratedShellTests.Shell.start()
+        defer { Task { await shell.stop() } }
+        let directory = try #require(shell.engine.root.projects.first?.directory)
+        shell.controller.workspace.newThread(in: directory)
+        #expect(await waitUntil(timeout: .seconds(5)) { shell.controller.container.displayed == .draft(directory: directory) })
+        let context = shell.controller.commandContext()
+        #expect(context.gitLab.panelAvailable && context.gitLab.hasProject && !context.agents.available)
+        #expect(context.isEnabled(.showMergeRequests))
+    }
+
     @Test func gitLabCommandsValidateFromTheTabsState() {
         var context = CommandContext()
         #expect(!context.isEnabled(.reviewMergeRequest) && !context.isEnabled(.submitReview) && !context.isEnabled(.showIssues))
         context.agents.available = true
+        context.gitLab.panelAvailable = true
         context.gitLab.configured = true
+        context.gitLab.hasProject = true
         context.gitLab.hasMergeRequest = true
         context.gitLab.hasThread = true
         #expect(context.isEnabled(.reviewMergeRequest) && context.isEnabled(.toggleBabysit) && context.isEnabled(.showIssues))

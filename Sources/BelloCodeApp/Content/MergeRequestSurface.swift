@@ -161,7 +161,9 @@ extension MergeRequestSurfaces {
         var state = GitLabCommandState()
         guard let model else { return state }
         let service = model.service
+        state.panelAvailable = true
         state.configured = !service.instances.isEmpty
+        state.hasProject = context?.projectDirectory.isEmpty == false
         state.hasThread = model.threadID != nil
         if let link = focusedLink {
             state.hasMergeRequest = true
