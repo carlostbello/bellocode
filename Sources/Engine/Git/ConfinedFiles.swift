@@ -81,10 +81,7 @@ final class ConfinedDirectory {
         }
         switch info.st_mode & S_IFMT {
         case S_IFLNK:
-            var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
-            let count = readlinkat(descriptor, name, &buffer, buffer.count - 1)
-            guard count >= 0 else { return .unreadable }
-            return .symlink(String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self))
+            return linkText(name).map(Entry.symlink) ?? .unreadable
         case S_IFDIR:
             return .directory
         case S_IFREG:
@@ -114,15 +111,26 @@ final class ConfinedDirectory {
         case skipped
     }
 
+    /// The text of the link `name`, or nil when `name` is not a link (any more) or cannot be read. Only `readlinkat`:
+    /// whatever replaced the link meanwhile is never opened.
+    func linkText(_ name: String) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = readlinkat(descriptor, name, &buffer, buffer.count - 1)
+        guard count >= 0 else { return nil }
+        return String(decoding: buffer[..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
     /// The start of `name` without following a link: a regular file's first `prefix` bytes, read only when its size
-    /// (checked on the opened descriptor, before anything is allocated) is below `maxSize`; a link's text.
-    func preview(_ name: String, maxSize: Int, prefix: Int) -> Preview {
+    /// (checked on the opened descriptor, before anything is allocated) is below `maxSize`; a link's text. Nothing
+    /// larger is ever read, even when the entry changes type between the examination and the read (AF01: a link
+    /// replaced by a large file is skipped, never read whole). `afterExamining` runs between the two (tests).
+    func preview(_ name: String, maxSize: Int, prefix: Int, afterExamining: (() -> Void)? = nil) -> Preview {
         var info = stat()
         guard fstatat(descriptor, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return .skipped }
+        afterExamining?()
         switch info.st_mode & S_IFMT {
         case S_IFLNK:
-            if case .symlink(let text) = entry(name) { return .symlink(text) }
-            return .skipped
+            return linkText(name).map(Preview.symlink) ?? .skipped
         case S_IFREG:
             let file = openat(descriptor, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
             guard file >= 0 else { return .skipped }

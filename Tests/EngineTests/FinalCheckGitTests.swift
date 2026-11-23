@@ -34,6 +34,39 @@ struct FinalCheckGitTests {
         #expect(GitRepository.untrackedExcerpt("notes.txt", in: repo.path) == "INSIDE-MARKER\n")
     }
 
+    /// AF01 (second round): a link that a checkout replaces with a large regular file between the examination and the
+    /// read is skipped without reading the replacement (the link branch reads link text only, never the file). The
+    /// replacement is a 1 GiB sparse file: reading it whole would raise the process's peak memory by about that much.
+    @Test func aLinkReplacedByALargeFileIsNotRead() async throws {
+        let repo = try await TempRepo.make(files: ["README.md": "hello\n"])
+        defer { repo.remove() }
+        let link = repo.path + "/swapped.conf"
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "elsewhere")
+        guard case .success(let directory) = ConfinedDirectory.open(root: repo.path, [], create: false) else {
+            Issue.record("the checkout opens")
+            return
+        }
+        func peak() -> Int {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return usage.ru_maxrss  // bytes on Darwin
+        }
+        let before = peak()
+        let size: off_t = 1 << 30
+        let result = directory.preview("swapped.conf", maxSize: 64 << 10, prefix: 8_000) {
+            unlink(link)
+            let file = Darwin.open(link, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+            ftruncate(file, size)
+            close(file)
+        }
+        #expect(result == .skipped)
+        #expect(peak() - before < 256 << 20, "the replacement was not read")
+        // An unchanged link still yields its text.
+        unlink(link)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: "elsewhere")
+        #expect(directory.preview("swapped.conf", maxSize: 64 << 10, prefix: 8_000) == .symlink("elsewhere"))
+    }
+
     /// AF05: committed, staged and unstaged versions of one file survive Stash and Switch, then Restore Stashed
     /// Changes: the index holds the staged version again and the working file the unstaged one.
     @Test func restoreStashedChangesKeepsTheStagedVersion() async throws {
