@@ -39,7 +39,8 @@ e2e-containers: app
 
 # The smoke test plus the execution-modes end-to-end run: shared workspace, two repositories under one temporary code
 # root, an agent reading across them and starting a compose stack through the filtered Docker endpoint (two prompts on
-# a free model). Needs bellocode-test-ws:1 (docs/features/workspace-image.Dockerfile) and redis:7-alpine present.
+# a free model). Needs the images bellocode-test-ws:1 and redis:7-alpine present; build the first with
+#   docker build -t bellocode-test-ws:1 -f docs/features/workspace-image.Dockerfile docs/features
 e2e-exec: app
 	BELLOCODE_SMOKE_EXEC=1 build/BelloCode.app/Contents/MacOS/BelloCode --smoke-test
 

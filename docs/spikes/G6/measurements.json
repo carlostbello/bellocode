@@ -125,10 +125,10 @@
   },
   "sharing" : {
     "Library_not_shared" : "\/Library\/Developer: Engine API 400: invalid mount config for type \"bind\": bind source path does not exist: \/Library\/Developer",
-    "home" : "\/Users\/carlosbello\/.bellocode-g6-spike: container sees 6 entries, host has 6",
+    "home" : "\/Users\/me\/.bellocode-g6-spike: container sees 6 entries, host has 6",
     "private_tmp" : "\/private\/tmp: container sees 24 entries, host has 27",
     "usr_share_not_shared" : "\/usr\/share\/man: Engine API 400: invalid mount config for type \"bind\": bind source path does not exist: \/usr\/share\/man",
-    "var_folders" : "\/var\/folders\/wm\/6pzgb_bn3rv3hb8jzgy3pp340000gn\/T\/: container sees 16664 entries, host has 17958"
+    "var_folders" : "\/var\/folders\/xx\/<user>\/T\/: container sees 16664 entries, host has 17958"
   },
   "throughput" : {
     "bellocodeExec_bytes_match" : 0,

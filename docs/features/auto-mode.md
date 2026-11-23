@@ -94,7 +94,8 @@ wakes `AutoModeService`, nothing is dropped). Escalations move into the normal p
 existing pinned card leads with "Auto asks you: Reads a secret-looking file: .env" and counts in Needs You. Approved calls
 carry `ToolCall.risk.autoApproval`: the transcript shows "✓ Auto-approved · reason · reviewer model|policy|your saved scope"
 under the call (routine reads, todos, questions, skills, sub-agents stay quiet; the audit lists them). Right panel **Auto**
-tab: per-thread audit (cached first, ↑/↓/Return expand), counts, policy and reviewer. Thread ▸ Set Permission Mode: Ask
+tab: per-thread audit (cached first, loaded at once by the thread's ID, one cancellable load, so an offline thread still
+shows its decisions; v1.0.1 NF22; ↑/↓/Return expand), counts, policy and reviewer. Thread ▸ Set Permission Mode: Ask
 ⌃⌥⌘1, Auto-edit ⌃⌥⌘2, Auto ⌃⌥⌘3, Full access ⌃⌥⌘4; Show Auto Audit Log ⌃⌘J; Mark Risk Notices Reviewed; Resume
 Interrupted Thread ⌃⌥⌘P (uniqueness tests pass). The picker (⇧⌘A) lists Auto with what runs and what always asks.
 
@@ -118,7 +119,8 @@ plus the cascade report. The target gets `metadata.bellocode_interrupt` (`held: 
 `[BelloCode interrupt]` note; the caller's transcript shows "✕ Stopped “X”: reason · requested stop, stopped". The target's
 tray shows "Stopped by “Y”: reason. Its queued work is held until you resume." with Open Thread and **Resume** (⌃⌥⌘P):
 clears the hold and posts a resuming note that starts a run (opencode then delivers the parked queue). Resume is a
-continuation, not a rollback. `thread_send` to a held thread is queued, never steered.
+continuation, not a rollback. `thread_send` to a held thread is queued, never steered, and admitted with
+`resume: false`, so it never wakes the thread or clears the hold (v1.0.1 GF02).
 
 ## Verification
 `make test` (Swift Testing, 1,069 tests; new: RiskPolicy 18, AutoReviewer 8, AutoMode 9 + interrupt 2 + audit store 1);

@@ -1,5 +1,7 @@
 # Releasing BelloCode
 
+What changed in each release: [RELEASE-NOTES.md](RELEASE-NOTES.md).
+
 BelloCode 1.0 is an internal build for one owner (docs/PLAN.md, section 0). It is **ad-hoc signed**: it is not signed
 with a Developer ID certificate and not notarised, so Gatekeeper refuses to open a downloaded copy until the owner
 allows it once (below).
@@ -22,10 +24,10 @@ This runs `Scripts/fetch-opencode.sh`, then `Scripts/make-release.sh`, which:
 
 1. builds the release configuration and assembles `build/BelloCode.app` (`Scripts/make-app.sh release`), signing the
    helpers and then the app, all ad-hoc (`BELLOCODE_SIGN_IDENTITY` overrides this when a real identity exists);
-2. checks the bundle: marketing version from `VERSION` (1.0.1), build number (`BELLOCODE_BUILD_NUMBER`, default the
+2. checks the bundle: marketing version from `VERSION`, build number (`BELLOCODE_BUILD_NUMBER`, default the
    commit count), arm64-only executables, the same kind of signature on every nested helper, and
    `codesign --verify --deep --strict`;
-3. zips it with `ditto` as `build/BelloCode-1.0.1.zip`;
+3. zips it with `ditto` as `build/BelloCode-<version>.zip`;
 4. unzips that zip into a temporary folder, marks the copy quarantined as a browser download would, runs the same
    checks on it, confirms it is identical to the built app, and reports Gatekeeper's verdict
    (`spctl --assess --type execute`). For an ad-hoc build the expected verdict is **rejected**: that is what the
@@ -38,7 +40,7 @@ Run `make test` first; `make smoke` checks the bundled server headlessly.
 
 ## Opening it on the owner's Mac
 
-Unzip `BelloCode-1.0.1.zip` (double-click it), move `BelloCode.app` to `/Applications`, then either:
+Unzip `BelloCode-<version>.zip` (double-click it, or `ditto -x -k BelloCode-<version>.zip /Applications`), move `BelloCode.app` to `/Applications`, then either:
 
 - **Finder:** open it once. macOS refuses because it cannot check the developer. On macOS 15 and later open
   **System Settings ▸ Privacy & Security**, scroll to Security, and click **Open Anyway** next to the BelloCode message,

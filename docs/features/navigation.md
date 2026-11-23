@@ -1,6 +1,6 @@
 # Navigation: sidebar organisation, palette, search, notifications (M2-D)
 
-Status: done 2026-11-16 against MockOpenCode (bundled 2.3.0 for `make smoke`). Not yet checked by a person.
+Status: done 2026-11-16 against MockOpenCode (bundled 2.3.0 for `make smoke` then; the pin is now 2.3.2). Not yet checked by a person.
 
 ## Sections and wake rules (`Engine/Organisation/ThreadSections.swift`, pure, injected clock)
 - Every top-level, unarchived thread is in one section: **Pinned** (wins over everything) → **Snoozed** (until its
@@ -54,7 +54,11 @@ key-cap footer. The snooze popover uses DS menu rows and buttons (the date field
 ## Palette (`Palette/`)
 One borderless key `NSPanel` per window, built with the window (no animation). ⌘K actions first; ⌘P threads,
 projects and files of the current project; ⇧⌘F message search. Prefixes `>` actions, `@` threads, `#` projects,
-`/` files. Every `ShellCommand` is listed with its shortcut, or "Unavailable" and the reason in the footer. Ranking:
+`/` files. Every `ShellCommand` is listed with its shortcut, or "Unavailable" and the reason in the footer; so are the
+Browser menu's commands (Show Browser and the built-in browser's items) and Browser ▸ Shared Chrome, validated and run
+exactly as the menu does (`SharedChromeMenuRouter.isEnabled`/`run`; NF20). GitLab to-dos (`+`) show the cached list at
+once; the open palette refreshes them (cancelled when it closes) and updates the rows in place, except in Messages
+mode (NF20). Ranking:
 fuzzy (word starts, runs, prefixes, synonyms) + frecency (persisted, 1,000 keys) + the pick remembered per query for
 3 weeks; fixed group order and deterministic tie-breaks, selection kept while typing; server results (files,
 messages) replace earlier ones only when they arrive, filtered locally meanwhile (no flicker, no spinner). Return

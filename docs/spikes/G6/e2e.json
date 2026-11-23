@@ -1,26 +1,26 @@
 [
   {
-    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "detail" : "\nLinux\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
     "name" : "shell job runs in Linux",
     "passed" : true
   },
   {
-    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "detail" : "\nLinux\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
     "name" : "shell job working directory is the host path",
     "passed" : true
   },
   {
-    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "detail" : "\nLinux\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
     "name" : "shell job runs as the host uid",
     "passed" : true
   },
   {
-    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "detail" : "\nLinux\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
     "name" : "python3 and node come from the container",
     "passed" : true
   },
   {
-    "detail" : "\nLinux\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
+    "detail" : "\nLinux\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\n501\npy 3.11.2\nnode v22.23.5\nto-stderr\n",
     "name" : "stderr captured",
     "passed" : true
   },
@@ -30,7 +30,7 @@
     "passed" : true
   },
   {
-    "detail" : "\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
+    "detail" : "\/Users\/me\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
     "name" : "shell is the helper despite the repository's opencode.json",
     "passed" : true
   },
@@ -70,7 +70,7 @@
     "passed" : true
   },
   {
-    "detail" : "1. `python3 -c 'import platform, os; print(platform.system(), os.getcwd())'` → output: `Linux \/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj` — exit code 0\n2. `node -e 'console.log(process.platform, process.version)'` → output: `linux v22.23.5` — exit code 0\n3. `python3 -c 'import sys; sys.stderr.write(\"boom\\n\"); sys.exit(3)'` → stderr: `boom`, no stdout — exit code 3\n\nNote: the shell tool only surfaces an exit code when it is nonzero, so 0 for the first two is inferred from their clean success (no error reported).",
+    "detail" : "1. `python3 -c 'import platform, os; print(platform.system(), os.getcwd())'` → output: `Linux \/Users\/me\/.bellocode-g6-spike\/e2e\/proj` — exit code 0\n2. `node -e 'console.log(process.platform, process.version)'` → output: `linux v22.23.5` — exit code 0\n3. `python3 -c 'import sys; sys.stderr.write(\"boom\\n\"); sys.exit(3)'` → stderr: `boom`, no stdout — exit code 3\n\nNote: the shell tool only surfaces an exit code when it is nonzero, so 0 for the first two is inferred from their clean success (no error reported).",
     "name" : "agent: failing command surfaced (stderr and exit 3)",
     "passed" : true
   },
@@ -95,12 +95,12 @@
     "passed" : true
   },
   {
-    "detail" : "\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
+    "detail" : "\/Users\/me\/.bellocode-g6-spike\/e2e\/helpers\/bellocode-exec",
     "name" : "PTY program is the helper",
     "passed" : true
   },
   {
-    "detail" : "2e\/proj$ uname -a; echo marker-$((6*7)); pwd\r\n\u001b[?2004l\rLinux 7debe6500f0b 6.18.60-0-virt #1-Alpine SMP PREEMPT_DYNAMIC 2026-11-01 07:26:31 aarch64 GNU\/Linux\r\nmarker-42\r\n\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "detail" : "2e\/proj$ uname -a; echo marker-$((6*7)); pwd\r\n\u001b[?2004l\rLinux 7debe6500f0b 6.18.60-0-virt #1-Alpine SMP PREEMPT_DYNAMIC 2026-11-01 07:26:31 aarch64 GNU\/Linux\r\nmarker-42\r\n\/Users\/me\/.bellocode-g6-spike\/e2e\/proj\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/me\/.bellocode-g6-spike\/e2e\/proj$ ",
     "name" : "PTY lands in the container (uname)",
     "passed" : true
   },
@@ -115,12 +115,12 @@
     "passed" : true
   },
   {
-    "detail" : " x\b\u001b[K\r\u001b[K\rI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ stty size\r\n\u001b[?2004l\r27 91\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "detail" : " x\b\u001b[K\r\u001b[K\rI have no name!@7debe6500f0b:\/Users\/me\/.bellocode-g6-spike\/e2e\/proj$ stty size\r\n\u001b[?2004l\r27 91\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/me\/.bellocode-g6-spike\/e2e\/proj$ ",
     "name" : "PTY resize reaches the container",
     "passed" : true
   },
   {
-    "detail" : "ame!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ echo after-ctrl-$((2+3))\r\n\u001b[?2004l\rafter-ctrl-5\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/carlosbello\/.bellocode-g6-spike\/e2e\/proj$ ",
+    "detail" : "ame!@7debe6500f0b:\/Users\/me\/.bellocode-g6-spike\/e2e\/proj$ echo after-ctrl-$((2+3))\r\n\u001b[?2004l\rafter-ctrl-5\r\n\u001b[?2004hI have no name!@7debe6500f0b:\/Users\/me\/.bellocode-g6-spike\/e2e\/proj$ ",
     "name" : "Ctrl-C interrupts the foreground process",
     "passed" : true
   },

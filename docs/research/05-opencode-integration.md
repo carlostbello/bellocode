@@ -408,7 +408,7 @@ Key risk: client-MCP and RPC routes are under `/api/experimental` (may change be
   use your real browser … A small native MCP server and a Chromium extension, for OpenCode, Claude Code, Codex…". It
   is an **MCP server**, not an opencode plugin. [V] `browse --version`, `browse doctor`; [S] README.
 - The user's opencode config registers it [V] (secrets redacted; none present):
-  `{"mcp":{"servers":{"browse":{"type":"local","command":["/Users/carlosbello/.local/bin/browse","mcp"],
+  `{"mcp":{"servers":{"browse":{"type":"local","command":["/Users/me/.local/bin/browse","mcp"],
   "environment":{"OPENCODE_BROWSER_RUNTIME":"auto-update"}}}}}`.
 - Architecture [S][V doctor]: agent spawns `browse mcp` (stdio proxy) → starts/uses the **relay** (`browse serve`, Rust)
   on `127.0.0.1:19988` (fallback 19990–19997), token in `~/.local/share/browse/relay-token` → the **Chrome-family

@@ -78,8 +78,10 @@ listed. Also shown: global plugins (they run inside opencode on the Mac), files 
 why, and a warning when BelloCode's plugin is not active. **Reload Configuration** (also Window ▸ Reload opencode
 Configuration) is `POST /api/location/reload` and asks first only when approvals or questions would be cancelled;
 **Restart Server…** (`ServerSupervisor.restart`; the event stream reconnects and resyncs) asks first when threads would be
-interrupted. Opening a file, reloading and trusting give feedback in place; failures are shown in the pane, the previous
-list stays visible as stale while offline.
+interrupted, and waits for the restarted server to be ready before the pane refreshes (no transient offline error;
+v1.0.1 NF06). Opening a file, reloading and trusting give feedback in place; failures are shown in the pane, the previous
+list stays visible as stale while offline. Window ▸ Reload opencode Configuration run while the pane is not on screen
+reports its result (success or failure) as a notice in the front window, or an alert with no window (NF16).
 
 ### Repository configuration and trust (one server, many projects)
 
@@ -94,7 +96,9 @@ two layers:
      session's folder, outer first; 64 KB per file, 96 KB total) as the session instruction entry
      `bellocode.project-instructions`, in opencode's own wording. It is written in the awaited session `prompt` hook
      (`SessionPrompt.prepare`), so the first turn already has it, and refreshed at each run when the files change. It is
-     text, not code. `CLAUDE.md` stays off, as before.
+     text, not code. `CLAUDE.md` stays off, as before. Each file is read only once the opened file is confirmed to be
+     reached from the pinned repository root through real directories (an ancestor swapped for a link is refused;
+     v1.0.1 AF08).
    - **Trusted projects only** ("Trust this project's opencode config", per project, default off): the repository's
      `.opencode/agent(s)/*.md`, `.opencode/command(s)/*.md`, `.opencode/skill(s)/*/SKILL.md` and `.agents/skills` are
      added to that project's location through the per-location transforms. Agents support `description`, `mode`,
@@ -103,7 +107,10 @@ two layers:
      The repository's `opencode.json` and plugins never load in this mode, trusted or not.
    - Trust is stored in `app_opencode_trust` (migration `v14-opencode-trust`), mirrored to `<data>/bellocode-trust.json`
      for the plugin, and applied by RPC `bellocode.projectConfig`, which re-reads the file and replays the transforms.
-     It applies at once with no restart, and untrusting removes the items again (verified). Offline, the choice is
+     It applies at once with no restart, and untrusting removes the items again (verified). A change reloads every
+     active location at or below the changed entry (projects and their threads' folders, up to 64), not only the folder
+     chosen, and stays pending until each acknowledges; a location no entry covers any more that still reports the
+     repository configuration keeps it pending with a problem naming it (v1.0.1 AF17). Offline, the choice is
      saved and applied at the next location setup ("Saved; applied when opencode is back").
 2. **"Load every repository's opencode.json and plugins" (`.native`, server-wide, off by default).** opencode loads every
    repository's configuration and plugins itself, for **every** project the server opens, trusted or not. The confirmation

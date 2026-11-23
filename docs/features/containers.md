@@ -74,7 +74,8 @@ recorded and the sync is retried with backoff): when the container is ready, aft
 
 ## Global MCP servers (Settings ▸ MCP Servers, Window ▸ MCP Servers…)
 
-Registered for each project in use (a thread of it is shown), per location; Project Settings ▸ Environment turns all
+Registered for each project in use (a thread or new-thread draft of it is shown: the window marks the project in use
+when it builds the view's context, v1.0.1 NF03), per location; Project Settings ▸ Environment turns all
 or single ones off; a project server of the same name wins. List in `mcp.global`; secret values only in the Keychain
 (`app.bellocode.mcp`, `<id>/header|env/<name>`), read at registration, sent only in opencode's runtime registration (never
 a file, the store, the helper configuration or a log; the editor shows "Saved in Keychain"; missing: not registered).
@@ -211,7 +212,10 @@ BelloCode's own image (the egress gateway's), never the project's, and nothing r
 exec into it (helper commands, terminals, relayed MCP servers, probes, diagnostics, port relays, the shared browser's
 routes) runs as the container's recorded numeric uid:gid against its inspected ID, never as a name Docker would
 resolve from the container's own (writable) `/etc/passwd`; a container whose user is not a nonzero numeric uid:gid gets
-no exec (`WorkspaceManager.execTarget`, `WorkspaceError.unverifiedUser`). Recreated when image, setting, folder identity or the
+no exec (`WorkspaceManager.execTarget`, `WorkspaceError.unverifiedUser`). A container recorded with a name, root or no group (one
+created before v1.0.1's AF09/AF10 fixes) counts as outdated ("user not verified"): it is never reused or adopted and is
+replaced by one created with the verified user. The workspace keeps no capabilities (no CHOWN/DAC_OVERRIDE/FOWNER for home preparation) and `/tmp/.bellocode`
+is a 1777 tmpfs. Recreated when image, setting, folder identity or the
 certificate selection changes; stopped when idle; archiving only hides; volumes go only by **Delete Container and
 Data…** (lists, asks once). Every blocked state is a phase with message and fix (helper configuration, banner, status
 item, context line). Ports forward on demand to `127.0.0.1` through an exec relay. File-watch bridge: FSEvents → `touch`.
@@ -227,7 +231,8 @@ and 15 hooks fire nothing (`HostGitIsolationTests`, also with BelloCode's creden
 configured GitLab instance authenticate through `bellocode-exec --git-credential`, the only program the network profile
 adds, answering only git processes the app launched ([git-parity.md](git-parity.md) "HTTPS credentials"). Git run outside BelloCode is unconfined; `sandbox-exec` is
 deprecated (removal makes host git fail closed). Secrets: delivered to containers by one-use reference; `secret_exec`
-runs the approved exact command in a one-shot sibling (no network, project read-only, value on stdin); see
+runs the approved exact command in a one-shot sibling (no network, project read-only, value on stdin), created and
+exec'd as the image's verified numeric uid:gid (root or an undefined user refused before it exists; v1.0.1 AF10); see
 [orchestration-extras.md](orchestration-extras.md#3-secrets). Host executables: `git`, `/bin/sh`, bundled `opencode`,
 `bellocode-exec`, `rg` (pinned SHA-256, re-checked before signing); licences in `Resources/Acknowledgements/`.
 Host git stays on the Mac for BelloCode and opencode (shim), confined by `HostGit`: `sandbox-exec` (only the real git, no
