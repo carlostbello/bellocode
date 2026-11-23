@@ -35,6 +35,41 @@ import Testing
         #expect(await waitUntil(timeout: .seconds(5)) { shell.controller.container.header?.issueChipTitle == "#12 Crash on launch" })
     }
 
+    /// NF09: the project's draft is already on screen: Start Thread puts the quoted issue into its visible composer (the
+    /// draft context has an insert hook) instead of only updating the stored draft behind it.
+    @Test func startThreadFromIssueFillsTheDraftAlreadyOnScreen() async throws {
+        let shell = try await IntegratedShellTests.Shell.start()
+        defer { Task { await shell.stop() } }
+        let workspace = shell.controller.workspace
+        let directory = try #require(shell.engine.root.projects.first?.directory)
+        workspace.newThread(in: directory)
+        #expect(await waitUntil(timeout: .seconds(5)) {
+            shell.controller.container.displayed == .draft(directory: directory) && shell.controller.container.composerController != nil
+        })
+        #expect(shell.controller.container.context?.onInsertIntoComposer != nil, "a draft takes inserted text too")
+        let issue = GitLabIssue(iid: 7, projectPath: "team/app", title: "Flaky login", webURL: "https://gitlab.corp.test/team/app/-/issues/7", description: "Fails.")
+        await shell.controller.startThread(from: issue, instance: "https://gitlab.corp.test", selection: nil, in: directory)
+        let text = shell.controller.container.composerController?.composer.currentDraft().text ?? ""
+        #expect(text.contains("Flaky login"), "the visible composer shows the issue: \(text)")
+        #expect(workspace.pendingIssueLinks[directory]?.issue.iid == 7)
+    }
+
+    /// NF24: the draft promises free built-in models only when the catalog lists them and nothing else.
+    @Test func draftModelHintFollowsTheCatalog() {
+        let free = ModelEntry(providerID: "opencode", modelID: "free-1", name: "Free", isFree: true)
+        let paid = ModelEntry(providerID: "anthropic", modelID: "m", name: "Paid", isFree: false)
+        func catalog(_ models: [ModelEntry]) -> Catalog { Catalog(directory: "/p", models: models, fetched: Timestamp(milliseconds: 0)) }
+        let promise = "Free built-in models work without signing in. Choose another with ⇧⌘M."
+        let neutral = "Choose a model with ⇧⌘M."
+        #expect(ThreadContainerViewController.draftModelHint(nil) == neutral, "not loaded yet")
+        #expect(ThreadContainerViewController.draftModelHint(catalog([])) == neutral, "no models at all")
+        #expect(ThreadContainerViewController.draftModelHint(catalog([free])) == promise)
+        #expect(ThreadContainerViewController.draftModelHint(catalog([free, paid])) == neutral, "a provider of the person's own")
+        var disabled = free
+        disabled.enabled = false
+        #expect(ThreadContainerViewController.draftModelHint(catalog([disabled])) == neutral, "free models hidden in Settings")
+    }
+
     @Test func gitLabCommandsValidateFromTheTabsState() {
         var context = CommandContext()
         #expect(!context.isEnabled(.reviewMergeRequest) && !context.isEnabled(.submitReview) && !context.isEnabled(.showIssues))

@@ -18,6 +18,9 @@ final class FakeComposerHost: ComposerHost {
     var holdSends = false
     var stopCalls = 0
     var prompts: [String] = []
+    /// The shared store this host's draft lives in (two hosts of one thread share it).
+    var owner: ObjectIdentifier?
+    var draftOwner: ObjectIdentifier? { owner }
 
     init(_ key: String, draft: ComposerDraft = .empty) {
         draftKey = key
@@ -86,6 +89,41 @@ private func settle() async {
         #expect(controller.errorMessage == "offline")
         #expect(controller.pendingSends == 0)
         #expect(host.draft.text == "fix it\n\nmore")
+    }
+
+    /// NF04: a new-thread draft's first send created the thread and the shell switched to that thread's composer before
+    /// the send failed: the thread's (live) composer shows the text again, merged with what was typed there.
+    @Test func aFailedSendReachesTheLiveComposerOfTheSameThread() async {
+        final class Store {}
+        let store = Store()
+        let registry = ComposerController.Registry()
+        let draftHost = FakeComposerHost("draft:/p")
+        draftHost.outcomes = [.failed("offline")]
+        draftHost.holdSends = true
+        var draftComposer: ComposerController? = ComposerController(registry: registry)
+        let draftView = FakeView()
+        draftView.bind(draftComposer!)
+        draftComposer!.attach(draftHost)
+        draftView.draft = ComposerDraft(text: "long prompt", attachments: [.text("log")])
+        #expect(draftComposer!.submit())
+        await settle()
+        // The thread was created: the draft host now stands for it, and the shell mounted the thread's composer.
+        draftHost.owner = ObjectIdentifier(store)
+        draftComposer = nil
+        let threadHost = FakeComposerHost("ses_1")
+        threadHost.owner = ObjectIdentifier(store)
+        let threadComposer = ComposerController(registry: registry)
+        let threadView = FakeView()
+        threadView.bind(threadComposer)
+        threadComposer.attach(threadHost)
+        threadView.draft = ComposerDraft(text: "and")
+        draftHost.release()
+        await settle()
+        #expect(threadView.draft.text == "long prompt\n\nand")
+        #expect(threadView.draft.attachments.count == 1)
+        #expect(threadHost.draft.text == "long prompt\n\nand", "saved, so the next keystroke does not overwrite it")
+        #expect(threadComposer.errorMessage == "offline")
+        #expect(draftHost.draft.text == "long prompt", "the sending host restored it too")
     }
 
     @Test func emptyDraftSendsNothing() {

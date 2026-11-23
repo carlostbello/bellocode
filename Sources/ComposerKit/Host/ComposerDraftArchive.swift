@@ -18,7 +18,8 @@ import os
 /// another on the main actor are ordered however their writes are scheduled. Writes for one key run one at a time, each
 /// writes the newest draft handed to `save`, and a write that finds a newer save after materializing its attachments
 /// gives way, so an older draft can never land after (and resurrect what) a newer save or clear removed. `flush` writes
-/// every key's newest draft and waits for writes already running.
+/// every key's newest draft and waits for writes already running. A write that fails (an attachment or the record)
+/// leaves the previous record and keeps the draft pending for the next save or flush (AF22).
 ///
 /// Main actor (A27): records are read off the main actor into an in-memory index (`preload`, started on creation) and
 /// kept current by every write, so `restore` on the main actor reads memory, not disk.
@@ -71,6 +72,8 @@ public actor ComposerDraftArchive {
     private var nextChain: UInt64 = 0
     /// The sequence last written per key.
     private var committed: [String: UInt64] = [:]
+    /// Keys whose newest draft could not be written (AF22): kept pending, never marked committed.
+    private nonisolated let unsaved = Mutex<Set<String>>([])
     /// Attachment ID → (byte count, file) already materialized (N27: typing does not rewrite or re-read the bytes).
     private var materialized: [String: (count: Int, url: URL)] = [:]
     private nonisolated let pinToken: UUID
@@ -153,11 +156,20 @@ public actor ComposerDraftArchive {
         if chains[key]?.id == id { chains[key] = nil }
     }
 
-    /// Writes every pending save now and waits for writes already running (quit, send).
-    public func flush() async {
+    /// Writes every pending save now and waits for writes already running (quit, send). Returns false when a draft
+    /// could still not be written (it stays pending: the next save or flush retries it).
+    @discardableResult
+    public func flush() async -> Bool {
         let keys = Set(intake.withLock { Array($0.latest.keys) }).union(chains.keys).union(pending.keys)
         let tasks = keys.map { enqueueCommit($0) }
         for task in tasks { await task.value }
+        return unsaved.withLock { $0.isEmpty }
+    }
+
+    /// Whether `key`'s newest draft failed to be written (an attachment or the record); it is retried by the next
+    /// save or flush, and the previous record stays until then.
+    public nonisolated func isUnsaved(_ key: String) -> Bool {
+        unsaved.withLock { $0.contains(key) }
     }
 
     /// Saves immediately (tests): hands `draft` over like `save`, then writes it.
@@ -171,6 +183,10 @@ public actor ComposerDraftArchive {
     }
 
     /// Writes the newest draft handed over for `key`, unless a newer one arrives while its attachments are stored.
+    ///
+    /// All or nothing (AF22): only when every attachment is stored and the record is written (or removed) is the
+    /// sequence marked committed and the draft dropped from the intake. On any failure the previous record stays, the
+    /// key is marked unsaved and the draft stays pending, so the next save or `flush` (quit) writes it again.
     private func commit(_ key: String) async {
         guard let (sequence, draft) = intake.withLock({ $0.latest[key] }), sequence > committed[key] ?? 0 else { return }
         let file = url(for: key)
@@ -182,35 +198,44 @@ public actor ComposerDraftArchive {
                 case .file:
                     attachments.append(attachment)
                 case .data(let data):
-                    if let url = await materialize(attachment, count: data.count) { attachments.append(attachment.stored(at: url)) }
+                    guard let url = await materialize(attachment, count: data.count) else { return failed(key, sequence) }
+                    attachments.append(attachment.stored(at: url))
                 case .text(let text):
-                    if let url = await materialize(attachment, count: text.utf8.count) { attachments.append(attachment.stored(at: url)) }
+                    guard let url = await materialize(attachment, count: text.utf8.count) else { return failed(key, sequence) }
+                    attachments.append(attachment.stored(at: url))
                 }
             }
             stored.attachments = attachments
         }
         // Fence: a newer save (a clear after Send, a later edit) owns the record now; it is written by a later commit.
         guard intake.withLock({ $0.latest[key]?.sequence }) == sequence else { return }
+        do {
+            if Self.needsRecord(draft) {
+                let record = Record(version: Self.currentVersion, key: key, saved: Date(), draft: stored)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .secondsSince1970
+                try encoder.encode(record).write(to: file, options: [.atomic])
+            } else if FileManager.default.fileExists(atPath: file.path) {
+                try FileManager.default.removeItem(at: file)
+            }
+        } catch {
+            Self.log.error("a draft record could not be written")
+            return failed(key, sequence)
+        }
         committed[key] = sequence
         intake.withLock { intake in
             if intake.latest[key]?.sequence == sequence { intake.latest[key] = nil }
         }
-        guard Self.needsRecord(draft) else {
-            try? FileManager.default.removeItem(at: file)
-            index.withLock { $0?.drafts[key] = nil }
-            return
-        }
-        let record = Record(version: Self.currentVersion, key: key, saved: Date(), draft: stored)
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .secondsSince1970
-            try encoder.encode(record).write(to: file, options: [.atomic])
-            index.withLock { $0?.drafts[key] = stored }
-        } catch {
-            Self.log.error("a draft record could not be written")
-        }
-        prune()
+        unsaved.withLock { _ = $0.remove(key) }
+        index.withLock { $0?.drafts[key] = Self.needsRecord(draft) ? stored : nil }
+        if Self.needsRecord(draft) { prune() }
+    }
+
+    /// A write that did not complete: the draft stays in the intake (unless a newer save replaced it already).
+    private func failed(_ key: String, _ sequence: UInt64) {
+        guard intake.withLock({ $0.latest[key]?.sequence }) == sequence else { return }
+        unsaved.withLock { _ = $0.insert(key) }
     }
 
     /// The store file for an in-memory attachment, written once per attachment ID.
@@ -227,7 +252,7 @@ public actor ComposerDraftArchive {
             materialized[attachment.id] = (count, url)
             return url
         } catch {
-            // Kept in memory for this session; the record keeps the rest (never the whole draft lost).
+            // The commit fails as a whole and stays pending: retried by the next save or flush (AF22).
             Self.log.error("a draft attachment could not be stored")
             return nil
         }

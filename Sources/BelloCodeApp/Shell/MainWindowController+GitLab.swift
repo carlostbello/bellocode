@@ -55,17 +55,29 @@ extension MainWindowController {
     func wireStartThreadFromIssue() {
         mergeRequests?.startThreadFromIssue = { [weak self] issue, instance, selection in
             guard let self, let directory = self.mergeRequests?.context?.projectDirectory else { return }
-            let known = self.workspace.engine.extras?.mergeRequests.knownSecrets(instance) ?? []
-            let text = IssueThreadPrompt.make(issue, selection: selection, known: known)
-            if case .draft(let shown) = self.workspace.selection, shown == directory, let insert = self.container.context?.onInsertIntoComposer {
-                // The draft is on screen: its composer takes the text as one undoable edit.
-                self.workspace.pendingIssueLinks[directory] = PendingIssueLink(issue: issue, instance: instance)
-                insert(text)
-            } else {
-                self.workspace.startThread(from: issue, instance: instance, text: text, in: directory)
+            self.issueThreadTask?.cancel()
+            self.issueThreadTask = Task { [weak self] in
+                await self?.startThread(from: issue, instance: instance, selection: selection, in: directory)
             }
-            self.focusComposerSoon()
         }
+    }
+
+    /// Start Thread from an issue in `directory`. When that project's draft is on screen its composer takes the text
+    /// as one undoable edit (NF09); otherwise the draft is opened with the text. The instance's token, redacted from
+    /// the quote, is read off the main actor (GF12).
+    func startThread(from issue: GitLabIssue, instance: String, selection: String?, in directory: String) async {
+        let known = await workspace.engine.extras?.mergeRequests.knownSecrets(instance) ?? []
+        guard !Task.isCancelled else { return }
+        let text = IssueThreadPrompt.make(issue, selection: selection, known: known)
+        if case .draft(let shown) = workspace.selection, shown == directory, container.displayed == .draft(directory: directory),
+            let insert = container.context?.onInsertIntoComposer
+        {
+            workspace.pendingIssueLinks[directory] = PendingIssueLink(issue: issue, instance: instance)
+            insert(text)
+        } else {
+            workspace.startThread(from: issue, instance: instance, text: text, in: directory)
+        }
+        focusComposerSoon()
     }
 }
 

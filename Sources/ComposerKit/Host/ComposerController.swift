@@ -54,9 +54,24 @@ public final class ComposerController {
         func add(_ controller: ComposerController) { live.add(controller) }
         /// Hands every registered composer's unsaved edit to its host now.
         public func flushAll() { for controller in live.allObjects { controller.flushDraft() } }
+
+        /// A send for `key` failed after its composer stopped showing it (NF04: a new-thread draft's first send switched
+        /// to the thread it created, whose composer mounted with an empty draft): every other live composer of that
+        /// draft takes the text back, merged with what was typed there since.
+        func restoreFailedSend(_ draft: ComposerDraft, owner: ObjectIdentifier?, message: String, except sender: ComposerController?) {
+            guard let owner else { return }
+            for controller in live.allObjects where controller !== sender {
+                controller.adoptFailedSend(draft, owner: owner, message: message)
+            }
+        }
     }
 
-    public init(registry: Registry = .shared) { registry.add(self) }
+    private let registry: Registry
+
+    public init(registry: Registry = .shared) {
+        self.registry = registry
+        registry.add(self)
+    }
 
     /// Hands every composer's unsaved edit to its host now (quit: a debounced save still waiting would be lost, N16).
     public static func flushAllDrafts() { Registry.shared.flushAll() }
@@ -203,6 +218,7 @@ public final class ComposerController {
         host.saveDraft(.empty)
         pendingSends += 1
         onStateChange()
+        let registry = self.registry
         Task { [weak self] in
             let outcome = await host.send(submission)
             if case .failed(let message) = outcome {
@@ -215,6 +231,8 @@ public final class ComposerController {
                 } else {
                     host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft()))
                 }
+                // The draft's owner may have changed with the send (a new thread was created): read it now.
+                registry.restoreFailedSend(draft, owner: host.draftOwner, message: message, except: self?.host === host ? self : nil)
             }
             guard let self else { return }
             self.pendingSends -= 1
@@ -231,6 +249,25 @@ public final class ComposerController {
             self.onStateChange()
         }
         return true
+    }
+
+    /// Another composer's send of this draft failed (see `Registry.restoreFailedSend`): show the text again, merged
+    /// in front of the current edit, and save it through this composer's host.
+    func adoptFailedSend(_ draft: ComposerDraft, owner: ObjectIdentifier, message: String) {
+        guard let host, host.draftOwner == owner else { return }
+        // Still loading: the stored draft (which the failed send restored) is what it will show.
+        guard !awaitingDraft else { return }
+        saveTask?.cancel()
+        saveTask = nil
+        let current = currentDraft()
+        // Already shown (idempotent when the text came back by another path).
+        if !draft.text.isEmpty, current.text.hasPrefix(draft.text) { return }
+        let merged = ComposerDraft.merging(failed: draft, current: current)
+        applyDraft(merged)
+        host.saveDraft(merged)
+        sendError = message
+        announce("Not sent. \(message)")
+        onStateChange()
     }
 
     /// Stops the running turn (wired by the host to a menu item and to the Stop button).

@@ -46,7 +46,7 @@ struct SharedBrowserApprovalTests {
         let fixture = try Fixture.make()
         defer { fixture.cleanup() }
         let service = await fixture.service()
-        guard service.settings.enabled else { return }  // turned off in this machine's defaults: nothing to advertise
+        try #require(service.settings.enabled, "a fresh defaults suite has the shared Chrome on")
         let broker = SharedBrowserBroker(host: ServiceHost(service: service), cachedTools: [Self.navigate])
         #expect(await broker.tools(directory: Self.directory).map(\.name) == [SharedBrowserBroker.requestAccessTool])
         try await service.answerApproval(Self.card(), session: SessionID("ses_a"), approved: true, always: false)
@@ -119,14 +119,15 @@ struct SharedBrowserApprovalTests {
         defer { fixture.cleanup() }
         let service = await fixture.service()
         try await service.answerApproval(Self.card(), session: SessionID("ses_a"), approved: true, always: true)
-        #expect(service.access(session: "ses_x", directory: Self.directory) == .allowed || !service.settings.enabled)
+        try #require(service.settings.enabled, "a fresh defaults suite has the shared Chrome on")
+        #expect(service.access(session: "ses_x", directory: Self.directory) == .allowed)
         await fixture.store.setWriteHook { _ in throw CancellationError() }
         let saved = await service.revokeProject(Self.directory)
         #expect(!saved, "the failure is reported")
         #expect(service.lastError != nil)
         #expect(service.pendingRevocations.contains(Self.directory))
         #expect(!service.approvedProjects.contains(Self.directory))
-        if service.settings.enabled { #expect(service.access(session: "ses_x", directory: Self.directory) == .needsApproval) }
+        #expect(service.access(session: "ses_x", directory: Self.directory) == .needsApproval)
         #expect(try await fixture.store.grants(.browserMCP).contains(Self.directory), "the stored grant is still there")
         // Relaunch with a still-failing store: the grant is not reloaded.
         let stillFailing = await fixture.service()
@@ -138,5 +139,70 @@ struct SharedBrowserApprovalTests {
         #expect(!healed.approvedProjects.contains(Self.directory))
         #expect(healed.pendingRevocations.isEmpty)
         #expect(try await fixture.store.grants(.browserMCP).isEmpty)
+    }
+
+    /// NF10: settings and the tools cache live in the injected defaults, never `UserDefaults.standard`.
+    @Test func settingsAndToolsCacheUseTheInjectedDefaults() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        var off = SharedBrowserSettings()
+        off.enabled = false
+        off.idleMinutes = 37
+        off.save(fixture.defaults)
+        let service = await fixture.service()
+        #expect(service.settings == off, "read from the injected suite")
+        var changed = off
+        changed.idleMinutes = 41
+        await service.update(changed)
+        #expect(SharedBrowserSettings.load(fixture.defaults).idleMinutes == 41, "written to the injected suite")
+        SharedBrowserService.saveCachedTools([Self.navigate], to: fixture.defaults)
+        #expect(SharedBrowserService.loadCachedTools(from: fixture.defaults).map(\.name) == ["navigate"])
+    }
+
+    /// NF11: archiving a thread closes the tabs it opened (not the one it shares) when the setting is on; off, nothing.
+    @Test func archivingAThreadClosesItsTabs() async throws {
+        let fixture = try Fixture.make()
+        defer { fixture.cleanup() }
+        let service = await fixture.service()
+        let closing = Mutex<[[String]]>([])
+        let (closed, closedNow) = AsyncStream.makeStream(of: Void.self)
+        service.closeThreadTabs = { tabs, _, _ in
+            closing.withLock { $0.append(tabs) }
+            closedNow.yield()
+            return tabs
+        }
+        var binding = BrowserBinding(sessionID: "ses_a", project: Self.directory, group: BrowserNaming.group(sessionID: "ses_a"))
+        binding.remember("\(binding.group)-2")
+        binding.remember("\(binding.group)-3")
+        binding.selectedTab = "\(binding.group)-2"
+        await service.save(binding)
+        await service.share(tab: "\(binding.group)-3", from: "ses_a", to: "ses_b")
+        func session(_ id: String, archived: Bool) -> Session {
+            Session(id: SessionID(id), projectID: ProjectID("p"), directory: Self.directory, created: Timestamp(milliseconds: 0),
+                    updated: Timestamp(milliseconds: archived ? 2 : 1), archivedAt: archived ? Timestamp(milliseconds: 2) : nil)
+        }
+        var batch = StoreBatch()
+        batch.sessions = [session("ses_a", archived: false)]
+        try await fixture.store.apply(batch)
+        batch.sessions = [session("ses_a", archived: true)]
+        try await fixture.store.apply(batch)
+        var events = closed.makeAsyncIterator()
+        _ = await events.next()  // archived: the tabs are being closed
+        #expect(closing.withLock { $0 } == [[binding.mainTab, "\(binding.group)-2"]])
+        // The binding is saved right after (the same main-actor step once the close returns).
+        for _ in 0..<1_000 where service.bindings["ses_a"]?.tabs.count == 3 { await Task.yield() }
+        #expect(service.bindings["ses_a"]?.tabs == [binding.mainTab, "\(binding.group)-3"])
+        #expect(service.bindings["ses_a"]?.selectedTab == binding.mainTab)
+        // Turned off: an archived thread keeps its tabs.
+        var settings = service.settings
+        settings.closeTabsWhenDone = false
+        await service.update(settings)
+        batch.sessions = [session("ses_c", archived: false)]
+        try await fixture.store.apply(batch)
+        await service.save(BrowserBinding(sessionID: "ses_c", project: Self.directory, group: BrowserNaming.group(sessionID: "ses_c")))
+        batch.sessions = [session("ses_c", archived: true)]
+        try await fixture.store.apply(batch)
+        await service.threadEnded("ses_c")
+        #expect(closing.withLock { $0.count } == 1)
     }
 }

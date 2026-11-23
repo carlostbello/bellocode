@@ -30,6 +30,9 @@ final class ThreadContainerViewController: NSViewController {
     private(set) var attachedTray: AttachedTrayView?
     private var attachment: (trayToRequests: NSLayoutConstraint, requestsToComposer: NSLayoutConstraint)?
     private var attachmentLoop: ObservationLoop?
+    /// The draft's model hint follows the catalog (NF24).
+    private var draftHintLoop: ObservationLoop?
+    private(set) var draftHint: NSTextField?
     private var surfaceControllers: [NSViewController] = []
     private var content: NSView?
     private var viewedMark: (SessionID, Timestamp)?
@@ -63,6 +66,7 @@ final class ThreadContainerViewController: NSViewController {
     isolated deinit {
         loop?.cancel()
         attachmentLoop?.cancel()
+        draftHintLoop?.cancel()
     }
 
     /// Reads the selection (observed) and rebuilds only when it changed; marks a finished thread viewed once shown.
@@ -144,6 +148,9 @@ final class ThreadContainerViewController: NSViewController {
         attachment = nil
         attachmentLoop?.cancel()
         attachmentLoop = nil
+        draftHintLoop?.cancel()
+        draftHintLoop = nil
+        draftHint = nil
     }
 
     private func adopt(_ controller: NSViewController) -> NSView {
@@ -256,6 +263,16 @@ final class ThreadContainerViewController: NSViewController {
         requestsToComposer.constant = hasRequests ? -overlap : 0
     }
 
+    /// The draft's model line: free built-in models are mentioned only when the catalog lists some and no other
+    /// enabled model (no provider of the person's own); otherwise, and before the catalog arrives, a neutral hint.
+    static func draftModelHint(_ catalog: Catalog?) -> String {
+        let models = (catalog?.models ?? []).filter(\.enabled)
+        if !models.isEmpty, models.allSatisfy(\.isFree) {
+            return "Free built-in models work without signing in. Choose another with ⇧⌘M."
+        }
+        return "Choose a model with ⇧⌘M."
+    }
+
     private func makeDraft(_ context: ThreadSurfaceContext) -> NSView {
         let container = NSView()
         _ = makeHeader(context)
@@ -265,15 +282,25 @@ final class ThreadContainerViewController: NSViewController {
         heading.alignment = .center
         heading.lineBreakMode = .byTruncatingTail
         heading.translatesAutoresizingMaskIntoConstraints = false
-        // The header and the composer's context line already show where the agent acts; no third path here.
-        let path = NSTextField(labelWithString: "Free built-in models work without signing in. Choose another with ⇧⌘M.")
+        // The header and the composer's context line already show where the agent acts; no third path here. Free
+        // models are promised only when the catalog lists them and nothing else (NF24, as onboarding does since R33).
+        let path = NSTextField(labelWithString: Self.draftModelHint(nil))
         path.font = DS.TextRole.label.font
         path.textColor = DS.Color.text3
         path.alignment = .center
         path.translatesAutoresizingMaskIntoConstraints = false
+        draftHint = path
+        let directory = context.directory
+        draftHintLoop = ObservationLoop { [weak self, weak path] in
+            guard let self, let path else { return }
+            let hint = Self.draftModelHint(self.workspace.engine.root.catalog.catalog(for: directory))
+            if path.stringValue != hint { path.stringValue = hint }
+        }
         let composer = surfaces.composer(context)
         self.composer = composer
         let composerView = adopt(composer)
+        // Start Thread from Issue and other "insert into the composer" commands reach the draft's composer too (NF09).
+        context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
         for subview in [heading, path, composerView] { container.addSubview(subview) }
         let width = composerView.widthAnchor.constraint(equalToConstant: DS.Size.contentMaxWidth)
         width.priority = Self.columnPreference

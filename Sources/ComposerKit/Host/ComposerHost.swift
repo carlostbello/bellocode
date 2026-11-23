@@ -57,6 +57,9 @@ public final class ComposerObservation {
 public protocol ComposerHost: AnyObject {
     /// Identity of the thread, for keeping per-thread state apart.
     var draftKey: String { get }
+    /// The object that stores the draft (a thread model), shared by every host of that thread; nil when the host is
+    /// the only one. A failed send restores its text into every live composer whose host has the same owner (NF04).
+    var draftOwner: ObjectIdentifier? { get }
     /// The saved draft. Called when the composer shows this host, and again when `isDraftLoaded` becomes true.
     func loadDraft() -> ComposerDraft
     /// The saved draft has been read. While false, `loadDraft()` is a placeholder: the composer saves nothing over it
@@ -85,6 +88,7 @@ public protocol ComposerHost: AnyObject {
 }
 
 extension ComposerHost {
+    public var draftOwner: ObjectIdentifier? { nil }
     public var isDraftLoaded: Bool { true }
     public var supportsSteer: Bool { true }
     public var supportsAttachments: Bool { true }

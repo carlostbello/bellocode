@@ -47,7 +47,9 @@ public enum UntrustedText {
             cleaned = cleaned.replacingOccurrences(of: #"\u001B\[[0-9;?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
             cleaned = cleaned.replacingOccurrences(of: #"\u001B[@-Z\\-_]"#, with: "", options: .regularExpression)
         }
-        if cleaned.contains("\r") {
+        // Scalars, not Characters: "\r\n" is one Character, so `contains("\r")` misses it (and the filter below would
+        // then drop the whole line break as a control character).
+        if cleaned.unicodeScalars.contains("\r") {
             cleaned = cleaned.replacingOccurrences(of: "\r\n", with: "\n")
             cleaned = cleaned.split(separator: "\n", omittingEmptySubsequences: false).map { line in
                 line.contains("\r") ? String(line.split(separator: "\r", omittingEmptySubsequences: false).last(where: { !$0.isEmpty }) ?? "") : String(line)
@@ -90,6 +92,15 @@ public enum UntrustedText {
             result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: template)
         }
         return (result, count)
+    }
+
+    /// One short external value shown on a line of its own, outside a block (GF13): a title, branch, label, user,
+    /// job, stage or rule name, a path, a URL. Terminal controls are stripped, line breaks collapsed (it cannot forge a
+    /// line of the result), secrets and `known` values redacted, delimiter look-alikes neutralised, and it is bounded.
+    public static func field(_ text: String, known: [String] = [], limit: Int = 300) -> String {
+        let flat = stripTerminal(text).split(whereSeparator: \.isNewline).joined(separator: " ")
+        let cleaned = neutralise(redact(flat, known: known).text)
+        return cleaned.count > limit ? String(cleaned.prefix(limit)) + "…" : cleaned
     }
 
     /// Clean, redact and bound one piece of external text (a note, a description) for a model.

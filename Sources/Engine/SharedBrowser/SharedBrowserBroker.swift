@@ -312,6 +312,28 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
 
     public func pendingNotices(for session: String) -> [String] { notices[session] ?? [] }
 
+    /// Closes a finished thread's `tabs` (NF11) in the browser this client already drives: closing never starts
+    /// Chrome (a stopped browser has no tabs), and the person's control wins (nothing closes while they hold it).
+    /// Returns the tabs closed.
+    public func closeTabs(_ tabs: [String], session: String, group: String) async -> [String] {
+        guard !tabs.isEmpty, let client, await !client.isClosed, clientGeneration == (await host.generation()) else { return [] }
+        // A group operation of that thread: serialised with its other calls.
+        guard let ticket = try? await gate.acquire(tab: "group:" + group, session: session, shared: false) else { return [] }
+        var closing: [String] = []
+        for tab in tabs where await !gate.isHumanControlled(tab) { closing.append(tab) }
+        var closed: [String] = []
+        if !closing.isEmpty,
+            let result = try? await client.call("tabs", arguments: .object(["action": .string("close"), "tabs": .array(closing.map(JSONValue.string))]),
+                                                timeout: .seconds(30)),
+            !result.isError
+        {
+            closed = closing
+            for tab in closed { ensured.remove("\(clientGeneration)|\(tab)") }
+        }
+        await gate.release(ticket)
+        return closed
+    }
+
     public func tabActivity() async -> [String: BrowserTabGate.TabActivity] { await gate.activity() }
 
     public func shutdown() async {

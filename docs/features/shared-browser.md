@@ -97,6 +97,8 @@ waiting across threads, 4 per thread, round-robin; overflow, takeover or another
 `chrome_request_access`, which raises a card (Allow Once = this thread; Always = the project; revocable in Settings).
 **Guidance** (`bellocode.chrome` instruction entry): WebKit preview vs shared Chrome, canonical URLs, own group, Busy,
 handoff, and that sign-ins are shared.
+**Done threads:** when a thread is archived or deleted its own tabs close (Settings ▸ Browser, on by default), except
+tabs it shares with another thread; this never starts the browser, and nothing closes while the person has control.
 
 ## Live view and takeover
 
@@ -160,7 +162,7 @@ destructive clear confirmed; takeover reversible; no animation. Not run: VoiceOv
 
 Shared-workspace projects share one container, so `a.bc:5173` and `b.bc:5173` reach the same listener. Service routes
 need the project's workspace running. Bringing a thread's group to the front needs a click in Chrome (browse has no
-focus verb). Close-tabs-when-done is a setting not yet wired to thread completion. No corrupt-profile snapshot/restore,
+focus verb). No corrupt-profile snapshot/restore,
 no Memory Saver tuning, no input restriction on the VNC transport. The approval card sits partly under the composer at
 short heights (existing request-stack layout). Downloads are not announced to agents.
 

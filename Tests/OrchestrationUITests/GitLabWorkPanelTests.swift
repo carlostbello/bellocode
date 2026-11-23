@@ -66,6 +66,31 @@ struct GitLabWorkPanelTests {
         #expect(model.issueProblem?.contains("not on a configured GitLab instance") == true)
     }
 
+    /// NF18: with the Issues section showing, a thread of another project drops the open issue and lists that
+    /// project's issues.
+    @Test func issuesFollowTheDisplayedProject() async throws {
+        let (model, server) = try await make()
+        server.put(FakeGitLabServer.Project(id: 12, path: "team/other"))
+        server.edit("team/other") { $0.issues[8] = FakeGitLabServer.Issue(iid: 8, title: "Other project bug", assignees: ["me"]) }
+        model.section = .issues
+        await model.loadIssues()
+        let issue = try #require(model.issueList?.issues.first)
+        await model.selectIssue(issue)
+        #expect(model.issueDetail != nil)
+        var directory = "/tmp/team-app"
+        model.projectDirectory = { directory }
+        model.resolveProject = { folder in
+            ForgeProject(instance: Self.instance, projectPath: folder == "/tmp/team-other" ? "team/other" : "team/app")
+        }
+        directory = "/tmp/team-other"
+        model.display(SessionID("ses_other"))
+        #expect(model.selectedIssue == nil, "the other project's issue is closed")
+        #expect(model.issueDetail == nil)
+        await model.issueReload?.value
+        #expect(model.issueProject?.projectPath == "team/other")
+        #expect(model.issueList?.issues.map(\.iid) == [8])
+    }
+
     @Test func todosOpenInPlaceAndMarkDoneNeedsWrites() async throws {
         let (model, server) = try await make()
         model.section = .todos

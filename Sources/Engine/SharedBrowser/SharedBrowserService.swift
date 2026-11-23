@@ -115,6 +115,10 @@ public final class SharedBrowserService {
     @ObservationIgnored private var previewFront: PreviewProxyFront?
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var noticeCounter = 0
+    @ObservationIgnored var threadEnds = ThreadEndTracker()
+    @ObservationIgnored private var followingThreadEnds = false
+    /// Test seam: closes a finished thread's tabs (default: the broker, in the running browser).
+    @ObservationIgnored var closeThreadTabs: (([String], String, String) async -> [String])?
     @ObservationIgnored let log = Logger(subsystem: "app.bellocode", category: "shared-browser")
     nonisolated static let maxForwards = 32
     nonisolated static let toolsCacheKey = "browser.shared.tools"
@@ -122,15 +126,22 @@ public final class SharedBrowserService {
     /// Approval cards for the browser that may wait at once; beyond that the agent is told to wait (R20).
     nonisolated static let maxPendingApprovals = 16
     @ObservationIgnored let defaults: UserDefaults
+    /// `settings.screen` for the supervisor's container spec (read off the main actor when a container is made).
+    @ObservationIgnored private let screenBox: LockedBox<(width: Int, height: Int)>
 
     init(store: ProjectionStore, configuration: SharedBrowserConfiguration?, defaults: UserDefaults = .standard) {
         self.store = store
         self.configuration = configuration
         self.defaults = defaults
-        settings = SharedBrowserSettings.load()
-        let cached = Self.loadCachedTools()
-        broker = SharedBrowserBroker(host: ServiceHost(service: self), cachedTools: cached, toolsCache: { tools in
-            Task { @MainActor in Self.saveCachedTools(tools) }
+        let settings = SharedBrowserSettings.load(defaults)
+        screenBox = LockedBox(settings.screen)
+        self.settings = settings
+        let cached = Self.loadCachedTools(from: defaults)
+        broker = SharedBrowserBroker(host: ServiceHost(service: self), cachedTools: cached, toolsCache: { [weak self] tools in
+            Task { @MainActor in
+                guard let self else { return }
+                Self.saveCachedTools(tools, to: self.defaults)
+            }
         })
     }
 
@@ -167,6 +178,7 @@ public final class SharedBrowserService {
 
     func start() async {
         await loadState()
+        followThreadEnds()
         guard let configuration, let environments, environments.isEnabled else { return }
         let runtime = DockerBrowserRuntime(
             socketPath: environments.activeRuntime.socketPath,
@@ -179,8 +191,8 @@ public final class SharedBrowserService {
             containerName: configuration.containerName, volume: configuration.volume, extraLabels: configuration.extraLabels)
         self.runtime = runtime
         let settings = self.settings
-        let supervisor = BrowserSupervisor(runtime: runtime, timing: .init(idle: settings.idle)) { [extra = configuration.extraLabels, name = configuration.containerName, volume = configuration.volume] image, placement, seccomp in
-            let screen = SharedBrowserSettings.load().screen
+        let supervisor = BrowserSupervisor(runtime: runtime, timing: .init(idle: settings.idle)) { [extra = configuration.extraLabels, name = configuration.containerName, volume = configuration.volume, screenBox] image, placement, seccomp in
+            let screen = screenBox.get()
             return BrowserContainerSpec(image: image, seccompProfile: seccomp, network: placement.network, proxy: placement.proxy,
                                         certificateDirectory: placement.certificateDirectory, volume: volume, name: name, screen: screen,
                                         extraLabels: extra)
@@ -211,6 +223,43 @@ public final class SharedBrowserService {
         let label = account == keyAccount ? "BelloCode shared browser extension packing key" : "BelloCode shared browser extension packing key (development)"
         try vault.store(account: account, label: label, value: SecretValue(pem))
         return pem
+    }
+
+    /// Archived or deleted threads are done: their tabs close when the setting says so (NF11).
+    private func followThreadEnds() {
+        guard !followingThreadEnds else { return }
+        followingThreadEnds = true
+        let lineage = store.observe(.lineage)
+        tasks.set(
+            "thread-ends",
+            Task { [weak self] in
+                for await change in lineage {
+                    guard let self else { return }
+                    let ended = self.threadEnds.ended(sessions: Array(change.sessions.values), removed: change.removedSessions)
+                    for session in ended { await self.threadEnded(session.rawValue) }
+                }
+            })
+    }
+
+    /// A thread is done (archived or deleted). With "Close a thread's tabs when it is done" on, the tabs it opened
+    /// close, except those it shares with another thread; nothing starts the browser for it (NF11).
+    func threadEnded(_ session: String) async {
+        guard settings.closeTabsWhenDone, var binding = bindings[session] else { return }
+        let closing = Self.tabsToClose(binding, shares: shares, now: .now)
+        let closed = Set(await (closeThreadTabs ?? broker.closeTabs)(closing, session, binding.group))
+        guard !closed.isEmpty, let current = bindings[session], current.group == binding.group else { return }
+        binding = current
+        binding.tabs = [binding.mainTab] + binding.tabs.filter { $0 != binding.mainTab && !closed.contains($0) }
+        if closed.contains(binding.selectedTab) { binding.selectedTab = binding.mainTab }
+        await save(binding)
+    }
+
+    /// The tabs a finished thread closes: its own, minus those it currently shares with another thread.
+    nonisolated static func tabsToClose(_ binding: BrowserBinding, shares: [BrowserShare], now: Date) -> [String] {
+        let shared = Set(shares.filter { $0.ownerSession == binding.sessionID && $0.isActive(at: now) }.map(\.tab))
+        var own = binding.tabs
+        if !own.contains(binding.mainTab) { own.insert(binding.mainTab, at: 0) }
+        return own.filter { !shared.contains($0) }
     }
 
     private func loadState() async {
@@ -252,7 +301,8 @@ public final class SharedBrowserService {
     public func update(_ settings: SharedBrowserSettings) async {
         let screenChanged = settings.screen != self.settings.screen
         self.settings = settings
-        settings.save()
+        settings.save(defaults)
+        screenBox.set(settings.screen)
         await supervisor?.setIdle(settings.idle)
         if !settings.enabled { await stopBrowser(reason: "turned off") }
         for host in hosts.values { await host.toolsChanged() }
@@ -770,17 +820,17 @@ public final class SharedBrowserService {
 
     // MARK: Tools cache
 
-    static func loadCachedTools() -> [ClientMCPTool] {
-        guard let data = UserDefaults.standard.data(forKey: toolsCacheKey), let value = try? JSONValue.parse(data) else { return [] }
+    static func loadCachedTools(from defaults: UserDefaults) -> [ClientMCPTool] {
+        guard let data = defaults.data(forKey: toolsCacheKey), let value = try? JSONValue.parse(data) else { return [] }
         return (value.arrayValue ?? []).compactMap { entry in
             guard let name = entry["name"]?.stringValue else { return nil }
             return ClientMCPTool(name: name, description: entry["description"]?.stringValue ?? "", inputSchema: entry["inputSchema"] ?? .object([:]))
         }
     }
 
-    static func saveCachedTools(_ tools: [ClientMCPTool]) {
+    static func saveCachedTools(_ tools: [ClientMCPTool], to defaults: UserDefaults) {
         let value = JSONValue.array(tools.map { .object(["name": .string($0.name), "description": .string($0.description), "inputSchema": $0.inputSchema]) })
-        if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: toolsCacheKey) }
+        if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: toolsCacheKey) }
     }
 
     /// browse over exec, only in the container proven BelloCode's, addressed by its ID (R07).

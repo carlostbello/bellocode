@@ -117,6 +117,7 @@ public final class ThreadModelComposerHost: ComposerHost {
     }
 
     public var draftKey: String { source.sessionID.rawValue }
+    public var draftOwner: ObjectIdentifier? { ObjectIdentifier(source) }
     public var isDraftLoaded: Bool { source.isDraftLoaded }
 
     public func loadDraft() -> ComposerDraft {

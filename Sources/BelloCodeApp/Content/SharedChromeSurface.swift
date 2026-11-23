@@ -49,6 +49,24 @@ final class SharedChromeSurfaces {
         (window?.contentViewController as? SharedChromePaneController)?.display(context)
     }
 
+    /// The detached window's viewer while that window is open.
+    var windowPane: SharedChromePaneController? {
+        guard let window, window.window?.isVisible == true else { return nil }
+        return window.contentViewController as? SharedChromePaneController
+    }
+
+    /// Take Over from the menu (NF17): in the detached window when it is open, else in the panel (`showPanel` first).
+    /// Every other open viewer follows the service's control state on its own.
+    func takeOver(showPanel: () -> Void) {
+        if let windowPane {
+            window?.showWindow(nil)
+            windowPane.takeOver("*")
+            return
+        }
+        showPanel()
+        pane?.takeOver("*")
+    }
+
     /// The optional detachable window (its own viewer; the panel's disconnects while hidden).
     func openWindow() {
         if let window { window.showWindow(nil); return }
@@ -94,11 +112,16 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
     private var loop: ObservationLoop?
     private var occlusion: (any NSObjectProtocol)?
     private var loadedURL: URL?
+    /// The connected viewer's input mode as last set (nil: not connected). Follows `service.humanControl` (NF17).
+    private(set) var appliedViewOnly: Bool?
+    /// Runs a script in the viewer page (tests record it).
+    var runScript: (String) -> Void = { _ in }
 
     init(service: SharedBrowserService, detached: Bool) {
         self.service = service
         self.detached = detached
         super.init(nibName: nil, bundle: nil)
+        runScript = { [weak self] script in self?.webView?.evaluateJavaScript(script) }
     }
 
     @available(*, unavailable)
@@ -197,13 +220,28 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
         }
     }
 
-    /// Follows the service: loads the viewer page once the forward exists, shows the stream only when ready.
-    private func follow() {
+    /// Follows the service: loads the viewer page once the forward exists, shows the stream only when ready, and keeps
+    /// the connected viewer's input mode in step with who has control, whichever viewer or menu changed it (NF17).
+    func follow() {
         let ready = service.phase.isReady && (service.viewerURL != nil || snapshotStream != nil)
         placeholder.view.isHidden = ready
         overlay.view.isHidden = !ready
         if visible, let url = service.viewerURL, url != loadedURL { load(url) }
         if service.viewerURL == nil, loadedURL != nil { disconnect() }
+        syncViewOnly()
+    }
+
+    private func syncViewOnly() {
+        let viewOnly = service.humanControl.isEmpty
+        guard let applied = appliedViewOnly, applied != viewOnly else { return }
+        appliedViewOnly = viewOnly
+        runScript("window.bellocodeSetViewOnly(\(viewOnly))")
+    }
+
+    /// The viewer page connected with `viewOnly` (the mode passed to `bellocodeConnect`).
+    func viewerConnected(viewOnly: Bool) {
+        appliedViewOnly = viewOnly
+        syncViewOnly()
     }
 
     private func makeWebView() -> WKWebView {
@@ -233,6 +271,7 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "bellocode")
         webView = nil
         loadedURL = nil
+        appliedViewOnly = nil
         state.connected = false
     }
 
@@ -254,6 +293,8 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
                 // The password reaches the page through a call, never a URL.
                 let script = "window.bellocodeConnect(\(Self.jsString(password)), {viewOnly: \(viewOnly), quality: \(compact ? 5 : 6), compression: 2})"
                 _ = try? await webView?.evaluateJavaScript(script)
+                // Control may have changed while connecting: the sync applies the current mode.
+                viewerConnected(viewOnly: viewOnly)
             }
         case "connect":
             state.connected = true
@@ -281,17 +322,26 @@ final class SharedChromePaneController: NSViewController, WKScriptMessageHandler
 
     // MARK: Take Over
 
+    /// Takes control; every open viewer (this one, the panel or the detached window) turns interactive through
+    /// `follow`, and this one takes focus.
     func takeOver(_ scope: String) {
         Task {
             await service.takeOver(scope)
-            _ = try? await webView?.evaluateJavaScript("window.bellocodeSetViewOnly(false); window.bellocodeFocus()")
+            syncViewOnly()
+            runScript("window.bellocodeFocus()")
         }
     }
 
+    /// Gives control back; every open viewer returns to view-only through `follow`.
     func giveBack() {
+        // This viewer stops taking input at once, before the agents resume.
+        if appliedViewOnly == false {
+            appliedViewOnly = true
+            runScript("window.bellocodeSetViewOnly(true)")
+        }
         Task {
-            _ = try? await webView?.evaluateJavaScript("window.bellocodeSetViewOnly(true)")
             await service.giveBack("*")
+            syncViewOnly()
         }
     }
 
@@ -699,13 +749,21 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
 
     @objc func perform(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let command = SharedChromeMenu.Command(rawValue: raw) else { return }
+        Self.run(command, in: window)
+    }
+
+    static func run(_ command: SharedChromeMenu.Command, in window: MainWindowController?) {
+        let service = window?.workspace.engine.sharedBrowser
         switch command {
         case .show: window?.showSharedChromePanel()
         case .openWindow: window?.sharedChrome?.openWindow()
         case .takeOver:
-            window?.showSharedChromePanel()
-            window?.sharedChrome?.pane?.takeOver("*")
-        case .giveBack: window?.sharedChrome?.pane?.giveBack()
+            // The detached window when it is open, else the panel (NF17).
+            guard let window else { return }
+            window.sharedChrome?.takeOver(showPanel: { window.showSharedChromePanel() })
+        case .giveBack:
+            // The service's state; every open viewer follows it (NF17).
+            Task { await service?.giveBack("*") }
         case .start: Task { await service?.startBrowser() }
         case .stop: Task { await service?.stopBrowser() }
         }
@@ -713,6 +771,11 @@ final class SharedChromeMenuRouter: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let raw = menuItem.representedObject as? String, let command = SharedChromeMenu.Command(rawValue: raw), let service else { return false }
+        return Self.isEnabled(command, service: service)
+    }
+
+    /// Whether `command` can run now (the menu and the Command Palette).
+    static func isEnabled(_ command: SharedChromeMenu.Command, service: SharedBrowserService) -> Bool {
         switch command {
         case .show, .openWindow: return service.isAvailable
         case .takeOver: return service.phase.isReady && service.humanControl.isEmpty

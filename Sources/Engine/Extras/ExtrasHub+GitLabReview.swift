@@ -38,17 +38,19 @@ extension ExtrasHub {
     func readIssueTool(_ arguments: JSONValue, _ caller: ExtrasCaller) async throws -> ClientMCPResult {
         let (project, iid) = try await toolIssue(arguments, caller)
         let issue = try await gitLabWork.loadIssue(project, iid: iid)
-        let known = mergeRequests.knownSecrets(project.instance.baseURL)
-        var lines = ["Source: \(issue.webURL) · \(project.instance.baseURL) · \(issue.reference) · read \(Self.dateText(Date()))"]
-        lines.append("State: \(issue.stateLabel); author @\(issue.author); assignees: \(issue.assignees.isEmpty ? "none" : issue.assignees.map { "@\($0)" }.joined(separator: ", "))")
-        if !issue.labels.isEmpty { lines.append("Labels: \(issue.labels.joined(separator: ", "))") }
+        let known = await mergeRequests.knownSecrets(project.instance.baseURL)
+        // Header fields come from GitLab too: cleaned, on one line, redacted (GF13).
+        let field = { (text: String) in UntrustedText.field(text, known: known) }
+        var lines = ["Source: \(field(issue.webURL)) · \(project.instance.baseURL) · \(field(issue.reference)) · read \(Self.dateText(Date()))"]
+        lines.append("State: \(issue.stateLabel); author @\(field(issue.author)); assignees: \(issue.assignees.isEmpty ? "none" : issue.assignees.map { "@\(field($0))" }.joined(separator: ", "))")
+        if !issue.labels.isEmpty { lines.append("Labels: \(issue.labels.map(field).joined(separator: ", "))") }
         if let related = gitLabWork.relatedMergeRequests[issue.webURL] {
-            lines.append("Related merge requests: \(related.isEmpty ? "none" : related.map { "\($0.reference) (\($0.state))" }.joined(separator: ", "))")
+            lines.append("Related merge requests: \(related.isEmpty ? "none" : related.map { "\(field($0.reference)) (\(field($0.state)))" }.joined(separator: ", "))")
         } else {
             lines.append("Related merge requests: not reported by this instance.")
         }
         if issue.descriptionTruncated { lines.append("The description is longer on GitLab; the start is quoted.") }
-        let body = "Title: \(issue.title)\n\n" + ((issue.description ?? "").isEmpty ? "(no description)" : UntrustedText.sanitise(issue.description ?? "", limit: 12_000, known: known))
+        let body = "Title: \(field(issue.title))\n\n" + ((issue.description ?? "").isEmpty ? "(no description)" : UntrustedText.sanitise(issue.description ?? "", limit: 12_000, known: known))
         lines.append(UntrustedText.block("issue \(issue.reference)", body))
         return ClientMCPResult(text: lines.joined(separator: "\n"))
     }
@@ -65,10 +67,12 @@ extension ExtrasHub {
         let search = arguments["search"]?.stringValue ?? ""
         let projectID = filter == .mentioned ? try? await gitLabWork.projectID(project) : nil
         let result = try await mergeRequests.provider.issues(project, filter: filter, search: search, page: page, projectID: projectID)
+        let known = await mergeRequests.knownSecrets(project.instance.baseURL)
+        let field = { (text: String) in UntrustedText.field(text, known: known) }
         let body = result.issues.map { issue in
-            "#\(issue.iid) [\(issue.stateLabel)] \(issue.title)"
-                + (issue.assignees.isEmpty ? "" : " — " + issue.assignees.map { "@\($0)" }.joined(separator: ", "))
-                + (issue.labels.isEmpty ? "" : " — " + issue.labels.joined(separator: ", "))
+            "#\(issue.iid) [\(issue.stateLabel)] \(field(issue.title))"
+                + (issue.assignees.isEmpty ? "" : " — " + issue.assignees.map { "@\(field($0))" }.joined(separator: ", "))
+                + (issue.labels.isEmpty ? "" : " — " + issue.labels.map(field).joined(separator: ", "))
         }.joined(separator: "\n")
         var lines = ["Source: \(project.instance.baseURL)/\(project.projectPath)/-/issues · \(filter.title) · page \(page) · read \(Self.dateText(Date()))"]
         lines.append("\(result.issues.count) issue(s)." + (result.nextPage.map { " More on page \($0)." } ?? "") + (result.bounded ? " More on GitLab beyond what BelloCode lists (5 pages); search to narrow." : ""))
@@ -82,26 +86,27 @@ extension ExtrasHub {
         let (ref, _) = try await toolRef(arguments, caller)
         guard let state = await reviews.load(ref) else { throw ExtrasError(Self.reviewProblem(reviews.phases[ref.url])) }
         let unresolvedOnly = arguments["unresolvedOnly"]?.boolValue ?? false
-        let known = mergeRequests.knownSecrets(ref.instance)
+        let known = await mergeRequests.knownSecrets(ref.instance)
+        let field = { (text: String) in UntrustedText.field(text, known: known) }
         let anchored = state.anchored.filter { !unresolvedOnly || ($0.discussion.isResolvable && !$0.discussion.isResolved) }
         let shown = anchored.suffix(Self.maxToolDiscussions)
         let body = shown.map { entry -> String in
             let place: String = switch entry.anchor {
-            case .line(let path, let side, let line, let start): "at \(path) \(side.rawValue) line \(start.map { "\($0)–" } ?? "")\(line) (current version)"
-            case .file(let path, let reason): "at \(path) (file level: \(reason))"
-            case .outdated(let position): "outdated: written at \(position.label) on head \(position.refs.headSHA.prefix(12))"
+            case .line(let path, let side, let line, let start): "at \(field(path)) \(side.rawValue) line \(start.map { "\($0)–" } ?? "")\(line) (current version)"
+            case .file(let path, let reason): "at \(field(path)) (file level: \(reason))"
+            case .outdated(let position): "outdated: written at \(field(position.label)) on head \(field(String(position.refs.headSHA.prefix(12))))"
             case .general: "general comment"
             }
             let notes = entry.discussion.visibleNotes.map { note in
-                "  note \(note.id) by @\(note.author): " + UntrustedText.sanitise(note.body, limit: 1_500, known: known).replacingOccurrences(of: "\n", with: "\n    ")
+                "  note \(note.id) by @\(field(note.author)): " + UntrustedText.sanitise(note.body, limit: 1_500, known: known).replacingOccurrences(of: "\n", with: "\n    ")
             }
-            return (["discussion \(entry.discussion.id) [\(entry.discussion.stateWord)] \(place)"] + notes).joined(separator: "\n")
+            return (["discussion \(field(entry.discussion.id)) [\(entry.discussion.stateWord)] \(place)"] + notes).joined(separator: "\n")
         }.joined(separator: "\n")
         var lines = [
-            "Source: \(ref.url) · \(ref.instance) · \(ref) · version head \(state.refs.headSHA) base \(state.refs.baseSHA) start \(state.refs.startSHA) · read \(Self.dateText(state.loaded))"
+            "Source: \(ref.url) · \(ref.instance) · \(ref) · version head \(field(state.refs.headSHA)) base \(field(state.refs.baseSHA)) start \(field(state.refs.startSHA)) · read \(Self.dateText(state.loaded))"
         ]
         lines.append("\(anchored.count) thread(s)\(anchored.count > shown.count ? "; the last \(shown.count) shown" : "")." + (state.discussionsIncomplete ? " The list is incomplete (paging bound)." : ""))
-        lines.append("Files in this version: " + state.diff.files.prefix(60).map { $0.renamedFile ? "\($0.oldPath) → \($0.newPath)" : $0.newPath }.joined(separator: ", ") + (state.diff.incomplete ? " (more not loaded)" : ""))
+        lines.append("Files in this version: " + state.diff.files.prefix(60).map { $0.renamedFile ? "\(field($0.oldPath)) → \(field($0.newPath))" : field($0.newPath) }.joined(separator: ", ") + (state.diff.incomplete ? " (more not loaded)" : ""))
         lines.append(UntrustedText.block("review threads of \(ref)", body.isEmpty ? "(none)" : body))
         return ClientMCPResult(text: lines.joined(separator: "\n"))
     }

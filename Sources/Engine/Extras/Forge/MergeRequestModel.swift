@@ -706,16 +706,18 @@ public enum MergeRequestWakeText {
         _ snapshot: MergeRequestSnapshot, events: [MergeRequestWakeEvent], wakeID: String? = nil, failingJob: (job: PipelineJob, excerpt: JobLogExcerpt)? = nil,
         known: [String] = []
     ) -> String {
-        var lines = ["\(prefix) \(snapshot.ref): " + events.map(\.text).joined(separator: " ")]
+        // Fields from GitLab (titles, branches, user and job names) are cleaned, kept on one line and redacted (GF13).
+        let field = { (text: String) in UntrustedText.field(text, known: known) }
+        var lines = ["\(prefix) \(snapshot.ref): " + events.map { field($0.text) }.joined(separator: " ")]
         lines.append("(Synthetic message from BelloCode's merge-request babysitter, not from the user\(wakeID.map { "; wake \($0)" } ?? "").)")
         lines.append(
-            "Merge request: “\(snapshot.title)” (\(snapshot.stateLabel), \(snapshot.approvals.label), \(snapshot.pipelineSummary.text), \(snapshot.unresolvedDiscussions) unresolved discussions)"
-                + (snapshot.sourceBranch.isEmpty ? "" : ", \(snapshot.sourceBranch) → \(snapshot.targetBranch)") + (snapshot.sha.isEmpty ? "." : " at \(snapshot.sha.prefix(12))."))
-        lines.append("MR: \(snapshot.webURL)")
+            "Merge request: “\(field(snapshot.title))” (\(snapshot.stateLabel), \(field(snapshot.approvals.label)), \(snapshot.pipelineSummary.text), \(snapshot.unresolvedDiscussions) unresolved discussions)"
+                + (snapshot.sourceBranch.isEmpty ? "" : ", \(field(snapshot.sourceBranch)) → \(field(snapshot.targetBranch))") + (snapshot.sha.isEmpty ? "." : " at \(field(String(snapshot.sha.prefix(12))))."))
+        lines.append("MR: \(field(snapshot.webURL))")
         for event in events {
             guard case .comments(let notes) = event else { continue }
             for note in notes.prefix(5) {
-                let label = "comment by @\(note.author)" + (note.position.map { " on \($0)" } ?? "") + ", note \(note.id), discussion \(note.discussionID)"
+                let label = "comment by @\(field(note.author))" + (note.position.map { " on \(field($0))" } ?? "") + ", note \(note.id), discussion \(field(note.discussionID))"
                 lines.append(UntrustedText.block(label, UntrustedText.sanitise(note.body, limit: 1_500, known: known)))
             }
             if notes.count > 5 { lines.append("(\(notes.count - 5) more comments: read them with bellocode_app_gitlab_list_discussions.)") }
@@ -724,7 +726,7 @@ public enum MergeRequestWakeText {
             let pipeline = snapshot.pipeline.map { "pipeline #\($0.id)" } ?? "pipeline"
             lines.append(
                 UntrustedText.block(
-                    "log excerpt of failed job \(failingJob.job.name) (#\(failingJob.job.id), stage \(failingJob.job.stage), \(pipeline))", failingJob.excerpt.text))
+                    "log excerpt of failed job \(field(failingJob.job.name)) (#\(failingJob.job.id), stage \(field(failingJob.job.stage)), \(pipeline))", failingJob.excerpt.text))
         }
         lines.append("Act on this if it needs you (fix failures, answer reviewers); otherwise reply briefly.")
         if events.contains(where: \.isTerminal) { lines.append("Babysitting has stopped.") }
