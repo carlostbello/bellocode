@@ -238,7 +238,9 @@ final class OpenCodeSettingsModel {
         return parts.joined(separator: " and ")
     }
 
-    func reload() {
+    /// Reloads opencode's configuration. The result shows in the pane; `notify` also gets it (success or failure) for
+    /// a menu command run while the pane is not on screen, so the command is never silent.
+    func reload(notify: (@MainActor (String) -> Void)? = nil) {
         let counts = engine?.root.attention.counts ?? AttentionCounts()
         if counts.approvals + counts.questions > 0 {
             guard actions.confirm(
@@ -247,7 +249,11 @@ final class OpenCodeSettingsModel {
                 "Reload")
             else { return }
         }
-        Task { message = await service.reload(directory: selectedProject) }
+        Task {
+            let failure = await service.reload(directory: selectedProject)
+            message = failure
+            notify?(failure ?? "Reloaded opencode's configuration.")
+        }
     }
 
     func restart() {

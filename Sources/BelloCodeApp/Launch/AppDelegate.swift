@@ -252,10 +252,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Window ▸ Reload opencode Configuration (`POST /api/location/reload`; confirms when approvals would be cancelled).
+    /// The result shows in Settings ▸ opencode when that pane is on screen, else in the front window's notice (an alert
+    /// without a window).
     @objc func reloadOpenCode(_ sender: Any?) {
         guard let engine = runtime?.engine, let services else { return }
         let model = OpenCodeSettingsModel.last ?? OpenCodeSettingsModel(service: engine.openCodeConfig, settings: services.settings, engine: engine)
-        model.reload()
+        let paneShown = settingsWindow?.window?.isVisible == true && settingsWindow?.selectedPaneID == "opencode"
+        if paneShown {
+            model.reload()
+            return
+        }
+        weak var front = NSApp.orderedWindows.compactMap({ $0.windowController as? MainWindowController }).first
+        model.reload(notify: { text in
+            if let front { front.workspace.undo.showNotice(text) } else { OpenCodeSettingsActions.live.report(text) }
+        })
     }
 
     /// BelloCode ▸ Install Command Line Tool…: links bellocode-opencode into ~/.local/bin after confirming.
