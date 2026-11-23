@@ -246,7 +246,8 @@ public struct ScheduledTasksView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
                 list.frame(width: 300)
-                SwiftUI.Color.ds.border.frame(height: 1)
+                // The vertical rule between the list and the editor (NV11: a 1-point-high line drew along the top).
+                SwiftUI.Color.ds.border.frame(width: 1)
                 editor.frame(minWidth: 360, maxWidth: .infinity)
             }
             SwiftUI.Color.ds.border.frame(height: 1)
