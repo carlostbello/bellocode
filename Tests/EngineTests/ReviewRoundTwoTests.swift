@@ -121,7 +121,7 @@ extension WorktreeService {
     }
 }
 
-@Suite struct WorktreeRemovalSafetyTests {
+@Suite(.timeLimit(.minutes(3))) struct WorktreeRemovalSafetyTests {
     /// M2: a worktree whose only own files are ignored (.env, build/) is not "clean": removal asks first, then keeps
     /// the files recoverable, and Undo brings them back byte for byte.
     @Test func ignoredFilesAreReportedHeldAndRestored() async throws {

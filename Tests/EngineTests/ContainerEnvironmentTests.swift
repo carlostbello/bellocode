@@ -359,7 +359,7 @@ struct ContainerSecretReferenceTests {
     }
 }
 
-@Suite("Container interception configuration")
+@Suite("Container interception configuration", .timeLimit(.minutes(3)))
 struct ContainerInterceptionTests {
     let execution = ContainerExecution(
         helperURL: URL(filePath: "/App/Contents/Helpers/bellocode-exec"), execConfigURL: URL(filePath: "/data/bellocode-exec.json"))

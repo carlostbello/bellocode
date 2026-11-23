@@ -163,7 +163,7 @@ struct ThreadSectionTests {
     }
 }
 
-@Suite("Thread organisation in the engine", .serialized)
+@Suite("Thread organisation in the engine", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct EngineOrganisationTests {
     func makeEngine(_ url: URL) throws -> Engine {

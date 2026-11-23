@@ -8,7 +8,7 @@ import Testing
 @testable import BelloCodeApp
 
 /// The browser seam in the real main window against MockOpenCode's simulated browser plugin.
-@MainActor @Suite(.serialized) struct BrowserShellTests {
+@MainActor @Suite(.serialized, .timeLimit(.minutes(3))) struct BrowserShellTests {
     /// Every key equivalent in the whole main menu (shell commands, standard items and the Browser menu) is unique.
     @Test func everyMainMenuShortcutIsUnique() {
         _ = NSApplication.shared

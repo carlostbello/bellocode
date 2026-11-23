@@ -4,7 +4,7 @@ import Testing
 @testable import BelloCodeApp
 
 /// The fixes an environment banner offers open the pane that holds the fix (NF08).
-@Suite("Environment fixes")
+@Suite("Environment fixes", .timeLimit(.minutes(3)))
 @MainActor
 struct EnvironmentFixesTests {
     /// NF08: "Sign in to the registry" opens Settings ▸ Containers (the only pane with the registry sign-in form) from a
