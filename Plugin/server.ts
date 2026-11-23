@@ -2,9 +2,9 @@
 //
 // Loaded by local path from BelloCode's isolated opencode config (`OPENCODE_CONFIG_CONTENT`), so it needs no npm install
 // and no network. It imports nothing from opencode: tool inputs are plain JSON Schema and the context is used through
-// the documented promise API (`@opencode/plugin`, 2.3.0), so a type mismatch shows up as a runtime error in the tool
-// result, never a load failure. Results carry `content` and `metadata` only: 2.3.0 rejects `output` without a declared
-// output schema ("Tool result declared output without an output schema", seen on the real binary). Everything here runs in the server process and keeps working while the app is closed.
+// the documented promise API (`@opencode/plugin`, 2.3.2 as pinned), so a type mismatch shows up as a runtime error in the tool
+// result, never a load failure. Results carry `content` and `metadata` only: opencode rejects `output` without a declared
+// output schema ("Tool result declared output without an output schema", seen on the real 2.3.0 binary). Everything here runs in the server process and keeps working while the app is closed.
 //
 // Durable state lives in opencode itself: child sessions (`parentID`), session metadata (`metadata.bellocode`) and
 // instruction entries. The plugin keeps only short-lived, in-memory bookkeeping (cascades in progress, event dedupe).

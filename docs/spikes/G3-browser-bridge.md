@@ -2,7 +2,8 @@
 
 Result: **pass.** A Swift desktop side of opencode 2.3.0's built-in browser bridge drives a visible WKWebView. A real
 agent session on a zero-cost model opened a local page, filled and submitted a form, and reported the confirmation.
-Prototype: `Sources/BrowserKit/SpikeBridge/` (throwaway, marked SPIKE) and `Sources/BrowserSpike/`.
+Prototype: `Sources/BrowserKit/SpikeBridge/` (throwaway, marked SPIKE) and `Sources/BrowserSpike/`. Both are gone since
+M4-A (`5ea0d8d`): the bridge became `Sources/BrowserKit/Browser/` and the demo is now `Sources/BrowserDemo/`.
 
 ## Contract (opencode 2.3.0: `packages/plugin-browser/src/{rpc,connection,machine,tools}.ts`, desktop prior art `packages/gui-plugins/src/browser/{pane,chromium}.ts`)
 
@@ -138,5 +139,7 @@ Chrome with browse for authenticated or devtools work.
 
 ## Run it
 
-`Scripts/fetch-opencode.sh`, then `swift run BrowserSpike --selftest` (about 20 s) or `swift run BrowserSpike --e2e`
-(sends one prompt to a zero-cost model; set `G3_MODEL` to choose one). Snapshots go to `build/snapshots/`.
+At the time: `swift run BrowserSpike --selftest` or `--e2e`. Today the same checks run against the production
+BrowserKit: `Scripts/fetch-opencode.sh`, then `swift run BrowserDemo --selftest` or `swift run BrowserDemo --e2e`
+(sends one prompt to a zero-cost model; export the `SWIFTTERM_BUILD_*` values from the Makefile first). Snapshots go
+to `build/snapshots/`.

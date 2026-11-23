@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Entitlements for the bundled opencode helper (Contents/Helpers/opencode), signed with the hardened runtime.
-  They mirror the upstream signature of opencode 2.3.0 (`codesign -d -\-entitlements - opencode`): the embedded Bun
+  They mirror the upstream signature of opencode 2.3.2, the pinned version (`codesign -d -\-entitlements - opencode`): the embedded Bun
   JavaScript runtime needs JIT and writable-executable memory.
 -->
 <plist version="1.0">

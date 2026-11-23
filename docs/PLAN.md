@@ -1,6 +1,10 @@
 # BelloCode: product plan and roadmap
 
-Status: draft 1, 2026-11-16. Owner decisions still open are listed in section 8.
+Status: the plan as written on 2026-11-16, with owner decisions added through 2026-11-18. It is kept as the record of
+scope and design intent. BelloCode 1.0.0 and 1.0.1 have shipped and cover M0–M4 and the container, secrets, Auto,
+GitLab and shared-browser work in section 0 (see [RELEASE-NOTES.md](RELEASE-NOTES.md) and [features/](features/));
+M5's notarisation and auto-update are not done ([RELEASE.md](RELEASE.md)). Section 8 records which decisions were
+settled.
 
 BelloCode is a native macOS app (Swift, AppKit + SwiftUI) that brings T3 Code's UI/UX and orchestration model to a
 single backend: opencode v2, shipped inside the app bundle. There is no multi-provider layer. Anything T3 Code built
@@ -248,19 +252,27 @@ Package.swift
 Sources/
   BelloCore/        domain types, IDs, no dependencies
   OpenCodeKit/      supervisor, HTTP, SSE, DTOs, client MCP host
-  Engine/           projection store, reducers, coalescer, services
+  Engine/           projection store, reducers, coalescer, services (git, GitLab, containers, secrets, shared browser)
+  ContainerKit/     Docker Engine API client over Rancher Desktop's socket, workspace containers, images
+  SecretKit/        secret binding rules, value scanner, placeholder egress proxy and its CA
   DesignSystem/     tokens, typography, icons, motion, shared controls
   TranscriptKit/    transcript view, Markdown pipeline, highlighting
   ComposerKit/      composer text view, mentions, attachments
-  DiffKit/          diff model and views
+  AgentUI/          approvals, questions, permission modes, model picker, onboarding, accounts
+  OrchestrationUI/  Agents panel, lineage rows
+  DiffKit/          diff model and views, git action forms
   TerminalKit/      terminal host
   BrowserKit/       web tabs and the browser bridge
-  BelloCodeApp/     app delegate, windows, menus, feature wiring
+  BelloCodeApp/     app delegate, windows, menus, settings, feature wiring
+  bellocode-exec/   the shell opencode runs: forwards commands into the container (bundled helper)
+  bellocode-opencode/  the opencode CLI on BelloCode's isolated data (bundled helper)
   MockOpenCode/     scriptable fake server for tests and UI fixtures
+  *Demo/, DesignGallery/  development harnesses (snapshots, benchmarks, end-to-end runs)
 Tests/<Module>Tests/
 Plugin/             bellocode opencode plugin (TypeScript)
+Containers/browser/ the shared Chromium image's build context
 Contracts/opencode-<version>/   openapi.json, recorded event streams
-Scripts/            fetch-opencode, make-app, sign, notarize, run-fixture
+Scripts/            fetch-opencode, make-app, make-release, opencode-upgrade, opencode-verify, browser-verify
 docs/
 ```
 
@@ -300,7 +312,7 @@ terminal, real trackpad input, input methods, VoiceOver.
 | **M4 Browser** | Agent and user share one built-in browser | Web tabs; browser bridge; element picker and annotations; presets; browse status |
 | **M5 Ship** | Signed, notarized, auto-updating release | Themes and settings; keybindings; accessibility pass; performance gates; signing, notarization, Sparkle; diagnostics |
 
-Status, 2026-11-16: M0 and M1 are merged on `develop` (shell, Engine, composer, approvals, model picker, onboarding,
+Status, 2026-11-16 (historical; current state in [RELEASE-NOTES.md](RELEASE-NOTES.md)): M0 and M1 are merged on `develop` (shell, Engine, composer, approvals, model picker, onboarding,
 production transcript), plus the M2 terminal drawer and the fixes from the first independent review
 ([reviews/M1-review.md](reviews/M1-review.md)). Per-feature notes are in [features/](features/). Nothing has yet been
 checked by a person at the screen.
@@ -324,6 +336,13 @@ M4 can start as soon as G3 passes and does not block M2 or M3.
   XCUITest become available if Xcode is installed.
 
 ## 8. Decisions for the owner
+
+As posed on 2026-11-16. Outcomes so far: #4 isolated data with credential import (built); #6 superseded by section 0
+(GitLab, not GitHub: link, watch, create and review merge requests); #2 still open (builds are ad-hoc signed, see
+[RELEASE.md](RELEASE.md)); #1 not done (development uses Command Line Tools only); #3 the app keeps running with no window open and has a
+menu bar item; #5 settled by gate G1 (row-based transcript with cross-message selection); #7 Return sends by default,
+configurable in Settings.
+
 
 1. **Install Xcode?** Recommended. Without it there is no Instruments, no XCUITest, and SwiftUI previews are
    unavailable. The plan works on Command Line Tools but performance evidence is weaker.
