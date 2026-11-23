@@ -159,7 +159,8 @@ public final class GitActionsModel {
 
     /// Called by the commit form: commits, then pushes and opens the MR form as the chosen action says. A failed
     /// commit stays in the form; once the commit is made the form is closed, so a failed push is reported like any
-    /// other action's failure (`lastError` and a notice), never only in the closed form (NF05).
+    /// other action's failure (`lastError` and a notice), never only in the closed form (NF05). After a commit the
+    /// state is reloaded whatever happens to the push, a cancelled confirmation included (NV16).
     public func finishCommit(_ form: GitCommitModel, as action: GitAction) async {
         let message = form.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
@@ -175,8 +176,7 @@ public final class GitActionsModel {
         host.notice("Committed to \(branch)")
         if action == .commitAndPush || action == .commitPushAndCreateMergeRequest {
             do {
-                guard try await push() else { return }
-                if action == .commitPushAndCreateMergeRequest { host.createMergeRequest() }
+                if try await push(), action == .commitPushAndCreateMergeRequest { host.createMergeRequest() }
             } catch {
                 let reason = (error as? GitError)?.userMessage ?? (error as? GitPushPlanError)?.userMessage ?? "The push failed."
                 lastError = "Committed to \(branch), but the push failed: \(reason)"
