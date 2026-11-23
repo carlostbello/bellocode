@@ -55,6 +55,17 @@ import Testing
     }
 }
 
+/// v1.0.1 NF07: the right panel ships no placeholder tab; a "files" selection saved by an earlier version falls back.
+@MainActor @Suite struct RightPanelTabsTests {
+    @Test func noPlaceholderTabAndAStaleSelectionFallsBack() {
+        let tabs = ShellSurfaces.builtIn.rightPanelTabs
+        #expect(!tabs.map(\.id).contains("files"))
+        #expect(tabs.map(\.id) == ["changes", "browser", "terminal", "agents", "mergeRequests", "auto", "chrome"])
+        let panel = RightPanelViewController(tabs: tabs, selectedID: "files")
+        #expect(panel.selectedID == "changes")
+    }
+}
+
 @Suite struct ShellStateTests {
     @Test func roundTripsEverything() {
         var state = ShellState()
@@ -64,7 +75,7 @@ import Testing
         state.isSidebarCollapsed = true
         state.isRightPanelVisible = true
         state.isTerminalVisible = true
-        state.rightPanelTab = "files"
+        state.rightPanelTab = "agents"
         state.manualUnread = ["ses_2"]
         state.newThreadDrafts = ["/a": "hello"]
         #expect(ShellState.decode(state.encoded()) == state)
