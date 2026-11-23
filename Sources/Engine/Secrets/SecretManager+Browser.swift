@@ -23,7 +23,7 @@ extension SecretManager {
         let scope = EgressScope(id: key, token: scopes[key]?.token ?? (UUID().uuidString.lowercased() + UUID().uuidString.lowercased()),
                                 admitsProject: admitsProject)
         scopes[key] = scope
-        proxy.setScopes(Array(scopes.values))
+        await proxy.publishScopes(Array(scopes.values))
         let spec = EgressGatewaySpec(scopeKey: key, image: image, proxyPort: Int(port), token: scope.token,
                                      extraLabels: [BrowserImageContext.labelBrowser: "1"].merging(extraLabels) { a, _ in a })
         try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(spec)

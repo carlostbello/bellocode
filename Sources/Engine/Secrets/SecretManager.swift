@@ -361,7 +361,9 @@ public final class SecretManager {
                 rebuildScope(key, token: scope.token, roots: environments.sharedSpec()?.workspaceRoots ?? [])
             }
         }
-        proxy?.setScopes(Array(scopes.values))
+        // Kept-alive connections of the shared workspace are judged by the new scope from their next request; a write
+        // the new scope no longer authorizes is cancelled and has ended before this returns (AV2-04).
+        await proxy?.publishScopes(Array(scopes.values))
         await refreshProxySnapshot()
     }
 
@@ -1220,9 +1222,11 @@ extension SecretManager {
     func ensureGateway(_ spec: WorkspaceSpec) async throws {
         guard let egress = spec.egress else { return }
         if let running = gatewaySetups[egress.scopeKey] { return try await running.value }
-        guard let (port, token, socket) = prepareScope(spec) else {
+        guard let (port, token, socket, drain) = prepareScope(spec) else {
             throw EgressGatewayError("BelloCode's egress proxy is not running, so this project's container has no network. Open Settings ▸ Secrets.")
         }
+        // A narrower scope (a root removed) applies to requests already in flight on the old one (AV2-04).
+        await proxy?.drain(drain)
         let gatewaySpec = Self.gatewaySpec(for: spec, proxyPort: port, token: token)
         let setup = Task { try await EgressGateway(client: EngineClient(socketPath: socket)).ensure(gatewaySpec) }
         gatewaySetups[egress.scopeKey] = setup
@@ -1243,13 +1247,13 @@ extension SecretManager {
     }
 
     /// Registers (or reuses) the scope's token; nil when the proxy is not running.
-    private func prepareScope(_ spec: WorkspaceSpec) -> (UInt16, String, String)? {
+    private func prepareScope(_ spec: WorkspaceSpec) -> (UInt16, String, String, EgressDrain)? {
         guard case .ready(let port) = egressStatus, let proxy, let egress = spec.egress, let socket = environments?.activeRuntime.socketPath else { return nil }
         // The token is kept for the launch; what the scope serves always follows the spec now (N13: code roots change).
         let token = scopes[egress.scopeKey]?.token ?? UUID().uuidString.lowercased() + UUID().uuidString.lowercased()
         let scope = rebuildScope(egress.scopeKey, token: token, roots: spec.workspaceRoots)
-        proxy.setScopes(Array(scopes.values))
-        return (port, scope.token, socket)
+        let drain = proxy.setScopes(Array(scopes.values))
+        return (port, scope.token, socket, drain)
     }
 
     /// (Re)makes a workspace scope serving exactly `roots`, with the raw allowlists of the projects inside them.
