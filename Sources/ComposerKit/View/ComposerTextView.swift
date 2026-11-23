@@ -5,6 +5,9 @@ import AppKit
 protocol ComposerTextViewOwner: AnyObject {
     /// Return or keypad Enter with these modifiers, outside composition. True when handled.
     func composerTextView(_ textView: ComposerTextView, handleReturn modifiers: KeyModifiers) -> Bool
+    /// The same, offered as a key equivalent (before the main menu): true only when it sends. Any other Command-Return
+    /// combination (⌃⌘↩, ⌃⌥⌘↩, ⇧⌘↩…) is left to the menu; when no menu item takes it, `keyDown` still handles it.
+    func composerTextView(_ textView: ComposerTextView, handleReturnKeyEquivalent modifiers: KeyModifiers) -> Bool
     /// Paste or drop. True when handled (attachments or a large paste); false to insert plain text.
     func composerTextView(_ textView: ComposerTextView, read pasteboard: NSPasteboard, inline: Bool) -> Bool
     func composerTextViewFocusChanged(_ textView: ComposerTextView)
@@ -58,16 +61,17 @@ public final class ComposerTextView: NSTextView {
         super.keyDown(with: event)
     }
 
-    /// Command-Return (and Command-Option-Return) belong to the composer while it has focus: they are handled here,
-    /// before the main menu sees them as key equivalents (a host's "Send ⌘↩" or "Submit ⌥⌘↩" items), so the composer's
-    /// send-key policy (send, or the alternate follow-up) applies exactly as typed.
+    /// The Command-Return combinations that send (⌘↩, and ⌥⌘↩ with the Command-Return send key) belong to the composer
+    /// while it has focus: they are handled here, before the main menu sees them as key equivalents, so the send-key
+    /// policy applies exactly as typed. Other combinations (⌃⌘↩ Run Suggested Git Action, ⌃⌥⌘↩ Submit Review) reach
+    /// the menu (NV03).
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown, Self.returnKeyCodes.contains(event.keyCode), event.modifierFlags.contains(.command),
            window?.firstResponder === self, !hasMarkedText()
         {
             currentKeyModifiers = event.modifierFlags
             defer { currentKeyModifiers = nil }
-            if owner?.composerTextView(self, handleReturn: KeyModifiers(event.modifierFlags)) == true { return true }
+            if owner?.composerTextView(self, handleReturnKeyEquivalent: KeyModifiers(event.modifierFlags)) == true { return true }
         }
         return super.performKeyEquivalent(with: event)
     }

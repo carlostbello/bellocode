@@ -89,6 +89,16 @@ public struct ComposerDraft: Hashable, Sendable, Codable {
         return copy
     }
 
+    /// Whether `failed` is already fully in this draft: its text at the start, each of its tokens at the same place,
+    /// and every one of its attachments (by ID). Text alone is not enough (AV12).
+    public func containsRestored(_ failed: ComposerDraft) -> Bool {
+        guard text.hasPrefix(failed.text) else { return false }
+        let placed = Set(tokens)
+        guard failed.tokens.allSatisfy(placed.contains) else { return false }
+        let present = Set(attachments.map(\.id))
+        return failed.attachments.allSatisfy { present.contains($0.id) }
+    }
+
     /// Joins a draft that failed to send with whatever the user typed since, so neither is lost: the failed text
     /// comes first, followed by a blank line and the newer text.
     public static func merging(failed: ComposerDraft, current: ComposerDraft) -> ComposerDraft {

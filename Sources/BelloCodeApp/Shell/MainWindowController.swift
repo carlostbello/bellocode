@@ -320,6 +320,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         changes?.saveOptions()
         issueThreadTask?.cancel()
         if let browser { Task { await browser.close() } }
+        // Nothing of this window outlives it (NV08): terminals detach their emulators (the PTYs keep running on the
+        // server), and the floating palette, Git popover and panels (clone, publish, Edit from Here) close with it.
+        terminals?.close()
+        palette.hide(restoreFocus: false)
+        closeGitPopover()
+        closeGitPanel()
+        gitUI.commitWatch.cancel()
     }
 
     /// One undo manager per window, owned by the workspace (text views share it, as AppKit intends).

@@ -39,6 +39,18 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Settings ▸ Secrets ▸ Uninspected destinations shows what is saved** for the selected project, so Save no longer
   replaces it with a blank field (NV06). A failed Revoke or Restore there, and a GitLab token replacement the Keychain
   refuses, are reported instead of ignored (NV12).
+- **Typed browser shortcuts belong to a shown, focused browser.** ⌘L, ⌘R, ⇧⌘R, ⌘=, ⌘-, ⌘0, ⇧⌘C, ⌃⇥ and ⌃⇧⇥ act on the
+  built-in browser only while its tab is shown and has focus; otherwise the composer, a text field or the terminal
+  keeps the key. Chosen from the Browser menu they work as before, and the ⌃⌘ browser shortcuts stay global (NV05).
+- **⌃⌘↩ and ⌃⌥⌘↩ in the composer** run Git ▸ Run Suggested Git Action and GitLab ▸ Submit Review… instead of inserting
+  a blank line; the composer keeps only the Return combinations that send (NV03).
+- **Show Merge Requests, Show Issues and Show To-dos work without an open thread**: on a new-thread draft (Issues for
+  its project) and with nothing selected (Merge Requests, To-dos) (NV02).
+- **Revoking Shared Chrome for a project stops its calls already waiting or running**: none is sent after the
+  revocation and a running call's result is withheld (AV05).
+- **Free models are promised only when one can be chosen now** (usable and not hidden with Hide Model) in the draft
+  hint, onboarding and Settings ▸ Accounts, whose empty state otherwise says "Connect a provider to use your own
+  models." (NF24, NV14).
 
 ### Fixes by area
 
@@ -93,6 +105,14 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   settings are read and written for the project root, while Open in Terminal still opens the worktree (NV04). File ▸ Reopen
   Closed Thread (⇧⌘T) also brings back a thread deleted within its Undo window (NV13). Thread ▸ Mark Risk Notices
   Reviewed works on a thread whose session has not loaded yet (NV15).
+- **Second verification round, app UI and Shared Chrome (Q5):** a failed Shared Chrome start stops a browser it adopted
+  from a previous launch, and Stop in Failed stops one still running (AF23); an out-of-range numeric tab ID (or
+  service-log line count) from an agent is refused instead of crashing (AV11); threads from before launch close their
+  Shared Chrome tabs when archived or deleted, also after a change-stream overflow (NF11); a failed first send whose
+  thread composer already starts with the same words still gets its attachment and error back (AV12); closing a
+  window detaches its terminals and closes its floating Git panel, popover and palette (NV08); Edit from Here puts
+  the prompt into its own thread after a thread switch (NV09); container notices appear on threads shown before
+  their session loaded (NV10); Settings ▸ Scheduled Tasks has its vertical divider (NV11).
 - **GitLab (P9):** the request gate re-checks the 429 hold for queued requests and never exceeds its limit (GF11);
   the token used for redaction is read off the main actor once per result (GF12); titles, branch, job and stage names
   and other header fields are cleaned and redacted (GF13).

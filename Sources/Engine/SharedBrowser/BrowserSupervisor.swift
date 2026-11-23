@@ -244,10 +244,14 @@ public actor BrowserSupervisor {
             let wanted = spec(tag, placement, try runtime.seccompProfile())
             let current = try await runtime.inspect()
             if let current, current.configHash == wanted.configHash {
+                // A running container with this configuration (left by a previous launch) is adopted: from here on it
+                // is this start's to stop if the start fails, exactly like one it started (AF23).
+                touchedContainer = true
                 if !current.running {
                     note("start")
-                    touchedContainer = true
                     try await runtime.start()
+                } else {
+                    note("adopt")
                 }
             } else {
                 note(current == nil ? "create" : "recreate")
@@ -274,8 +278,9 @@ public actor BrowserSupervisor {
                 note("start-cancelled")
                 throw error
             }
-            // The container this attempt created or started is ours to stop: a failed start never leaves it running
-            // behind a Failed or Stopped phase (R23), and a stop that cannot be confirmed is shown as such (A19).
+            // The container this attempt created, started or adopted is ours to stop: a failed start (readiness timeout,
+            // viewer password) never leaves it running behind a Failed or Stopped phase (R23, AF23), and a stop that
+            // cannot be confirmed is shown as such (A19).
             if touchedContainer {
                 note("cleanup-stop")
                 do { try await runtime.stop(timeout: timing.stopTimeoutSeconds) } catch _ {
@@ -341,8 +346,17 @@ public actor BrowserSupervisor {
                 break
             }
         }
-        guard phase == .ready || phase == .starting || phase.isRecovering || phase.isStopUnconfirmed else {
-            if case .failed = phase { set(.stopped) }
+        if case .failed = phase {
+            // Failed is not proof of stopped (a recovery whose cleanup stop failed, a container started behind
+            // BelloCode's back): only a container verifiably not running is Stopped; otherwise the orderly stop below
+            // runs, with its confirmation (AF23).
+            if await confirmedStopped() {
+                note("failed-stopped")
+                set(.stopped)
+                return
+            }
+            note("failed-still-running")
+        } else if !(phase == .ready || phase == .starting || phase.isRecovering || phase.isStopUnconfirmed) {
             return
         }
         let task = Task { await self.stopNow(reason: reason) }

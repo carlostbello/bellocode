@@ -229,13 +229,26 @@ public final class SharedBrowserService {
     private func followThreadEnds() {
         guard !followingThreadEnds else { return }
         followingThreadEnds = true
+        // Subscribed before the seed is read, so no change falls between them.
         let lineage = store.observe(.lineage)
+        let store = self.store
         tasks.set(
             "thread-ends",
             Task { [weak self] in
+                // Threads loaded from the cache before this started emit nothing until they change: without their
+                // current state, archiving or deleting one would never be seen as an end.
+                let seed = (try? await store.allSessions()) ?? []
+                self?.threadEnds.seed(seed)
                 for await change in lineage {
                     guard let self else { return }
-                    let ended = self.threadEnds.ended(sessions: Array(change.sessions.values), removed: change.removedSessions)
+                    let ended: [SessionID]
+                    if change.overflowed {
+                        // Changes were dropped: compare with every thread now (an archive or delete may be among them).
+                        guard let all = try? await store.allSessions() else { continue }
+                        ended = self.threadEnds.reconcile(all: all)
+                    } else {
+                        ended = self.threadEnds.ended(sessions: Array(change.sessions.values), removed: change.removedSessions)
+                    }
                     for session in ended { await self.threadEnded(session.rawValue) }
                 }
             })
@@ -350,6 +363,8 @@ public final class SharedBrowserService {
         approvedSessions = approvedSessions.filter { $0.value != directory }
         pendingRevocations.insert(directory)
         defaults.set(pendingRevocations.sorted(), forKey: Self.pendingRevocationsKey)
+        // Calls already admitted for the project are cancelled; none reaches the browser or returns a result (AV05).
+        await broker.revoke(directory: directory)
         await hosts[directory]?.toolsChanged()
         return await finishRevocation(directory)
     }
@@ -386,6 +401,9 @@ public final class SharedBrowserService {
 
     func shutdown() async {
         tasks.cancelAll()
+        // A later start follows thread ends again, from a fresh seed.
+        followingThreadEnds = false
+        threadEnds = ThreadEndTracker()
         for host in hosts.values { await host.stop() }
         hosts = [:]
         hostsConnection = nil

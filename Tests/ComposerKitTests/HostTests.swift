@@ -126,6 +126,48 @@ private func settle() async {
         #expect(draftHost.draft.text == "long prompt", "the sending host restored it too")
     }
 
+    /// v1.0.1 AV12: the live composer's newer text merely starts with the failed text: that is not proof the failed
+    /// draft is shown, so its attachment and error still come back, and are saved.
+    @Test func aFailedSendWithTheSamePrefixStillRestoresItsAttachment() async {
+        final class Store {}
+        let store = Store()
+        let registry = ComposerController.Registry()
+        let draftHost = FakeComposerHost("draft:/p")
+        draftHost.outcomes = [.failed("offline")]
+        draftHost.holdSends = true
+        var draftComposer: ComposerController? = ComposerController(registry: registry)
+        let draftView = FakeView()
+        draftView.bind(draftComposer!)
+        draftComposer!.attach(draftHost)
+        draftView.draft = ComposerDraft(text: "fix", attachments: [.text("log")])
+        #expect(draftComposer!.submit())
+        await settle()
+        draftHost.owner = ObjectIdentifier(store)
+        draftComposer = nil
+        let threadHost = FakeComposerHost("ses_1")
+        threadHost.owner = ObjectIdentifier(store)
+        let threadComposer = ComposerController(registry: registry)
+        let threadView = FakeView()
+        threadView.bind(threadComposer)
+        threadComposer.attach(threadHost)
+        threadView.draft = ComposerDraft(text: "fix the login bug")
+        draftHost.release()
+        await settle()
+        #expect(threadView.draft.attachments.count == 1, "the attachment came back")
+        #expect(threadView.draft.text == "fix\n\nfix the login bug")
+        #expect(threadComposer.errorMessage == "offline")
+        #expect(threadHost.draft.attachments.count == 1, "saved, so the next edit does not drop it")
+    }
+
+    /// AV12: a draft already fully shown (text, tokens and attachments) is not duplicated, and the error still shows.
+    @Test func aFailedSendAlreadyFullyShownIsNotDuplicated() {
+        let failed = ComposerDraft(text: "fix", attachments: [.text("log")])
+        var current = failed
+        current.text = "fix and more"
+        #expect(current.containsRestored(failed))
+        #expect(!ComposerDraft(text: "fix and more").containsRestored(failed), "text alone is not enough")
+    }
+
     @Test func emptyDraftSendsNothing() {
         let controller = ComposerController()
         let view = FakeView()

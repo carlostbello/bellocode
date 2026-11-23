@@ -80,7 +80,9 @@ Purpose/context: footer names status, shared tab count, project › thread; tab 
 new tab, loading (progress), failure/crash (Try Again/Reload), suspended (snapshot), agent running, paused, dialog,
 permission, sign-in, offline/incompatible/replaced bridge: by self-test and snapshots. Speed: tab and thread swaps
 < 100 ms (tests). Keyboard: every command in the Browser menu; ⌃⌘B Show Browser, ⌘L/⌃⌘[/⌃⌘]/⌘R/⌘+/-/0, ⌃⌘T/⌃⌘W/⌃⌥⌘T, ⌃⇥ (⌘[ ⌘] ⇧⌘T ⇧⌘B stay with Go/Changes, docs/features/navigation.md); ⌘F/⌘G find
-in page when the browser has focus; pages see keys first. Accessibility: tabs are labelled radio buttons with
+in page when the browser has focus; pages see keys first. Typed, ⌘L, ⌘R, ⇧⌘R, ⌘=, ⌘-, ⌘0, ⇧⌘C, ⌃⇥ and ⌃⇧⇥
+validate only while the Browser tab is shown and has focus, so the composer, text fields and the terminal keep them
+(a disabled match is not consumed); chosen from the menu they work as before, and the ⌃⌘ shortcuts stay global (NV05). Accessibility: tabs are labelled radio buttons with
 ownership text, bars are labelled groups, status never colour-only; VoiceOver unverified. Persistence: tabs, URLs,
 history, zoom, preset, appearance per thread (bridge test). Approvals: N/A (no card; see Permission).
 

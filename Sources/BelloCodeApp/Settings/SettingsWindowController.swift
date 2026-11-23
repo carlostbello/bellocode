@@ -22,6 +22,15 @@ struct SettingsPane {
 /// sidebar's top 52 pt like the main window. ↑/↓ in the sidebar switch panes; each pane is built once.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    /// Whether opencode's free models can be chosen now (Settings ▸ Accounts promises them only then, NV14).
+    static func freeModelsOffered(_ engine: Engine?) -> (@MainActor () -> Bool)? {
+        guard let engine else { return nil }
+        return { [weak engine] in
+            guard let engine else { return false }
+            return !BackgroundModelResolver.offeredFreeModels(engine.root.catalog.current, hidden: engine.modelPreferences.value.hidden).isEmpty
+        }
+    }
+
     let root: SettingsRootViewController
     private(set) var panes: [SettingsPane]
 
@@ -177,7 +186,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let auth {
             panes.append(
                 SettingsPane(id: "accounts", title: "Accounts", symbolName: "person.crop.circle") {
-                    let controller = AgentUIFactories.accountsSettings(auth: auth, importSource: importSource, style: AppStyle.agentUI)
+                    let controller = AgentUIFactories.accountsSettings(
+                        auth: auth, importSource: importSource, style: AppStyle.agentUI, freeModelsOffered: Self.freeModelsOffered(engine))
                     controller.preferredContentSize = NSSize(width: 620, height: 460)
                     return controller
                 })

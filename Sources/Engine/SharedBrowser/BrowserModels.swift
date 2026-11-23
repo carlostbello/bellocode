@@ -145,8 +145,24 @@ public struct SharedBrowserSettings: Codable, Sendable, Equatable {
 
 /// Which threads just ended (NF11): archived since last seen, or deleted. A thread seen for the first time only
 /// records its state (one already archived at launch is not "just done"). Bounded by the threads opencode lists.
+///
+/// It is seeded from the store before following changes (threads loaded from the cache at launch emit no change
+/// until they change), and reconciled against the full list after a change-stream overflow.
 struct ThreadEndTracker {
     private var archived: [SessionID: Bool] = [:]
+
+    var isEmpty: Bool { archived.isEmpty }
+
+    /// Records the state of threads not seen yet; a thread already seen keeps what the change stream said.
+    mutating func seed(_ sessions: [Session]) {
+        for session in sessions where archived[session.id] == nil { archived[session.id] = session.isArchived }
+    }
+
+    /// After an overflow: `all` is every thread now. Threads archived since last seen, or gone, have ended.
+    mutating func reconcile(all: [Session]) -> [SessionID] {
+        let present = Set(all.map(\.id))
+        return ended(sessions: all, removed: Set(archived.keys).subtracting(present))
+    }
 
     mutating func ended(sessions: [Session], removed: Set<SessionID>) -> [SessionID] {
         var ended: [SessionID] = []

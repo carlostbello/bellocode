@@ -233,6 +233,23 @@ struct BrowserCallPolicyTests {
         }
     }
 
+    /// v1.0.1 AV11: numbers the host integer cannot hold (or fractional ones) are unknown tabs, never a trap.
+    @Test func outOfRangeNumericTabsAreRefusedNotTrapped() {
+        for number in [1e30, -1e30, 9.3e18, 1.5] {
+            guard case .refuse(let message) = plan("click", ["tab": .number(number)], numeric: [1: "bc-aaaa0001-main"]) else {
+                Issue.record("\(number) allowed")
+                continue
+            }
+            #expect(message.contains("string ID"))
+            guard case .refuse = plan("tabs", ["action": .string("close"), "tabs": .array([.number(number)])], numeric: [1: "bc-aaaa0001-main"]) else {
+                Issue.record("\(number) allowed in an array")
+                continue
+            }
+        }
+        let text = #"[{"tab":1e30,"id":"bc-aaaa0001-main"},{"tab":2.5,"id":"bc-aaaa0001-x"},{"tab":7,"id":"bc-aaaa0001-y"}]"#
+        #expect(BrowserCallPolicy.learnTabIDs(from: text) == [7: "bc-aaaa0001-y"])
+    }
+
     @Test func globalToolsAreNotOffered() {
         guard case .refuse = plan("settings", ["set": .object([:])]) else {
             Issue.record("settings allowed")
@@ -385,6 +402,7 @@ actor FakeSharedBrowserHost: SharedBrowserHost {
     func hold(_ tool: String) { held.insert(tool) }
 
     func approve(_ directory: String) { approved.insert(directory) }
+    func revoke(_ directory: String) { approved.remove(directory) }
     func setGeneration(_ value: Int) { gen = value }
     func share(_ tab: String, with session: String) { sharesWithMe[session, default: []].insert(tab) }
 
@@ -513,6 +531,68 @@ struct SharedBrowserBrokerTests {
         let result = await inFlight.value
         #expect(result.isError && result.text.contains("took over"), "\(result.text)")
         await broker.gate.giveBack("*")
+    }
+
+    /// Sets up a click held in the browser on ses_a's main tab and a snapshot queued behind it on the same tab.
+    private func heldClickAndQueuedSnapshot(_ host: FakeSharedBrowserHost, _ broker: SharedBrowserBroker) async throws
+        -> (click: Task<ClientMCPResult, Never>, snapshot: Task<ClientMCPResult, Never>)
+    {
+        await host.approve("/p/atlas")
+        await host.hold("click")
+        let tab = "\(BrowserNaming.group(sessionID: "ses_a"))-main"
+        _ = await call(broker, "navigate", ["url": .string("https://x")], session: "ses_a")
+        let click = Task { await self.call(broker, "click", ["ref": .string("e1")], session: "ses_a") }
+        var dispatched = false
+        for _ in 0..<20_000 {
+            if host.calls.all.contains(where: { $0.tool == "click" }) { dispatched = true; break }
+            await Task.yield()
+        }
+        try #require(dispatched, "the click reached the browser")
+        let snapshot = Task { await self.call(broker, "snapshot", [:], session: "ses_a") }
+        var queued = false
+        for _ in 0..<20_000 {
+            if (await broker.tabActivity())[tab]?.queued == 1 { queued = true; break }
+            await Task.yield()
+        }
+        try #require(queued, "the snapshot waits for the tab")
+        return (click, snapshot)
+    }
+
+    /// v1.0.1 AV05: a call queued behind a busy tab is checked again when it gets the tab: after the project's access
+    /// was revoked it is never sent, and a running call's result is withheld.
+    @Test func aQueuedCallIsNotDispatchedAfterRevocation() async throws {
+        let host = FakeSharedBrowserHost()
+        let broker = SharedBrowserBroker(host: host)
+        let (click, snapshot) = try await heldClickAndQueuedSnapshot(host, broker)
+        await host.revoke("/p/atlas")
+        click.cancel()  // the running call ends; the queued one gets the tab
+        let clicked = await click.value
+        #expect(clicked.isError && clicked.text.contains("revoked") && clicked.text.contains("withheld"), "\(clicked.text)")
+        let snapped = await snapshot.value
+        #expect(snapped.isError && snapped.text.contains("not sent"), "\(snapped.text)")
+        #expect(!host.calls.all.contains { $0.tool == "snapshot" }, "nothing reached the browser after the revocation")
+    }
+
+    /// AV05: revoking cancels the project's admitted calls at once (waiting and running) without waiting for the tab;
+    /// another project's calls are untouched.
+    @Test func revocationCancelsTheProjectsPendingCalls() async throws {
+        let host = FakeSharedBrowserHost()
+        let broker = SharedBrowserBroker(host: host)
+        let (click, snapshot) = try await heldClickAndQueuedSnapshot(host, broker)
+        await host.approve("/p/other")
+        await host.revoke("/p/atlas")
+        await broker.revoke(directory: "/p/atlas")
+        let snapped = await snapshot.value
+        #expect(snapped.isError && snapped.text.contains("not sent"), "\(snapped.text)")
+        let clicked = await click.value
+        #expect(clicked.isError && clicked.text.contains("while this call ran"), "\(clicked.text)")
+        #expect(!host.calls.all.contains { $0.tool == "snapshot" })
+        let other = await call(broker, "navigate", ["url": .string("https://y")], session: "ses_b", directory: "/p/other")
+        #expect(!other.isError, "\(other.text)")
+        // Allowed again later: calls work again (the revocation applied only to calls admitted before it).
+        await host.approve("/p/atlas")
+        let again = await call(broker, "navigate", ["url": .string("https://x")], session: "ses_c")
+        #expect(!again.isError, "\(again.text)")
     }
 
     @Test func takeOverMakesAgentCallsBusy() async {

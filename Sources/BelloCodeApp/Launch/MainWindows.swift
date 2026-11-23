@@ -17,7 +17,9 @@ final class MainWindows {
     private(set) var controllers: [String: MainWindowController] = [:]
     /// Window IDs in the order they were opened.
     private(set) var order: [String] = []
-    private var observers: [any NSObjectProtocol] = []
+    /// One window-close observer per open window, removed when it closes (NV08).
+    private var observers: [String: any NSObjectProtocol] = [:]
+    var closeObserverCount: Int { observers.count }
     private var isTerminating = false
 
     init(defaults: UserDefaults, make: @escaping @MainActor (String) -> MainWindowController) {
@@ -26,7 +28,7 @@ final class MainWindows {
     }
 
     isolated deinit {
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        for observer in observers.values { NotificationCenter.default.removeObserver(observer) }
     }
 
     /// The system "Close windows when quitting" setting is off (so windows should come back).
@@ -96,7 +98,7 @@ final class MainWindows {
                 [weak self] _ in
                 MainActor.assumeIsolated { self?.closed(id) }
             }
-            observers.append(observer)
+            observers[id] = observer
         }
         if show { controller.showWindow(nil) }
         return controller
@@ -105,6 +107,7 @@ final class MainWindows {
     /// A window closed: its workspace saves and closes. A secondary window is forgotten (closing it is deliberate);
     /// the first window keeps its state for the next time it opens.
     private func closed(_ id: String) {
+        if let observer = observers.removeValue(forKey: id) { NotificationCenter.default.removeObserver(observer) }
         guard !isTerminating, let controller = controllers.removeValue(forKey: id) else { return }
         order.removeAll { $0 == id }
         controller.workspace.close()

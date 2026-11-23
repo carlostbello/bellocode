@@ -190,8 +190,7 @@ final class ThreadContainerViewController: NSViewController {
             unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
             unconfirmedSends = unconfirmed
-            let directory = context.directory
-            let environment = EnvironmentBannerHost(engine: workspace.engine, directory: { directory })
+            let environment = Self.makeEnvironmentBanner(engine: workspace.engine, context: context)
             environmentBanner = environment
             environmentView = environment
             let interrupted = InterruptedBanner(thread: thread)
@@ -263,11 +262,17 @@ final class ThreadContainerViewController: NSViewController {
         requestsToComposer.constant = hasRequests ? -overlap : 0
     }
 
-    /// The draft's model line: free built-in models are mentioned only when the catalog lists some and no other
-    /// enabled model (no provider of the person's own); otherwise, and before the catalog arrives, a neutral hint.
-    static func draftModelHint(_ catalog: Catalog?) -> String {
-        let models = (catalog?.models ?? []).filter(\.enabled)
-        if !models.isEmpty, models.allSatisfy(\.isFree) {
+    /// The blocked-command banner reads the context's directory live (NV10): a thread shown before its session
+    /// hydrated (directory unknown) gets its container notices once the session's directory is known.
+    static func makeEnvironmentBanner(engine: Engine, context: ThreadSurfaceContext) -> EnvironmentBannerHost {
+        EnvironmentBannerHost(engine: engine, directory: { [weak context] in context?.directory })
+    }
+
+    /// The draft's model line: free built-in models are mentioned only when the catalog offers some that can be used
+    /// (enabled, not deprecated, provider not disabled, not hidden in the model picker) and no other usable model
+    /// is shown; otherwise, and before the catalog arrives, a neutral hint (NF24).
+    static func draftModelHint(_ catalog: Catalog?, hidden: Set<String> = []) -> String {
+        if BackgroundModelResolver.offersOnlyFreeModels(catalog, hidden: hidden) {
             return "Free built-in models work without signing in. Choose another with ⇧⌘M."
         }
         return "Choose a model with ⇧⌘M."
@@ -293,7 +298,8 @@ final class ThreadContainerViewController: NSViewController {
         let directory = context.directory
         draftHintLoop = ObservationLoop { [weak self, weak path] in
             guard let self, let path else { return }
-            let hint = Self.draftModelHint(self.workspace.engine.root.catalog.catalog(for: directory))
+            let engine = self.workspace.engine
+            let hint = Self.draftModelHint(engine.root.catalog.catalog(for: directory), hidden: engine.modelPreferences.value.hidden)
             if path.stringValue != hint { path.stringValue = hint }
         }
         let composer = surfaces.composer(context)

@@ -74,6 +74,14 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
     /// Dispatched downstream calls by ticket, so Take Over can cancel them (R22).
     private var operations: [Int: (tab: String, task: Task<(outcome: Outcome, value: ClientMCPResult), Never>)] = [:]
     private let toolsCache: (@Sendable ([ClientMCPTool]) -> Void)?
+    /// Every admitted call until it returns, by call ID: its project, the revocation sequence it was admitted under,
+    /// its work (so a revocation cancels it while it waits or runs), and whether it reached the browser (AV05).
+    private var admitted: [Int: AdmittedCall] = [:]
+    private var nextCallID = 0
+    /// Revocations, in order: a call admitted at sequence `n` is stale once its project was revoked after `n`.
+    /// Entries matter only to admitted calls, so they are dropped when none is left (bounded, rule 5).
+    private var revocationSequence = 0
+    private var lastRevoked: [String: Int] = [:]
     private static let log = Logger(subsystem: "app.bellocode", category: "shared-browser")
 
     public init(host: any SharedBrowserHost, gate: BrowserTabGate = BrowserTabGate(), cachedTools: [ClientMCPTool] = [],
@@ -131,10 +139,22 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
 
     // MARK: Calls
 
+    private struct AdmittedCall {
+        var directory: String
+        var sequence: Int
+        var work: Task<(outcome: Outcome, value: ClientMCPResult), Never>?
+        var dispatched = false
+    }
+
     public func call(_ call: ClientMCPCall) async -> ClientMCPResult {
         guard let session = call.sessionID, !session.isEmpty else {
             return .error("BelloCode could not tell which thread made this call, so the shared Chrome refused it.")
         }
+        // Registered before the access check, so a revocation at any later point is seen by this call (AV05).
+        nextCallID += 1
+        let callID = nextCallID
+        admitted[callID] = AdmittedCall(directory: call.directory, sequence: revocationSequence)
+        defer { finish(callID) }
         switch await host.access(session: session, directory: call.directory) {
         case .unavailable(let reason): return .error(reason)
         case .needsApproval:
@@ -158,13 +178,31 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
             if case .refuse(let message) = plan { return .error(message) }
             return .error("Refused.")
         }
+        guard !isRevoked(callID) else { return .error(Self.revokedMessage(dispatched: false)) }
         do {
             try await host.beginCall()
         } catch {
             return .error("The shared Chrome could not start: \(BrowserSupervisor.describe(error))")
         }
-        let result = await perform(tool: tool, arguments: arguments, tab: tab, shared: shared, ensure: ensure, session: session, binding: binding)
+        let directory = call.directory
+        let work = Task {
+            await self.perform(tool: tool, arguments: arguments, tab: tab, shared: shared, ensure: ensure, session: session,
+                               directory: directory, binding: binding, callID: callID)
+        }
+        admitted[callID]?.work = work
+        // Revoked between admission and here: the work is cancelled before it waits for its tab.
+        if isRevoked(callID) { work.cancel() }
+        let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
         await host.endCall()
+        // A result is returned only under a grant that is still current: page content read after the person revoked
+        // the project never reaches the agent (AV05).
+        let access = await host.access(session: session, directory: directory)
+        if isRevoked(callID) || access == .needsApproval {
+            return .error(Self.revokedMessage(dispatched: admitted[callID]?.dispatched == true))
+        }
+        if case .unavailable(let reason) = access {
+            return .error(reason + " The call's result was withheld; it may or may not have taken effect.")
+        }
         if case .success = result.outcome, let remember {
             binding.remember(remember)
             await host.save(binding)
@@ -178,8 +216,41 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
 
     private enum Outcome { case success, failure }
 
+    /// Revokes the project's access for calls already admitted (Settings ▸ Browser): those waiting for a tab are
+    /// cancelled and never sent; those running are cancelled and their results withheld (AV05). New calls are refused
+    /// by the host's access check.
+    public func revoke(directory: String) {
+        revocationSequence += 1
+        lastRevoked[directory] = revocationSequence
+        for call in admitted.values where call.directory == directory { call.work?.cancel() }
+    }
+
+    private func isRevoked(_ callID: Int) -> Bool {
+        guard let call = admitted[callID] else { return true }
+        return (lastRevoked[call.directory] ?? 0) > call.sequence
+    }
+
+    private func finish(_ callID: Int) {
+        admitted[callID] = nil
+        if admitted.isEmpty { lastRevoked = [:] }
+    }
+
+    static func revokedMessage(dispatched: Bool) -> String {
+        dispatched
+            ? "The person revoked this project's access to the shared Chrome while this call ran. It may or may not have taken effect, and its result was withheld. Do not use the browser again unless the person allows it (\(serverName)_\(requestAccessTool))."
+            : "The person revoked this project's access to the shared Chrome, so this call was not sent. Do not use the browser again unless the person allows it (\(serverName)_\(requestAccessTool))."
+    }
+
+    /// Whether the call may still reach the browser: its project not revoked since it was admitted, and the host still
+    /// allows it (checked after the wait for its tab, right before dispatch).
+    private func mayDispatch(_ callID: Int, session: String, directory: String) async -> Bool {
+        guard !isRevoked(callID), !Task.isCancelled else { return false }
+        guard await host.access(session: session, directory: directory) == .allowed else { return false }
+        return !isRevoked(callID) && !Task.isCancelled
+    }
+
     private func perform(tool: String, arguments: JSONValue, tab: String, shared: Bool, ensure: Bool, session: String,
-                         binding: BrowserBinding) async -> (outcome: Outcome, value: ClientMCPResult) {
+                         directory: String, binding: BrowserBinding, callID: Int) async -> (outcome: Outcome, value: ClientMCPResult) {
         let ticket: BrowserTabGate.Ticket
         do {
             ticket = try await gate.acquire(tab: tab, session: session, shared: shared)
@@ -188,6 +259,12 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
         } catch {
             return (.failure, .error("The call was cancelled."))
         }
+        // Access is checked again at execution time: a call queued behind a busy tab may have waited past a revocation.
+        guard await mayDispatch(callID, session: session, directory: directory) else {
+            await gate.release(ticket)
+            return (.failure, .error(Self.revokedMessage(dispatched: false)))
+        }
+        admitted[callID]?.dispatched = true
         activeSessions.insert(session)
         let work = Task { await self.run(tool: tool, arguments: arguments, tab: tab, ensure: ensure, binding: binding, ticket: ticket) }
         operations[ticket.id] = (tab, work)

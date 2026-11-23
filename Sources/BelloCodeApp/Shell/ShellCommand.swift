@@ -775,7 +775,8 @@ struct CommandContext: Equatable, Sendable {
         case .followUpAgent: return agents.selectionIsChild
         case .stopAgentTree: return agents.canStopSelection
         case .openParentThread: return agents.hasParent
-        case .showMergeRequests: return agents.available
+        // The tab works without a thread: Issues on a draft's project, To-dos everywhere, Connect GitLab (NV02).
+        case .showMergeRequests: return gitLab.panelAvailable
         case .showScheduledTasks: return true
         case .showContainers, .showEnvironment, .verifyIsolation, .showMCPServers, .showSecrets, .showModelSettings: return true
         case .showOpenCodeSettings, .reloadOpenCode, .installCommandLineTool, .uninstallCommandLineTool: return true
@@ -807,7 +808,8 @@ struct CommandContext: Equatable, Sendable {
         case .retryFailedJob: return gitLab.hasFailedJob && gitLab.writes
         case .playManualJob: return gitLab.hasManualJob && gitLab.writes
         case .approveMergeRequest, .mergeMergeRequest: return gitLab.hasMergeRequest && gitLab.approveAndMerge
-        case .showIssues, .showTodos: return gitLab.configured && agents.available
+        case .showIssues: return gitLab.panelAvailable && gitLab.configured && gitLab.hasProject
+        case .showTodos: return gitLab.panelAvailable && gitLab.configured
         case .startThreadFromIssue: return gitLab.issueSelected
         case .linkIssueToThread: return gitLab.issueSelected && gitLab.hasThread
         case .openTodo: return gitLab.todoSelected
@@ -878,7 +880,11 @@ struct CommandContext: Equatable, Sendable {
             return command == .submitReview ? "No drafts to send" : "No review threads"
         case .showFailingJobLog, .sendFailureToAgent, .retryFailedJob: return gitLab.hasFailedJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No failed job"
         case .playManualJob: return gitLab.hasManualJob ? "GitLab write actions are off (Settings ▸ GitLab)" : "No manual job"
-        case .showIssues, .showTodos: return "Connect GitLab in Settings ▸ GitLab"
+        case .showMergeRequests: return "GitLab features are not available in this window"
+        case .showIssues, .showTodos:
+            if !gitLab.panelAvailable { return "GitLab features are not available in this window" }
+            if !gitLab.configured { return "Connect GitLab in Settings ▸ GitLab" }
+            return "Open a thread or a new-thread draft in a project"
         case .linkMergeRequest: return gitLab.configured ? "Open a thread" : "Connect GitLab in Settings ▸ GitLab"
         case .startThreadFromIssue, .linkIssueToThread: return "Select an issue in Issues"
         case .openTodo, .markTodoDone: return gitLab.todoSelected ? "GitLab write actions are off (Settings ▸ GitLab)" : "Select a to-do"
@@ -929,6 +935,10 @@ func nextAttention(after current: SessionID?, in items: [SessionID]) -> SessionI
 struct GitLabCommandState: Equatable, Sendable {
     /// At least one GitLab instance is configured.
     var configured = false
+    /// The Merge Requests tab is bound (the engine has its GitLab services).
+    var panelAvailable = false
+    /// A project is shown (a thread or a new-thread draft): Issues lists its project's issues.
+    var hasProject = false
     var hasThread = false
     /// The tab's focused (expanded or only) linked MR.
     var hasMergeRequest = false

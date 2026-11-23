@@ -56,8 +56,10 @@ public enum BrowserCallPolicy {
         func resolve(_ value: JSONValue?) -> Resolved {
             switch value {
             case nil, .null?: return .success(binding.selectedTab)
-            case .number(let n)?:
-                guard let id = context.numeric[Int(n)] else {
+            case .number?:
+                // Checked, exact conversion: a fractional or out-of-range number (the contract has no bound) is an
+                // unknown tab, never a trap (AV11).
+                guard let n = value?.intValue, let id = context.numeric[n] else {
                     return .failure("Use your tab's string ID (\(binding.selectedTab), or one from `tabs` with action list), not a number.")
                 }
                 return .success(id)
@@ -144,7 +146,7 @@ public enum BrowserCallPolicy {
         func walk(_ value: JSONValue) {
             switch value {
             case .object(let object):
-                if case .number(let n)? = object["tab"], case .string(let id)? = object["id"] { out[Int(n)] = id }
+                if let n = object["tab"]?.intValue, case .string(let id)? = object["id"] { out[n] = id }
                 object.values.forEach(walk)
             case .array(let items): items.forEach(walk)
             default: break
