@@ -47,6 +47,9 @@ public final class MergeRequestPanelModel {
     /// The project the Issues view lists (the displayed thread's or draft's project on a configured instance).
     public private(set) var issueProject: ForgeProject?
     public private(set) var issueProjectProblem: String?
+    /// The project folder the Issues view was resolved for; another one clears it (NF18).
+    @ObservationIgnored private var issueDirectory: String?
+    @ObservationIgnored private(set) var issueReload: Task<Void, Never>?
     /// The selected to-do (its ID) in the To-dos view.
     public var selectedTodo: Int?
     public var linkText = ""
@@ -92,7 +95,10 @@ public final class MergeRequestPanelModel {
         self.reviews = reviews
     }
 
+    isolated deinit { issueReload?.cancel() }
+
     public func display(_ id: SessionID?) {
+        followProjectForIssues()
         guard id != threadID else { return }
         threadID = id
         message = nil
@@ -337,6 +343,21 @@ extension MergeRequestPanelModel {
 
     // MARK: Issues
 
+    /// The Issues view follows the displayed thread's or draft's project (NF18): another project drops the issue
+    /// list and the open issue, and reloads them when the Issues section is showing.
+    private func followProjectForIssues() {
+        let directory = projectDirectory()
+        guard directory != issueDirectory else { return }
+        issueDirectory = directory
+        selectedIssue = nil
+        issueProject = nil
+        issueProjectProblem = nil
+        issueReload?.cancel()
+        issueReload = nil
+        guard section == .issues else { return }
+        issueReload = Task { [weak self] in await self?.loadIssues() }
+    }
+
     /// Resolves the project and loads the first page for the current filter and search.
     public func loadIssues(more: Bool = false) async {
         guard let work else { return }
@@ -346,7 +367,11 @@ extension MergeRequestPanelModel {
                 issueProjectProblem = "Select a thread or project to see its issues."
                 return
             }
-            issueProject = await resolveProject?(directory)
+            let resolved = await resolveProject?(directory)
+            // Another project was displayed meanwhile: its own load applies (rule 8).
+            guard !Task.isCancelled, projectDirectory() == directory else { return }
+            issueDirectory = directory
+            issueProject = resolved
             issueProjectProblem = issueProject == nil
                 ? "This project's origin remote is not on a configured GitLab instance (Settings ▸ GitLab)." : nil
         }
