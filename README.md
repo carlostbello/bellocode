@@ -46,7 +46,7 @@ The [user guide](docs/USER-GUIDE.md) explains how to use all of this.
 - An Apple Silicon (arm64) Mac with macOS 15 or later. Intel Macs are not supported: `Scripts/make-app.sh` refuses
   to build there, and the shared Chrome image is arm64 only.
 - To build: Swift 6.4 from the Command Line Tools for Xcode (`xcode-select --install`). Xcode itself is not needed and
-  there is no Xcode project.
+  there is no Xcode project. Approved pushes need the Command Line Tools' git to be 2.46 or Apple Git-155 or later.
 - To run commands, terminals and the shared Chrome: [Rancher Desktop](https://rancherdesktop.io) with the **dockerd
   (moby)** container engine. Without it the app still chats, but every command is refused rather than run on the Mac.
 - Network access for the first build: SwiftPM fetches the Swift packages and `Scripts/fetch-opencode.sh` downloads the

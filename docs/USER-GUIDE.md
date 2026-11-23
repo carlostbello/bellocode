@@ -240,7 +240,9 @@ Details: [features/secrets.md](features/secrets.md).
 - **Git** menu: Run Suggested Git Action (⌃⌘↩), Git Actions… (⌃⌘G), Commit and Push…, Pull (⌃⌘L), Pull with Rebase,
   Fetch (⌃⌘R), Sync, Abort Merge or Rebase…, Restore Stashed Changes, Clone from GitLab…, New Project…,
   Publish to GitLab… and Switch Remote to HTTPS. Commit messages and merge request text can be written by a model
-  (Settings ▸ Models). A failed push after a commit is reported, not hidden.
+  (Settings ▸ Models). A failed push after a commit is reported, not hidden. A push you or an agent's card approve goes
+  only to the address shown, which needs git 2.46 or Apple Git-155 or later (current Command Line Tools); with an older
+  git it is refused with a message and nothing is sent.
 - **Worktrees and branches:** Choose Workspace… (⇧⌘E) and Choose Branch… (⇧⌘B) start a thread in a new worktree or on
   another branch; Move Changes to New Worktree… and Remove Worktree… manage them. The Git menu's toggles can remove
   clean worktrees when a thread is settled or archived, and pull the default branch automatically.
