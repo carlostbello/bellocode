@@ -142,6 +142,10 @@ public final class SecretManager {
     /// thread are sent one at a time, each computed when its turn comes; one a newer request superseded is skipped.
     @ObservationIgnored private var environmentGeneration: [String: Int] = [:]
     @ObservationIgnored private var environmentWriters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// The newest answered replacement of each thread with replacements running, and the superseded callers waiting
+    /// for one at least as new as theirs (AF26).
+    @ObservationIgnored private var environmentSettled: [String: Int] = [:]
+    @ObservationIgnored private var environmentSettlementWaiters: [String: [(generation: Int, continuation: CheckedContinuation<Void, Never>)]] = [:]
     @ObservationIgnored var codeRoots: () -> [String] = { [] }
     /// Tests: extra TLS roots for the brokered tool's loopback servers (added to the configuration's).
     @ObservationIgnored var extraBrokerAnchors: [Data] = []
@@ -563,22 +567,24 @@ public final class SecretManager {
         try? await mutate(account) { $0.retiredValueAccounts = $0.retiredValueAccounts?.filter { !removed.contains($0) }.nilIfEmpty }
     }
 
-    /// Applies `change` to the secret's row and writes it; the in-memory record gets the same change applied to its
-    /// state after the write. Row writes of one account are serialized (AF03), so each starts from the state the
-    /// previous one left and none writes back a policy, revocation or count another one replaced. `require` is checked
-    /// on that state before anything is written (a change bound to what it was validated against).
+    /// Applies `change` to the secret's row and writes it; the in-memory record becomes exactly the row written. Row
+    /// writes of one account are serialized (AF03), so each starts from the state the previous one left and none writes
+    /// back a policy, revocation or count another one replaced. `change` runs once, on that state: what it computes
+    /// from anything live (a use count read from the ledger) is the same in the database and in memory (AV13). A change
+    /// that leaves the row as it is writes nothing. `require` is checked on that state before anything is written (a
+    /// change bound to what it was validated against).
     private func mutate(_ account: String, require: ((ManagedSecret) throws -> Void)? = nil, _ change: (inout ManagedSecret) -> Void) async throws {
         await acquireRow(account)
         defer { releaseRow(account) }
-        guard var next = secret(account) else { throw ExtrasError("That secret no longer exists.") }
-        try require?(next)
+        guard let current = secret(account) else { throw ExtrasError("That secret no longer exists.") }
+        try require?(current)
+        var next = current
         change(&next)
+        guard next != current else { return }
         try await store.saveManagedSecret(next)
-        if let index = secrets.firstIndex(where: { $0.account == account }) {
-            var latest = secrets[index]
-            change(&latest)
-            secrets[index] = latest
-        }
+        // Every other change of this row waits for its turn, so the committed row is the current one (a deletion
+        // during the write removed it from memory: it is not brought back).
+        if let index = secrets.firstIndex(where: { $0.account == account }) { secrets[index] = next }
     }
 
     /// Waits until no other row write of `account` runs, then holds it (released by `releaseRow`, first come first served).
@@ -880,23 +886,36 @@ public final class SecretManager {
     /// `pendingEnvironmentSessions` (with or without grants left), retried at the next reconnect (AF26).
     ///
     /// Replacements of one thread are ordered (GV04): each waits until the previous one has been answered, then computes
-    /// the variables from the state as it is then; a replacement a newer one superseded while it waited is skipped (the
-    /// newer one sends the current state). So a request computed before a revocation can never reach the server after
-    /// the revocation's own replacement, and the last replacement the server applies is always the newest state.
+    /// the variables from the state as it is then; a replacement a newer one superseded is not sent (the newer one sends
+    /// the current state). So a request computed before a revocation can never reach the server after the revocation's
+    /// own replacement, and the last replacement the server applies is always the newest state.
+    ///
+    /// Every caller returns only once a replacement covering its state has been answered (AF26): a superseded one waits
+    /// for the newer replacement's answer instead of returning before anything was removed. A revocation therefore
+    /// returns with the value gone from the server or the thread shown as pending, never with neither.
     func applyEnvironment(_ session: String) async {
         guard let engine, engine.configuration.containers != nil else { return }
         let generation = (environmentGeneration[session] ?? 0) + 1
         environmentGeneration[session] = generation
         await acquireEnvironment(session)
-        defer { releaseEnvironment(session) }
-        guard environmentGeneration[session] == generation else { return }
+        let sent = await sendEnvironment(session, generation: generation, engine: engine)
+        if sent { settleEnvironment(session, through: generation) }
+        releaseEnvironment(session)
+        // Superseded: the newer replacement (queued behind this one) carries this caller's state too.
+        if !sent { await awaitEnvironment(session, covering: generation) }
+    }
+
+    /// Computes and sends one replacement (holding the thread's turn). False when a newer replacement superseded it
+    /// before it was sent; true once it was answered, acknowledged or not.
+    private func sendEnvironment(_ session: String, generation: Int, engine: Engine) async -> Bool {
+        guard environmentGeneration[session] == generation else { return false }
         guard let client = try? await engine.core.currentClient() else {
             pendingEnvironmentSessions.insert(session)
-            return
+            return true
         }
         let variables = await environmentVariables(for: session)
         // Superseded while the values were read: the newer replacement (waiting for this turn) sends the newer state.
-        guard environmentGeneration[session] == generation else { return }
+        guard environmentGeneration[session] == generation else { return false }
         if let hold = environmentSendHook { await hold(session) }
         do {
             try await client.setSessionEnvironment(sessionID: session, variables: variables)
@@ -905,6 +924,23 @@ public final class SecretManager {
             pendingEnvironmentSessions.insert(session)
             log.error("session environment not applied: \(String(describing: type(of: error)), privacy: .public)")
         }
+        return true
+    }
+
+    /// Waits until a replacement of `session` at least as new as `generation` has been answered.
+    private func awaitEnvironment(_ session: String, covering generation: Int) async {
+        guard (environmentSettled[session] ?? 0) < generation, environmentWriters[session] != nil else { return }
+        await withCheckedContinuation { environmentSettlementWaiters[session, default: []].append((generation, $0)) }
+    }
+
+    /// A replacement of `session` at `generation` was answered: the callers it superseded may return.
+    private func settleEnvironment(_ session: String, through generation: Int) {
+        environmentSettled[session] = max(environmentSettled[session] ?? 0, generation)
+        guard let waiters = environmentSettlementWaiters[session] else { return }
+        let ready = waiters.filter { $0.generation <= generation }
+        let rest = waiters.filter { $0.generation > generation }
+        environmentSettlementWaiters[session] = rest.isEmpty ? nil : rest
+        for waiter in ready { waiter.continuation.resume() }
     }
 
     /// Tests: runs right before a thread's environment request is sent.
@@ -922,8 +958,13 @@ public final class SecretManager {
     private func releaseEnvironment(_ session: String) {
         guard var waiters = environmentWriters[session], !waiters.isEmpty else {
             environmentWriters[session] = nil
-            // Nothing queued: the counter is no longer needed (bounded by the threads with a replacement running).
+            // Nothing queued: the newest replacement has been answered, so no superseded caller can still be waiting
+            // (any left is released, never stranded). The counters are no longer needed (bounded by the threads with a
+            // replacement running).
+            let stranded = environmentSettlementWaiters.removeValue(forKey: session) ?? []
             environmentGeneration[session] = nil
+            environmentSettled[session] = nil
+            for waiter in stranded { waiter.continuation.resume() }
             return
         }
         let next = waiters.removeFirst()
@@ -933,6 +974,9 @@ public final class SecretManager {
 
     /// Tests: environment replacements of `session` waiting for their turn.
     func waitingEnvironmentWriters(_ session: String) -> Int { environmentWriters[session]?.count ?? 0 }
+
+    /// Tests: superseded callers of `session` waiting for a newer replacement's answer.
+    func waitingEnvironmentSettlements(_ session: String) -> Int { environmentSettlementWaiters[session]?.count ?? 0 }
 
     private func reapplyEnvironments(account: String) async {
         for session in Set(grants.values.filter { $0.account == account }.map(\.sessionID)) { await applyEnvironment(session) }
@@ -1023,12 +1067,15 @@ public final class SecretManager {
     /// Lowers the persisted counts of these uses to the ledger's after they were released (refused before anything was
     /// sent, AV13): a relaunch, which seeds the ledger from the persisted counts, does not count them. A failed write
     /// leaves the higher count (fail-closed: a use may be over-counted, never under-counted).
+    ///
+    /// Through the same serialized row writes as `recordUses`: whether anything is lowered is decided on the row as it
+    /// is when this write's turn comes (never on a count sampled before it), and the count written is the one kept in
+    /// memory. So concurrent refunds and reservations leave the database, the record and the ledger in agreement.
     func releaseUses(_ uses: [SubstitutionUse]) async {
         let ledger = useLedger
         for account in Set(uses.map(\.account)) {
-            guard let current = secret(account) else { continue }
+            guard secret(account) != nil else { continue }
             let bindings = Set(uses.filter { $0.account == account }.map(\.bindingID))
-            guard bindings.contains(where: { (current.uses[$0] ?? 0) > ledger.count(account: account, bindingID: $0) }) else { continue }
             do {
                 try await mutate(account) { secret in
                     for binding in bindings {
