@@ -199,8 +199,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         }
     }
 
-    /// The project of the thread or draft shown (Project Environment…).
-    var currentProjectDirectory: String? {
+    /// The project of the thread or draft shown, by its root (Window ▸ opencode…, Project Environment…): a worktree
+    /// thread's settings and trust belong to its project, not to the worktree (NV04).
+    var currentProjectDirectory: String? { container.context?.settingsDirectory }
+
+    /// Where the thread or draft shown works: its worktree when it has one (Open in Terminal).
+    var currentWorkingDirectory: String? {
         container.context.map { $0.directory.isEmpty ? $0.projectDirectory : $0.directory }
     }
 
@@ -260,7 +264,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     @objc func openProjectInTerminal(_ sender: Any?) {
-        guard let directory = currentProjectDirectory, !directory.isEmpty,
+        guard let directory = currentWorkingDirectory, !directory.isEmpty,
               let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
         else { return NSSound.beep() }
         NSWorkspace.shared.open([URL(fileURLWithPath: directory)], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
@@ -376,7 +380,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             return split.validateUserInterfaceItem(menuItem)
         }
         if menuItem.action == #selector(openProjectInTerminal(_:)) {
-            return !(currentProjectDirectory ?? "").isEmpty
+            return !(currentWorkingDirectory ?? "").isEmpty
         }
         guard let action = menuItem.action, let command = ShellCommand.command(for: action) else { return true }
         let context = commandContext()

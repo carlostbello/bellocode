@@ -142,8 +142,8 @@ final class WorkspaceController {
         guard let context = makeSurfaceContext(for: selection) else { return nil }
         projectShownWatch?.cancel()
         projectShownWatch = nil
-        if !context.directory.isEmpty {
-            projectShown(context.directory)
+        if !context.settingsDirectory.isEmpty {
+            projectShown(context.settingsDirectory)
         } else if case .thread(let id) = selection {
             watchProjectDirectory(of: id)
         }

@@ -217,6 +217,21 @@ import Testing
         #expect(await waitUntil(timeout: .seconds(5)) { thread.draft.hasPrefix("A long prompt that must survive") })
     }
 
+    /// NV04: for a thread in a worktree outside the project root, Window ▸ opencode… and Project Environment… name the
+    /// registered project (whose trust and settings apply), while Open in Terminal still opens the worktree.
+    @Test func aWorktreeThreadsProjectMenusNameTheProjectRoot() async throws {
+        let shell = try await Shell.start()
+        defer { Task { await shell.stop() } }
+        let project = try #require(shell.engine.root.projects.first)
+        let projectID = try #require(project.projectID)
+        let worktree = FileManager.default.temporaryDirectory.appending(path: "bellocode-wt-\(UUID().uuidString)/feat-x").path
+        await shell.server.addWorktree(worktree, projectID: projectID.rawValue)
+        let session = try await shell.engine.createThread(in: worktree, title: "In a worktree")
+        #expect(await shell.driver.select(.thread(session.id)))
+        #expect(await waitUntil(timeout: .seconds(10)) { shell.controller.currentWorkingDirectory == worktree })
+        #expect(shell.controller.currentProjectDirectory == project.directory)
+    }
+
     @Test func draftSendsAttachmentsAndMentionsThenDocks() async throws {
         let shell = try await Shell.start()
         defer { Task { await shell.stop() } }

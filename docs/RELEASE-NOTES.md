@@ -63,6 +63,8 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   Start Thread from Issue fills an open draft (NF09); the draft's model hint only promises free models when they exist
   (NF24); the Issues view follows the displayed project (NF18); Shared Chrome viewers follow who has control and Stop
   during a start is reconciled (NF17, AF23); the menu bar's Scheduled Tasks… brings BelloCode forward (NF21).
+  For a thread in a worktree, Window ▸ opencode… and Project Environment… open on its project, so trust and
+  settings are read and written for the project root, while Open in Terminal still opens the worktree (NV04).
 - **GitLab (P9):** the request gate re-checks the 429 hold for queued requests and never exceeds its limit (GF11);
   the token used for redaction is read off the main actor once per result (GF12); titles, branch, job and stage names
   and other header fields are cleaned and redacted (GF13).
