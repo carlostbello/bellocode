@@ -290,6 +290,35 @@ struct DevContainerTests {
         }
     }
 
+    /// AV06: a folder on the Dockerfile's path swapped for a link to a folder outside the project after the paths were
+    /// checked, and put back before the final check, fails the read; the outside file's bytes are never returned.
+    @Test func aFolderOnTheDockerfilePathSwappedForALinkIsRefused() throws {
+        let (root, outside) = try temporaryProject()
+        let base = (root as NSString).deletingLastPathComponent
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let folder = root + "/.devcontainer"
+        let parked = base + "/parked"
+        let result = DevContainerBuildInputs.verify(build, projectRoot: root, beforeOpening: {
+            try? FileManager.default.moveItem(atPath: folder, toPath: parked)
+            try? FileManager.default.createSymbolicLink(atPath: folder, withDestinationPath: outside)
+        }, afterReading: {
+            try? FileManager.default.removeItem(atPath: folder)
+            try? FileManager.default.moveItem(atPath: parked, toPath: folder)
+        })
+        if case .success(let inputs) = result {
+            #expect(!String(decoding: inputs.dockerfile, as: UTF8.self).contains("id_rsa"), "the outside Dockerfile was read")
+            Issue.record("a Dockerfile read through a swapped folder was accepted")
+        }
+        // Put back (the refusal skips `afterReading`): the same build verifies, with the project's own bytes.
+        if FileManager.default.fileExists(atPath: parked) {
+            try? FileManager.default.removeItem(atPath: folder)
+            try FileManager.default.moveItem(atPath: parked, toPath: folder)
+        }
+        let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+        #expect(inputs.dockerfile == Data("FROM alpine\n".utf8))
+    }
+
     /// Runs `work` off the test's thread. If it has not returned after `seconds`, each FIFO in `fifos` gets a writer
     /// (so a blocked open returns and the test fails instead of hanging) and the result says so.
     func withoutWaitingOnFIFOs<T: Sendable>(_ fifos: [String], seconds: Int = 10, _ work: @escaping @Sendable () -> T) async -> (T, waited: Bool) {
