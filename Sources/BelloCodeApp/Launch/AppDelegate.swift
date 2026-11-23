@@ -32,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // GV06: launchd's default of 256 open files is too few for deep folder walks next to the server's pipes.
+        ProcessLimits.raiseOpenFileLimit()
         NSApp.mainMenu = MainMenu.make()
         Task { @MainActor in
             do {

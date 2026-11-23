@@ -319,6 +319,41 @@ struct DevContainerTests {
         #expect(inputs.dockerfile == Data("FROM alpine\n".utf8))
     }
 
+    /// GV06: a context nested deeper than the bound is refused with its own message (not "changed while copied"), an
+    /// unreadable folder says it cannot be read, and running out of descriptors says so.
+    @Test func deepOrUnreadableContextsSayWhy() throws {
+        let (root, _) = try temporaryProject()
+        let base = (root as NSString).deletingLastPathComponent
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let deep = root + "/" + Array(repeating: "d", count: DevContainerBuildInputs.maxContextDepth + 2).joined(separator: "/")
+        try FileManager.default.createDirectory(atPath: deep, withIntermediateDirectories: true)
+        try "x".write(toFile: deep + "/f.txt", atomically: true, encoding: .utf8)
+        let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+        guard case .failure(let tooDeep) = inputs.stage(projectRoot: root, parent: base) else {
+            Issue.record("a context deeper than the bound was copied")
+            return
+        }
+        #expect(tooDeep == DevContainerBuildInputs.contextTooDeep, "\(tooDeep)")
+        // Within the bound it copies.
+        try FileManager.default.removeItem(atPath: root + "/d")
+        let fine = root + "/" + Array(repeating: "d", count: DevContainerBuildInputs.maxContextDepth - 1).joined(separator: "/")
+        try FileManager.default.createDirectory(atPath: fine, withIntermediateDirectories: true)
+        try inputs.stage(projectRoot: root, parent: base).get().remove()
+        try FileManager.default.removeItem(atPath: root + "/d")
+        // An unreadable folder.
+        try FileManager.default.createDirectory(atPath: root + "/private", withIntermediateDirectories: true)
+        chmod(root + "/private", 0)
+        defer { chmod(root + "/private", 0o755) }
+        guard case .failure(let unreadable) = inputs.stage(projectRoot: root, parent: base) else {
+            Issue.record("an unreadable folder was skipped")
+            return
+        }
+        #expect(unreadable.description.contains("private") && unreadable.description.contains("cannot be read"), "\(unreadable)")
+        #expect(DevContainerBuildInputs.openProblem(EMFILE, path: "x") == DevContainerBuildInputs.tooManyOpenFiles)
+        #expect(DevContainerBuildInputs.openProblem(ENOENT, path: "x") == DevContainerBuildInputs.contextReplaced)
+    }
+
     /// Runs `work` off the test's thread. If it has not returned after `seconds`, each FIFO in `fifos` gets a writer
     /// (so a blocked open returns and the test fails instead of hanging) and the result says so.
     func withoutWaitingOnFIFOs<T: Sendable>(_ fifos: [String], seconds: Int = 10, _ work: @escaping @Sendable () -> T) async -> (T, waited: Bool) {

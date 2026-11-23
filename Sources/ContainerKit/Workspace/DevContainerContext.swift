@@ -201,6 +201,24 @@ extension DevContainerBuildInputs {
     static let contextReplaced = Problem("The dev container was not built: its build context changed while it was being copied.")
     static let copyFailed = Problem("The dev container was not built: copying its context failed.")
     static let contextTooLarge = Problem("The dev container's build context sends more than 200 000 files or 4 GiB; add a .dockerignore so only what the image needs is sent.")
+    /// GV06: folders nested deeper than this are refused with their own message. The copy holds two descriptors per
+    /// level (the folder read and its copy), so the depth bounds the descriptors it needs.
+    public static let maxContextDepth = 128
+    static let contextTooDeep = Problem("The dev container's build context has folders nested more than \(maxContextDepth) levels deep; add a .dockerignore so only what the image needs is sent.")
+    static let tooManyOpenFiles = Problem("The dev container was not built: BelloCode has too many files open to copy its context. Quit and reopen BelloCode, then retry.")
+    static func unreadable(_ path: String) -> Problem {
+        Problem("The dev container was not built: the folder \(path) in its build context cannot be read (permission denied). Make it readable or add it to .dockerignore.")
+    }
+
+    /// The problem for a failed open of a context entry (errno): out of descriptors and no permission say so;
+    /// anything else means the entry is not the one listed.
+    static func openProblem(_ code: Int32, path: String) -> Problem {
+        switch code {
+        case EMFILE, ENFILE: tooManyOpenFiles
+        case EACCES, EPERM: unreadable(path)
+        default: contextReplaced
+        }
+    }
 
     /// The kept entries of `root` copied into `destination` (which exists), as `contextDigest` walks them.
     ///
@@ -278,31 +296,74 @@ extension DevContainerBuildInputs {
             return names.sorted { $0.text < $1.text }
         }
 
+        /// One open folder of the walk: its descriptor and its copy's, its listed names and the next one to copy, and
+        /// the permissions its copy gets once it is filled (nil for the context folder itself, whose descriptors the
+        /// caller owns).
+        struct Frame {
+            var source: Int32
+            var target: Int32
+            var relative: String
+            var names: [(raw: [CChar], text: String)]
+            var next = 0
+            var mode: mode_t?
+        }
+
+        /// Copies the open folder `source` into the open folder `target`. Iterative (GV06): a deep context neither
+        /// grows the thread's stack nor holds more than two descriptors per level, and its depth is bounded.
         mutating func copyFolder(_ source: Int32, into target: Int32, relative: String) -> Result<Void, Problem> {
-            guard let names = Self.names(source) else { return .failure(DevContainerBuildInputs.contextReplaced) }
-            for (raw, name) in names {
-                let path = relative.isEmpty ? name : relative + "/" + name
+            guard let names = Self.names(source) else {
+                return .failure(DevContainerBuildInputs.openProblem(errno, path: relative.isEmpty ? "." : relative))
+            }
+            var stack = [Frame(source: source, target: target, relative: relative, names: names)]
+            defer {
+                for frame in stack where frame.mode != nil {
+                    close(frame.source)
+                    close(frame.target)
+                }
+            }
+            while var frame = stack.popLast() {
+                guard frame.next < frame.names.count else {
+                    // Folder permissions as in the context, set once it is filled (a read-only folder must be filled first).
+                    if let mode = frame.mode {
+                        fchmod(frame.target, mode)
+                        close(frame.source)
+                        close(frame.target)
+                    }
+                    continue
+                }
+                let (raw, name) = frame.names[frame.next]
+                frame.next += 1
+                stack.append(frame)
+                let path = frame.relative.isEmpty ? name : frame.relative + "/" + name
                 let ignored = ignore.ignores(path)
                 var listed = stat()
-                guard fstatat(source, raw, &listed, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+                guard fstatat(frame.source, raw, &listed, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
                 let type = listed.st_mode & S_IFMT
                 if type == S_IFDIR {
                     guard !ignored || ignore.hasExclusions else { continue }
+                    guard stack.count <= maxContextDepth else { return .failure(DevContainerBuildInputs.contextTooDeep) }
                     beforeDescending?(path)
-                    guard mkdirat(target, raw, 0o700) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
-                    let child = openat(source, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                    guard child >= 0 else { return .failure(DevContainerBuildInputs.contextReplaced) }
-                    defer { close(child) }
+                    guard mkdirat(frame.target, raw, 0o700) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
+                    let child = openat(frame.source, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard child >= 0 else { return .failure(DevContainerBuildInputs.openProblem(errno, path: path)) }
                     var opened = stat()
                     guard fstat(child, &opened) == 0, opened.st_dev == listed.st_dev, opened.st_ino == listed.st_ino else {
+                        close(child)
                         return .failure(DevContainerBuildInputs.contextReplaced)
                     }
-                    let childTarget = openat(target, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                    guard childTarget >= 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
-                    defer { close(childTarget) }
-                    if case .failure(let problem) = copyFolder(child, into: childTarget, relative: path) { return .failure(problem) }
-                    // Folder permissions as in the context, set once it is filled (a read-only folder must be filled first).
-                    fchmod(childTarget, opened.st_mode & 0o7777)
+                    let childTarget = openat(frame.target, raw, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard childTarget >= 0 else {
+                        let code = errno
+                        close(child)
+                        return .failure(code == EMFILE || code == ENFILE ? DevContainerBuildInputs.tooManyOpenFiles : DevContainerBuildInputs.copyFailed)
+                    }
+                    guard let childNames = Self.names(child) else {
+                        let code = errno
+                        close(child)
+                        close(childTarget)
+                        return .failure(DevContainerBuildInputs.openProblem(code, path: path))
+                    }
+                    stack.append(Frame(source: child, target: childTarget, relative: path, names: childNames, mode: opened.st_mode & 0o7777))
                     continue
                 }
                 if ignored { continue }
@@ -311,12 +372,12 @@ extension DevContainerBuildInputs {
                 guard files <= maxContextFiles, bytes <= maxContextBytes else { return .failure(DevContainerBuildInputs.contextTooLarge) }
                 if type == S_IFLNK {
                     var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
-                    let count = readlinkat(source, raw, &buffer, Int(PATH_MAX))
+                    let count = readlinkat(frame.source, raw, &buffer, Int(PATH_MAX))
                     guard count >= 0 else { continue }
                     buffer[count] = 0
-                    guard symlinkat(buffer, target, raw) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
+                    guard symlinkat(buffer, frame.target, raw) == 0 else { return .failure(DevContainerBuildInputs.copyFailed) }
                 } else if type == S_IFREG {
-                    if case .failure(let problem) = copyFile(raw, path: path, from: source, into: target, listed: listed) { return .failure(problem) }
+                    if case .failure(let problem) = copyFile(raw, path: path, from: frame.source, into: frame.target, listed: listed) { return .failure(problem) }
                 }
             }
             return .success(())
@@ -326,7 +387,12 @@ extension DevContainerBuildInputs {
         /// opened counted, cloned (blocks shared until either side changes) or copied.
         mutating func copyFile(_ raw: [CChar], path: String, from source: Int32, into target: Int32, listed: stat) -> Result<Void, Problem> {
             let fd = openat(source, raw, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-            guard fd >= 0 else { return .failure(DevContainerBuildInputs.contextReplaced) }
+            guard fd >= 0 else {
+                let code = errno
+                return .failure(code == EACCES || code == EPERM
+                    ? Problem("The dev container was not built: the file \(path) in its build context cannot be read (permission denied). Make it readable or add it to .dockerignore.")
+                    : DevContainerBuildInputs.openProblem(code, path: path))
+            }
             defer { close(fd) }
             var opened = stat()
             guard fstat(fd, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG, opened.st_dev == listed.st_dev, opened.st_ino == listed.st_ino else {
