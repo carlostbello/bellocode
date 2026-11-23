@@ -55,7 +55,9 @@ import Testing
         let attachment = try #require(composer.currentDraft().attachments.first)
         #expect(attachment.kind == .text)
         #expect(attachment.name.hasPrefix("Terminal Terminal 1"))
-        if case .text(let text) = attachment.content { #expect(text.contains("selection-for-agent")) }
+        if case .text(let text) = attachment.content { #expect(text.contains("selection-for-agent")) } else {
+            Issue.record("expected a text attachment, got \(attachment.content)")
+        }
 
         // ⌃` hides the drawer; the thread remembers it.
         driver.perform(.toggleTerminal)

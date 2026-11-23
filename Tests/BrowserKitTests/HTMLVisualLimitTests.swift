@@ -212,10 +212,10 @@ struct HTMLVisualLimitTests {
         let second = Task { try await renderer.render(HTMLRenderRequest(html: Self.simple, width: 400)) }
         defer { second.cancel() }
         while renderer.queueDepth < 3 { await Task.yield() }
-        // The queue holds two waiting renders: a third is refused at once, without waiting for the stuck one.
-        let start = ContinuousClock.now
+        // The queue holds two waiting renders: a third is refused at once, without waiting for the stuck one (which
+        // still holds its slot: nothing has left the queue).
         await #expect(throws: ExtrasError.self) { try await renderer.render(HTMLRenderRequest(html: Self.simple, width: 400)) }
-        #expect(seconds(since: start) < 0.5)
+        #expect(renderer.queueDepth == 3)
         second.cancel()
         await #expect(throws: CancellationError.self) { try await second.value }
         #expect(renderer.queueDepth == 2)

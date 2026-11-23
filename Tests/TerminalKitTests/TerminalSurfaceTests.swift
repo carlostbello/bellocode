@@ -142,10 +142,9 @@ struct TerminalSurfaceTests {
         #expect(await fixture.server.ptyIDs() == [ra.id, rb.id], "switching never deletes PTYs")
         await fixture.server.writeToPTY(ra.id, "while-hidden\r\n")
 
-        let start = ContinuousClock.now
+        // Synchronously, before any I/O: the cached emulator is mounted again.
         fixture.drawer.display(a, directory: "/tmp/mock-project")
         #expect(fixture.drawer.mountedIDs == [ra.id], "the cached emulator shows at once")
-        #expect(ContinuousClock.now - start < .milliseconds(100))
         #expect(try fixture.pane(ra.id) === paneA)
         try await waitFor("gap replayed") { fixture.screen(ra.id).contains("while-hidden") }
         #expect(fixture.screen(ra.id).contains("from-a"), "scrollback kept")

@@ -62,10 +62,13 @@ import Testing
         #expect(await shell.driver.select(.thread(threads[0])))
         shell.driver.settle()
         #expect(browser.pane?.set === set && browser.pane?.set?.selectedTabID == tabID)
-        // The browser's own swap (no reload): well inside the 100 ms feedback budget.
-        let start = ContinuousClock.now
+        // The browser's own swap reloads nothing: the same tab, web view and document.
+        let tab = try #require(set.tabs.first { $0.id == tabID })
+        let webView = tab.webView
+        let generation = tab.generation
         browser.display(browser.context)
-        #expect(ContinuousClock.now - start < .milliseconds(100))
+        #expect(browser.pane?.set === set && set.selectedTabID == tabID)
+        #expect(tab.webView === webView && tab.generation == generation && !tab.isLoading)
 
         // The pane commands are wired to the Browser menu router.
         #expect(browser.canPerform(.newTab))

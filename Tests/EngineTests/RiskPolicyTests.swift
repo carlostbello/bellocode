@@ -105,7 +105,11 @@ struct RiskPolicyTests {
     @Test func externalDirectoryActionEscalates() {
         let verdict = RiskPolicy.decide(RiskPolicy.Action(action: "external_directory", resources: ["/Users/tester/Downloads/*"]), in: Self.context)
         #expect(categories(verdict) == [.outsidePath])
-        if case .escalate(let findings) = verdict { #expect(findings.first?.target == "~/Downloads") }
+        guard case .escalate(let findings) = verdict else {
+            Issue.record("expected an escalation, got \(verdict)")
+            return
+        }
+        #expect(findings.first?.target == "~/Downloads")
     }
 
     @Test func crossProjectEscalates() {

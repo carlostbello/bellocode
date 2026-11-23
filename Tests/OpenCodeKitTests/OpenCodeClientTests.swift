@@ -197,7 +197,9 @@ struct OpenCodeClientTests {
         } else {
             Issue.record("expected an unknown tool state")
         }
-        if case .shell(let shell) = page.data[2] { #expect(shell.exit?.value.isNaN == true) }
+        if case .shell(let shell) = page.data[2] { #expect(shell.exit?.value.isNaN == true) } else {
+            Issue.record("expected a shell message")
+        }
     }
 
     @Test func transportErrorsAreTyped() async throws {
