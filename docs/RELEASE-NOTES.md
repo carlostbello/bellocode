@@ -32,6 +32,11 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **A message to a held thread waits.** After one agent stops another thread, a `thread_send` to it is queued without
   waking it, until you resume (GF02). `create_threads` refuses unknown agents and sub-agents (GF14).
 - **Command Palette** lists the Browser and Shared Chrome commands and refreshes GitLab to-dos while open (NF20).
+- **A short Brokered or Placeholder value saved by an earlier release is no longer used** in that mode; Settings ▸
+  Secrets names it until you rotate it to at least 8 bytes or make it Visible (AF16).
+- **Settings ▸ Secrets ▸ Uninspected destinations shows what is saved** for the selected project, so Save no longer
+  replaces it with a blank field (NV06). A failed Revoke or Restore there, and a GitLab token replacement the Keychain
+  refuses, are reported instead of ignored (NV12).
 
 ### Fixes by area
 
@@ -48,6 +53,14 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   broker only admits the bundled helper (AF02, AF18). Secret row writes are serialised so a use count cannot undo a
   revocation; grant kinds are checked at delivery; short values cannot be put into a hidden mode; environment cleanup
   is retried (AF03, AF04, AF16, AF26). The egress proxy re-authorizes a substitution right before sending (AF15).
+- **Secrets and egress, second round (Q1):** a revocation published after the proxy's last check cancels the pending
+  write and returns only once it has ended, and only once the proxy holds a snapshot at least that new (AF15); the
+  response is scanned for the value actually sent, so a rotation in flight cannot echo it back (AV01); transfer codings
+  and repeated `Content-Encoding` fields are undone before scanning (AV02); an overflowing chunk size is refused
+  instead of terminating the app (AV09); every refusal before sending gives its reserved uses back, in memory and in the
+  store, and an upgrade with a placeholder reserves nothing (AV13, GV05, NV07); a thread's environment replacements are
+  ordered, so a stale one cannot land after a revocation's (AF26, GV04); a short hidden value saved by an earlier release
+  is never activated (AF16).
 - **Containers and the Docker filter (P6, P6b):** dev-container staging copies through pinned folder descriptors and
   never blocks on a FIFO (AF07, AF25); CRLF Dockerfiles and a nameless global `ARG` are parsed correctly (AF11, AF12);
   an oversized chunk size no longer crashes the filter (AF13); "Sign in to the registry" opens Settings ▸ Containers

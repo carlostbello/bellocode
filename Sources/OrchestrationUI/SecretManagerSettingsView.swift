@@ -33,6 +33,10 @@ public struct SecretManagerSettingsView: View {
             header
             if let problem = manager.metadataProblem { metadataProblem(problem) }
             if !manager.pendingEnvironmentSessions.isEmpty { pendingEnvironments(manager.pendingEnvironmentSessions.count) }
+            ForEach(manager.secrets.filter { $0.mode != .visible && manager.shortValueAccounts.contains($0.account) }) { secret in
+                Label(SecretManager.shortStoredValueMessage(secret.label), systemImage: "exclamationmark.triangle.fill")
+                    .font(.ds(.label)).foregroundStyle(SwiftUI.Color.ds.warningText).fixedSize(horizontal: false, vertical: true)
+            }
             if state.adding { SecretEditorForm(manager: manager, state: state) }
             if manager.secrets.isEmpty && !state.adding {
                 Text("No secrets yet. Agents ask for one with a card, or add one here.")
@@ -60,6 +64,11 @@ public struct SecretManagerSettingsView: View {
         .frame(width: 620, alignment: .topLeading)
         .task {
             if let selected = state.selected, state.audit.isEmpty { state.audit = await manager.audit(account: selected, limit: 20) }
+        }
+        // The raw-egress field always shows the saved entries of the project it saves to (NV06): at first display and
+        // whenever the projects change (the first one appears, or the selected one goes).
+        .task(id: manager.egressProjects) {
+            state.syncRawProject(manager.egressProjects, read: manager.rawEgressAllowlist(projectDirectory:))
         }
     }
 
@@ -187,13 +196,16 @@ public struct SecretManagerSettingsView: View {
                 .font(.ds(.meta)).foregroundStyle(SwiftUI.Color.ds.text3).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: DS.Space.s6) {
                 DSMenuSelect("Project", options: projects.map { ($0, ($0 as NSString).lastPathComponent) },
-                             selection: Binding(get: { state.rawProject ?? projects[0] }, set: { state.rawProject = $0; state.rawText = manager.rawEgressAllowlist(projectDirectory: $0).joined(separator: ", ") }))
+                             selection: Binding(get: { state.rawProject ?? projects[0] },
+                                                set: { state.selectRawProject($0, read: manager.rawEgressAllowlist(projectDirectory:)) }))
                 TextField("db.internal:5432, git.example.com:22", text: $state.rawText).textFieldStyle(DSTextFieldStyle())
+                    .disabled(state.rawProject == nil)
                 Button("Save") {
-                    let project = state.rawProject ?? projects[0]
-                    manager.setRawEgressAllowlist(state.rawText.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init), projectDirectory: project)
-                    state.rawText = manager.rawEgressAllowlist(projectDirectory: project).joined(separator: ", ")
+                    state.saveRaw(projects, read: manager.rawEgressAllowlist(projectDirectory:)) { entries, project in
+                        manager.setRawEgressAllowlist(entries, projectDirectory: project)
+                    }
                 }
+                .disabled(state.rawProject == nil)
             }
         }
     }
@@ -254,6 +266,44 @@ final class SecretsSettingsState: ObservableObject {
     init(selected: String? = nil, adding: Bool = false) {
         self.selected = selected
         self.adding = adding
+    }
+
+    /// Keeps the raw-egress editor on a listed project with that project's saved entries loaded (NV06). Text typed for a
+    /// project that is still listed is kept.
+    func syncRawProject(_ projects: [String], read: (String) -> [String]) {
+        guard let first = projects.first else {
+            rawProject = nil
+            rawText = ""
+            return
+        }
+        if let rawProject, projects.contains(rawProject) { return }
+        selectRawProject(first, read: read)
+    }
+
+    func selectRawProject(_ project: String, read: (String) -> [String]) {
+        rawProject = project
+        rawText = read(project).joined(separator: ", ")
+    }
+
+    /// Saves the field for the project its entries were loaded from; never for one whose entries were not loaded (that
+    /// would replace them with whatever the field held).
+    func saveRaw(_ projects: [String], read: (String) -> [String], write: ([String], String) -> Void) {
+        guard let project = rawProject, projects.contains(project) else {
+            syncRawProject(projects, read: read)
+            return
+        }
+        write(rawText.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" }).map(String.init), project)
+        rawText = read(project).joined(separator: ", ")
+    }
+
+    /// Runs a secret action from Settings; a failure is shown, never dropped (NV12).
+    func perform(_ action: () async throws -> Void) async {
+        do {
+            try await action()
+            error = nil
+        } catch {
+            self.error = (error as? any CustomStringConvertible)?.description ?? error.localizedDescription
+        }
     }
 
     func select(_ account: String, manager: SecretManager) {
@@ -423,9 +473,9 @@ struct SecretDetail: View {
                     .help("Replace the value; placeholders and handles stay the same")
                 Spacer()
                 if secret.revoked {
-                    Button("Restore") { Task { try? await manager.restore(account: secret.account) } }
+                    Button("Restore") { Task { await state.perform { try await manager.restore(account: secret.account) } } }
                 } else {
-                    Button("Revoke") { Task { try? await manager.revoke(account: secret.account) } }
+                    Button("Revoke") { Task { await state.perform { try await manager.revoke(account: secret.account) } } }
                         .help("Stop every use now; placeholders already given stop working")
                 }
                 Button("Delete…") {

@@ -27,7 +27,9 @@ offers Placeholder / Brokered / Visible / Approved command with the binding fiel
 its popover; the agent is woken with a handle or placeholder, never the value (unless Visible). Placeholder mode is
 shown only while the proxy runs (never silently downgraded). Values shorter than 8 bytes can only be Visible (too short
 to detect in responses), whether saved, rotated or moved to a hidden mode in Settings; the check is bound to the value
-the change commits with (v1.0.1 AF16). Secrets saved before modes appear as "Commands only". `bellocode_app_list_secrets` lists
+the change commits with (v1.0.1 AF16). A shorter value saved as Brokered or Placeholder by an earlier release is never
+used in that mode: the proxy does not get it, its placeholder is not granted, the brokered tool refuses it, and
+Settings ▸ Secrets says so until it is rotated to a longer value or made Visible. Secrets saved before modes appear as "Commands only". `bellocode_app_list_secrets` lists
 handles and this thread's placeholders. Rotate replaces the value and keeps placeholders; Revoke stops every use at
 once (placeholders become unknown to the proxy); Delete removes the Keychain item and every record (confirmed).
 
@@ -44,9 +46,22 @@ fit their secret are dropped. Settings edits patch only the editable fields onto
 the previous one left; use counts go through the same path, so a count never writes back a policy a revocation
 replaced. A new mode, name or withdrawn confirmation (from Settings or a save under the same label from a card) retires
 every thread's grant of the old policy, and delivery requires the grant kind the mode gives (a placeholder grant never
-yields the value). The proxy substitutes again against the current snapshot at the handoff to the send, so a revocation
-published while the connection opens refuses the request. A thread whose environment replacement fails stays pending
-(shown in Settings ▸ Secrets) and is retried at every reconnect, with or without grants left.
+yields the value). The proxy substitutes again against the current snapshot and registers the request as being sent in
+one step under its lock; a snapshot published afterwards that withdraws it (revocation, narrower scope or binding)
+cancels that upstream connection, and publishing waits until the write has ended. A revocation (or any change) returns
+only once the proxy holds a snapshot at least that new, so nothing carrying a withdrawn value leaves after it returns.
+The response is scanned for the values of both the snapshot the request was admitted under and the one it was sent
+under, so a rotation in flight cannot echo the new value back. A thread's environment replacements are sent one at a
+time, each computed when its turn comes (one superseded meanwhile is skipped), so a replacement read before a
+revocation never lands after the revocation's. A thread whose replacement fails stays pending (shown in Settings ▸
+Secrets) and is retried at every reconnect, with or without grants left.
+
+**Use limits count what was sent.** A use is reserved, and for a limited binding stored, before the request leaves.
+Every refusal before the bytes are handed to the network (use not storable, upgrade, destination unreachable or
+refused, re-authorization) gives the reservation back in memory and lowers the stored count again, so a relaunch does
+not count it either; an upgrade carrying a placeholder is refused before anything is reserved. Once the write has
+started the use counts, whatever happens next. If the store cannot be lowered the count stays higher (over-counted,
+never under-counted), as after a crash between storing and sending.
 
 **Built-in brokered uses (unchanged guarantees).** The GitLab token and git's HTTPS credentials already never reach the
 agent: GitLab REST from the app, git through `bellocode-exec --git-credential` answering only BelloCode's git. They are
@@ -121,8 +136,9 @@ truncated, re-cased or encoded placeholders (base64 at any alignment, hex, perce
 Upgrades (WebSocket, h2c) to a destination that receives secrets are refused; elsewhere they pass. Redirects go back to
 the client; its next request is judged on its own (a placeholder sent on to another host is refused).
 
-**Responses** from any destination a hidden secret is bound to are read whole (≤ 16 MB, ≤ 60 s), decoded
-(gzip, deflate, brotli; others refused) and scanned in headers and body for the value as is, JSON-escaped,
+**Responses** from any destination a hidden secret is bound to are read whole (≤ 16 MB, ≤ 60 s; chunk sizes are
+strict hex and checked against what is left, never summed), decoded (transfer codings such as `gzip, chunked`, then
+every `Content-Encoding` field; gzip, deflate, brotli; others refused) and scanned in headers and body for the value as is, JSON-escaped,
 percent-encoded, hex, base64 (every alignment, URL-safe, line-wrapped) and in percent-decoded and JSON-unescaped views
 (partial or nested escaping). Raw, JSON- and URL-encoded copies are replaced with the thread's placeholder; any other
 form blocks the response (502). Streaming responses from such destinations are cut at the bound (502, stated). Other
