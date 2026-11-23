@@ -24,8 +24,11 @@ public struct RewindPlan: Sendable {
 
 public struct AppliedRewind: Sendable {
     public var plan: RewindPlan
-    /// Files written (Undo puts their earlier bytes back).
+    /// Files written (Undo puts their earlier bytes back). Their paths are relative to `root`.
     public var written: [FileChangePlan]
+    /// The working tree root the files were restored in (the file plan's, not the session directory: a session opened
+    /// in a subdirectory restores, rolls back and undoes worktree-relative paths at the root, AF20).
+    public var root: String
 }
 
 extension Engine {
@@ -46,19 +49,39 @@ extension Engine {
         }
     }
 
-    /// Other live threads whose directory is this one, inside it, or contains it (a file restore would erase their
-    /// work, as in T3 Code's `isCheckpointRestoreIsolated`).
-    public func threadsSharing(directory: String, except id: SessionID) -> [Session] {
-        let real = HostGitPaths.real(directory)
+    /// Other live threads working in the git working tree of `directory` (a file restore, which acts on the whole
+    /// working tree, would erase their work, as in T3 Code's `isCheckpointRestoreIsolated`). Compared by canonical
+    /// working tree root, the scope checkpoints are captured and restored in, not by directory strings: threads in
+    /// sibling directories of one checkout share every checkpoint (AF19). A thread in a directory that contains the
+    /// root counts too, and so does one whose root cannot be read (fail closed); a thread in a nested repository or
+    /// worktree below the root does not. Outside a repository the directory itself stands for the root.
+    public func threadsSharingWorktree(of directory: String, except id: SessionID) async -> [Session] {
+        let runner = git.runner
+        let real = HostGitPaths.real(await Self.worktreeRoot(of: directory, runner: runner) ?? directory)
         var result: [Session] = []
         for project in root.loadedProjects {
             for sessionID in project.sessionIDs where sessionID != id {
                 guard let session = project.row(sessionID)?.session else { continue }
                 let other = HostGitPaths.real(session.directory)
-                if other == real || other.hasPrefix(real + "/") || real.hasPrefix(other + "/") { result.append(session) }
+                if other == real || real.hasPrefix(other + "/") {
+                    result.append(session)
+                } else if other.hasPrefix(real + "/") {
+                    // Below the root: the same working tree unless it is a nested repository or worktree of its own.
+                    let otherRoot = await Self.worktreeRoot(of: session.directory, runner: runner)
+                    if otherRoot.map(HostGitPaths.real) ?? real == real { result.append(session) }
+                }
             }
         }
         return result
+    }
+
+    /// The working tree root of `directory` (nil outside a repository or when it cannot be read).
+    static func worktreeRoot(of directory: String, runner: GitRunner) async -> String? {
+        try? await GitRepository(directory: directory, runner: runner).location()?.root
+    }
+
+    static func sharedWorktreeMessage(_ count: Int) -> String {
+        "Files can only be restored in a worktree no other thread uses (\(count) other thread\(count == 1 ? "" : "s") work here)."
     }
 
     /// Plans a rewind. With `revertFiles`, the checkpoint taken before `messageID` is planned for restore unless the
@@ -66,9 +89,9 @@ extension Engine {
     public func planRewind(_ id: SessionID, to messageID: MessageID, directory: String, revertFiles: Bool) async throws -> RewindPlan {
         var plan = RewindPlan(sessionID: id, messageID: messageID, directory: directory)
         guard revertFiles else { return plan }
-        let shared = threadsSharing(directory: directory, except: id)
+        let shared = await threadsSharingWorktree(of: directory, except: id)
         if !shared.isEmpty {
-            plan.filesUnavailable = "Files can only be restored in a worktree no other thread uses (\(shared.count) other thread\(shared.count == 1 ? "" : "s") work here)."
+            plan.filesUnavailable = Self.sharedWorktreeMessage(shared.count)
             return plan
         }
         let runner = git.runner
@@ -90,10 +113,18 @@ extension Engine {
 
     /// Restores the files (all or nothing; fails without touching the conversation when a file changed meanwhile),
     /// then rewinds the conversation through opencode (`revert.stage files:false` + `revert.commit`). If opencode
-    /// refuses, the files are put back.
+    /// refuses, the files are put back. Isolation is checked again just before the files are written: a thread that
+    /// started working in the same worktree since the plan refuses the rewind with nothing changed (AF19).
     public func rewind(_ plan: RewindPlan) async throws -> AppliedRewind {
         var written: [FileChangePlan] = []
-        if let files = plan.files { written = try await GitCheckpoints.apply(files) }
+        let root = plan.files?.directory ?? plan.directory
+        if let files = plan.files {
+            let shared = await threadsSharingWorktree(of: files.directory, except: plan.sessionID)
+            guard shared.isEmpty else {
+                throw GitError.failed(command: "rewind", status: 1, message: Self.sharedWorktreeMessage(shared.count) + " Nothing was rewound.")
+            }
+            written = try await GitCheckpoints.apply(files)
+        }
         var staged = false
         do {
             let client = try await core.currentClient()
@@ -109,24 +140,25 @@ extension Engine {
             }
             var filesKept: String?
             if !written.isEmpty {
-                do { try await GitCheckpoints.undo(written, directory: plan.directory) } catch {
+                do { try await GitCheckpoints.undo(written, directory: root) } catch {
                     filesKept = (error as? WorkingCopyError)?.userMessage ?? String(describing: error)
                 }
             }
-            git.refreshAll(under: plan.directory)
+            git.refreshAll(under: root)
             if revertStillStaged || filesKept != nil {
                 throw RewindRollbackError(reason: String(describing: error), revertStillStaged: revertStillStaged, filesNotRestored: filesKept)
             }
             throw error
         }
-        git.refreshAll(under: plan.directory)
-        return AppliedRewind(plan: plan, written: written)
+        git.refreshAll(under: root)
+        return AppliedRewind(plan: plan, written: written, root: root)
     }
 
-    /// Undo for the files of a rewind (the conversation rewind itself is permanent in opencode).
+    /// Undo for the files of a rewind (the conversation rewind itself is permanent in opencode), at the root they were
+    /// restored in. Throws `WorkingCopyError` naming the path when a file changed since (nothing is overwritten).
     public func undoRewindFiles(_ applied: AppliedRewind) async throws {
-        try await GitCheckpoints.undo(applied.written, directory: applied.plan.directory)
-        git.refreshAll(under: applied.plan.directory)
+        defer { git.refreshAll(under: applied.root) }
+        try await GitCheckpoints.undo(applied.written, directory: applied.root)
     }
 }
 
@@ -166,7 +198,7 @@ extension Engine {
         let base = git.repository(for: projectDirectory).baseBranch ?? "main"
         let verdict = await git.worktrees.cleanupVerdict(
             directory: session.directory, projectDirectory: projectDirectory, parent: preferences.parentDirectory(projectDirectory: projectDirectory),
-            base: base, sharedByOtherThreads: !threadsSharing(directory: session.directory, except: session.id).isEmpty)
+            base: base, sharedByOtherThreads: !(await threadsSharingWorktree(of: session.directory, except: session.id)).isEmpty)
         guard verdict == .remove else { return nil }
         return try? await git.removeWorktree(
             directory: session.directory, projectDirectory: projectDirectory, projectID: session.projectID, deleteBranch: false, force: false)
