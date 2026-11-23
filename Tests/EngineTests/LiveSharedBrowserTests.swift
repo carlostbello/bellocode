@@ -116,6 +116,8 @@ struct LiveSharedBrowserTests {
                 var body = ContainerCreate(image: Self.nodeImage)
                 body.cmd = ["node", "-e", script]
                 body.labels = Self.label
+                // As every workspace: a verified numeric user (routes into it exec only as that, never as the image's).
+                if name == names.ws { body.user = "1000:1000" }
                 var hostConfig = HostConfig()
                 hostConfig.networkMode = names.net
                 body.hostConfig = hostConfig
