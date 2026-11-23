@@ -12,6 +12,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var item: NSStatusItem?
     private var loop: ObservationLoop?
     var onOpen: (SessionID) -> Void = { _ in }
+    /// Brings BelloCode forward before any window opens from the menu (another app is frontmost then; NF21).
+    var activateApp: () -> Void = { NSApp.activate() }
+    var onShowScheduledTasks: () -> Void = { (NSApp.delegate as? AppDelegate)?.showScheduledTasks(nil) }
 
     init(engine: Engine, settings: AppSettings) {
         self.engine = engine
@@ -80,7 +83,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 action: nil, keyEquivalent: "")
             line.isEnabled = false
             menu.addItem(line)
-            let tasks = NSMenuItem(title: "Scheduled Tasks…", action: #selector(AppDelegate.showScheduledTasks(_:)), keyEquivalent: "")
+            let tasks = NSMenuItem(title: "Scheduled Tasks…", action: #selector(showScheduledTasks(_:)), keyEquivalent: "")
+            tasks.target = self
             menu.addItem(tasks)
             menu.addItem(.separator())
         }
@@ -97,13 +101,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func open(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String else { return }
-        NSApp.activate()
+        activateApp()
         onOpen(SessionID(raw))
     }
 
     @objc private func activate(_ sender: Any?) {
-        NSApp.activate()
+        activateApp()
         (NSApp.delegate as? AppDelegate)?.showFrontWindow()
+    }
+
+    @objc func showScheduledTasks(_ sender: Any?) {
+        activateApp()
+        onShowScheduledTasks()
     }
 }
 
