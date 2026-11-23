@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ContainerKit
@@ -250,5 +251,95 @@ struct DevContainerTests {
         #expect((try? String(contentsOfFile: staged.directory + "/src/a.txt", encoding: .utf8)) == "a")
         #expect(try DevContainerBuildInputs.contextDigest(staged.directory, cache: DevContextDigestCache()).get() == staged.digest)
         #expect(try DevContainerBuildInputs.contextDigest(inputs.context, cache: DevContextDigestCache()).get() != staged.digest)
+    }
+
+    /// AF07: a folder of the context replaced by a link to a folder outside the project after it was listed (and
+    /// before it is read) fails the copy; nothing from outside reaches the private copy.
+    @Test func aFolderSwappedForALinkWhileTheContextIsCopiedIsRefused() throws {
+        let (root, outside) = try temporaryProject()
+        let base = (root as NSString).deletingLastPathComponent
+        defer { try? FileManager.default.removeItem(atPath: base) }
+        try FileManager.default.createDirectory(atPath: root + "/sub", withIntermediateDirectories: true)
+        try "inside".write(toFile: root + "/sub/a.txt", atomically: true, encoding: .utf8)
+        try "secret".write(toFile: outside + "/secret.txt", atomically: true, encoding: .utf8)
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+        var identity = stat()
+        #expect(lstat(inputs.context, &identity) == 0)
+        let destination = base + "/staged"
+        #expect(mkdir(destination, 0o700) == 0)
+        let result = DevContainerBuildInputs.copyContext(inputs.context, into: destination, identity: identity, projectRoot: root) { path in
+            guard path == "sub" else { return }
+            try? FileManager.default.removeItem(atPath: inputs.context + "/sub")
+            try? FileManager.default.createSymbolicLink(atPath: inputs.context + "/sub", withDestinationPath: outside)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination + "/sub/secret.txt"), "a file outside the project was copied")
+        guard case .failure(let problem) = result else {
+            Issue.record("the copy went on through a folder replaced by a link")
+            return
+        }
+        #expect(problem == DevContainerBuildInputs.contextReplaced)
+        // A context folder that is not the one verified is refused before anything is read.
+        var other = stat()
+        #expect(lstat(outside, &other) == 0)
+        let second = base + "/staged2"
+        #expect(mkdir(second, 0o700) == 0)
+        guard case .failure = DevContainerBuildInputs.copyContext(inputs.context, into: second, identity: other, projectRoot: root) else {
+            Issue.record("a context with another identity was copied")
+            return
+        }
+    }
+
+    /// Runs `work` off the test's thread. If it has not returned after `seconds`, each FIFO in `fifos` gets a writer
+    /// (so a blocked open returns and the test fails instead of hanging) and the result says so.
+    func withoutWaitingOnFIFOs<T: Sendable>(_ fifos: [String], seconds: Int = 10, _ work: @escaping @Sendable () -> T) async -> (T, waited: Bool) {
+        let waited = Mutex(false)
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if Task.isCancelled { return }
+            waited.withLock { $0 = true }
+            for fifo in fifos {
+                let writer = open(fifo, O_WRONLY | O_NONBLOCK)
+                if writer >= 0 { close(writer) }
+            }
+        }
+        let value = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: work()) }
+        }
+        watchdog.cancel()
+        return (value, waited.withLock { $0 })
+    }
+
+    /// AF25: a Dockerfile that is a named pipe is refused at once (when the tag is calculated and when the context is
+    /// staged, which both verify first), never waited on; a `.dockerignore` that is one does not block the digest or the
+    /// copy either.
+    @Test(.timeLimit(.minutes(1))) func aFIFODockerfileOrDockerignoreNeverBlocks() async throws {
+        let (root, _) = try temporaryProject()
+        defer { try? FileManager.default.removeItem(atPath: (root as NSString).deletingLastPathComponent) }
+        let dockerfile = root + "/.devcontainer/Dockerfile"
+        try FileManager.default.removeItem(atPath: dockerfile)
+        #expect(mkfifo(dockerfile, 0o600) == 0)
+        let build = try #require(plan(#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#, root: root).build)
+        let (verified, waited) = await withoutWaitingOnFIFOs([dockerfile]) { DevContainerBuildInputs.verify(build, projectRoot: root) }
+        #expect(!waited, "verifying waited for a writer of the Dockerfile")
+        guard case .failure(let problem) = verified else {
+            Issue.record("a FIFO Dockerfile was accepted")
+            return
+        }
+        #expect(problem.description.contains("not a regular file"))
+
+        try FileManager.default.removeItem(atPath: dockerfile)
+        try "FROM alpine\n".write(toFile: dockerfile, atomically: true, encoding: .utf8)
+        let ignore = root + "/.dockerignore"
+        #expect(mkfifo(ignore, 0o600) == 0)
+        let inputs = try DevContainerBuildInputs.verify(build, projectRoot: root).get()
+        let parent = (root as NSString).deletingLastPathComponent
+        let (outcome, blocked) = await withoutWaitingOnFIFOs([ignore]) {
+            (DevContainerBuildInputs.contextDigest(inputs.context, cache: DevContextDigestCache()), inputs.stage(projectRoot: root, parent: parent))
+        }
+        #expect(!blocked, "the digest or the copy waited for a writer of .dockerignore")
+        #expect((try? outcome.0.get()) != nil)
+        let staged = try outcome.1.get()
+        staged.remove()
     }
 }

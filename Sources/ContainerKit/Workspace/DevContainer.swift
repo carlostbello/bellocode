@@ -304,7 +304,9 @@ public struct DevContainerBuildInputs: Sendable, Equatable {
             return .failure(Problem("The dev container was not built: its build context \(context) is not a folder."))
         }
         // The canonical path has no links; O_NOFOLLOW refuses one swapped in since, and fstat proves a regular file.
-        let fd = open(file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        // O_NONBLOCK (AF25): a FIFO opens at once (and is then refused) instead of blocking until a writer appears,
+        // which neither the build's deadline nor task cancellation could interrupt.
+        let fd = open(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { return .failure(Problem("The dev container was not built: its Dockerfile could not be opened (\(String(cString: strerror(errno))))."))}
         defer { close(fd) }
         var info = stat()
