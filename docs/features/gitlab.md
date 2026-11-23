@@ -69,7 +69,10 @@ anything quoted to a model.
 
 ## Polling and wake semantics
 One service, per-instance `ForgeGate`: ≤ 4 requests in flight; a 429 holds the whole instance (`Retry-After` seconds
-or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. A release hands its slot straight to
+or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. The wait is validated where the
+response is read: a value that is not a finite number is ignored and the hold is at most an hour, so a proxy's huge
+number cannot trap the app when the error is shown; job durations and token expiry dates from the server are bounded
+the same way before any integer conversion (v1.0.1 AV2-03). A release hands its slot straight to
 the next waiter, and a woken waiter re-checks the hold (passing the slot on when refused), so queued requests neither
 exceed the limit nor go out inside a backoff window (v1.0.1 GF11). Watches of the same MR share one
 read; ≤ 8 MRs per pass. Failures keep the cached snapshot with its time and a kind label (Offline, Token invalid, No

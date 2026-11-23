@@ -249,8 +249,20 @@ public struct PipelineJob: Hashable, Sendable, Codable, Identifiable {
         self.status = status
         self.webURL = webURL
         self.allowFailure = allowFailure
-        self.duration = duration
+        self.duration = Self.validDuration(duration)
         self.failureReason = failureReason
+    }
+
+    /// A job's duration from GitLab, kept only when it is a finite number of seconds within ten years (AV2-03).
+    public static func validDuration(_ seconds: Double?) -> Double? {
+        guard let seconds, seconds.isFinite, seconds >= 0, seconds <= 315_360_000 else { return nil }
+        return seconds
+    }
+
+    /// "42s", or nil without a usable duration (also for a cached snapshot from before `validDuration`).
+    public var durationText: String? {
+        guard let seconds = Self.validDuration(duration), let whole = Int(exactly: seconds.rounded(.down)) else { return nil }
+        return "\(whole)s"
     }
 
     public var isFailure: Bool { status == "failed" }

@@ -432,7 +432,7 @@ struct JobRow: View {
                 Text(job.glyph).foregroundStyle(GitLabTone.job(job)).frame(width: 12).accessibilityHidden(true)
                 Text(job.name).foregroundStyle(SwiftUI.Color.ds.text).lineLimit(1)
                 Text(job.label + (job.allowFailure == true && job.isFailure ? " (allowed)" : "")).foregroundStyle(GitLabTone.job(job))
-                if let duration = job.duration { Text("\(Int(duration))s").monospacedDigit().foregroundStyle(SwiftUI.Color.ds.text4) }
+                if let duration = job.durationText { Text(duration).monospacedDigit().foregroundStyle(SwiftUI.Color.ds.text4) }
                 Spacer(minLength: 0)
                 Button("Log") { model.showLog(snapshot.ref, job) }.buttonStyle(DSButtonStyle(.ghost, size: .small)).help("Show the end of this job's log")
                 if job.isRetryable {

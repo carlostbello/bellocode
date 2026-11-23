@@ -168,6 +168,43 @@ struct GitLabErrorTests {
         #expect(GitLabProvider.retryAfter(["retry-after": "Wed, 18 Nov 2026 10:00:30 GMT"], now: ISO8601DateFormatter().date(from: "2026-11-18T10:00:00Z")!) == 30)
     }
 
+    /// AV2-03: a proxy or self-managed instance can answer a 429 with any number. Each is validated and bounded where
+    /// the response is read (an hour at most, a non-number ignored), and the error's message, the throttle window and
+    /// a refresh that records the error never trap. Server-supplied job durations and token expiry dates are bounded
+    /// the same way before any integer conversion.
+    @MainActor @Test func serverSuppliedNumbersCannotTrap() async throws {
+        for (value, expected) in [("1e300", 3_600.0), ("99999999999999999999999", 3_600), ("-5", 0), ("120", 120)] as [(String, Double)] {
+            #expect(GitLabProvider.retryAfter(["retry-after": value]) == expected, "\(value)")
+        }
+        for value in ["inf", "nan", "-inf"] { #expect(GitLabProvider.retryAfter(["retry-after": value]) == nil, "\(value)") }
+        #expect(GitLabProvider.retryAfter(["ratelimit-reset": "1e300"], now: Date(timeIntervalSince1970: 0)) == 3_600)
+        for after in [Double.infinity, -.infinity, .nan, 1e300, -1e300, Double.greatestFiniteMagnitude] {
+            _ = ForgeError.rateLimited(retryAfter: after).description
+            _ = ForgeError.rateLimited(retryAfter: after).kind
+        }
+        #expect(ForgeError.rateLimited(retryAfter: 1e300).description.contains("in 86400 s"))
+
+        let server = GitLabWorld.server()
+        let provider = GitLabProvider(transport: server, tokens: GitLabWorld.tokens())
+        server.fail("merge_requests/42", status: 429, headers: ["Retry-After": "1e300"])
+        await #expect(throws: ForgeError.rateLimited(retryAfter: 3_600)) { _ = try await provider.mergeRequest(GitLabWorld.ref, now: .now) }
+        let service = MergeRequestService(
+            store: try ProjectionStore(location: .inMemory), clock: ManualWallClock(Date(timeIntervalSince1970: 1_800_000_000)), transport: server,
+            tokens: GitLabWorld.tokens(), autoPoll: false)
+        await service.start()
+        _ = try await service.saveInstance(baseURL: GitLabWorld.instance.baseURL, token: nil)
+        server.fail("merge_requests/42", status: 429, headers: ["Retry-After": "1e300"])
+        await service.refresh(GitLabWorld.ref)
+        #expect(service.problems[GitLabWorld.ref.url]?.contains("rate limit") == true, "\(service.problems)")
+
+        #expect(PipelineJob(id: 1, name: "j", status: "failed", duration: 1e300).durationText == nil)
+        #expect(PipelineJob(id: 1, name: "j", status: "failed", duration: .nan).duration == nil)
+        #expect(PipelineJob(id: 1, name: "j", status: "failed", duration: 42.7).durationText == "42s")
+        #expect(GitLabProvider.job(["id": 1, "name": "j", "status": "failed", "duration": 1e300]).duration == nil)
+        let far = GitLabTokenInfo(scopes: ["api"], expiresAt: Date.distantFuture, active: true)
+        #expect(far.expiryWarning(now: Date()) == nil)
+    }
+
     @Test func pathPrefixAndPaginationAnd304() async throws {
         let server = GitLabWorld.server { $0.pageSize = 2 }
         let provider = GitLabProvider(transport: server, tokens: GitLabWorld.tokens())
