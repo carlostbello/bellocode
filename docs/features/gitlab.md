@@ -161,7 +161,11 @@ secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0
 from the Keychain off the main actor, once per tool result, wake or excerpt (GF12). If it cannot be read (a locked or
 busy Keychain, no token), nothing from GitLab reaches a model: tools return an error naming the Keychain, Add to Agent
 Context, Send to Agent and Start Thread from Issue say so and insert nothing, and a babysit wake is held (the watch shows
-"Updates held", the log says why) and goes out redacted at the next poll that can read it (v1.0.1 AV07). Text that is
+"Updates held", the log says why) and goes out redacted at the next poll that can read it (v1.0.1 AV07). That holds
+for every post of a wake, a retry after a lost answer or a relaunch included: the token is read again, the saved text is
+redacted again with it, and a locked Keychain holds the retry. A wake saved by an earlier version (no redaction mark on
+`PendingWake`) is never posted; it is dropped with a log line and rebuilt, redacted, from the unchanged baseline (AV07,
+third round). Text that is
 ready only after such an await goes to the composer that was shown when the action started (`ComposerTarget`); if the
 person switched threads meanwhile it is not inserted anywhere and the panel says so (AV10).
 

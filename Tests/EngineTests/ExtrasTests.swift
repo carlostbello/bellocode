@@ -280,7 +280,12 @@ final class FakeMergeRequestHost: MergeRequestHost {
         return updated
     }
 
-    func wake(_ sessionID: SessionID, text: String, url: String) async throws { wakes.append((sessionID, text)) }
+    /// When set, posting a wake fails with it (a lost answer, the server away).
+    var wakeError: (any Error)?
+    func wake(_ sessionID: SessionID, text: String, url: String) async throws {
+        if let wakeError { throw wakeError }
+        wakes.append((sessionID, text))
+    }
     func pause(_ sessionID: SessionID) -> MergeRequestPause {
         onPause?()
         return pauses[sessionID] ?? .none
@@ -388,6 +393,59 @@ struct MergeRequestServiceTests {
         // Every model-facing reader fails closed the same way.
         vault.locked.withLock { $0 = true }
         await #expect(throws: ExtrasError.self) { _ = try await service.knownSecrets(GitLabFixtures.instance.baseURL) }
+        service.shutdown()
+    }
+
+    /// AV07 (third round): every path that posts a wake needs the exact redaction value, retries included. A wake
+    /// whose first post failed is not retried while the Keychain is locked; and a wake saved by an earlier version (no
+    /// redaction mark, its text possibly holding the bare token) is never posted after the upgrade: it is rebuilt from
+    /// the unchanged baseline, redacted, and only that goes out.
+    @Test func everyWakeDeliveryNeedsTheRedactionValue() async throws {
+        let token = "corp7-Q2hxNnZ3dWl6c0F4cGdtYk9u"
+        let inner = InMemorySecretVault()
+        try inner.store(account: GitLabFixtures.instance.baseURL, label: "t", value: SecretValue(token))
+        let vault = LockableVault(inner)
+        let store = try ProjectionStore(location: .inMemory)
+        do {
+            let (service, clock, host, transport) = try await make(store: store, tokens: vault)
+            GitLabFixtures.install(transport, mr: GitLabFixtures.mr(), jobs: GitLabFixtures.jobs([("unit", "running")]))
+            try await service.setWatching(GitLabFixtures.ref, for: thread, true)
+            await service.waitForFetches()
+            await service.pollDue()
+            GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]))
+            transport.setJSON("\(GitLabFixtures.api)/jobs/1/trace", "Step 3/9\nauth with \(token) failed\nERROR: job failed\n")
+            host.wakeError = ExtrasError("the server is away")
+            clock.advance(by: 120)
+            await service.pollDue()
+            #expect(host.wakes.isEmpty)
+            let saved = try #require(service.watch(thread, GitLabFixtures.ref.url)?.pending)
+            #expect(saved.redaction == PendingWake.exactTokenRedaction)
+            // The retry, with the Keychain locked: held, not posted.
+            host.wakeError = nil
+            vault.locked.withLock { $0 = true }
+            clock.advance(by: 600)
+            await service.pollDue()
+            #expect(host.wakes.isEmpty, "a retried wake waits for the redaction value too")
+            #expect(service.watch(thread, GitLabFixtures.ref.url)?.heldForRedaction == true)
+            #expect(service.watch(thread, GitLabFixtures.ref.url)?.pending != nil, "kept for later")
+            vault.locked.withLock { $0 = false }
+            // What an earlier version could have saved: the same wake, built without the exact-token redaction.
+            var legacy = try #require(service.watch(thread, GitLabFixtures.ref.url))
+            legacy.pending?.redaction = nil
+            legacy.pending?.text = "[BelloCode MR watch] LEGACY-TEXT auth with \(token) failed"
+            try await store.saveMergeRequestWatch(legacy)
+            service.shutdown()
+        }
+        let (service, clock, host, transport) = try await make(store: store, tokens: vault)
+        GitLabFixtures.install(transport, mr: GitLabFixtures.mr(pipelineStatus: "failed"), jobs: GitLabFixtures.jobs([("unit", "failed")]))
+        transport.setJSON("\(GitLabFixtures.api)/jobs/1/trace", "Step 3/9\nauth with \(token) failed\nERROR: job failed\n")
+        clock.advance(by: 120)
+        await service.pollDue()
+        #expect(!host.wakes.contains { $0.1.contains("LEGACY-TEXT") }, "the saved text is never posted")
+        try #require(host.wakes.count == 1, "rebuilt from the unchanged baseline")
+        #expect(host.wakes[0].1.contains("Pipeline failed"))
+        #expect(!host.wakes[0].1.contains(token))
+        #expect(service.watch(thread, GitLabFixtures.ref.url)?.pending == nil)
         service.shutdown()
     }
 
