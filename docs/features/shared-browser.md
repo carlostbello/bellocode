@@ -56,7 +56,9 @@ each thread that used the browser gets a plain `[BelloCode] …` line with its n
 byte quota) with a warning at 80% of the Settings limit. Quitting BelloCode stops the browser in order. **Stop during a
 start** (including one that adopted a browser left running by a previous launch) hands over to the orderly stop,
 which checks the container's actual state; a daemon failure shows "Stop not confirmed", never Stopped, and an absent
-container counts as stopped (v1.0.1 AF23, `SharedBrowserStopTests`).
+container counts as stopped (v1.0.1 AF23, `SharedBrowserStopTests`). A start that fails after adopting such a browser
+(readiness timeout, viewer password) stops it like one it started, and Stop in Failed stops a container that still
+runs instead of only relabelling it.
 
 ## Networking and canonical URLs
 
@@ -92,16 +94,21 @@ image blocks, initializes as opencode (plain tools). The app hosts it as the cli
 `BrowserCallPolicy`: each thread gets its own group `bc-<8 hex>` and default tab `<group>-main` (created before use);
 calls without `tab` go there (never a stray background tab); `tabs new` lands in the group; `tabs list`/group close
 are limited to the group; another thread's tab is refused naming its owner; numeric tabs are translated to string IDs
-(browse reserves only string tabs) or refused; `settings` and `recording` are hidden. **Sharing** is the person's act,
+(browse reserves only string tabs) or refused, as is a number no host integer can hold (never a crash, AV11); `settings` and `recording` are hidden. **Sharing** is the person's act,
 recorded with expiry. `BrowserTabGate`: one call per tab at a time in order; a shared tab has one **driver** (lease
 renewed per call, released by `chrome_release_tab`, revoked by the person, lapses after 60 s); ≤ 4 running and 16
 waiting across threads, 4 per thread, round-robin; overflow, takeover or another driver return a plain **Busy**.
 **Approval:** MCP servers always need a person: until the project is approved the only tool is
 `chrome_request_access`, which raises a card (Allow Once = this thread; Always = the project; revocable in Settings).
+Access is checked again when a call gets its tab (right before dispatch) and before its result is returned: revoking
+a project cancels its calls already waiting or running, none is sent afterwards, and a running call's result is
+withheld (AV05).
 **Guidance** (`bellocode.chrome` instruction entry): WebKit preview vs shared Chrome, canonical URLs, own group, Busy,
 handoff, and that sign-ins are shared.
 **Done threads:** when a thread is archived or deleted its own tabs close (Settings ▸ Browser, on by default), except
 tabs it shares with another thread; this never starts the browser, and nothing closes while the person has control.
+Threads that existed before launch count too (the tracker is seeded from the store), and a change-stream overflow is
+reconciled against every thread.
 
 ## Live view and takeover
 

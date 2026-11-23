@@ -127,7 +127,9 @@ GitLab menu (additive): Show Merge Requests ⌃⌘M, Link Merge Request…, Crea
 Babysit/Stop Babysitting, Unlink, Review Merge Request Diff ⌃⌥⌘R, Review ▸ (Next/Previous Thread ⌃⌥⌘] / ⌃⌥⌘[, Reply,
 Resolve/Reopen, Add Thread to Agent Context, Submit Review… ⌃⌥⌘↩, Discard Drafts, Close Review), Show Failing Job Log,
 Send Failure to Agent, Retry Failed Job, Run Manual Job…, Approve, Merge…, Show Issues ⌃⌘I, Start Thread from Issue…,
-Link Issue to Thread, Show To-dos ⌃⌘Y, Open To-do, Mark To-do Done. All are in the palette with a reason when disabled;
+Link Issue to Thread, Show To-dos ⌃⌘Y, Open To-do, Mark To-do Done. All are in the palette with a reason when disabled.
+Show Merge Requests needs no thread (the tab offers Connect GitLab when none is configured), Show Issues a configured
+instance and a shown project (a thread or a new-thread draft), Show To-dos a configured instance (NV02);
 `everyCommandHasAUniqueSelectorAndShortcut` and the Browser-menu disjointness test pass.
 
 ## Agent tools (`bellocode_app_*`) and gates

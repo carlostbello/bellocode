@@ -9,8 +9,10 @@ Status: done 2026-11-16 against opencode 2.3.0 (sandboxed real binary) and MockO
   Thread menu (Allow Once ⌥⌘Y, Always Allow ⇧⌥⌘Y, Deny/Dismiss ⌥⌘N, Submit ⌥⌘↩, Previous/Next ⌥⌘[ / ⌥⌘]).
 - Composer controls bar: `permissionModeControl(thread:engine:)` (⇧⌘A), `planToggle(thread:)` (⌥⌘P),
   `modelPicker(thread:engine:auth:onConnect:)` (⇧⌘M; `onConnect(integrationID?)` should open `providerConnect`).
-- Shell/Settings: `onboarding(auth:engine:importSource:onFinish:)`, `accountsSettings(auth:importSource:)`,
-  `providerConnect(auth:integrationID:onDone:)` return `NSViewController`s. Create one `AuthService` per app with
+- Shell/Settings: `onboarding(auth:engine:importSource:onFinish:)`, `accountsSettings(auth:importSource:freeModelsOffered:)`,
+  `providerConnect(auth:integrationID:onDone:)` return `NSViewController`s. Onboarding, the Accounts empty state and the
+  draft hint promise free models only when `BackgroundModelResolver.offeredFreeModels` lists one: usable (enabled, not
+  deprecated, provider not disabled) and not hidden with Hide Model (NF24, NV14). Create one `AuthService` per app with
   `engine.makeAuthService(openURL: { NSWorkspace.shared.open($0) })`; call `shutdown()` before `engine.stop()`.
 - SwiftUI views are public too (`PendingRequestStackView`, `PermissionModePicker`, `ModelPickerButton`/`View`, …).
   Protocols `PendingRequestSource` / `AgentModeSource` (ThreadModel conforms) keep views testable. No SwiftUI macro

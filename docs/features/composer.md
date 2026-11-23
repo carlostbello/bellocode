@@ -80,7 +80,13 @@ running-steer,running-stop,capped,hero}-{light,dark}.png`.
   flush. Quit asks "Some drafts could not be saved" (Try Again / Quit Anyway) while one is still pending (AF22).
 - **Failed first send from a draft** (the send that creates the thread): the shell has already switched to the new
   thread, so the text, merged with anything typed since, goes back into every live composer with the same
-  `draftOwner` (the new thread's) with the error there, not into a stored draft nobody re-reads (NF04).
+  `draftOwner` (the new thread's) with the error there, not into a stored draft nobody re-reads (NF04). Each
+  submission has an identity and is restored at most once per composer; only a draft that already holds the failed
+  text in front, its tokens in place and every attachment counts as shown, so a newer edit that merely starts with
+  the same words still gets the attachment and error back (AV12).
+- **Command-Return key equivalents:** the composer takes, before the menu, only the Return combinations that send
+  (⌘↩; ⌥⌘↩ with the Command-Return send key). ⌃⌘↩ (Git ▸ Run Suggested Git Action) and ⌃⌥⌘↩ (GitLab ▸ Submit
+  Review…) reach the menu; with no menu item to take them, they insert a newline as before (NV03).
 - **Start Thread… from a GitLab issue** with the project's new-thread draft on screen inserts into that open composer
   (the draft wires `onInsertIntoComposer` as a thread does), so the text is no longer lost on the next keystroke (NF09).
 - **Draft model hint** follows the catalog: "Free built-in models work without signing in…" only when every enabled
