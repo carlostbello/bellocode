@@ -1008,6 +1008,12 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
         return true
     }
 
+    func composerTextView(_ textView: ComposerTextView, handleReturnKeyEquivalent modifiers: KeyModifiers) -> Bool {
+        guard case .send = SendKeyPolicy.action(sendKey: configuration.sendKey, modifiers: modifiers, hasMarkedText: textView.hasMarkedText())
+        else { return false }
+        return composerTextView(textView, handleReturn: modifiers)
+    }
+
     func composerTextView(_ textView: ComposerTextView, read pasteboard: NSPasteboard, inline: Bool) -> Bool {
         let signpost = ComposerSignposts.edit.beginInterval("paste")
         defer { ComposerSignposts.edit.endInterval("paste", signpost) }
