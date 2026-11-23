@@ -95,9 +95,12 @@ extension WorkspaceController {
     /// delete out at once. See `PendingThreadDeletions`.
     func delete(_ id: SessionID) { delete([id]) }
 
+    /// A deleted thread also counts as closed: File ▸ Reopen Closed Thread (⇧⌘T) within the Undo window cancels the
+    /// delete and shows it again (NV13).
     func delete(_ ids: [SessionID]) {
         deletions.delete(
             ids, name: ids.count == 1 ? "Delete Thread" : "Delete Threads", message: "Deleted \(describe(ids))", from: self)
+        noteClosed(ids)
     }
 
     /// Sends every pending delete now (they can no longer be undone).
