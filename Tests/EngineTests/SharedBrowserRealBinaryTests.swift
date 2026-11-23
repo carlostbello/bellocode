@@ -116,7 +116,7 @@ struct SharedBrowserRealBinaryTests {
         await browser.stop(reason: "test end")
         try? await client.removeContainer(names.container, force: true)
         try? await client.removeVolume(names.volume, force: true)
-        if let tag = try? await runtime.expectedTag() { try? await client.removeImage(tag, force: true) }
+        if ProcessInfo.processInfo.environment["BELLOCODE_KEEP_BROWSER_IMAGE"] != "1", let tag = try? await runtime.expectedTag() { try? await client.removeImage(tag, force: true) }
         await engine.stop()
         try? FileManager.default.removeItem(at: root)
     }
