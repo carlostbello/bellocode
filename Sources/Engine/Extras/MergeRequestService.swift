@@ -776,12 +776,39 @@ public final class MergeRequestService {
             guard isCurrent(key, generation) else { return }
             record = watches[key] ?? record
         }
+        // Every delivery, first or retried, of a wake built now or saved before an upgrade, needs the exact redaction
+        // value (AV07). A text saved by an earlier version may have been built without it: it is never posted; the
+        // baseline it would have advanced is unchanged, so the same events are read again and rebuilt redacted.
+        guard pending.redaction == PendingWake.exactTokenRedaction else {
+            record.pending = nil
+            watches[key] = record
+            try? await store.saveMergeRequestWatch(record)
+            nextPoll[key] = clock.now()
+            await appendLog(key, record, .deferred, "An update saved by an earlier version was not sent; it is rebuilt with redaction: \(pending.summary)")
+            return
+        }
+        guard let known = try? await knownSecrets(ref.instance) else {
+            guard isCurrent(key, generation) else { return }
+            record = watches[key] ?? record
+            let firstDeferral = record.heldForRedaction != true
+            record.heldForRedaction = true
+            watches[key] = record
+            try? await store.saveMergeRequestWatch(record)
+            nextPoll[key] = clock.now().addingTimeInterval(baseInterval)
+            if firstDeferral { await appendLog(key, record, .deferred, "The GitLab token could not be read to redact this update; waiting: \(pending.summary)") }
+            return
+        }
+        guard isCurrent(key, generation) else { return }
+        record = watches[key] ?? record
+        record.heldForRedaction = nil
+        // Redacted again with the value read now (the token may have been replaced since the text was built).
+        let text = UntrustedText.redact(pending.text, known: known).text
         pending.attempts += 1
         record.pending = pending
         watches[key] = record
         try? await store.saveMergeRequestWatch(record)
         do {
-            try await host.wake(record.sessionID, text: pending.text, url: record.url)
+            try await host.wake(record.sessionID, text: text, url: record.url)
         } catch {
             // Not confirmed: tried again at the next poll (which first checks whether it arrived after all).
             guard isCurrent(key, generation) else { return }

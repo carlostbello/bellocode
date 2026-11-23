@@ -59,8 +59,8 @@ extension Engine {
     /// Every unarchived session the engine knows is checked, in any project, not only the sidebar's top-level rows: a
     /// delegated child (sub-agent) whose parent is listed is not a row of its own but edits the same files (AF19). The
     /// rewound thread's own descendants are the one exception, and only when their work is part of what is rewound:
-    /// created after the checkpoint (`rewoundSince`, by turns the rewind removes) and settled (idle, finished or
-    /// failed). A descendant still working, waiting on the person, of unknown status, or that already existed before
+    /// created after the rewound turns began on the server's own record (`rewoundSince`, `rewoundTurnsStart`) and
+    /// settled (idle, finished or failed). A descendant still working, waiting on the person, of unknown status, or that already existed before
     /// the checkpoint counts like any other thread, and so do the thread's ancestors.
     public func threadsSharingWorktree(of directory: String, except id: SessionID, rewoundSince: Timestamp? = nil) async -> [Session] {
         let runner = git.runner
@@ -78,7 +78,8 @@ extension Engine {
             return false
         }
         func partOfTheRewind(_ session: Session) -> Bool {
-            guard let rewoundSince, session.created >= rewoundSince, descends(session) else { return false }
+            // Strictly later: a child created in the very millisecond the turns began is not known to be theirs.
+            guard let rewoundSince, session.created > rewoundSince, descends(session) else { return false }
             return [.idle, .finishedUnread, .failed].contains(status[session.id])
         }
         var result: [Session] = []
@@ -96,14 +97,38 @@ extension Engine {
         return result
     }
 
-    /// When `checkpoint` was captured, on the server's clock (sessions carry the server's times), rounded up to the
-    /// next whole second (git records seconds): a session created in the capture's own second is treated as older
-    /// than the checkpoint (fail closed). Nil when it cannot be read.
-    func checkpointTime(_ checkpoint: String, directory: String) async -> Timestamp? {
-        guard let output = try? await GitRepository(directory: directory, runner: git.runner).git(["log", "-1", "--format=%ct", checkpoint, "--"], allowFailure: true),
-              output.status == 0, let seconds = Double(output.text.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return nil }
-        return await core.serverTime(of: Date(timeIntervalSince1970: seconds + 1))
+    /// When the turns a rewind to `messageID` removes began, on the server's own record (AF19, third round): the
+    /// creation time of the first assistant message after that user message in the server's message order. A child
+    /// session those turns delegated was created during one of them, so its creation time (the same server clock) is
+    /// later; a child of an earlier turn was created while that turn's own steps ran, before this one began. Nothing
+    /// here reads this Mac's clock, a git timestamp or an estimated clock offset, so a delayed event or a retried prompt
+    /// cannot move the cutoff earlier.
+    ///
+    /// Nil (no child is exempt, fail closed) when the history cannot be read, the message is not a user message the
+    /// server lists within the newest `pageLimit` pages, or no assistant message follows it.
+    func rewoundTurnsStart(_ sessionID: SessionID, from messageID: MessageID, pageLimit: Int = 20) async -> Timestamp? {
+        guard let client = try? await core.currentClient() else { return nil }
+        var cursor: String?
+        var earliestAfter: Double?
+        for page in 0..<pageLimit {
+            let query = page == 0 ? MessageListQuery(limit: 100, order: .descending) : MessageListQuery(limit: 100, cursor: cursor)
+            guard let result = try? await client.messages(sessionID: sessionID.rawValue, query) else { return nil }
+            // Newest first: every assistant message before the user message in this walk comes after it on the server.
+            for message in result.data {
+                switch message {
+                case .user(let user) where user.id == messageID.rawValue:
+                    guard let earliestAfter, earliestAfter.isFinite else { return nil }
+                    return Timestamp(milliseconds: earliestAfter)
+                case .assistant(let assistant):
+                    earliestAfter = assistant.time.created
+                default:
+                    guard message.id != messageID.rawValue else { return nil }
+                }
+            }
+            guard let next = result.cursor.next, !result.data.isEmpty else { return nil }
+            cursor = next
+        }
+        return nil
     }
 
     /// The working tree root of `directory` (nil outside a repository or when it cannot be read).
@@ -123,7 +148,7 @@ extension Engine {
         let runner = git.runner
         let ref = GitCheckpoints.ref(session: id, message: messageID)
         let checkpoint = await GitCheckpoints.resolve(ref, directory: directory, runner: runner)
-        let since = if let checkpoint { await checkpointTime(checkpoint, directory: directory) } else { Timestamp?.none }
+        let since = checkpoint == nil ? nil : await rewoundTurnsStart(id, from: messageID)
         let shared = await threadsSharingWorktree(of: directory, except: id, rewoundSince: since)
         if !shared.isEmpty {
             plan.filesUnavailable = Self.sharedWorktreeMessage(shared.count)
@@ -152,7 +177,7 @@ extension Engine {
         var written: [FileChangePlan] = []
         let root = plan.files?.directory ?? plan.directory
         if let files = plan.files {
-            let since = await checkpointTime(files.checkpoint, directory: files.directory)
+            let since = await rewoundTurnsStart(plan.sessionID, from: plan.messageID)
             let shared = await threadsSharingWorktree(of: files.directory, except: plan.sessionID, rewoundSince: since)
             guard shared.isEmpty else {
                 throw GitError.failed(command: "rewind", status: 1, message: Self.sharedWorktreeMessage(shared.count) + " Nothing was rewound.")

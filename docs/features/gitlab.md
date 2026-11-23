@@ -69,7 +69,10 @@ anything quoted to a model.
 
 ## Polling and wake semantics
 One service, per-instance `ForgeGate`: ≤ 4 requests in flight; a 429 holds the whole instance (`Retry-After` seconds
-or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. A release hands its slot straight to
+or date, `RateLimit-Reset`, else 30 s doubling to 15 min), manual refresh included. The wait is validated where the
+response is read: a value that is not a finite number is ignored and the hold is at most an hour, so a proxy's huge
+number cannot trap the app when the error is shown; job durations and token expiry dates from the server are bounded
+the same way before any integer conversion (v1.0.1 AV2-03). A release hands its slot straight to
 the next waiter, and a woken waiter re-checks the hold (passing the slot on when refused), so queued requests neither
 exceed the limit nor go out inside a backoff window (v1.0.1 GF11). Watches of the same MR share one
 read; ≤ 8 MRs per pass. Failures keep the cached snapshot with its time and a kind label (Offline, Token invalid, No
@@ -155,13 +158,25 @@ Notes, descriptions, diffs and logs reach models only inside `----- BEGIN UNTRUS
 markers and CR overprints are stripped; GitLab/GitHub/Slack/AWS/JWT/bearer/URL-credential/`*TOKEN=` shapes and the
 instance token are redacted (best effort, counted). Excerpts: first error-looking block (≤ 16 lines) + last 60 lines,
 ≤ 8 KB, lines ≤ 400 chars. "Send to Agent" puts the same block, fenced, into the composer for the person to send.
+The panel keeps excerpts (at most 32) and in-flight loads by installation, project and job ID, never the job number
+alone: two configured instances number their jobs independently, so one's excerpt is never sent as the other's
+(v1.0.1 AV2-01).
 Short header fields outside the block (titles, branches, labels, user, job, stage and rule names, file lists, issue
 titles) go through `UntrustedText.field`: controls stripped, line breaks collapsed (a job name cannot forge a line),
-secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). The token to redact with is read
+secrets and the token redacted, delimiters neutralised, ≤ 300 characters (v1.0.1 GF13). That includes what the composer
+actions interpolate: the note author, path and discussion ID of Add to Agent Context, the job name, stage and SHA of
+Send to Agent, and the issue title, reference and URL of Start Thread from Issue. Two final passes remove the exact
+token from the whole text whatever a caller forgot: `UntrustedText.composerQuote` requires the token and redacts its
+entire result, and every GitLab tool's result and error text is redacted with each configured instance's token
+(`redactingGitLabTokens`) (v1.0.1 AV2-05). The token to redact with is read
 from the Keychain off the main actor, once per tool result, wake or excerpt (GF12). If it cannot be read (a locked or
 busy Keychain, no token), nothing from GitLab reaches a model: tools return an error naming the Keychain, Add to Agent
 Context, Send to Agent and Start Thread from Issue say so and insert nothing, and a babysit wake is held (the watch shows
-"Updates held", the log says why) and goes out redacted at the next poll that can read it (v1.0.1 AV07). Text that is
+"Updates held", the log says why) and goes out redacted at the next poll that can read it (v1.0.1 AV07). That holds
+for every post of a wake, a retry after a lost answer or a relaunch included: the token is read again, the saved text is
+redacted again with it, and a locked Keychain holds the retry. A wake saved by an earlier version (no redaction mark on
+`PendingWake`) is never posted; it is dropped with a log line and rebuilt, redacted, from the unchanged baseline (AV07,
+third round). Text that is
 ready only after such an await goes to the composer that was shown when the action started (`ComposerTarget`); if the
 person switched threads meanwhile it is not inserted anywhere and the panel says so (AV10).
 

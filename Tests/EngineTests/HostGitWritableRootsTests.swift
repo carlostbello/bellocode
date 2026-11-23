@@ -135,4 +135,43 @@ struct HostGitWritableRootsTests {
         // The checkout's own `.git` directory is still a root.
         #expect(HostGit.writableRoots(directory: victim, environment: [:], extra: [], mode: .local).contains(HostGit.canonical(victim + "/.git")))
     }
+    /// AV03, the race: `.git` is a real directory when it is examined and is replaced by a link to another checkout's
+    /// `.git` before the grant is derived. The grant comes from the folder that was opened, which is no longer
+    /// `<project>/.git`, so nothing is granted; the other checkout's metadata never becomes a root. The same swap for a
+    /// `.git` file, and a hard link to another checkout's worktree `.git` file, are refused too.
+    @Test func aDotGitSwappedForALinkAfterInspectionNeverReachesTheOtherCheckout() throws {
+        defer { remove() }
+        let victim = try repository("victim")
+        let project = try repository("project")
+        let swap = {
+            try? FileManager.default.moveItem(atPath: project + "/.git", toPath: project + "/.git-moved")
+            try? FileManager.default.createSymbolicLink(atPath: project + "/.git", withDestinationPath: victim + "/.git")
+        }
+        let roots = HostGit.gitDirectories(from: project, afterOpening: swap)
+        #expect(!roots.contains { $0.hasPrefix(HostGit.canonical(victim)) }, "\(roots)")
+        #expect(roots.isEmpty, "the opened folder is no longer the checkout's .git: \(roots)")
+        // Untouched, the checkout's own `.git` is granted (by the path of the opened folder).
+        #expect(HostGit.gitDirectories(from: victim) == [HostGit.canonical(victim + "/.git")])
+
+        // A linked worktree's `.git` file swapped for a link to the victim's worktree `.git` file.
+        let victimWorktree = base + "/victim-wt"
+        try plain(["worktree", "add", "-q", "-b", "vfeature", victimWorktree], in: victim)
+        let own = try repository("own")
+        let worktree = base + "/wt"
+        try plain(["worktree", "add", "-q", "-b", "feature", worktree], in: own)
+        #expect(HostGit.gitDirectories(from: worktree).contains(HostGit.canonical(own + "/.git")), "the untouched worktree keeps its metadata")
+        let swapFile = {
+            try? FileManager.default.removeItem(atPath: worktree + "/.git")
+            try? FileManager.default.createSymbolicLink(atPath: worktree + "/.git", withDestinationPath: victimWorktree + "/.git")
+        }
+        let fileRoots = HostGit.gitDirectories(from: worktree, afterOpening: swapFile)
+        #expect(!fileRoots.contains { $0.hasPrefix(HostGit.canonical(victim)) }, "\(fileRoots)")
+
+        // A hard link to the victim worktree's `.git` file passes a back-reference check by identity: refused.
+        let linked = base + "/hardlinked"
+        try FileManager.default.createDirectory(atPath: linked, withIntermediateDirectories: true)
+        #expect(link(victimWorktree + "/.git", linked + "/.git") == 0)
+        #expect(!HostGit.gitDirectories(from: linked).contains { $0.hasPrefix(HostGit.canonical(victim)) })
+        #expect(!HostGit.writableRoots(directory: linked, environment: [:], extra: [], mode: .local).contains { $0.hasPrefix(HostGit.canonical(victim)) })
+    }
 }

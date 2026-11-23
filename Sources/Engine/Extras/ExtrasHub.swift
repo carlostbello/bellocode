@@ -225,7 +225,7 @@ public final class ExtrasHub {
                 return ClientMCPResult(text: try await visuals.preview(html: html, hosts: hosts))
             case ExtrasTools.htmlRender: return try await htmlRender(arguments, caller)
             case let tool where GitLabTools.all.contains(tool):
-                return try await handleGitLab(call, caller: caller)
+                return await redactingGitLabTokens { try await self.handleGitLab(call, caller: caller) }
             case GitPushTool.push: return try await handleGitPush(arguments, caller)
             default:
                 return .error("Unknown tool \(call.tool).")

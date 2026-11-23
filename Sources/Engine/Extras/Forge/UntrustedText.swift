@@ -19,12 +19,24 @@ public enum UntrustedText {
             """
     }
 
-    /// The same block as a fenced quote for the composer (the person sends it themselves).
-    public static func composerQuote(intro: String, label: String, body: String) -> String {
+    /// The same block as a fenced quote for the composer (the person sends it themselves). `known` (the instance's
+    /// token, required) is removed from the whole result, intro and label included (AV2-05): every GitLab field a
+    /// caller interpolates is covered, even one it forgot to pass through `field`.
+    public static func composerQuote(intro: String, label: String, body: String, known: [String]) -> String {
         let wrapped = block(label, body)
         var fence = "```"
         while wrapped.contains(fence) { fence += "`" }
-        return "\(intro)\n\n\(fence)text\n\(wrapped)\n\(fence)\n"
+        return redactExact("\(intro)\n\n\(fence)text\n\(wrapped)\n\(fence)\n", known: known)
+    }
+
+    /// Only the exact `known` values (at least 8 characters, as `redact`), replaced in the whole text: the final pass
+    /// over anything assembled from GitLab content on its way to a model (AV2-05).
+    public static func redactExact(_ text: String, known: [String]) -> String {
+        var result = text
+        for value in known where value.count >= 8 && result.contains(value) {
+            result = result.replacingOccurrences(of: value, with: "<redacted>")
+        }
+        return result
     }
 
     /// Delimiter look-alikes inside external text cannot close the block early.

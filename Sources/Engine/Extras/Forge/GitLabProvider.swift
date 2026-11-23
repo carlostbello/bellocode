@@ -84,7 +84,8 @@ actor ForgeGate {
     func throttle(_ instance: String, after: TimeInterval?) -> TimeInterval {
         let strike = strikes[instance, default: 0] + 1
         strikes[instance] = strike
-        let wait = after ?? min(900, 30 * pow(2, Double(strike - 1)))
+        let wait = after.map { $0.isFinite ? min(GitLabProvider.maxRetryAfter, max(0, $0)) : GitLabProvider.maxRetryAfter }
+            ?? min(900, 30 * pow(2, Double(min(strike, 32) - 1)))
         throttledUntil[instance] = now().addingTimeInterval(wait)
         return wait
     }
@@ -303,17 +304,23 @@ public struct GitLabProvider: ForgeProvider {
         return (try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]) ?? [:]
     }
 
-    /// `Retry-After` (seconds or an HTTP date) or `RateLimit-Reset` (epoch seconds).
+    /// The longest wait a 429 can impose (an hour): a proxy or self-managed instance can send any number.
+    static let maxRetryAfter: TimeInterval = 3_600
+
+    /// `Retry-After` (seconds or an HTTP date) or `RateLimit-Reset` (epoch seconds), validated at the response
+    /// boundary (AV2-03): a value that is not a finite number is ignored, and the wait is bounded to
+    /// `0...maxRetryAfter`, so no later conversion (to an integer for a message, a date, a duration) can trap.
     static func retryAfter(_ headers: [String: String], now: Date = Date()) -> TimeInterval? {
+        func bounded(_ seconds: TimeInterval) -> TimeInterval? { seconds.isFinite ? min(maxRetryAfter, max(0, seconds)) : nil }
         if let value = headers["retry-after"]?.trimmingCharacters(in: .whitespaces) {
-            if let seconds = TimeInterval(value) { return max(0, seconds) }
+            if let seconds = TimeInterval(value) { return bounded(seconds) }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-            if let date = formatter.date(from: value) { return max(0, date.timeIntervalSince(now).rounded(.up)) }
+            if let date = formatter.date(from: value) { return bounded(date.timeIntervalSince(now).rounded(.up)) }
         }
         if let reset = headers["ratelimit-reset"].flatMap({ TimeInterval($0.trimmingCharacters(in: .whitespaces)) }) {
-            return max(0, reset - now.timeIntervalSince1970)
+            return bounded(reset - now.timeIntervalSince1970)
         }
         return nil
     }
@@ -354,7 +361,7 @@ public struct GitLabProvider: ForgeProvider {
         PipelineJob(
             id: job["id"] as? Int ?? 0, name: job["name"] as? String ?? "job", stage: job["stage"] as? String ?? "",
             status: job["status"] as? String ?? "unknown", webURL: job["web_url"] as? String, allowFailure: job["allow_failure"] as? Bool,
-            duration: job["duration"] as? Double, failureReason: job["failure_reason"] as? String)
+            duration: PipelineJob.validDuration(job["duration"] as? Double), failureReason: job["failure_reason"] as? String)
     }
 
     static func discussion(_ raw: [String: Any]) -> DiscussionDigest {

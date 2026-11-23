@@ -62,13 +62,25 @@ Counts (32 rows): 26 done (6 of them adapted to GitLab/opencode: 11, 12, 19, 21,
   `push.followTags` ignored), no configured push options, no mirror (AV08). A force push leases on the plan's remote
   head. A remote with several push URLs is refused. The agent's `git_push` card and the GUI confirmation both use it;
   there is no unbound force push.
+- **Only on a git that can pin (AF06, GV10, third round):** the reset relies on an empty `remote.<name>.url` /
+  `.pushurl` clearing the list, which git 2.45 and older and Apple Git-154 and older do not do (they append it, so the
+  repository's own push URLs stay ahead of the pinned one). Every plan and every approved push first checks the git
+  that will run it (`requirePinnablePush`): its version line must not be a known older git (Apple's build number
+  decides for an Apple git, 2.46 otherwise), and the same binary, asked through `git remote -v` about a remote only that
+  invocation defines, must show just the value after the reset in both lists. Either check failing, or not running,
+  refuses with "This git (…) cannot hold a push to the reviewed address … Update the Command Line Tools, or push from
+  a terminal", and nothing is sent. Sync and Publish push as a terminal would and are not affected.
 - **Commit & Push (NF05):** a push failure after a successful commit is the action's error and a notice, not only in
   the closed form.
 - **Rewind (AF19, AF20, NF12):** the shared-worktree guard compares canonical git working-tree roots (a thread in a
   sibling directory of the same checkout blocks a file restore), re-checked just before files are written. It checks
   every unarchived session the engine knows, delegated children included (not only sidebar rows); the rewound
-  thread's own children are exempt only when settled and created after the checkpoint, i.e. by the turns the rewind
-  removes (second round of AF19). Worktree
+  thread's own children are exempt only when settled and created by the turns the rewind removes (second round of
+  AF19). "Created by those turns" is read from the server's own record, not from a clock (third round): the child's
+  creation time must be strictly later than that of the first assistant message after the rewound user message, both
+  stamped by the server. No git timestamp or estimated clock offset is involved, so a lagging clock or a delayed event
+  cannot exempt an older child; when the history cannot be read, the message is not listed in the newest 2,000, or no
+  assistant message follows it, no child is exempt. Worktree
   cleanup uses the same check. Rollback and Undo act at the recorded restore root, not the session directory; a failed
   rewind Undo is shown with the affected path.
 - **Stash restore (AF05):** a failed restore keeps the stash with a recovery ref and shows the recovery alert.

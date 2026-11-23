@@ -36,6 +36,13 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
     /// A write's outcome is unknown (timeout or lost connection after sending): read back before retrying.
     case outcomeUnknown(String)
 
+    /// A wait in whole seconds for a message, or nil when it is not a finite number (AV2-03: `Int(_:)` of an
+    /// infinite or out-of-range Double traps); bounded to a day.
+    static func wholeSeconds(_ seconds: TimeInterval?) -> Int? {
+        guard let seconds, seconds.isFinite else { return nil }
+        return Int(exactly: min(86_400, max(0, seconds)).rounded(.up))
+    }
+
     public var description: String {
         switch self {
         case .noInstance(let host): "\(host) is not a configured GitLab instance. Add it in Settings ▸ GitLab."
@@ -43,7 +50,7 @@ public enum ForgeError: Error, Sendable, Hashable, CustomStringConvertible {
         case .tokenInvalid(let instance): "The GitLab token for \(instance) is invalid or expired. Replace it in Settings ▸ GitLab."
         case .forbidden: "GitLab refused access (403): the token lacks a scope (read_api for reading, api for changes) or your role does not allow this in the project."
         case .notFound: "Not found on GitLab (404), or hidden from this token: GitLab answers 404 for projects and merge requests you cannot see."
-        case .rateLimited(let after): "GitLab's rate limit was reached; BelloCode retries\(after.map { " in \(Int($0)) s" } ?? " later")."
+        case .rateLimited(let after): "GitLab's rate limit was reached; BelloCode retries\(Self.wholeSeconds(after).map { " in \($0) s" } ?? " later")."
         case .network(let reason): "GitLab could not be reached: \(reason)"
         case .unexpected(let reason): reason
         case .insecureInstance(let instance):

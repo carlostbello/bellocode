@@ -52,6 +52,21 @@ extension ExtrasHub {
 
     // MARK: Routing
 
+    /// A GitLab tool's result or error with every configured instance's token removed (AV2-05): the final pass over
+    /// whatever a tool assembled from GitLab, header fields and error text naming a job or path included. The tool
+    /// itself already failed closed when its own instance's token could not be read; a token that cannot be read
+    /// here cannot be removed by this pass, so its instance is skipped.
+    func redactingGitLabTokens(_ body: () async throws -> ClientMCPResult) async -> ClientMCPResult {
+        var result: ClientMCPResult
+        do { result = try await body() } catch { result = .error(ExtrasError.message(error)) }
+        var known: [String] = []
+        for instance in mergeRequests.instances where mergeRequests.instancesWithToken.contains(instance.baseURL) {
+            if let values = try? await mergeRequests.knownSecrets(instance.baseURL) { known += values }
+        }
+        result.text = UntrustedText.redactExact(result.text, known: known)
+        return result
+    }
+
     func handleGitLab(_ call: ClientMCPCall, caller: ExtrasCaller) async throws -> ClientMCPResult {
         let arguments = call.arguments
         // The instance's token, read once per call off the main actor (GF12), never per note or file.

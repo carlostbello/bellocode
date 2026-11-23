@@ -216,8 +216,9 @@ public struct GitLabTokenInfo: Hashable, Sendable, Codable {
         guard let expiresAt else { return nil }
         let seconds = expiresAt.timeIntervalSince(now)
         if seconds <= 0 { return .expired }
-        let days = Int((seconds / 86_400).rounded(.up))
-        return days <= 30 ? .soon(days: days) : nil
+        // Compared before converting: a far (or non-finite) date from the server never reaches `Int(_:)` (AV2-03).
+        guard seconds.isFinite, seconds <= 30 * 86_400, let days = Int(exactly: (seconds / 86_400).rounded(.up)) else { return nil }
+        return .soon(days: days)
     }
 
     /// "Scopes: api, read_api · expires 2026-12-01", "Scopes unknown (GitLab older than 15.5)".

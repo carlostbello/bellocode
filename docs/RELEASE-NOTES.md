@@ -53,6 +53,10 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   alive across the change is judged by the new scope at its next request (AV2-04).
 - **Stop Shared Chrome is available when a start failed or a stop was not confirmed**, from the Browser menu, the
   Command Palette, Settings ▸ Browser and the panel (AF23).
+- **Approved pushes need git 2.46 or Apple Git-155 or later.** BelloCode pins an approved push to the reviewed address
+  in a way older git does not honour, so on an older Command Line Tools git the push plan and the approved push are
+  refused with a message naming the version ("Update the Command Line Tools, or push from a terminal"); nothing is
+  sent. Sync and Publish are not affected (AF06, GV10).
 - **Free models are promised only when one can be chosen now** (usable and not hidden with Hide Model) in the draft
   hint, onboarding and Settings ▸ Accounts, whose empty state otherwise says "Connect a provider to use your own
   models." (NF24, NV14).
@@ -139,6 +143,18 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   and shown as "Updates held") (AV07); Add to Agent Context and Send to Agent never land in a thread you switched to
   meanwhile (AV10). Move Changes to New Worktree opens a thread there instead of "No Thread Selected" (NV01); a
   cancelled push after Commit and Push still refreshes the actions (NV16).
+- **Git, rewind and GitLab, third round (R3b,** [Astra](reviews/v1.0.1-astra-verification-2.md),
+  [GLM](reviews/v1.0.1-glm-verification-2.md)**):** an approved push first checks that the git running it clears a
+  remote's URL lists on an empty value (its version, then a probe of the same binary) and refuses otherwise (AF06,
+  GV10). The host git sandbox derives a checkout's metadata roots from the `.git` it opened, so a `.git` swapped for a
+  link after the check grants nothing; worktree back-references are compared by identity and a hard-linked `.git` file
+  is refused (AV03). Rewind decides which children the rewound turns created from the server's own message order, not
+  from a git timestamp and an estimated clock offset (AF19). GitLab: every babysit wake post, retries included, needs
+  the token to redact with, and a wake saved by an earlier version is rebuilt instead of posted (AV07); triage excerpts
+  are kept per installation, project and job (AV2-01); a huge `Retry-After`, job duration or expiry date no longer
+  traps the app (AV2-03); the author, path, job name, stage and issue title in Add to Agent Context, Send to Agent and
+  Start Thread from Issue are redacted too, and every GitLab tool result and error gets a final exact-token pass
+  (AV2-05).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,

@@ -271,6 +271,31 @@ struct ReviewDraftLifecycleTests {
         #expect(reviews.drafts(for: GitLabWorld.ref).count == 1)
     }
 
+    /// AV2-05: the note author, the file path and the discussion ID come from GitLab too. A token in any of them (here
+    /// the instance's own, in the author and a path) reaches the composer redacted, not only in the note bodies; so does
+    /// the title, reference and URL of an issue quoted by Start Thread from Issue (a custom-prefix token that only the
+    /// exact-value redaction knows).
+    @Test func addToAgentContextRedactsEveryGitLabField() async throws {
+        let server = ReviewWorld.server()
+        server.editMR(GitLabWorld.path, 42) { mr in
+            mr.discussions.append(.init(id: "tok-\(GitLabWorld.token)", notes: [FakeGitLabServer.Note(id: 9, author: GitLabWorld.token, body: "hello", resolvable: false)]))
+        }
+        let (reviews, _, _) = try await ReviewWorld.make(server)
+        let state = try #require(await reviews.load(GitLabWorld.ref))
+        let planted = try #require(state.discussions.first { $0.id.hasPrefix("tok-") })
+        let text = try await reviews.agentContext(planted, ref: GitLabWorld.ref)
+        #expect(!text.contains(GitLabWorld.token), "\(text)")
+        #expect(text.contains("hello"))
+
+        let custom = "corp5-ISSUE-TITLE-TOKEN-0123456789"
+        let issue = GitLabIssue(
+            iid: 7, projectPath: "platform/\(custom)", title: "Fix \(custom)", webURL: "https://code.corp.test/gitlab/platform/\(custom)/-/issues/7",
+            description: "body")
+        let prompt = IssueThreadPrompt.make(issue, selection: nil, known: [custom])
+        #expect(!prompt.contains(custom), "\(prompt)")
+        #expect(prompt.contains("Fix <redacted>"))
+    }
+
     @Test func addToAgentContextQuotesTheThreadAsUntrustedData() async throws {
         let server = ReviewWorld.server()
         let (reviews, _, _) = try await ReviewWorld.make(server)
