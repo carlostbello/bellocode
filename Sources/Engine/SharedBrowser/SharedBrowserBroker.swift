@@ -144,6 +144,8 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
         var sequence: Int
         var work: Task<(outcome: Outcome, value: ClientMCPResult), Never>?
         var dispatched = false
+        /// Checked by the MCP client as each of the call's requests is registered and sent (AV05).
+        let authorization = BrowserCallAuthorization()
     }
 
     public func call(_ call: ClientMCPCall) async -> ClientMCPResult {
@@ -185,9 +187,10 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
             return .error("The shared Chrome could not start: \(BrowserSupervisor.describe(error))")
         }
         let directory = call.directory
+        guard let authorization = admitted[callID]?.authorization else { return .error(Self.revokedMessage(dispatched: false)) }
         let work = Task {
             await self.perform(tool: tool, arguments: arguments, tab: tab, shared: shared, ensure: ensure, session: session,
-                               directory: directory, binding: binding, callID: callID)
+                               directory: directory, binding: binding, callID: callID, authorization: authorization)
         }
         admitted[callID]?.work = work
         // Revoked between admission and here: the work is cancelled before it waits for its tab.
@@ -219,10 +222,16 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
     /// Revokes the project's access for calls already admitted (Settings ▸ Browser): those waiting for a tab are
     /// cancelled and never sent; those running are cancelled and their results withheld (AV05). New calls are refused
     /// by the host's access check.
-    public func revoke(directory: String) {
+    ///
+    /// Each admitted call's authorization is withdrawn at the transport, so none of them puts a request on the browser's
+    /// wire after this returns: not a first operation still waiting for the pooled client to start, not a retry. A
+    /// request whose bytes were being written when this was called has been written by the time it returns.
+    public func revoke(directory: String) async {
         revocationSequence += 1
         lastRevoked[directory] = revocationSequence
-        for call in admitted.values where call.directory == directory { call.work?.cancel() }
+        let affected = admitted.values.filter { $0.directory == directory }
+        for call in affected { call.work?.cancel() }
+        for call in affected { await call.authorization.revoke() }
     }
 
     private func isRevoked(_ callID: Int) -> Bool {
@@ -250,7 +259,8 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
     }
 
     private func perform(tool: String, arguments: JSONValue, tab: String, shared: Bool, ensure: Bool, session: String,
-                         directory: String, binding: BrowserBinding, callID: Int) async -> (outcome: Outcome, value: ClientMCPResult) {
+                         directory: String, binding: BrowserBinding, callID: Int,
+                         authorization: BrowserCallAuthorization) async -> (outcome: Outcome, value: ClientMCPResult) {
         let ticket: BrowserTabGate.Ticket
         do {
             ticket = try await gate.acquire(tab: tab, session: session, shared: shared)
@@ -266,7 +276,9 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
         }
         admitted[callID]?.dispatched = true
         activeSessions.insert(session)
-        let work = Task { await self.run(tool: tool, arguments: arguments, tab: tab, ensure: ensure, binding: binding, ticket: ticket) }
+        let work = Task {
+            await self.run(tool: tool, arguments: arguments, tab: tab, ensure: ensure, binding: binding, ticket: ticket, authorization: authorization)
+        }
         operations[ticket.id] = (tab, work)
         let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
         operations[ticket.id] = nil
@@ -295,24 +307,26 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
         }
     }
 
+    /// Every browser operation of the call goes through the client with the call's authorization (AV05): the pooled
+    /// client may have taken long to start, and a revocation meanwhile stops each request at the transport.
     private func run(tool: String, arguments: JSONValue, tab: String, ensure: Bool, binding: BrowserBinding,
-                     ticket: BrowserTabGate.Ticket) async -> (outcome: Outcome, value: ClientMCPResult) {
+                     ticket: BrowserTabGate.Ticket, authorization: BrowserCallAuthorization) async -> (outcome: Outcome, value: ClientMCPResult) {
         do {
             let client = try await currentClient()
             let generation = clientGeneration
             if ensure, !ensured.contains("\(generation)|\(tab)") {
                 _ = try await client.call("tabs", arguments: .object([
                     "action": .string("new"), "id": .string(tab), "group": .string(binding.group),
-                ]), timeout: .seconds(60))
+                ]), timeout: .seconds(60), authorization: authorization)
                 ensured.insert("\(generation)|\(tab)")
             }
-            var result = try await client.call(tool, arguments: arguments)
+            var result = try await client.call(tool, arguments: arguments, authorization: authorization)
             if ensure, result.isError, result.text.contains("No tab has the id") {
                 // The tab vanished (closed by the person, or the browser restarted): open it again once, then retry.
                 _ = try await client.call("tabs", arguments: .object([
                     "action": .string("new"), "id": .string(tab), "group": .string(binding.group),
-                ]), timeout: .seconds(60))
-                result = try await client.call(tool, arguments: arguments)
+                ]), timeout: .seconds(60), authorization: authorization)
+                result = try await client.call(tool, arguments: arguments, authorization: authorization)
             }
             guard await gate.isCurrent(ticket) else { return (.failure, .error(BrowserTabGate.Busy.restarted.description)) }
             // Taken over while it ran: the person has the tab now, so the agent must not act on this result as if
@@ -327,6 +341,8 @@ public actor SharedBrowserBroker: ClientMCPToolProvider {
                 return (.failure, .error("The person took over the shared Chrome, so this call was cancelled; it may or may not have taken effect."))
             }
             return (.failure, .error("The call was cancelled."))
+        } catch BrowseMCPClient.Failure.revoked {
+            return (.failure, .error(Self.revokedMessage(dispatched: false)))
         } catch let failure as BrowseMCPClient.Failure {
             if failure == .closed { client = nil }
             return (.failure, .error(failure == .closed ? BrowserTabGate.Busy.restarted.description : failure.description))

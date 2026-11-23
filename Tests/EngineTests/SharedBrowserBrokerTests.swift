@@ -398,8 +398,18 @@ actor FakeSharedBrowserHost: SharedBrowserHost {
     var gen = 0
     nonisolated let calls = CallLog()
     var held: Set<String> = []
+    /// While set, the pooled client's start parks in `makeTransport` until `releaseStartup()` (a slow first start).
+    var holdsStartup = false
+    var startupWaiter: CheckedContinuation<Void, Never>?
+    var startupWaiting: Bool { startupWaiter != nil }
 
     func hold(_ tool: String) { held.insert(tool) }
+    func holdStartup() { holdsStartup = true }
+    func releaseStartup() {
+        holdsStartup = false
+        startupWaiter?.resume()
+        startupWaiter = nil
+    }
 
     func approve(_ directory: String) { approved.insert(directory) }
     func revoke(_ directory: String) { approved.remove(directory) }
@@ -426,7 +436,10 @@ actor FakeSharedBrowserHost: SharedBrowserHost {
     }
     func beginCall() async throws { begins += 1 }
     func endCall() async {}
-    func makeTransport() async throws -> any BrowseMCPTransport { FakeBrowseTransport(calls: calls, held: held) }
+    func makeTransport() async throws -> any BrowseMCPTransport {
+        if holdsStartup { await withCheckedContinuation { startupWaiter = $0 } }
+        return FakeBrowseTransport(calls: calls, held: held)
+    }
     func generation() async -> Int { gen }
     func threadTitle(session: String) async -> String { "thread \(session)" }
 }
@@ -595,6 +608,29 @@ struct SharedBrowserBrokerTests {
         #expect(!again.isError, "\(again.text)")
     }
 
+    /// AV05 (third round): the project's first call is admitted and dispatched while the pooled client is still
+    /// starting; the person revokes the project, and only then does the start finish. No browser operation of that
+    /// call (not the tab it would open, not the call itself) is sent, and its result says it was not sent.
+    @Test func aFirstCallWaitingForThePooledStartIsNeverSentAfterRevocation() async throws {
+        let host = FakeSharedBrowserHost()
+        let broker = SharedBrowserBroker(host: host)
+        await host.approve("/p/atlas")
+        await host.holdStartup()
+        let first = Task { await self.call(broker, "navigate", ["url": .string("https://x")], session: "ses_a") }
+        var starting = false
+        for _ in 0..<20_000 {
+            if await host.startupWaiting { starting = true; break }
+            await Task.yield()
+        }
+        try #require(starting, "the call is waiting for the pooled client to start")
+        await host.revoke("/p/atlas")
+        await broker.revoke(directory: "/p/atlas")
+        await host.releaseStartup()
+        let result = await first.value
+        #expect(result.isError && result.text.contains("revoked"), "\(result.text)")
+        #expect(host.calls.all.isEmpty, "a browser operation was sent after the revocation: \(host.calls.all.map(\.tool))")
+    }
+
     @Test func takeOverMakesAgentCallsBusy() async {
         let host = FakeSharedBrowserHost()
         await host.approve("/p/atlas")
@@ -711,5 +747,56 @@ struct SharedBrowserDoneTabsTests {
         #expect(tracker.ended(sessions: [session("a", archived: true)], removed: []).isEmpty, "once")
         #expect(tracker.ended(sessions: [], removed: [SessionID("c")]) == [SessionID("c")], "deleted")
         #expect(tracker.ended(sessions: [], removed: [SessionID("a")]).isEmpty, "already ended when archived")
+    }
+}
+
+/// AV05 (third round), at the transport boundary: a request is put on the wire only if its call is still authorized
+/// and not cancelled at the moment it is registered.
+@Suite("Browse MCP client authorization", .timeLimit(.minutes(3)))
+struct BrowseMCPClientAuthorizationTests {
+    func started() async throws -> (BrowseMCPClient, CallLog) {
+        let calls = CallLog()
+        let client = BrowseMCPClient(transport: FakeBrowseTransport(calls: calls))
+        _ = try await client.start()
+        return (client, calls)
+    }
+
+    @Test func aRevokedAuthorizationSendsNothing() async throws {
+        let (client, calls) = try await started()
+        let authorization = BrowserCallAuthorization()
+        #expect(try await client.call("navigate", arguments: .object([:]), authorization: authorization).isError == false)
+        await authorization.revoke()
+        await #expect(throws: BrowseMCPClient.Failure.revoked) {
+            _ = try await client.call("navigate", arguments: .object([:]), authorization: authorization)
+        }
+        #expect(calls.all.count == 1, "only the call made before the revocation was sent")
+        // Other calls (no authorization, or another one) are unaffected.
+        #expect(try await client.call("snapshot", arguments: .object([:]), authorization: BrowserCallAuthorization()).isError == false)
+        #expect(calls.all.map(\.tool) == ["navigate", "snapshot"])
+    }
+
+    /// A caller cancelled before its request is registered never sends it (the cancellation is not forgotten).
+    @Test func aCallerCancelledBeforeRegistrationNeverSends() async throws {
+        let (client, calls) = try await started()
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await client.call("navigate", arguments: .object([:]))
+        }
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        // A later call shows the wire is in order and that nothing of the cancelled one went out before it.
+        _ = try await client.call("snapshot", arguments: .object([:]))
+        #expect(calls.all.map(\.tool) == ["snapshot"])
+    }
+
+    /// Revocation while a request's bytes are being written waits for the write; nothing starts after it returns.
+    @Test func revokeWaitsForASendInProgress() async throws {
+        let authorization = BrowserCallAuthorization()
+        #expect(authorization.beginSend())
+        let revoked = Task { await authorization.revoke() }
+        for _ in 0..<1_000 { await Task.yield() }
+        #expect(!authorization.beginSend(), "a send started after the revocation began")
+        authorization.endSend()
+        await revoked.value
+        #expect(authorization.isRevoked)
     }
 }
