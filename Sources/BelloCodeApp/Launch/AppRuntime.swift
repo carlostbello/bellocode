@@ -61,7 +61,7 @@ final class AppRuntime {
             switch self {
             case .developmentOnly(let what): "\(what) is available only in development builds."
             case .incompleteBundle(let missing):
-                "The app bundle is incomplete (missing \(missing.joined(separator: ", "))). BelloCode runs commands only through its bundled server and container helper, so it does not start without them. Reinstall BelloCode."
+                "The app bundle is incomplete (missing \(missing.joined(separator: ", "))). BelloCode runs commands only through its bundled server and helpers, so it does not start without them. Reinstall BelloCode."
             }
         }
     }
