@@ -91,6 +91,9 @@ public final class OrchestrationService {
     @ObservationIgnored private var hosts: [String: ClientMCPHost] = [:]
     /// The server every host in `hosts` dials.
     @ObservationIgnored private var hostsConnection: ServerConnection?
+    /// How many times opencode listed the app tools (each live MCP session does once): diagnostics, and proof in tests
+    /// that a host reached the server.
+    @ObservationIgnored private(set) var appToolListings = 0
     @ObservationIgnored private var started = false
 
     /// The client-MCP server name: tools appear to the agent as `bellocode_app_<tool>`.
@@ -301,6 +304,8 @@ public final class OrchestrationService {
 
     public var hostedDirectories: [String] { Array(hosts.keys).sorted() }
 
+    func appToolsListed() { appToolListings += 1 }
+
     /// Runs one app tool call. Calls must be attributed to a session; targets must be in the caller's project.
     public func handleAppTool(_ call: ClientMCPCall) async -> ClientMCPResult {
         guard let caller = call.sessionID.map({ SessionID($0) }), let callerNode = graph.nodes[caller] else {
@@ -393,6 +398,9 @@ public enum AppTools {
 struct AppToolProvider: ClientMCPToolProvider {
     let service: OrchestrationService
 
-    func tools(directory: String) async -> [ClientMCPTool] { AppTools.definitions + ExtrasTools.definitions + ContainerTools.definitions }
+    func tools(directory: String) async -> [ClientMCPTool] {
+        await service.appToolsListed()
+        return AppTools.definitions + ExtrasTools.definitions + ContainerTools.definitions
+    }
     func call(_ call: ClientMCPCall) async -> ClientMCPResult { await service.handleAppTool(call) }
 }
