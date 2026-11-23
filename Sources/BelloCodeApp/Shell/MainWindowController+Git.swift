@@ -370,8 +370,13 @@ extension MainWindowController {
                 else { return }
                 let created = try await engine.git.worktrees.handoff(from: directory, branch: branch, parent: preferences.parentDirectory(projectDirectory: project))
                 engine.git.refreshAll(under: project)
-                workspace.undo.showNotice("Moved changes to \(created.branch)")
-                workspace.newThread(in: created.directory)
+                do {
+                    try await workspace.startThread(inWorktree: created.directory, title: created.branch)
+                    workspace.undo.showNotice("Moved changes to \(created.branch)")
+                } catch {
+                    // The changes are safely in the worktree; only the thread is missing.
+                    workspace.undo.showNotice("Moved changes to \(created.branch) at \(created.directory), but no thread could be opened there: \(error.localizedDescription)")
+                }
             } catch let recovery as StashRecoveryError {
                 // Never a transient notice: the work is only in the stash until the person restores it (R04).
                 engine.git.refreshAll(under: project)

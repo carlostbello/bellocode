@@ -257,6 +257,16 @@ final class WorkspaceController {
         select(.draft(directory: directory))
     }
 
+    /// A thread working in `directory`, a worktree that is not a project of its own (Move Changes to New Worktree): a
+    /// draft needs a project folder (`.draft` of a worktree has no project and shows nothing, NV01), so the thread is
+    /// created there at once and selected; its header names the worktree and branch.
+    @discardableResult
+    func startThread(inWorktree directory: String, title: String?) async throws -> SessionID {
+        let session = try await engine.createThread(in: directory, title: title)
+        select(.thread(session.id))
+        return session.id
+    }
+
     func archive(_ id: SessionID) { archive([id]) }
 
     func archive(_ ids: [SessionID]) {
