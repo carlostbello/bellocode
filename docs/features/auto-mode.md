@@ -120,7 +120,9 @@ plus the cascade report. The target gets `metadata.bellocode_interrupt` (`held: 
 tray shows "Stopped by “Y”: reason. Its queued work is held until you resume." with Open Thread and **Resume** (⌃⌥⌘P):
 clears the hold and posts a resuming note that starts a run (opencode then delivers the parked queue). Resume is a
 continuation, not a rollback. `thread_send` to a held thread is queued, never steered, and admitted with
-`resume: false`, so it never wakes the thread or clears the hold (v1.0.1 GF02).
+`resume: false`, so it never wakes the thread or clears the hold (v1.0.1 GF02). A `thread_send` that arrives while an
+interrupt of that thread is still confirming its stop waits for it and is held the same way, even if the hold record
+could not be written (GV08).
 
 ## Verification
 `make test` (Swift Testing, 1,069 tests; new: RiskPolicy 18, AutoReviewer 8, AutoMode 9 + interrupt 2 + audit store 1);

@@ -30,7 +30,7 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Shared Chrome closes a thread's tabs when the thread is archived or deleted**, as the setting in Settings ▸ Browser
   always said (on by default; tabs shared with another thread stay open) (NF11).
 - **A message to a held thread waits.** After one agent stops another thread, a `thread_send` to it is queued without
-  waking it, until you resume (GF02). `create_threads` refuses unknown agents and sub-agents (GF14).
+  waking it, until you resume, including one sent while the stop is still being confirmed (GF02, GV08). `create_threads` refuses unknown agents and sub-agents (GF14).
 - **Command Palette** lists the Browser and Shared Chrome commands and refreshes GitLab to-dos while open (NF20).
 
 ### Fixes by area
