@@ -103,10 +103,26 @@ public struct CorporateNetwork: Codable, Sendable, Equatable, Hashable {
         ]
     }
 
-    /// The compiled trust bundles of Debian, Ubuntu and Alpine, and of Fedora and RHEL: what programs that read no
-    /// variable use. A workspace gets the combined bundle there instead of running the image's
-    /// `update-ca-certificates` / `update-ca-trust` as root (AF09).
-    public static let compiledBundles = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
+    /// The compiled trust bundles programs that read no variable use, by distribution (GV09). A workspace gets the
+    /// combined bundle at each of them instead of running the image's `update-ca-certificates` / `update-ca-trust` as
+    /// root (AF09):
+    /// - Debian, Ubuntu, Alpine, Arch: `/etc/ssl/certs/ca-certificates.crt` (OpenSSL's and GnuTLS's default there);
+    /// - Alpine: `/etc/ssl/cert.pem` (its OpenSSL's default file, a link to the one above in the image);
+    /// - Fedora, RHEL, CentOS, Rocky, Alma, Amazon Linux: `/etc/pki/tls/certs/ca-bundle.crt` (the traditional path),
+    ///   `/etc/pki/tls/cert.pem` (OpenSSL's default file) and the extracted bundle both link to,
+    ///   `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`;
+    /// - openSUSE and SLES: `/etc/ssl/ca-bundle.pem` and its target `/var/lib/ca-certificates/ca-bundle.pem`.
+    /// A path that is a link in the image is resolved inside the container by the daemon, so its target gets the
+    /// bundle; a path the image lacks is created as an empty mount point.
+    public static let compiledBundles = [
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/cert.pem",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/pki/tls/cert.pem",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/ca-bundle.pem",
+        "/var/lib/ca-certificates/ca-bundle.pem",
+    ]
 
     /// The combined bundle (the Mac's trusted roots and the enterprise roots), read-only at each compiled bundle path.
     public var compiledBundleMounts: [Mount] {
