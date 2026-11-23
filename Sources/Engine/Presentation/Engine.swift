@@ -262,6 +262,7 @@ public final class Engine {
         }
         self.sharedBrowser = sharedBrowser
         openCodeConfig = OpenCodeConfigService.make(configuration: configuration, store: store, core: core)
+        openCodeConfig.activeLocations = { [weak self] in self?.locationDirectories() ?? [] }
         models = ModelSettingsService.make(configuration: configuration, store: store, core: core)
         models.engine = self
         let mergeRequests = extras.mergeRequests
@@ -633,5 +634,18 @@ extension ProjectModel {
         for session in sessions { change.sessions[session.id] = session }
         change.statuses = statuses
         apply(change)
+    }
+}
+
+extension Engine {
+    /// The directories opencode may hold as locations: every project and its threads' directories (bounded).
+    func locationDirectories() -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        let sessions = root.loadedProjects.flatMap { project in project.sessionIDs.compactMap { project.row($0)?.session.directory } }
+        for directory in root.projects.map(\.directory) + sessions where !directory.isEmpty && result.count < 512 && seen.insert(directory).inserted {
+            result.append(directory)
+        }
+        return result
     }
 }

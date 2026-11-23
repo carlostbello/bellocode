@@ -19,6 +19,10 @@ struct OpenCodeTrustAckTests {
             var pluginsFail = false
             var skillPath = ""
             var reloads = 0
+            /// Locations that still report the repository configuration as loaded after a reload.
+            var stillTrusted: Set<String> = []
+            /// The location of each reload, in order.
+            var reloaded: [String] = []
         }
         let state = Mutex(State())
         let trustFile: URL
@@ -38,9 +42,12 @@ struct OpenCodeTrustAckTests {
                 else { body = #"{\#(location),"data":[{"id":"bellocode","source":{"type":"local"},"state":{"status":"active"}}]}"# }
             case "/api/rpc/bellocode/projectConfig":
                 let revision = state.echoRevision ? ProjectTrustFile.read(from: trustFile).revision : 1
-                self.state.withLock { $0.reloads += 1 }
+                let directory = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first { $0.name == "location[directory]" }?.value ?? ""
+                self.state.withLock { $0.reloads += 1; $0.reloaded.append(directory) }
                 let failures = state.failures.map { "\"\($0)\"" }.joined(separator: ",")
-                body = #"{"output":{"mode":"bellocode","revision":\#(revision),"applied":\#(state.applied),"failures":[\#(failures)],"trusted":false,"agents":[],"commands":[],"skills":[],"skipped":[]}}"#
+                let trusted = state.stillTrusted.contains(directory)
+                body = #"{"output":{"mode":"bellocode","revision":\#(revision),"applied":\#(state.applied),"failures":[\#(failures)],"trusted":\#(trusted),"agents":[],"commands":[],"skills":[],"skipped":[]}}"#
             default: break
             }
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
@@ -87,6 +94,29 @@ struct OpenCodeTrustAckTests {
         #expect(service.trustPending)
         // Retried at the next refresh; acknowledged now.
         transport.state.withLock { $0.echoRevision = true }
+        await service.refresh(directory: "/r/a")
+        #expect(!service.trustPending)
+    }
+
+    /// AF17: the checkout root and a subdirectory are both active locations. Revoking the root's trust reloads both,
+    /// and a location that still reports the repository configuration keeps the change pending with a problem.
+    @Test func revocationReloadsEveryCoveredLocation() async throws {
+        let root = Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (service, transport, _) = try await make(root)
+        service.activeLocations = { ["/r/a", "/r/a/web", "/r/b", "/r/ab"] }
+        #expect(await service.setTrusted("/r/a", false) == nil)
+        #expect(transport.state.withLock { $0.reloaded } == ["/r/a", "/r/a/web"])
+        #expect(!service.trustPending)
+
+        #expect(await service.setTrusted("/r/a", true) == nil)
+        transport.state.withLock { $0.stillTrusted = ["/r/a/web"]; $0.reloaded = [] }
+        let problem = await service.setTrusted("/r/a", false)
+        #expect(problem?.contains("/r/a/web") == true)
+        #expect(service.trustPending)
+        #expect(transport.state.withLock { $0.reloaded } == ["/r/a", "/r/a/web"])
+        // Retried at the next refresh; acknowledged once the location applied it.
+        transport.state.withLock { $0.stillTrusted = [] }
         await service.refresh(directory: "/r/a")
         #expect(!service.trustPending)
     }
