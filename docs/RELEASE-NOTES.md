@@ -52,6 +52,19 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   never blocks on a FIFO (AF07, AF25); CRLF Dockerfiles and a nameless global `ARG` are parsed correctly (AF11, AF12);
   an oversized chunk size no longer crashes the filter (AF13); "Sign in to the registry" opens Settings ▸ Containers
   (NF08).
+- **Containers, second round (Q2):** the Dockerfile reader the image policy relies on reads a file as BuildKit does
+  (a byte-order mark, every trailing CR, Go's blanks, continuations joined with nothing between, builder flags byte by
+  byte, `--mount` options as CSV, global `ARG` defaults expanded) and refuses a file it cannot be sure about: invalid
+  UTF-8, a form feed, vertical tab, NEL, no-break space or control character in an instruction or a leading comment,
+  `//syntax=` or JSON directives, a quoted base image, a variable in `COPY --from` (AF11, GV01). A dev container's
+  Dockerfile is read through the project folder's descriptor, so a folder swapped for a link cannot hand the builder a
+  file from outside the project (AV06). The context copy is iterative and bounded at 128 folders deep (a context about
+  130 deep used to crash the app); an unreadable folder or too many open files is reported as such, and the app raises
+  its open-file limit at launch (GV06). The workspace setup helper mounts volumes only at fixed paths of its own and
+  makes nested cache folders as the user, so a populated or shared cache can no longer cover its programs; cache paths
+  from image labels must be plain absolute paths away from `$HOME`'s parents and BelloCode's own mounts, and caches
+  outside `$HOME` now have their root folder given to the user too (AF09). Enterprise roots reach Alpine's, the RHEL family's and openSUSE's
+  default CA files as well as Debian's (GV09).
 - **Engine, client MCP and models (P8):** the app and Shared Chrome tools are hosted for projects added while
   connected and again after a server restart (NF01); live message updates are no longer dropped after a sub-agent
   refresh (NF02); global MCP servers are registered when a project is shown (NF03); the Auto tab loads its log at once

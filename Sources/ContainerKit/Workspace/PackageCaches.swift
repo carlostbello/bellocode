@@ -53,10 +53,10 @@ public enum PackageCache: String, Codable, Sendable, CaseIterable, Hashable, Ide
         var result: [PackageCache: String] = [:]
         for name in (labels[imageLabel] ?? "").split(separator: ",") {
             guard let cache = PackageCache(rawValue: name.trimmingCharacters(in: .whitespaces).lowercased()) else { continue }
-            result[cache] = labels[pathLabel(cache)].flatMap { $0.hasPrefix("/") ? $0 : nil } ?? cache.defaultPath
+            result[cache] = labels[pathLabel(cache)].flatMap { CacheMount.isAllowedPath($0) ? $0 : nil } ?? cache.defaultPath
         }
         for cache in PackageCache.allCases where result[cache] == nil {
-            if let path = labels[pathLabel(cache)], path.hasPrefix("/") { result[cache] = path }
+            if let path = labels[pathLabel(cache)], CacheMount.isAllowedPath(path) { result[cache] = path }
         }
         return result
     }
@@ -76,6 +76,29 @@ public struct CacheMount: Codable, Sendable, Equatable, Hashable {
     }
 
     public func volumeName(projectKey: String) -> String { PackageCache.volumeName(cache, projectKey: shared ? nil : projectKey) }
+
+    /// AF09: where a cache may be mounted. The path comes from the project's image (a label), so it must be absolute
+    /// and already in its plain form (Docker cleans `..` away, which would move the mount), not `/`, not `$HOME` or a
+    /// folder above it, and not over or above what BelloCode itself mounts (the certificates, its process-group files)
+    /// or the kernel's file systems. Anything else falls back to the tool's default path in `$HOME`.
+    public static func isAllowedPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), path != "/", !path.hasSuffix("/") else { return false }
+        guard path.dropFirst().split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+              !path.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else { return false }
+        let reserved = [WorkspaceSpec.home, CorporateNetwork.containerDirectory, "/tmp/.bellocode", "/proc", "/sys", "/dev"]
+        for folder in reserved where folder.hasPrefix(path + "/") || path == folder || (folder != WorkspaceSpec.home && path.hasPrefix(folder + "/")) {
+            return false
+        }
+        return true
+    }
+
+    /// The path below `$HOME`, when the cache is inside it (its folders there are made by the user before the
+    /// workspace mounts it).
+    public var homeRelativePath: String? {
+        let prefix = WorkspaceSpec.home + "/"
+        guard Self.isAllowedPath(path), path.hasPrefix(prefix) else { return nil }
+        return String(path.dropFirst(prefix.count))
+    }
 
     /// Labels of the volume: a project cache carries the project's key (purged with the project); a shared one does not.
     public func volumeLabels(projectRoot: String, projectKey: String) -> [String: String] {

@@ -297,6 +297,85 @@ struct LiveWorkspaceTests {
         }
     }
 
+    /// AF09 residual (live): a cache whose image-chosen path covers a program folder of the setup helper (/usr/local/sbin
+    /// is first on its PATH), already populated with programs named like the helper's tools, never runs as root: the
+    /// helper mounts every volume at a fixed path of its own and runs absolute programs. The nested cache folders in
+    /// `$HOME` still belong to the user, and so does the root of a cache outside `$HOME`.
+    @Test func aPopulatedCacheNeverCoversTheSetupHelpersPrograms() async throws {
+        try await requireImage()
+        try await withProject { _, original in
+            var spec = original
+            spec.user = "1000:1000"
+            let covering = CacheMount(cache: .npm, path: "/usr/local/sbin")
+            spec.cacheMounts = [covering, CacheMount(cache: .pip, path: WorkspaceSpec.home + "/.cache/pip")]
+            let volume = covering.volumeName(projectKey: spec.projectKey)
+            try await client.createVolume(name: volume, labels: covering.volumeLabels(projectRoot: spec.projectRoot, projectKey: spec.projectKey)
+                .merging(spec.extraLabels) { a, _ in a })
+            // Populated as a workspace could have left it on an earlier run.
+            let tools = #"for t in chown mkdir dirname sh id; do printf '#!/bin/sh\ntouch "/home/bellocode/ran-%s-$(/usr/bin/id -u)" 2>/dev/null\nexec /usr/bin/%s "$@"\n' "$t" "$t" > "/v/$t"; chmod 755 "/v/$t"; done"#
+            var body = ContainerCreate(image: Self.image)
+            body.entrypoint = ["/bin/sh", "-c", tools]
+            body.user = "0:0"
+            body.labels = ["app.bellocode.test": "1"]
+            var host = HostConfig()
+            host.networkMode = "none"
+            host.mounts = [Mount(type: .volume, source: volume, target: "/v")]
+            body.hostConfig = host
+            let filler = try await client.createContainer(name: nil, body)
+            try await client.startContainer(filler)
+            #expect(try await client.waitContainer(filler) == 0)
+            try? await client.removeContainer(filler, force: true)
+
+            let id = try await manager.ensureRunning(spec)
+            let (code, out, _) = try await sh(id, "/bin/ls -a \"$HOME\" | /bin/grep -- '-0$' || true; /usr/bin/stat -c %u \"$HOME\" \"$HOME/.cache\" \"$HOME/.cache/pip\" /usr/local/sbin", spec: spec)
+            #expect(code == 0)
+            #expect(!out.contains("ran-"), "a program from the cache ran as root while the workspace was prepared: \(out)")
+            #expect(out == "1000\n1000\n1000\n1000\n", "\(out)")
+        }
+    }
+
+    /// GV09 (live): with enterprise roots selected, the combined bundle is what a program reading no variable finds at
+    /// its distribution's default file: Debian (node), Alpine (redis, `/etc/ssl/cert.pem` a link in the image) and a
+    /// RHEL-family and an openSUSE layout (default files that are regular files in the image), without any root step in the image.
+    @Test func theEnterpriseBundleIsAtEachDistributionsDefaultFile() async throws {
+        try await requireImage()
+        try await requireImage("redis:7-alpine")
+        // RHEL-family files as regular files (an image may hold copies, not links), and openSUSE's layout.
+        let rhel = #"RUN mkdir -p /etc/pki/ca-trust/extracted/pem /etc/pki/tls/certs /var/lib/ca-certificates /etc/ssl && echo system > /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem && echo system > /etc/pki/tls/certs/ca-bundle.crt && echo system > /etc/pki/tls/cert.pem && echo system > /var/lib/ca-certificates/ca-bundle.pem && ln -s /var/lib/ca-certificates/ca-bundle.pem /etc/ssl/ca-bundle.pem"#
+        try await withTestImage(rhel) { rhelImage in
+        try await withProject { root, original in
+            let certificates = root + "/.certs"
+            try FileManager.default.createDirectory(atPath: certificates, withIntermediateDirectories: true)
+            try "BELLOCODE-COMBINED-BUNDLE\n".write(toFile: certificates + "/" + CorporateNetwork.bundleName, atomically: true, encoding: .utf8)
+            try "BELLOCODE-ENTERPRISE\n".write(toFile: certificates + "/" + CorporateNetwork.enterpriseName, atomically: true, encoding: .utf8)
+            let checks: [(String, [String])] = [
+                (Self.image, ["/etc/ssl/certs/ca-certificates.crt"]),
+                ("redis:7-alpine", ["/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem"]),
+                (rhelImage, ["/etc/pki/tls/certs/ca-bundle.crt", "/etc/pki/tls/cert.pem", "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+                             "/etc/ssl/ca-bundle.pem"]),
+            ]
+            for (image, files) in checks {
+                var spec = original
+                spec.image = image
+                spec.user = "1000:1000"
+                spec.corporateNetwork = CorporateNetwork(certificateDirectory: certificates, certificateFingerprint: "f")
+                var body = spec.createBody(imageID: nil)
+                let script = files.map { #"grep -q BELLOCODE-COMBINED-BUNDLE "\#($0)" || { echo "missing: \#($0)"; exit 1; }"# }.joined(separator: "; ")
+                    + #"; [ "$SSL_CERT_FILE" = /etc/bellocode/certs/ca-bundle.pem ] && grep -q BELLOCODE-ENTERPRISE "$NODE_EXTRA_CA_CERTS""#
+                body.entrypoint = ["/bin/sh", "-c", script]
+                body.cmd = nil
+                body.hostConfig?.init_ = false
+                body.labels = ["app.bellocode.test": "1", WorkspaceSpec.labelProjectKey: spec.projectKey]
+                let id = try await client.createContainer(name: nil, body)
+                try await client.startContainer(id)
+                let status = try await client.waitContainer(id)
+                try? await client.removeContainer(id, force: true)
+                #expect(status == 0, "\(image): a default bundle file lacks the enterprise roots")
+            }
+        }
+        }
+    }
+
     /// AF10 (live): an image that maps a plausible name to uid 0, and whose `id` says 1000, is refused before any
     /// container of it starts; no container of the project is left.
     @Test func aNameMappedToRootIsRefusedWhateverTheImageReports() async throws {

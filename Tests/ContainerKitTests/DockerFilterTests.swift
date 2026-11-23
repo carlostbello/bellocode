@@ -378,6 +378,9 @@ struct DockerFilterTests {
             ("unresolvable base", "/build?t=x:1", "ARG B\nFROM $B\n", "cannot check", nil),
             // AF11: a Windows-edited Dockerfile whose first line is a comment.
             ("CRLF file with a leading comment", "/build?t=x:1", "# built on Windows\r\nFROM evil.example.com/crlf:1\r\n", "evil.example.com/crlf:1", nil),
+            // AF11 / GV01: a byte-order mark before the first FROM; a form feed Docker strips before an instruction.
+            ("BOM before the first FROM", "/build?t=x:1", "\u{FEFF}FROM evil.example.com/bom:1\n", "evil.example.com/bom:1", nil),
+            ("form feed before a FROM", "/build?t=x:1", "FROM registry.acme.internal/base:1\n\u{000C}FROM evil.example.com/ff:1\n", "U+000C", nil),
             // AF12: a global ARG without a name is refused, not a crash of the host.
             ("nameless global ARG", "/build?t=x:1", "ARG =\nFROM registry.acme.internal/base:1\n", "has no name", nil),
             ("Dockerfile elsewhere", "/build?t=x:1&dockerfile=ci/Dockerfile", "FROM registry.acme.internal/base:1\n", "no Dockerfile", nil),

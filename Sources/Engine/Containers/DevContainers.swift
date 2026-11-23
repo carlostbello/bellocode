@@ -207,7 +207,7 @@ extension EnvironmentService {
             }
             defer { staged.remove() }
             // The base images the Dockerfile pulls are under the image policy (R14), checked before anything is built.
-            let bases = DockerfileBases.images(in: String(decoding: inputs.dockerfile, as: UTF8.self), buildArgs: build.args)
+            let bases = DockerfileBases.images(in: inputs.dockerfile, buildArgs: build.args)
             if let refusal = self.baseImageRefusal(bases) {
                 model.phase = .imageRefused(refusal)
                 self.scheduleConfigWrite()

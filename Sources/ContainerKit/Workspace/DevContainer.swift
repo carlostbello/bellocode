@@ -292,35 +292,75 @@ public struct DevContainerBuildInputs: Sendable, Equatable {
         return nil
     }
 
-    public static func verify(_ build: DevContainerPlan.Build, projectRoot: String) -> Result<DevContainerBuildInputs, Problem> {
+    /// The verified inputs. AV06: the Dockerfile is read through the project folder's own descriptor: the folder is
+    /// opened once (without following a link, and proven to be the canonical project folder), then every folder on
+    /// the Dockerfile's path is opened relative to the one before it with `O_NOFOLLOW`, and the file itself the same
+    /// way. A folder on that path swapped for a link at any moment fails the read instead of leading outside the
+    /// project, and the bytes returned are the bytes that are checked by the image policy and given to the builder.
+    /// `beforeOpening` and `afterReading` (tests) run once the paths are resolved and once the bytes are read.
+    public static func verify(_ build: DevContainerPlan.Build, projectRoot: String,
+                              beforeOpening: (() -> Void)? = nil, afterReading: (() -> Void)? = nil) -> Result<DevContainerBuildInputs, Problem> {
         if let problem = containmentProblem(context: build.context, dockerfile: build.dockerfile, projectRoot: projectRoot) {
             return .failure(Problem("The dev container was not built: \(problem)."))
         }
-        guard let context = CodeRootPaths.canonical(build.context), let file = CodeRootPaths.canonical(build.dockerfile) else {
+        guard let root = CodeRootPaths.canonical(projectRoot), let context = CodeRootPaths.canonical(build.context),
+              let file = CodeRootPaths.canonical(build.dockerfile) else {
             return .failure(Problem("The dev container was not built: its build context or Dockerfile disappeared."))
         }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: context, isDirectory: &isDirectory), isDirectory.boolValue else {
             return .failure(Problem("The dev container was not built: its build context \(context) is not a folder."))
         }
-        // The canonical path has no links; O_NOFOLLOW refuses one swapped in since, and fstat proves a regular file.
-        // O_NONBLOCK (AF25): a FIFO opens at once (and is then refused) instead of blocking until a writer appears,
-        // which neither the build's deadline nor task cancellation could interrupt.
-        let fd = open(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { return .failure(Problem("The dev container was not built: its Dockerfile could not be opened (\(String(cString: strerror(errno))))."))}
+        guard CodeRootPaths.strictlyInside(file, root) else {
+            return .failure(Problem("The dev container was not built: its Dockerfile \(file) is not inside the project."))
+        }
+        let components = file.dropFirst(root == "/" ? 1 : root.count + 1).split(separator: "/").map(String.init)
+        beforeOpening?()
+        let data: Data
+        switch readDockerfile(components, root: root) {
+        case .failure(let problem): return .failure(problem)
+        case .success(let bytes): data = bytes
+        }
+        afterReading?()
+        // Still inside after reading (the context and the file as named are checked again).
+        if let problem = containmentProblem(context: context, dockerfile: file, projectRoot: projectRoot) {
+            return .failure(Problem("The dev container was not built: \(problem)."))
+        }
+        return .success(DevContainerBuildInputs(context: context, dockerfile: data))
+    }
+
+    static let dockerfileMoved = Problem("The dev container was not built: a folder on its Dockerfile's path changed while it was being read.")
+
+    /// The Dockerfile at `components` below the canonical folder `root`, opened component by component (AV06).
+    static func readDockerfile(_ components: [String], root: String) -> Result<Data, Problem> {
+        guard let name = components.last, !components.contains(where: { $0 == ".." || $0 == "." }) else { return .failure(dockerfileMoved) }
+        var folder = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard folder >= 0 else { return .failure(Problem("The dev container was not built: the project folder could not be opened (\(String(cString: strerror(errno)))).")) }
+        defer { close(folder) }
+        guard DevContainerBuildInputs.path(of: folder) == root else { return .failure(dockerfileMoved) }
+        for component in components.dropLast() {
+            let next = openat(folder, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { return .failure(dockerfileMoved) }
+            close(folder)
+            folder = next
+        }
+        // O_NOFOLLOW refuses a link, fstat proves a regular file. O_NONBLOCK (AF25): a FIFO opens at once (and is then
+        // refused) instead of blocking until a writer appears, which neither the deadline nor cancellation could stop.
+        let fd = openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
+            return .failure(errno == ELOOP ? dockerfileMoved : Problem("The dev container was not built: its Dockerfile could not be opened (\(String(cString: strerror(errno)))).") )
+        }
         defer { close(fd) }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else {
             return .failure(Problem("The dev container was not built: its Dockerfile is not a regular file."))
         }
         guard Int(info.st_size) <= dockerfileLimit else { return .failure(Problem("The dev container was not built: its Dockerfile is larger than 1 MiB.")) }
+        // The file opened is in the project now (its descriptor's path), whatever happened to the names since.
+        guard let opened = DevContainerBuildInputs.path(of: fd), CodeRootPaths.strictlyInside(opened, root) else { return .failure(dockerfileMoved) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         let data = (try? handle.read(upToCount: dockerfileLimit + 1)) ?? Data()
         guard data.count <= dockerfileLimit else { return .failure(Problem("The dev container was not built: its Dockerfile is larger than 1 MiB.")) }
-        // Still inside after opening (a parent folder swapped for a link between the checks and the open).
-        if let problem = containmentProblem(context: context, dockerfile: file, projectRoot: projectRoot) {
-            return .failure(Problem("The dev container was not built: \(problem)."))
-        }
-        return .success(DevContainerBuildInputs(context: context, dockerfile: data))
+        return .success(data)
     }
 }
