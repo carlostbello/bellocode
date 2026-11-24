@@ -787,7 +787,8 @@ public enum RiskPolicy {
         case "tree": args.contains { OptionSyntax.cluster($0, contains: ["o", "R"]) }
         // A second operand is the output file. `-` is an operand (stdin), and every word after `--` is one (GR3-01):
         // `uniq - FILE` and `xxd - FILE` write FILE.
-        case "uniq": operandCount(args) >= 2
+        // BSD uniq (and GNU with POSIXLY_CORRECT) also stops reading options at its first operand.
+        case "uniq": operandCount(args, optionsEndAtFirstOperand: true) >= 2
         case "file": args.contains { OptionSyntax.cluster($0, contains: ["C"]) || OptionSyntax.abbreviates($0, ["compile"]) }
         // xxd matches its options by prefix, with one dash or two (`-r`, `-revert`, `--r`).
         case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || operandCount(args, optionsEndAtFirstOperand: true) >= 2

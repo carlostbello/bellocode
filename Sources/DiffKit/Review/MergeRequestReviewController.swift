@@ -200,8 +200,9 @@ public final class MergeRequestReviewController: NSViewController, DiffViewContr
 
     public func diffViewController(_ controller: DiffViewController, revertHunk hunkIndex: Int, in file: DiffFile) {}
 
-    public func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment) {
+    public func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment) -> Bool {
         Task { await model.comment(comment) }
+        return true
     }
 
     public func diffViewController(_ controller: DiffViewController, open file: DiffFile, line: Int?) {

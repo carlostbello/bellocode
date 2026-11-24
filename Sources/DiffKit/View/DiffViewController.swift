@@ -61,7 +61,9 @@ public struct DiffAnnotationAction: Sendable, Hashable {
 @MainActor
 public protocol DiffViewControllerDelegate: AnyObject {
     func diffViewController(_ controller: DiffViewController, revertHunk hunkIndex: Int, in file: DiffFile)
-    func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment)
+    /// Whether the comment was taken. When it is not (the composer refused it), the editor stays open with its text and
+    /// no line is marked (R6-01).
+    func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment) -> Bool
     func diffViewController(_ controller: DiffViewController, open file: DiffFile, line: Int?)
 }
 
@@ -653,12 +655,13 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
         popover.behavior = .transient
         popover.contentViewController = editor
         editor.onSubmit = { [weak self, weak popover] text in
-            popover?.close()
             guard let self else { return }
             let comment = DiffReviewComment(
                 path: target.file.path, side: target.side, startLine: target.lines.lowerBound, endLine: target.lines.upperBound, quoted: target.quoted, text: text)
+            // Refused (for example, the composer's draft has not loaded): keep the editor and its text (R6-01).
+            guard self.delegate?.diffViewController(self, addComment: comment) == true else { return }
+            popover?.close()
             for line in target.lines { self.content.commentMarks.insert(DiffCommentMark(path: comment.path, side: comment.side, line: line)) }
-            self.delegate?.diffViewController(self, addComment: comment)
         }
         editor.onCancel = { [weak popover] in popover?.close() }
         let rect = content.rowRect(selection.end.row)
@@ -667,6 +670,8 @@ public final class DiffViewController: NSViewController, NSTextFieldDelegate {
     }
 
     private var pendingCommentPopover: NSPopover?
+    /// The open comment editor, if any (tests).
+    var pendingCommentEditor: CommentEditorController? { pendingCommentPopover?.contentViewController as? CommentEditorController }
     private var pendingCurrentAnnotation: String?
 
     private func contextMenu(row: Int?) -> NSMenu? {

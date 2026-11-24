@@ -29,6 +29,8 @@ fixed before the next release unless this index says otherwise.
 | [v1.0.1-glm-round3-check.md](v1.0.1-glm-round3-check.md) | 2026-11-24 | `e6b84a6` | GW01, GW02, GV10 closed; GR3-01 (blocker) | Hold. GR3-01 fixed in `eebf7b9`; R3-01 confirmed closed at `705d749` |
 | [v1.0.2-astra-final-verification.md](v1.0.2-astra-final-verification.md) | 2026-11-24 | `dd34d1e` | AF08, AV2-02, GR3-01 open; R4-01 (new); documentation | Hold. GR3-01 (`xxd`) and the documentation fixed in `013a161`; R4-01 in R5 (`d3f5f2a`); AV2-02 finished in R6; the AF08 path-swap race accepted (below) |
 | [v1.0.2-astra-reverification.md](v1.0.2-astra-reverification.md) | 2026-11-24 | `7f2102b` | R4-01, GR3-01 closed; AV2-02 open; R5-01, R5-02 (new); documentation | Hold. Fixed in R6 (`4b7e5a4`): a composer takes no edits until it has observed its loaded draft, which removes R5's pre-load hand-over. The guide's repository-instruction paragraph was corrected |
+| [v1.0.2-glm-final-verification.md](v1.0.2-glm-final-verification.md) | 2026-11-24 | `1dc68ff` | GR3-01 closed; publication scan of the history; R6-01 confirmed | Hold on R6-01 only. R6-01 fixed (below); the BSD `uniq` residual fixed; the snapshot count corrected |
+| [v1.0.2-astra-r6-check.md](v1.0.2-astra-r6-check.md) | 2026-11-24 | `1dc68ff` | AV2-02, R5-01, R5-02 closed; R6-01 (new); documentation | Hold. R6-01 fixed: a refused review comment keeps its editor and text, and marks no line. The feature note's Retry, Edit in Composer and first-send statements qualified; two first-send cases listed below |
 
 The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NOTES.md#102-2026-11-24).
 
@@ -38,8 +40,8 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
 - **deep-review-1:** C9 (narrowed), D1 (worked around), attachment eviction grace, and the minor items and
   suggestions without a recorded disposition: S8, Q2–Q4, U2, U4, U5, D4, D5. No commit records a fix for them; treat them as
   open.
-- **GF06 remainders:** `docs/snapshots/opencode-trusted-light.png` still renders the capture machine's per-user
-  temporary folder (not identifying by itself; re-render with the snapshot harness to remove it), and
+- **GF06 remainders:** the six `docs/snapshots/opencode-{problems,trusted,untrusted}-{dark,light}.png` snapshots still
+  render the capture machine's per-user temporary folder (not identifying by itself; re-render with the snapshot harness to remove it), and
   `Scripts/opencode_contract.py` still writes recorded streams without normalising the sandbox path, so a future
   capture should be checked for personal paths before it is committed. The git history keeps the old strings.
 - **GF08 remainder:** the moby/profiles notice is bundled and documented, but Settings ▸ Acknowledgements does not list
@@ -60,5 +62,10 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
   - A rewound prompt that is still waiting for a slow draft is lost if the app quits first, and the new-thread draft
     (before its thread exists) has no shared revision across windows (R4b follow-ups). While a thread's draft is
     loading (normally milliseconds) its composer is read-only; after 5 seconds it offers Retry and saves nothing (R6).
+  - Two narrow first-send cases remain (Astra, R6 check): a failed first send whose new thread's draft has not loaded
+    within ten minutes is not restored to the composer, and a follow-up typed in the new-thread editor just as the
+    thread is created can miss its debounced save.
+  - On the Mac's own BSD `uniq`, `uniq in.txt -out` writes `-out`; Auto now counts it as a write too (GLM 1.0.2 final
+    verification). Commands normally run in Linux containers, where GNU `uniq` does not.
 - **Owner decisions (GLM OD1–OD4):** no licence has been chosen; the history's author identity; whether to publish these
   review and threat-model documents; the default branch and an explicit push refspec (GF04, GF05, GF07).

@@ -48,16 +48,19 @@ the archived record) if there is one, never a blank pane; typing, paste, drop, c
 unavailable, and the controller saves, flushes, hands over or clears nothing for the thread. A switch-away flush
 therefore saves only once the composer has observed the loaded draft, closing the window in which a model had
 loaded but the composer's queued observation had not yet run (AV2-02). When the observation runs the loaded draft is
-shown as is: nothing was edited, so there is nothing to join. If the host reports a failure, or the draft has not
-loaded after `draftLoadTimeout` (5 s), the error line says it could not be loaded and offers Retry
+shown as is: nothing was edited, so there is nothing to join. If the host reports a failure (observed once the composer is attached to it), or the
+draft has not loaded after `draftLoadTimeout` (5 s), the error line says it could not be loaded and offers Retry (a
+refused attachment's dismissible error can briefly take its place)
 (`retryDraftLoad()`, which `ThreadModel` answers by reading the thread again); still nothing is written.
 `ThreadModelComposerHost.saveDraft` also refuses a write before the load. There is no pre-load hand-over or join any
 more: R5's, which could lose a file chosen while loading when the stored text was identical (R5-02) or keep a pasted
-image only in the released thread model (R5-01), is removed. Insertions from other panes report the refusal: review
-comments, terminal output and picked elements show the attachment message, GitLab's composer target returns false
-("…or was still loading its draft…"), and Edit in Composer on an unconfirmed send is offered only once the composer
-takes it (if the composer changed before the text arrived, an alert shows the text with Copy Message). A failed send
-whose thread is new and still loading its draft waits for that draft (up to 10 minutes) before putting the text back.
+image only in the released thread model (R5-01), is removed. Insertions from other panes report the refusal: a review
+comment keeps its editor and text open and marks no line (R6-01), terminal output and picked elements show the
+attachment message, GitLab's composer target returns false
+("…or was still loading its draft…"), and Edit in Composer on an unconfirmed send stays visible but only beeps until the
+composer takes edits (if the composer changed before the text arrived, an alert shows the text with Copy Message). A failed send
+whose thread is new and still loading its draft waits for that draft (up to 10 minutes) before putting the text back; if it has not loaded by then, the text is not
+restored.
 `ThreadModelComposerHost(threadModel)` adapts an Engine
 `ThreadModel` (via `ComposerThreadSource`); tokens, attachments and selection live in a bounded in-memory
 `ComposerDraftCache` and are used while the persisted text still matches (entries are scoped to the thread source

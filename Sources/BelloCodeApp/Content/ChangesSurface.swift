@@ -110,19 +110,22 @@ final class ChangesSurfaces: ChangesPanelHost {
 
     // MARK: ChangesPanelHost
 
-    func changesPanel(_ panel: ChangesPanelController, addComment comment: DiffReviewComment) {
+    func changesPanel(_ panel: ChangesPanelController, addComment comment: DiffReviewComment) -> Bool {
         guard let composer = shell?.changesComposer else {
             shell?.changesUndo.showNotice("Open a thread to send review comments.")
-            return
+            return false
         }
         // ComposerKit has no review-comment chip yet: the comment is a named text attachment (a chip) with the
         // location, side, quoted lines and the comment.
         let rejected = composer.add(attachments: [.text(comment.promptText, name: "Review \(comment.location).md")], actionName: "Add Review Comment")
         if rejected.isEmpty {
             shell?.changesUndo.showNotice("Comment on \(comment.location) added to the composer")
-        } else {
-            shell?.changesUndo.showNotice("The composer has no room for another attachment.")
+            return true
         }
+        shell?.changesUndo.showNotice(rejected.contains(.draftLoading)
+            ? "The thread's draft has not loaded, so the comment was not added. It is still in the comment editor."
+            : "The composer has no room for another attachment. The comment is still in the comment editor.")
+        return false
     }
 
     func changesPanel(_ panel: ChangesPanelController, didChange change: ReversibleChange) { register(change) }

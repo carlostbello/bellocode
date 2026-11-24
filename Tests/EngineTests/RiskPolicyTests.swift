@@ -310,7 +310,7 @@ extension RiskPolicyTests {
     @Test(arguments: [
         "rg --pre ./pwn.sh x README.md", "rg --pre=./pwn.sh x src", "rg --pre-glob '*' --pre ./x.sh y", "git grep --open-files-in-pager=./pwn.sh x",
         "git grep -O./pwn.sh x", "git grep -nO ./pwn.sh x", "git diff --ext-diff", "git log -p --textconv", "sort --compress-program=./x.sh src/main.swift",
-        "tree -o out.txt", "uniq src/main.swift out.txt", "uniq - out.txt", "uniq -- -in -out", "xxd - out.txt", "xxd -- -in -out", "xxd in.txt -out", "xxd -c 16 in.txt -out", "date -s 2020-01-01", "find src -fprint0 out",
+        "tree -o out.txt", "uniq src/main.swift out.txt", "uniq - out.txt", "uniq in.txt -out", "uniq - --", "uniq -- -in -out", "xxd - out.txt", "xxd -- -in -out", "xxd in.txt -out", "xxd -c 16 in.txt -out", "date -s 2020-01-01", "find src -fprint0 out",
     ])
     func programRunningOptionsAreNotDeterministicallyAllowed(_ command: String) {
         #expect(!shell(command).isAllow, "\(command): \(shell(command))")

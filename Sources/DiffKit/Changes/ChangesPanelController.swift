@@ -7,8 +7,8 @@ import Observation
 /// What the Changes panel asks of the window it lives in.
 @MainActor
 public protocol ChangesPanelHost: AnyObject {
-    /// A review comment to put into the thread's composer as context.
-    func changesPanel(_ panel: ChangesPanelController, addComment comment: DiffReviewComment)
+    /// A review comment to put into the thread's composer as context. False when it was not added.
+    func changesPanel(_ panel: ChangesPanelController, addComment comment: DiffReviewComment) -> Bool
     /// A completed change to offer as Undo (Edit menu and toast).
     func changesPanel(_ panel: ChangesPanelController, didChange change: ReversibleChange)
     /// A short notice (toast) such as "Pushed feature/login".
@@ -768,8 +768,8 @@ public final class ChangesPanelController: NSViewController, NSOutlineViewDataSo
         }
     }
 
-    public func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment) {
-        host?.changesPanel(self, addComment: comment)
+    public func diffViewController(_ controller: DiffViewController, addComment comment: DiffReviewComment) -> Bool {
+        host?.changesPanel(self, addComment: comment) ?? false
     }
 
     public func diffViewController(_ controller: DiffViewController, open file: DiffFile, line: Int?) {
