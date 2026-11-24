@@ -136,8 +136,10 @@ loaded with their source (Global, Project or Plugin). After editing, use **Reloa
 opencode Configuration); it asks first if pending approvals would be cancelled. **Restart Server…** restarts opencode.
 
 **Repository configuration.** Every project's `AGENTS.md` files are used, bound to the checkout a session first
-found: a session whose folder is, or becomes, a link inside a checkout, or whose checkout was replaced, gets no
-repository instructions. A repository's `.opencode/` agents, commands
+found. Some sessions get no repository instructions: one whose folder is, or becomes, a link inside a checkout; one
+whose checkout was replaced; and a session from before this version (or whose record was pruned) that is reached
+through a link anywhere in its folder's path. Once a session's record has been pruned, BelloCode cannot tell whether
+the folder at its path is the one it used before. A repository's `.opencode/` agents, commands
 and skills are used only when you turn on **Trust this project's opencode config** for that project in the same pane
 (off by default). A repository's own `opencode.json` and plugins are not loaded unless you change the repository config
 policy there, which applies to every project at once; the pane explains the trade-off. Do not add a policy that denies

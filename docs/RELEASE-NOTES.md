@@ -10,8 +10,8 @@ and opened: [RELEASE.md](RELEASE.md). What the reviews found and how each findin
 The first public release. It holds the fixes from the three v1.0.1 final pre-push checks
 ([Astra](reviews/v1.0.1-astra-final-check.md) AF01–AF27, [Neon](reviews/v1.0.1-neon-final-check.md) NF01–NF24,
 [GLM](reviews/v1.0.1-glm-final-check.md) GF01–GF14) and from the three verification rounds that followed (AV, NV, GV,
-GW, R3 and GR3 findings; see the [review index](reviews/README.md)), merged on `develop` as P5–P10, Q1–Q5, R3a–R3c and
-R4a–R4c, plus the documentation for the first public push.
+GW, R3 and GR3 findings; see the [review index](reviews/README.md)), merged on `develop` as P5–P10, Q1–Q5, R3a–R3c,
+R4a–R4c, R5 and R6, plus the documentation for the first public push.
 
 ### Behaviour you will notice
 
