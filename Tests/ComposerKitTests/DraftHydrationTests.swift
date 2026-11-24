@@ -73,6 +73,26 @@ final class LateDraftHost: ComposerHost {
         #expect(host.saved.last?.text == "restored\n\ntyped")
     }
 
+    /// AV2-02: sending text typed before the stored draft arrived clears only the composer; nothing (not even the
+    /// empty clear) is saved over the stored draft, which shows when it loads.
+    @Test func sendingBeforeTheDraftArrivesSavesNothingOverIt() async {
+        let controller = ComposerController(registry: ComposerController.Registry())
+        let view = FakeView()
+        view.bind(controller)
+        let host = LateDraftHost(stored: ComposerDraft(text: "restored"))
+        controller.attach(host)
+        view.draft = ComposerDraft(text: "typed")
+        controller.draftDidChange()
+        #expect(controller.submit())
+        #expect(view.draft == .empty)
+        #expect(host.saved.isEmpty, "the clear is not saved over a draft that has not been read")
+        controller.flushDraft()
+        #expect(host.saved.isEmpty)
+        host.finishLoading()
+        #expect(view.draft.text == "restored")
+        #expect(host.saved.isEmpty)
+    }
+
     /// After a thread model is evicted and reopened, its tokens and selection come back from the draft cache once the
     /// stored text arrives; nothing typed in the gap overwrites the cache.
     @Test func richDraftSurvivesModelEviction() async throws {

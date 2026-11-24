@@ -71,7 +71,9 @@ public protocol ComposerHost: AnyObject {
     /// newer draft first, so a stale copy (an idle second window) never replaces a newer draft (R3-01). Report changes
     /// through `observe`. A host that is its draft's only writer may keep the default (never changes).
     var draftRevision: Int { get }
-    /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown.
+    /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown. Called while
+    /// `isDraftLoaded` is false only to hand over an edit typed before the stored draft arrived (the composer left
+    /// first): join it with the stored draft when that loads, never write it over the stored draft (AV2-02).
     func saveDraft(_ draft: ComposerDraft)
     /// Send, queue or steer. Return only when the server admitted the prompt or the attempt failed.
     func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome

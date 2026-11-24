@@ -196,9 +196,16 @@ R4a–R4c, plus the documentation for the first public push.
   follows the other window's save, and an edit made there is kept after the newer draft instead of replacing it ("Both
   versions are kept"). Edit from Here puts the rewound prompt in front of the latest draft once, and every window then
   shows it, so an idle window can no longer save its old text over the other window's newer text or attachments
-  (R3-01). When the thread's saved draft is slow to load, the prompt waits for it (with a notice) instead of being
-  added as plain text, which used to drop the draft's mentions and attachments; if it never loads, the draft is left
-  unchanged and an alert shows the prompt with Copy Prompt (AV2-02).
+  (R3-01). The prompt always goes in front of the latest draft, also in the composer on screen: there it is one
+  undoable edit with the caret at the end of the prompt, and selected text is no longer replaced. When the thread's
+  saved draft is slow to load, the prompt waits for it (with a notice) instead of being added as plain text, which
+  used to drop the draft's mentions and attachments. This includes a composer on screen that is still loading the
+  draft: nothing is inserted or saved until the draft arrives, and text typed meanwhile is kept after it. If it
+  never loads, the draft is left unchanged and an alert shows the prompt with Copy Prompt (AV2-02). A composer left
+  before its draft loaded no longer replaces the saved draft's mentions and attachments; what was typed is added
+  after the draft. A message still being sent (its attachments prepared) no longer erases a draft another window
+  saved meanwhile with the same words: only the composer's own clear at Send applies, and only if nothing newer was
+  saved (R4-01).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,

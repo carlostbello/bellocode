@@ -161,6 +161,9 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         controller.currentDraft = { [weak self] in self?.currentDraft() ?? .empty }
         controller.applyDraft = { [weak self] draft in self?.apply(draft) }
         controller.replaceTextUndoably = { [weak self] draft in self?.replaceText(with: draft) }
+        controller.applyRecoveredUndoably = { [weak self] draft in
+            self?.replaceText(with: draft, actionName: "Edit from Here", selection: draft.selection)
+        }
         controller.onStateChange = { [weak self] in self?.refreshControls() }
         controller.announce = { [weak self] message in self?.announce(message) }
         completion.onChange = { [weak self] in self?.renderCompletion() }
@@ -407,11 +410,17 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         textView.needsDisplay = true
     }
 
-    /// Replaces the text (keeping attachments) as one undoable edit: history recall.
-    private func replaceText(with draft: ComposerDraft) {
+    /// Replaces the text (keeping attachments) as one undoable edit: history recall (caret at the end), or a recovered
+    /// prompt joined in front of the draft (caret at `selection`).
+    private func replaceText(with draft: ComposerDraft, actionName: String = "Recall Prompt", selection: NSRange? = nil) {
+        // A recovered prompt arrives from outside the text view: an IME composition in progress is ended first (its
+        // marked text is already part of the draft that was joined).
+        if selection != nil, textView.hasMarkedText() {
+            textView.unmarkText()
+        }
         let attributed = TokenText.attributedText(for: draft, base: baseAttributes, decoration: tokenDecoration)
-        perform(edit: NSRange(location: 0, length: storage.length), with: attributed, actionName: "Recall Prompt")
-        textView.setSelectedRange(NSRange(location: storage.length, length: 0))
+        perform(edit: NSRange(location: 0, length: storage.length), with: attributed, actionName: actionName)
+        textView.setSelectedRange(selection ?? NSRange(location: storage.length, length: 0))
         textView.scrollRangeToVisible(textView.selectedRange())
     }
 

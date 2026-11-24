@@ -221,15 +221,20 @@ public final class ThreadModel: Identifiable {
 
     // MARK: - Commands
 
-    /// Sends `text` (default: the draft). Idle: appears at once as `.sending`. Running: queued (or steered). On
-    /// failure the text returns to the draft and `lastError` is set. Returns the message ID once the server admitted it.
+    /// Sends `text`, or the draft when `text` is nil. Idle: appears at once as `.sending`. Running: queued (or
+    /// steered). `lastError` is set on failure. Returns the message ID once the server admitted it.
+    ///
+    /// Only a send of the draft (`text` nil) clears the draft, and only its failure puts the text back. Explicit text
+    /// never touches the draft, even when the draft holds the same words: the composer clears its own submission
+    /// before preparing attachments, and by dispatch the draft can be a newer one another window saved with the same
+    /// text but different mentions (R4-01). Text equality is never taken as proof that the draft is the one sent.
     @discardableResult
     public func send(
         _ text: String? = nil, attachments: PromptAttachments = .none, delivery: PromptDelivery? = nil
     ) async -> MessageID? {
+        let fromDraft = text == nil
         let text = text ?? draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
-        let fromDraft = text == draft
         if fromDraft { draft = "" }
         do {
             let id = try await core.sendPrompt(sessionID, text: text, attachments: attachments, delivery: delivery)
