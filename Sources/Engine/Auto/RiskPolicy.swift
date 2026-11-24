@@ -785,12 +785,25 @@ public enum RiskPolicy {
         case "sort": args.contains { OptionSyntax.cluster($0, contains: ["o"]) || OptionSyntax.abbreviates($0, ["output"]) }
         // `-R` reruns tree into `00Tree.html` files in every folder.
         case "tree": args.contains { OptionSyntax.cluster($0, contains: ["o", "R"]) }
-        case "uniq": args.filter { !$0.hasPrefix("-") }.count >= 2
+        // A second operand is the output file. `-` is an operand (stdin), and every word after `--` is one (GR3-01):
+        // `uniq - FILE` and `xxd - FILE` write FILE.
+        case "uniq": operandCount(args) >= 2
         case "file": args.contains { OptionSyntax.cluster($0, contains: ["C"]) || OptionSyntax.abbreviates($0, ["compile"]) }
         // xxd matches its options by prefix, with one dash or two (`-r`, `-revert`, `--r`).
-        case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || args.filter { !$0.hasPrefix("-") }.count >= 2
+        case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || operandCount(args) >= 2
         default: false
         }
+    }
+
+    /// Words a getopt-style program takes as operands: a bare `-` and anything not starting with `-`, and every word
+    /// after `--`. Option values (`uniq -f 1`) count too, which only makes the count larger: never an allow.
+    static func operandCount(_ args: [String]) -> Int {
+        var count = 0
+        var afterTerminator = false
+        for arg in args {
+            if afterTerminator { count += 1 } else if arg == "--" { afterTerminator = true } else if arg == "-" || !arg.hasPrefix("-") { count += 1 }
+        }
+        return count
     }
 
     /// The files a read-only program's writing options name (`sort -oFILE`, `sort -ro FILE`, `sort --out=FILE`): each

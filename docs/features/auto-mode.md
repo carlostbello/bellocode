@@ -61,7 +61,8 @@ things; implement T3's Auto; agents may interrupt other threads; MCP servers alw
 4. **Deterministic allow** (`once`): in-project non-secret read/list/glob/grep; in-project non-policy edits; read-only
    commands (ls, cat, grep/rg, find without -exec/-delete, git status/diff/log/show, …) whose every path is inside, and
    never with an option that runs a program (`rg --pre`, `git grep -O`/`--open-files-in-pager`, `--ext-diff`, `--textconv`,
-   `sort --compress-program`, `ag --pager`) or writes a file (`sort -o`, `tree -o`, `file -C`, `xxd -r`) or sets the
+   `sort --compress-program`, `ag --pager`) or writes a file (`sort -o`, `tree -o`, `file -C`, `xxd -r`, a second operand to `uniq` or `xxd`, where `-` is an
+   operand and so is every word after `--`, so `uniq - FILE` writes FILE: GR3-01) or sets the
    clock (N05). Every spelling a program reads counts as the option (GW02): any unique abbreviation of a long option,
    since getopt_long and git's parse-options take them (`git grep --op=CMD`, `sort --out=FILE`), its value attached or
    as the next word, and a short option anywhere in a cluster or with an attached value (`sort -ro FILE`, `-oFILE`;

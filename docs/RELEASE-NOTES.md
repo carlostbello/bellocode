@@ -24,7 +24,8 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   the option they spell, so they are no longer allowed as read-only commands, and a recursive spelling gets the
   secret-file preflight. `diff -r`, `git diff --no-index` and `git grep --no-index`/`--untracked` get the same
   preflight. `git stash` with no subcommand, and `git branch`/`tag`/`remote` with anything but listing options, now
-  go to the reviewer (GW02, AF14).
+  go to the reviewer (GW02, AF14). `uniq - FILE` and `xxd - FILE` (stdin in, FILE written) and any operands after
+  `--` count as an output file too (GR3-01).
 - **Workspace containers run as a verified numeric user.** The image's user is resolved from its own account files
   without running it, root and unknown names are refused before anything starts, and every exec (commands,
   terminals, MCP servers, probes, port relays, secret commands) uses the numeric `uid:gid`. An existing workspace that
