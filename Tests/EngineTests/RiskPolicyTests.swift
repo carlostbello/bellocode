@@ -473,6 +473,8 @@ extension RiskPolicyTests {
         // Listing subcommands accept only listing options: `--unset-upstream` reconfigures, `--edit-description` runs an editor.
         "git branch --unset-upstream", "git branch --edit-description", "git branch --del x", "git branch --set-u=origin/x",
         "git tag -d", "git remote --rm", "git stash",
+        // `--text` / `--filter` are exact only where git defines them; `git cat-file --text` is `--textconv` (GW02).
+        "git cat-file --text HEAD:x", "git cat-file --filter HEAD:x", "git blame --text x", "git ls-tree --filter HEAD",
     ])
     func everySpellingOfAGuardedOptionCounts(_ command: String) {
         #expect(!shell(command).isAllow, "\(command): \(shell(command))")

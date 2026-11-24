@@ -1101,7 +1101,13 @@ public enum RiskPolicy {
     /// (GW02): `--output`, `git grep --open-files-in-pager` (`--op=CMD` runs CMD through the shell), external diff,
     /// text conversion and filter drivers. `exact` are other options' exact spellings that abbreviate one of them.
     static let gitDangerousOptions = ["output", "open-files-in-pager", "ext-diff", "textconv", "filters", "upload-pack", "exec"]
-    static let gitExactOptions: Set<String> = ["text", "filter"]
+    /// Exact spellings that win over the abbreviation, per subcommand: only where git defines that exact option
+    /// (`git diff --text` is `--text`; `git cat-file` has no `--text`, so there it resolves to `--textconv`).
+    /// Anywhere else they count as the dangerous option they abbreviate (GW02).
+    static let gitExactOptions: [String: Set<String>] = [
+        "diff": ["text"], "log": ["text"], "show": ["text"], "grep": ["text"], "whatchanged": ["text"],
+        "rev-list": ["filter"],
+    ]
 
     /// Options `git branch`, `git tag` and `git remote` take when they only list (anything else, or a name, may
     /// create, delete, rename or reconfigure): exact spellings, `name=value` for the ones that take a value, and
@@ -1140,7 +1146,7 @@ public enum RiskPolicy {
         }
         if sub == "reflog", positional.first.map({ ["expire", "delete", "drop"].contains($0) }) == true { return false }
         return !tail.contains { arg in
-            arg == "-o" || OptionSyntax.abbreviates(arg, gitDangerousOptions, exact: gitExactOptions)
+            arg == "-o" || OptionSyntax.abbreviates(arg, gitDangerousOptions, exact: gitExactOptions[sub] ?? [])
                 || (sub == "grep" && OptionSyntax.cluster(arg, contains: ["O"]))
         }
     }
