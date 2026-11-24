@@ -62,18 +62,26 @@ public protocol ComposerHost: AnyObject {
     var draftOwner: ObjectIdentifier? { get }
     /// The saved draft. Called when the composer shows this host, and again when `isDraftLoaded` becomes true.
     func loadDraft() -> ComposerDraft
-    /// The saved draft has been read. While false, `loadDraft()` is a placeholder: the composer saves nothing over it
-    /// and reconciles (merging anything typed meanwhile) once it turns true. Report the change through `observe`.
+    /// The saved draft has been read. While false, `loadDraft()` is a placeholder: a composer showing this host takes
+    /// no edit and saves, flushes or clears nothing until it has observed the change to true, then shows the loaded
+    /// draft. Report the change through `observe`.
     var isDraftLoaded: Bool { get }
+    /// Reading the saved draft failed (the composer then offers Retry, and still writes nothing). Report it through
+    /// `observe`.
+    var draftLoadFailed: Bool { get }
+    /// Reads the saved draft again after a failure or a slow load.
+    func retryDraftLoad()
+    /// While the saved draft is loading: the newest copy of it known in memory or on disk, shown read-only so the
+    /// composer is not blank. Never saved and never edited. Nil: none.
+    func cachedDraft() -> ComposerDraft?
     /// The stored draft's revision, shared by every host of the same draft (`draftOwner`): it changes with every
     /// `saveDraft` through any of them and with any other change to the stored draft (a send clearing it, a restore).
     /// A composer saves only on top of the revision it last read; when the draft moved on it rebases its edit onto the
     /// newer draft first, so a stale copy (an idle second window) never replaces a newer draft (R3-01). Report changes
     /// through `observe`. A host that is its draft's only writer may keep the default (never changes).
     var draftRevision: Int { get }
-    /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown. Called while
-    /// `isDraftLoaded` is false only to hand over an edit typed before the stored draft arrived (the composer left
-    /// first): join it with the stored draft when that loads, never write it over the stored draft (AV2-02).
+    /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown; never while
+    /// `isDraftLoaded` is false (a host may refuse such a write).
     func saveDraft(_ draft: ComposerDraft)
     /// Send, queue or steer. Return only when the server admitted the prompt or the attempt failed.
     func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome
@@ -91,14 +99,17 @@ public protocol ComposerHost: AnyObject {
     func clearError()
     /// Earlier prompts in this thread, oldest first, for Up/Down recall.
     func recentPrompts() -> [String]
-    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage`, `isDraftLoaded`, `draftRevision` or
-    /// capabilities change.
+    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage`, `isDraftLoaded`, `draftLoadFailed`,
+    /// `draftRevision` or capabilities change.
     func observe(_ onChange: @escaping @MainActor () -> Void) -> ComposerObservation
 }
 
 extension ComposerHost {
     public var draftOwner: ObjectIdentifier? { nil }
     public var isDraftLoaded: Bool { true }
+    public var draftLoadFailed: Bool { false }
+    public func retryDraftLoad() {}
+    public func cachedDraft() -> ComposerDraft? { nil }
     public var draftRevision: Int { 0 }
     public var supportsSteer: Bool { true }
     public var supportsAttachments: Bool { true }

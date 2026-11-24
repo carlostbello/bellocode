@@ -187,8 +187,9 @@ final class ThreadContainerViewController: NSViewController {
             let queued = QueuedPromptsView(thread: thread)
             queuedPrompts = queued
             let unconfirmed = UnconfirmedSendsView(thread: thread)
-            unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
-            context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
+            unconfirmed.editInComposer = { [weak self] text in self?.composerSurface?.insertText(text) ?? false }
+            unconfirmed.canEditInComposer = { [weak self] in self?.composerSurface?.acceptsInsertion ?? false }
+            context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) ?? false }
             unconfirmedSends = unconfirmed
             let environment = Self.makeEnvironmentBanner(engine: workspace.engine, context: context)
             environmentBanner = environment
@@ -306,7 +307,7 @@ final class ThreadContainerViewController: NSViewController {
         self.composer = composer
         let composerView = adopt(composer)
         // Start Thread from Issue and other "insert into the composer" commands reach the draft's composer too (NF09).
-        context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) }
+        context.onInsertIntoComposer = { [weak self] text in self?.composerSurface?.insertText(text) ?? false }
         for subview in [heading, path, composerView] { container.addSubview(subview) }
         let width = composerView.widthAnchor.constraint(equalToConstant: DS.Size.contentMaxWidth)
         width.priority = Self.columnPreference

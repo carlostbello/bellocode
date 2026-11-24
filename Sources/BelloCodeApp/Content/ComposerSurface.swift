@@ -52,11 +52,14 @@ final class ComposerSurfaceController: NSViewController, ComposerSurface {
     // MARK: ComposerSurface
 
     var preferredFocusView: NSView? { composer.textView }
-    var hasSendableText: Bool { !composer.currentDraft().isEmpty }
+    var hasSendableText: Bool { !composer.isLoadingDraft && !composer.currentDraft().isEmpty }
+    /// The composer takes an insertion now (not while it is loading its thread's draft).
+    var acceptsInsertion: Bool { !composer.isLoadingDraft }
     func performSend() { composer.send(alternate: false) }
-    func insertText(_ text: String) {
+    @discardableResult
+    func insertText(_ text: String) -> Bool {
         composer.focus()
-        composer.insert(text: text)
+        return composer.insert(text: text)
     }
     var runState: ComposerRunState { composer.controller.runState }
 
@@ -393,6 +396,11 @@ final class DraftComposerHost: ComposerHost {
     var draftOwner: ObjectIdentifier? { created?.draftOwner }
     /// The created thread's draft revision, so a save after creation is on top of that thread's latest draft (R3-01).
     var draftRevision: Int { created?.draftRevision ?? 0 }
+    /// Before creation there is nothing to load. After it, the created thread's: a failed first send waits for that
+    /// thread's stored draft before putting the text back, since nothing is written over a draft not yet read.
+    var isDraftLoaded: Bool { created?.isDraftLoaded ?? true }
+    var draftLoadFailed: Bool { created?.draftLoadFailed ?? false }
+    func retryDraftLoad() { created?.retryDraftLoad() }
 
     func loadDraft() -> ComposerDraft {
         if let created { return created.loadDraft() }
@@ -461,6 +469,8 @@ final class DraftComposerHost: ComposerHost {
             guard let self else { return }
             _ = self.context.visibleError
             _ = self.context.isCreatingThread
+            _ = self.created?.isDraftLoaded
+            _ = self.created?.draftLoadFailed
             onChange()
         }
         return ComposerObservation { loop.cancel() }

@@ -199,11 +199,15 @@ R4a–R4c, plus the documentation for the first public push.
   (R3-01). The prompt always goes in front of the latest draft, also in the composer on screen: there it is one
   undoable edit with the caret at the end of the prompt, and selected text is no longer replaced. When the thread's
   saved draft is slow to load, the prompt waits for it (with a notice) instead of being added as plain text, which
-  used to drop the draft's mentions and attachments. This includes a composer on screen that is still loading the
-  draft: nothing is inserted or saved until the draft arrives, and text typed meanwhile is kept after it. If it
-  never loads, the draft is left unchanged and an alert shows the prompt with Copy Prompt (AV2-02). A composer left
-  before its draft loaded no longer replaces the saved draft's mentions and attachments; what was typed is added
-  after the draft. A message still being sent (its attachments prepared) no longer erases a draft another window
+  used to drop the draft's mentions and attachments; this includes a composer on screen that is still loading the
+  draft, where the prompt goes in front once the draft is shown. If it never loads, the draft is left unchanged and
+  an alert shows the prompt with Copy Prompt (AV2-02). A composer takes edits for a thread only after it has shown
+  that thread's loaded draft. Until then (normally a few milliseconds) it is read-only and says "Loading draft…",
+  showing the last copy of the draft known to BelloCode, if any: typing, paste, drop, file completion and insertions
+  from other panes are refused, Send is unavailable, and the composer saves nothing for that thread, so switching
+  threads at that moment no longer writes over the loaded draft. If the draft has not loaded after 5 seconds, or
+  reading it failed, the composer says so and offers Retry, and still saves nothing (AV2-02, R5-01, R5-02). A
+  message still being sent (its attachments prepared) no longer erases a draft another window
   saved meanwhile with the same words: only the composer's own clear at Send applies, and only if nothing newer was
   saved (R4-01).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard

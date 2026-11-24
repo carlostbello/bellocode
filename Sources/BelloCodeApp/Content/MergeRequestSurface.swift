@@ -104,8 +104,7 @@ final class MergeRequestSurfaces {
         guard let bound = context, bound.onInsertIntoComposer != nil else { return nil }
         return ComposerTarget { [weak self, weak bound] text in
             guard let self, let bound, self.context === bound, let insert = bound.onInsertIntoComposer else { return false }
-            insert(text)
-            return true
+            return insert(text)
         }
     }
 

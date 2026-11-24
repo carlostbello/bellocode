@@ -121,6 +121,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         strip.isHidden = true
         errorView.isHidden = true
         errorView.onDismiss = { [weak self] in self?.controller.dismissError() }
+        errorView.onRetry = { [weak self] in self?.controller.retryDraftLoad() }
 
         buildControlsBar()
 
@@ -216,7 +217,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         textView.textColor = look.textColor
         textView.insertionPointColor = look.textColor
         textView.typingAttributes = baseAttributes
-        textView.placeholder = look.placeholder
+        textView.placeholder = controller.awaitingDraft ? "Loading draft…" : look.placeholder
         textView.placeholderColor = look.placeholderColor
     }
 
@@ -445,19 +446,35 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         view.window?.makeFirstResponder(textView)
     }
 
-    /// Inserts text at the selection (paste-to-focus, review comments).
-    public func insert(text: String) {
+    /// The composer has not yet shown its thread's loaded draft: it is read-only ("Loading draft…") and every edit,
+    /// paste, drop, completion and insertion is refused (`ComposerController.awaitingDraft`).
+    public var isLoadingDraft: Bool { controller.awaitingDraft }
+
+    /// Inserts text at the selection (paste-to-focus, review comments). False (nothing inserted) while the draft loads.
+    @discardableResult
+    public func insert(text: String) -> Bool {
+        guard !isLoadingDraft else { return false }
         perform(edit: textView.selectedRange(), with: NSAttributedString(string: text, attributes: baseAttributes))
+        return true
     }
 
-    /// Inserts a token at the selection as one undoable edit, followed by a space.
-    public func insert(token: ComposerToken) {
+    /// Inserts a token at the selection as one undoable edit, followed by a space. False (nothing inserted) while the
+    /// draft loads.
+    @discardableResult
+    public func insert(token: ComposerToken) -> Bool {
+        guard !isLoadingDraft else { return false }
         insertToken(token, replacing: textView.selectedRange())
+        return true
     }
 
-    /// Adds attachments (undoable). Returns what was refused, which is also shown inline.
+    /// Adds attachments (undoable). Returns what was refused, which is also shown inline. While the draft loads nothing
+    /// is added (`.draftLoading`).
     @discardableResult
     public func add(attachments candidates: [ComposerAttachment], actionName: String = "Add Attachment") -> [AttachmentList.Rejection] {
+        guard !isLoadingDraft else {
+            showLocalError(AttachmentList.Rejection.draftLoading.message)
+            return [.draftLoading]
+        }
         var list = attachments
         let rejected = list.add(candidates)
         if list != attachments { setAttachments(list, actionName: actionName) }
@@ -466,6 +483,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     }
 
     public func removeAttachment(id: String) {
+        guard !isLoadingDraft else { return }
         var list = attachments
         guard let removed = list.remove(id: id) else { return }
         setAttachments(list, actionName: "Remove Attachment")
@@ -507,6 +525,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     /// Chooses files to attach (the paperclip; menus can target `attachFiles:` through the responder chain).
     @objc public func attachFiles(_ sender: Any?) {
+        guard !isLoadingDraft else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -604,8 +623,9 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     // MARK: - Controls state
 
+    /// Nothing sendable: an empty draft, or a read-only copy shown while the draft loads.
     private var currentDraftIsEmpty: Bool {
-        guard isViewLoaded else { return true }
+        guard isViewLoaded, !isLoadingDraft else { return true }
         return attachments.isEmpty && storage.string.allSatisfy(\.isWhitespace)
     }
 
@@ -653,9 +673,21 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
         }
         stopButton.isHidden = !(running && !empty && controller.runState == .running)
         followUpMenuButton.isHidden = !running
-        statusLabel.stringValue = controller.pendingSends > 0 ? "Sending…" : ""
-        statusLabel.isHidden = controller.pendingSends == 0
-        if let message = controller.errorMessage {
+        let loading = isLoadingDraft
+        // Read-only until the thread's draft has loaded (a cached copy may show meanwhile); no edit can be lost.
+        if textView.isEditable == loading { textView.isEditable = !loading }
+        let placeholder = loading ? "Loading draft…" : look.placeholder
+        if textView.placeholder != placeholder { textView.placeholder = placeholder }
+        textView.alphaValue = loading ? 0.6 : 1
+        attachButton.isEnabled = !loading
+        if loading { completion.close() }
+        let status = controller.pendingSends > 0 ? "Sending…" : loading && !controller.draftLoadFailed ? "Loading draft…" : ""
+        statusLabel.stringValue = status
+        statusLabel.isHidden = status.isEmpty
+        if let failure = controller.draftLoadError {
+            errorView.show(failure, retryable: true)
+            errorView.isHidden = false
+        } else if let message = controller.errorMessage {
             errorView.show(message)
             errorView.isHidden = false
         } else if !errorView.isHidden, errorView.label.stringValue != "" {
@@ -736,6 +768,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
 
     private func updateCompletion() {
         guard !completion.providers.isEmpty, !textView.hasMarkedText(), !isApplying else { return }
+        guard !isLoadingDraft else { return completion.close() }
         let selection = textView.selectedRange()
         guard selection.length == 0 else {
             completion.close()
@@ -753,7 +786,7 @@ public final class ComposerViewController: NSViewController, NSMenuItemValidatio
     }
 
     private func acceptCompletion() -> Bool {
-        guard let item = completion.selectedItem, let query = completion.query else { return false }
+        guard !isLoadingDraft, let item = completion.selectedItem, let query = completion.query else { return false }
         var token = item.token
         token.id = UUID().uuidString
         completion.close()
@@ -900,6 +933,8 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
     public func textView(
         _ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?
     ) -> Bool {
+        // Read-only while the thread's draft loads (the text view is not editable; this refuses any other path).
+        if isLoadingDraft, !isApplying { return false }
         guard !isApplying, !isPerformingEdit, !textView.hasMarkedText(), let replacement = replacementString else {
             textEditInProgress = true
             return true
@@ -1024,6 +1059,11 @@ extension ComposerViewController: NSTextViewDelegate, ComposerTextViewOwner, NST
     }
 
     func composerTextView(_ textView: ComposerTextView, read pasteboard: NSPasteboard, inline: Bool) -> Bool {
+        // Paste and drop while the draft loads: handled by taking nothing (the composer says it is loading).
+        guard !isLoadingDraft else {
+            announce("The draft is still loading.")
+            return true
+        }
         let signpost = ComposerSignposts.edit.beginInterval("paste")
         defer { ComposerSignposts.edit.endInterval("paste", signpost) }
         let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []

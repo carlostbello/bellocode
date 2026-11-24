@@ -10,8 +10,10 @@ import Engine
 @MainActor
 final class UnconfirmedSendsView: NSView {
     private let thread: ThreadModel
-    /// Puts text into this thread's composer (for a send that is definitely not sent).
-    var editInComposer: (String) -> Void = { _ in }
+    /// Puts text into this thread's composer (for a send that is definitely not sent). False: nothing was inserted.
+    var editInComposer: (String) -> Bool = { _ in false }
+    /// The composer takes an insertion now (it has loaded its thread's draft).
+    var canEditInComposer: () -> Bool = { true }
     private let stack = NSStackView()
     private var collapsed: NSLayoutConstraint!
     private var loop: ObservationLoop?
@@ -126,10 +128,31 @@ final class UnconfirmedSendsView: NSView {
 
     @objc private func edit(_ sender: NSView) {
         guard let raw = sender.identifier?.rawValue else { return }
+        // Taken only when the composer can take it: it is still loading its draft for a few milliseconds at most.
+        guard canEditInComposer() else { return NSSound.beep() }
         let thread = thread
         Task { [weak self] in
             guard let text = await thread.takeUnconfirmed(MessageID(raw)) else { return }
-            self?.editInComposer(text)
+            if self?.editInComposer(text) != true { Self.presentUntakenText(text, in: self?.window) }
         }
+    }
+
+    /// The text was taken back but the composer did not take it (it changed meanwhile): shown with Copy, never dropped.
+    static func presentUntakenText(_ text: String, in window: NSWindow?) {
+        let alert = NSAlert()
+        alert.messageText = "The message was not put back in the composer"
+        alert.informativeText = "The composer changed before the text arrived. Copy the message to keep it:\n\n" + text
+        alert.addButton(withTitle: "Copy Message")
+        alert.addButton(withTitle: "Close")
+        alert.alertStyle = .warning
+        let copy = {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        guard let window else {
+            if alert.runModal() == .alertFirstButtonReturn { copy() }
+            return
+        }
+        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { copy() } }
     }
 }
