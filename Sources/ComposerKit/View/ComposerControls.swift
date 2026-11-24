@@ -131,14 +131,16 @@ final class ComposerSendButton: NSButton {
     }
 }
 
-/// The inline error line: triangle `dangerText`, message `label` `text`, a ghost dismiss. Text plus icon, never colour
-/// alone.
+/// The inline error line: triangle `dangerText`, message `label` `text`, an optional Retry, a ghost dismiss. Text plus
+/// icon, never colour alone.
 @MainActor
 final class ComposerErrorView: NSView {
     let label = NSTextField(wrappingLabelWithString: "")
     private let icon = NSImageView()
+    let retry = DSButton(title: "Retry", variant: .outline, size: .small)
     private let dismiss = DSButton(icon: "xmark", accessibilityTitle: "Dismiss error", size: .small)
     var onDismiss: (() -> Void)?
+    var onRetry: (() -> Void)?
 
     init(style: ComposerStyle) {
         super.init(frame: .zero)
@@ -152,7 +154,15 @@ final class ComposerErrorView: NSView {
         dismiss.toolTip = "Dismiss"
         dismiss.target = self
         dismiss.action = #selector(dismissPressed)
-        for view in [icon, label, dismiss] as [NSView] {
+        retry.target = self
+        retry.action = #selector(retryPressed)
+        retry.isHidden = true
+        // A stack, so the hidden one takes no room.
+        let buttons = NSStackView(views: [retry, dismiss])
+        buttons.orientation = .horizontal
+        buttons.spacing = 4
+        buttons.alignment = .top
+        for view in [icon, label, buttons] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -163,9 +173,9 @@ final class ComposerErrorView: NSView {
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
             label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
-            dismiss.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
-            dismiss.trailingAnchor.constraint(equalTo: trailingAnchor),
-            dismiss.topAnchor.constraint(equalTo: topAnchor),
+            buttons.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 6),
+            buttons.trailingAnchor.constraint(equalTo: trailingAnchor),
+            buttons.topAnchor.constraint(equalTo: topAnchor),
             dismiss.widthAnchor.constraint(equalToConstant: DS.Size.micro),
             dismiss.heightAnchor.constraint(equalToConstant: DS.Size.micro),
         ])
@@ -176,12 +186,16 @@ final class ComposerErrorView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func show(_ message: String) {
+    /// Shows `message`; `retryable` adds Retry (which calls `onRetry`) and hides the dismiss button.
+    func show(_ message: String, retryable: Bool = false) {
         label.stringValue = message
+        retry.isHidden = !retryable
+        dismiss.isHidden = retryable
         setAccessibilityLabel("Error: \(message)")
     }
 
     @objc private func dismissPressed() { onDismiss?() }
+    @objc private func retryPressed() { onRetry?() }
 }
 
 /// The composer container: the composer glass surface (`raised` 80 % over the within-window material; solid `raised`

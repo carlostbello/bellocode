@@ -142,6 +142,9 @@ public final class ThreadModel: Identifiable {
     }
     /// The stored draft has been read into `draft`. Editors should show `draft` only after this (or reconcile then).
     public private(set) var isDraftLoaded = false
+    /// Reading the thread (and so its stored draft) failed before the draft loaded. Editors write nothing meanwhile and
+    /// offer `retryDraftLoad()`.
+    public private(set) var isDraftLoadFailed = false
 
     @ObservationIgnored private var draftEditedBeforeLoad = false
     @ObservationIgnored private var models: [MessageID: MessageModel] = [:]
@@ -426,8 +429,12 @@ public final class ThreadModel: Identifiable {
         tasks.set(
             "reload",
             Task { [weak self] in
-                guard let snapshot = try? await core.threadSnapshot(id) else { return }
+                let snapshot = try? await core.threadSnapshot(id)
                 guard let self, generation == self.loadGeneration, !Task.isCancelled else { return }
+                guard let snapshot else {
+                    if !self.isDraftLoaded { self.isDraftLoadFailed = true }
+                    return
+                }
                 self.applySnapshot(snapshot)
             })
     }
@@ -459,6 +466,13 @@ public final class ThreadModel: Identifiable {
         uiState = snapshot.ui
         if !isDraftLoaded { hydrateDraft(stored: snapshot.ui.draft) }
         if phase != .deleted { phase = .ready }
+    }
+
+    /// Reads the thread again when its stored draft has not loaded (after a failure, or a slow read).
+    public func retryDraftLoad() {
+        guard !isDraftLoaded, !isClosed else { return }
+        isDraftLoadFailed = false
+        reload()
     }
 
     /// Internal (not private) so tests can drive an exact change sequence.
@@ -603,6 +617,7 @@ public final class ThreadModel: Identifiable {
         let merged = draftEditedBeforeLoad ? Self.mergeDrafts(stored: stored, local: local) : stored
         draftEditedBeforeLoad = false
         isDraftLoaded = true
+        isDraftLoadFailed = false
         if merged != draft { draft = merged }
         if merged == stored { tasks.remove("draft") } else { scheduleDraftSave() }
     }

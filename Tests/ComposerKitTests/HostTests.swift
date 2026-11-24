@@ -282,6 +282,10 @@ final class FakeThread: ComposerThreadSource {
     var draft = ""
     var loaded = true
     var isDraftLoaded: Bool { loaded }
+    var failed = false
+    var isDraftLoadFailed: Bool { failed }
+    @ObservationIgnored var retries = 0
+    func retryDraftLoad() { retries += 1 }
     var unknown = false
     var composerDeliveryUnknown: Bool { unknown }
     var isRunning = false

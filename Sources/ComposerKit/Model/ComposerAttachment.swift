@@ -102,9 +102,12 @@ public struct AttachmentList: Hashable, Sendable {
         case tooMany(limit: Int)
         case tooLarge(name: String, limit: Int)
         case duplicate(name: String)
+        /// The composer is still loading its thread's draft and takes no edit yet.
+        case draftLoading
 
         public var message: String {
             switch self {
+            case .draftLoading: "The draft is still loading, so nothing was added. Try again in a moment."
             case .tooMany(let limit): "You can attach up to \(limit) files."
             case .tooLarge(let name, let limit):
                 "\(name) is larger than \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file))."

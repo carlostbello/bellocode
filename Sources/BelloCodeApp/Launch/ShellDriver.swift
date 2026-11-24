@@ -17,11 +17,13 @@ struct ShellDriver {
     var composer: ComposerViewController? { composerSurface?.composer }
     var requestStack: RequestStackSurfaceController? { controller.container.requestStackController }
 
-    /// Selects and waits until the content area shows it with a composer (the container rebuilds on the next turn).
+    /// Selects and waits until the content area shows it with a composer (the container rebuilds on the next turn)
+    /// that has loaded its thread's draft, so it takes typing (as a person sees "Loading draft…" go away first).
     func select(_ selection: ShellSelection) async -> Bool {
         workspace.select(selection)
         return await waitUntil(timeout: .seconds(5)) {
-            controller.container.displayed == selection && controller.container.composerController != nil
+            controller.container.displayed == selection
+                && controller.container.composerController.map { !$0.composer.isLoadingDraft } ?? false
         }
     }
 

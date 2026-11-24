@@ -80,7 +80,8 @@ extension MainWindowController {
             let insert = container.context?.onInsertIntoComposer
         {
             workspace.pendingIssueLinks[directory] = PendingIssueLink(issue: issue, instance: instance)
-            insert(text)
+            // A new-thread draft's composer has no stored draft to load, so it always takes the text.
+            _ = insert(text)
         } else {
             workspace.startThread(from: issue, instance: instance, text: text, in: directory)
         }

@@ -8,7 +8,8 @@ import Foundation
 public struct ComposerTarget {
     private let insertion: (String) -> Bool
 
-    /// `insert` inserts and returns true, or returns false (inserting nothing) when its composer is no longer shown.
+    /// `insert` inserts and returns true, or returns false (inserting nothing) when its composer is no longer shown or
+    /// is still loading its thread's draft.
     public init(insert: @escaping (String) -> Bool) {
         insertion = insert
     }
@@ -18,5 +19,5 @@ public struct ComposerTarget {
     public func insert(_ text: String) -> Bool { insertion(text) }
 
     /// What to tell the person when `insert` returned false.
-    public static let movedMessage = "The thread on screen changed before the text was ready, so nothing was added to any composer. Add it again from the thread you want."
+    public static let movedMessage = "The composer on screen changed, or was still loading its draft, before the text was ready, so nothing was added to any composer. Add it again from the thread you want."
 }

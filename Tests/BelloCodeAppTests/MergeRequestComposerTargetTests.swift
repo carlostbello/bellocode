@@ -21,9 +21,9 @@ import Testing
         var intoFirst: [String] = []
         var intoSecond: [String] = []
         let a = ThreadSurfaceContext(engine: engine, directory: "/tmp/a", projectName: "a", thread: first)
-        a.onInsertIntoComposer = { intoFirst.append($0) }
+        a.onInsertIntoComposer = { intoFirst.append($0); return true }
         let b = ThreadSurfaceContext(engine: engine, directory: "/tmp/b", projectName: "b", thread: second)
-        b.onInsertIntoComposer = { intoSecond.append($0) }
+        b.onInsertIntoComposer = { intoSecond.append($0); return true }
         let surfaces = MergeRequestSurfaces()
         surfaces.display(a)
         let target = try #require(surfaces.composerTarget())
@@ -36,7 +36,7 @@ import Testing
         #expect(intoSecond == ["for b"])
         // Back to the first thread with a new context: the stale target still refuses.
         let again = ThreadSurfaceContext(engine: engine, directory: "/tmp/a", projectName: "a", thread: first)
-        again.onInsertIntoComposer = { intoFirst.append($0) }
+        again.onInsertIntoComposer = { intoFirst.append($0); return true }
         surfaces.display(again)
         #expect(target.insert("late") == false)
         #expect(intoFirst.isEmpty)

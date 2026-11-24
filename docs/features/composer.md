@@ -40,14 +40,25 @@ rows, neutral `highlight`. `ComposerContextStrip` is the 26 pt project / branch 
 at once, shows "Sending…", and on failure puts text, tokens and attachments back (merged before anything typed since,
 into the thread that sent it) with the error inline. `.unconfirmed` (every answer lost; the host keeps it under its
 ID for an explicit retry) leaves the composer clear and shows the message: restoring it would invite a duplicate.
-`isDraftLoaded` (default true): while false the composer shows nothing, saves nothing over the stored draft, and
-when it turns true shows the stored draft or, if the user typed meanwhile, the stored draft followed by the new text.
-Sending what was typed before the stored draft arrived clears only the composer: the clear is not saved, and the stored
-draft shows when it loads. A composer that leaves before its draft loaded hands over what was typed through
-`saveDraft`, which a host must join with the stored draft, never write over it: `ThreadModelComposerHost` gives the
-thread the text (the thread joins it after the stored text, `ThreadModel.mergeDrafts`), leaves the cache and the
-archived record alone, and joins the edit's own tokens and attachments with the stored rich draft on the first
-`loadDraft()` after the load (both drafts' mentions and attachments kept; AV2-02). `ThreadModelComposerHost(threadModel)` adapts an Engine
+`isDraftLoaded` (default true), `draftLoadFailed` / `retryDraftLoad()` and `cachedDraft()`: a composer takes edits for
+a host only after it has observed that host's loaded draft (`ComposerController.awaitingDraft` false). Until then the
+view is read-only and says "Loading draft…", showing `cachedDraft()` (the newest rich copy in the draft cache, else
+the archived record) if there is one, never a blank pane; typing, paste, drop, completion, `insert(text:)` /
+`insert(token:)` (false) and `add(attachments:)` (`.draftLoading`) are refused, Send and history recall are
+unavailable, and the controller saves, flushes, hands over or clears nothing for the thread. A switch-away flush
+therefore saves only once the composer has observed the loaded draft, closing the window in which a model had
+loaded but the composer's queued observation had not yet run (AV2-02). When the observation runs the loaded draft is
+shown as is: nothing was edited, so there is nothing to join. If the host reports a failure, or the draft has not
+loaded after `draftLoadTimeout` (5 s), the error line says it could not be loaded and offers Retry
+(`retryDraftLoad()`, which `ThreadModel` answers by reading the thread again); still nothing is written.
+`ThreadModelComposerHost.saveDraft` also refuses a write before the load. There is no pre-load hand-over or join any
+more: R5's, which could lose a file chosen while loading when the stored text was identical (R5-02) or keep a pasted
+image only in the released thread model (R5-01), is removed. Insertions from other panes report the refusal: review
+comments, terminal output and picked elements show the attachment message, GitLab's composer target returns false
+("…or was still loading its draft…"), and Edit in Composer on an unconfirmed send is offered only once the composer
+takes it (if the composer changed before the text arrived, an alert shows the text with Copy Message). A failed send
+whose thread is new and still loading its draft waits for that draft (up to 10 minutes) before putting the text back.
+`ThreadModelComposerHost(threadModel)` adapts an Engine
 `ThreadModel` (via `ComposerThreadSource`); tokens, attachments and selection live in a bounded in-memory
 `ComposerDraftCache` and are used while the persisted text still matches (entries are scoped to the thread source
 that stored them, so another engine's thread with the same session ID cannot replace them; a reopened model gets the
@@ -113,7 +124,8 @@ running-steer,running-stop,capped,hero}-{light,dark}.png`.
   prompt. It is never inserted at the selection, so selected text is not replaced. The other composers follow.
   A stored draft that has not loaded is waited for, never written as plain text, and this includes a visible composer
   still awaiting its draft (the person came back to the thread during the rewind): nothing is inserted or saved
-  until the draft loads, what was typed meanwhile is kept after the loaded draft, and then the prompt goes in front
+  until the draft loads (the composer is read-only meanwhile), the composer shows the loaded draft, and then the
+  prompt goes in front
   (if the window shows another thread by then, the prompt goes into its own thread's draft through that thread's host).
   After 10 s a notice says the prompt will be added when it loads; after 10 minutes (or if the wait is cancelled)
   nothing is written and an alert shows the prompt with Copy Prompt.

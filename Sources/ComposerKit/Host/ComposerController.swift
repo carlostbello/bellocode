@@ -24,6 +24,9 @@ public final class ComposerController {
     public private(set) var sendError: String?
     public var sendKey: SendKey = .returnKey
     public var draftSaveDelay: Duration = .milliseconds(150)
+    /// How long a draft may take to load before the composer says it could not be loaded and offers Retry. Drafts are
+    /// local, so loading normally takes milliseconds.
+    public var draftLoadTimeout: Duration = .seconds(5)
 
     /// The view's current draft.
     public var currentDraft: () -> ComposerDraft = { .empty }
@@ -43,10 +46,15 @@ public final class ComposerController {
     private var saveTask: Task<Void, Never>?
     private var historyStash: ComposerDraft?
     private var applyingHistory = false
-    /// The host's stored draft has not been read yet; nothing is saved over it until it has.
+    /// This composer has not yet observed its host's loaded draft. Meanwhile it takes no edit (the view is read-only,
+    /// showing `ComposerHost.cachedDraft()` if any, with "Loading draft…") and saves, flushes, hands over or clears
+    /// nothing for the thread; then it shows the loaded draft. It is set only when a host is attached, so a composer
+    /// never edits on top of a placeholder (AV2-02, R5-01, R5-02).
     public private(set) var awaitingDraft = false
-    /// The user edited while `awaitingDraft`; the stored draft is merged in front of the edit when it arrives.
-    private var editedWhileAwaiting = false
+    /// The draft did not load (the host reported a failure, or `draftLoadTimeout` passed): shown with Retry. Still
+    /// awaiting, so still nothing is written.
+    public private(set) var draftLoadFailed = false
+    private var loadWatch: Task<Void, Never>?
     /// Failed submissions this composer already took back (bounded; most recent last).
     private var restoredSubmissions: [Int] = []
     /// The stored draft's revision (`ComposerHost.draftRevision`) this composer's content is based on, and that
@@ -179,8 +187,8 @@ public final class ComposerController {
     /// the latest revision; every other live composer of the thread then shows that revision.
     ///
     /// While this composer is still loading its stored draft, nothing is inserted or saved (AV2-02): the prompt waits
-    /// for the load (`onDelay` after `noticeAfter`), the loaded draft is reconciled with anything typed meanwhile, and
-    /// only then is the prompt placed. If the composer shows another thread by then, the prompt goes into the original
+    /// for the load (`onDelay` after `noticeAfter`), the composer shows the loaded draft, and only then is the prompt
+    /// placed in front of it. If the composer shows another thread by then, the prompt goes into the original
     /// thread's draft through its host. `.unloadedDraft` (nothing written) when the draft never loads or the wait is
     /// cancelled.
     public func placeRecovered(
@@ -193,7 +201,7 @@ public final class ComposerController {
             return .unloadedDraft
         }
         if host === target {
-            // The host observation may not have run yet: take the loaded draft in now (merging any edit after it).
+            // The host observation may not have run yet: show the loaded draft now.
             reconcileLoadedDraft()
             if let placed = placeRecoveredIfLoaded(draft) { return placed }
         }
@@ -264,6 +272,7 @@ public final class ComposerController {
 
     isolated deinit {
         saveTask?.cancel()
+        loadWatch?.cancel()
         observation?.cancel()
     }
 
@@ -280,8 +289,16 @@ public final class ComposerController {
         host = newHost
         history = PromptHistory(entries: newHost?.recentPrompts() ?? [])
         awaitingDraft = !(newHost?.isDraftLoaded ?? true)
-        editedWhileAwaiting = false
-        applyDraft(awaitingDraft ? .empty : newHost?.loadDraft().validated() ?? .empty)
+        draftLoadFailed = false
+        loadWatch?.cancel()
+        loadWatch = nil
+        if awaitingDraft {
+            // Read-only until the stored draft loads: the newest known copy, so the composer is not blank (UX rule 1).
+            applyDraft(newHost?.cachedDraft()?.validated() ?? .empty)
+            watchLoad()
+        } else {
+            applyDraft(newHost?.loadDraft().validated() ?? .empty)
+        }
         markBase()
         observation = newHost?.observe { [weak self] in self?.hostDidChange() }
         onStateChange()
@@ -289,8 +306,45 @@ public final class ComposerController {
 
     private func hostDidChange() {
         reconcileLoadedDraft()
+        if awaitingDraft, host?.draftLoadFailed == true { draftLoadFailed = true }
         followStoredDraft()
         onStateChange()
+    }
+
+    /// Whether the person can edit now: a host is shown and its loaded draft has been observed.
+    public var acceptsEdits: Bool { host != nil && !awaitingDraft }
+
+    /// The visible error while the draft cannot be loaded (with Retry). Nil otherwise.
+    public var draftLoadError: String? {
+        guard awaitingDraft, draftLoadFailed else { return nil }
+        return "This thread's draft could not be loaded. Nothing will be saved until it loads."
+    }
+
+    /// Reads the stored draft again (Retry). Still nothing is written until it loads.
+    public func retryDraftLoad() {
+        guard awaitingDraft, let host else { return }
+        draftLoadFailed = false
+        host.retryDraftLoad()
+        watchLoad()
+        // A host that loads synchronously.
+        hostDidChange()
+    }
+
+    /// After `draftLoadTimeout` still awaiting the same host: the load counts as failed (shown with Retry).
+    private func watchLoad() {
+        loadWatch?.cancel()
+        let timeout = draftLoadTimeout
+        let watched = host
+        loadWatch = Task { [weak self, weak watched] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled, let self, let watched, self.host === watched, self.awaitingDraft else { return }
+            self.loadWatch = nil
+            // The load may have finished with its observation still queued.
+            self.reconcileLoadedDraft()
+            guard self.awaitingDraft else { return self.onStateChange() }
+            self.draftLoadFailed = true
+            self.onStateChange()
+        }
     }
 
     /// What is shown now is based on the host's current revision.
@@ -328,7 +382,8 @@ public final class ComposerController {
     private func commitShown() {
         saveTask?.cancel()
         saveTask = nil
-        guard let host else { return }
+        // Nothing is written for a thread whose loaded draft this composer has not observed.
+        guard let host, !awaitingDraft else { return }
         var draft = currentDraft()
         if host.draftRevision != baseRevision {
             let latest = host.loadDraft().validated()
@@ -348,25 +403,18 @@ public final class ComposerController {
         markBase()
     }
 
-    /// The host's stored draft arrived: show it, or put it in front of what was typed meanwhile and save the result.
+    /// The host's stored draft arrived: show it (nothing was edited meanwhile, so there is nothing to join or save).
     private func reconcileLoadedDraft() {
         guard awaitingDraft, let host, host.isDraftLoaded else { return }
         awaitingDraft = false
-        let loaded = host.loadDraft().validated()
-        guard editedWhileAwaiting else {
-            applyDraft(loaded)
-            markBase()
-            return
-        }
-        editedWhileAwaiting = false
+        draftLoadFailed = false
+        loadWatch?.cancel()
+        loadWatch = nil
         saveTask?.cancel()
         saveTask = nil
-        let current = currentDraft()
-        let merged = current.text == loaded.text && current.attachments.isEmpty
-            ? loaded : ComposerDraft.merging(failed: loaded, current: current)
-        applyDraft(merged)
-        host.saveDraft(merged)
+        applyDraft(host.loadDraft().validated())
         markBase()
+        onStateChange()
     }
 
     /// The text or attachments changed by the user.
@@ -375,11 +423,9 @@ public final class ComposerController {
             history.endBrowsing()
             historyStash = nil
         }
-        guard let host else { return }
-        if awaitingDraft {
-            editedWhileAwaiting = true
-            return
-        }
+        // Not editable while awaiting: a change reported anyway (a stray programmatic edit) is not saved, and the
+        // loaded draft replaces it.
+        guard let host, !awaitingDraft else { return }
         let delay = draftSaveDelay
         saveTask?.cancel()
         saveTask = Task { [weak self, weak host] in
@@ -390,16 +436,11 @@ public final class ComposerController {
         }
     }
 
-    /// Saves now (thread switch, window close, send).
+    /// Saves now (thread switch, window close, send). Only once this composer has observed its loaded draft: before
+    /// that it shows a placeholder or a read-only copy and saves nothing (AV2-02: a switch after the model loaded but
+    /// before this composer's observation ran). The save itself is a compare-and-swap on the shared revision.
     public func flushDraft() {
-        if awaitingDraft {
-            // Leaving before the stored draft arrived: hand over only real edits, which the host joins with the stored
-            // draft when it loads (never written over it, AV2-02); never the empty placeholder.
-            if editedWhileAwaiting { host?.saveDraft(currentDraft()) }
-            editedWhileAwaiting = false
-            return
-        }
-        guard saveTask != nil else { return }
+        guard !awaitingDraft, saveTask != nil else { return }
         commitShown()
     }
 
@@ -438,7 +479,8 @@ public final class ComposerController {
     /// Returns false when there was nothing to send or it could not be sent.
     @discardableResult
     public func submit(alternate: Bool = false) -> Bool {
-        guard let host else { return false }
+        // A read-only copy shown while the draft loads is not sendable.
+        guard let host, !awaitingDraft else { return false }
         let draft = currentDraft()
         guard !draft.isEmpty else { return false }
         if !draft.attachments.isEmpty, !host.supportsAttachments {
@@ -458,21 +500,20 @@ public final class ComposerController {
         sendError = nil
         host.clearError()
         applyDraft(.empty)
-        if awaitingDraft {
-            // The stored draft has not been read: the submission was typed on top of the empty placeholder, so the
-            // stored draft is not cleared (nothing is saved over it) and shows when it loads.
-            editedWhileAwaiting = false
-        } else {
-            // The send's only clear: a compare-and-swap on the revision this composer showed. A newer draft saved by
-            // another window meanwhile is kept, not cleared, and dispatch clears nothing later (R4-01).
-            commitShown()
-        }
+        // The send's only clear: a compare-and-swap on the revision this composer showed. A newer draft saved by
+        // another window meanwhile is kept, not cleared, and dispatch clears nothing later (R4-01).
+        commitShown()
         pendingSends += 1
         onStateChange()
         let registry = self.registry
         let submissionID = registry.makeSubmissionID()
         Task { [weak self] in
             let outcome = await host.send(submission)
+            if case .failed = outcome, !host.isDraftLoaded {
+                // The draft's thread may be new and still reading its stored draft: the text goes back only on top of
+                // what is stored, never over a placeholder.
+                _ = await Self.waitUntilLoaded(host, noticeAfter: .seconds(600), giveUpAfter: .seconds(600), onDelay: {})
+            }
             if case .failed(let message) = outcome {
                 // Put the text back into its own thread, merged with anything typed since.
                 if let self, self.host === host {
@@ -541,6 +582,7 @@ public final class ComposerController {
 
     /// Recalls the previous prompt. Returns false when there is none (the key then does its normal thing).
     public func historyPrevious() -> Bool {
+        guard !awaitingDraft else { return false }
         let wasBrowsing = history.isBrowsing
         guard case .entry(let text) = history.previous() else { return false }
         if !wasBrowsing { historyStash = currentDraft() }
@@ -550,7 +592,7 @@ public final class ComposerController {
 
     /// Recalls the next prompt, or restores the stashed draft past the newest. False when not browsing.
     public func historyNext() -> Bool {
-        guard let step = history.next() else { return false }
+        guard !awaitingDraft, let step = history.next() else { return false }
         switch step {
         case .entry(let text):
             replaceHistoryText(ComposerDraft(text: text))

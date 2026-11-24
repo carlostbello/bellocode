@@ -110,8 +110,12 @@ protocol FocusableSurface: AnyObject {
 protocol ComposerSurface: FocusableSurface {
     var hasSendableText: Bool { get }
     func performSend()
-    /// Inserts text at the selection as one undoable edit and focuses the composer.
-    func insertText(_ text: String)
+    /// Inserts text at the selection as one undoable edit and focuses the composer. False (nothing inserted) while the
+    /// composer is still loading its thread's draft.
+    @discardableResult
+    func insertText(_ text: String) -> Bool
+    /// The composer takes an insertion now (not while it is loading its thread's draft).
+    var acceptsInsertion: Bool { get }
 }
 
 /// Choices made in a new-thread draft, applied when its thread is created.
@@ -167,7 +171,7 @@ final class ThreadSurfaceContext {
     @ObservationIgnored var onShowIssues: (() -> Void)?
     /// Inserts text into this thread's composer as one undoable edit (GitLab triage "Send to Agent"); set by the
     /// thread container while its composer exists.
-    @ObservationIgnored var onInsertIntoComposer: ((String) -> Void)?
+    @ObservationIgnored var onInsertIntoComposer: ((String) -> Bool)?
 
     init(engine: Engine, directory: String, projectName: String, thread: ThreadModel?, newThreadDraft: String = "") {
         self.engine = engine

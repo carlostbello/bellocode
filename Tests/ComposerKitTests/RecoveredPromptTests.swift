@@ -313,7 +313,7 @@ struct RecoveredPromptTests {
         }
         defer { finished.cancel() }
         for await _ in delayed { break }
-        #expect(loading.view.draft == .empty, "nothing is inserted into the placeholder")
+        #expect(loading.view.draft.text == loading.stored.text, "nothing is inserted: the archived copy shows read-only")
         #expect(loading.thread.draft == "", "nothing is saved while the draft is loading")
         #expect(await loading.recordIsStored(), "the archived mention and attachment are untouched")
 
@@ -332,9 +332,9 @@ struct RecoveredPromptTests {
         #expect(record.attachments.count == 1)
     }
 
-    /// AV2-02, visible path: what the person types while the draft loads is kept after the loaded draft, and the
-    /// prompt goes in front of both.
-    @Test func typingWhileTheVisibleComposerLoadsIsKeptBehindTheDraft() async throws {
+    /// AV2-02, visible path: a change reported while the draft loads (the view is read-only then, so only a stray
+    /// programmatic one) is not taken: nothing is saved, and the prompt goes in front of the loaded draft alone.
+    @Test func anEditWhileTheVisibleComposerLoadsIsNotTaken() async throws {
         let loading = try await LoadingComposer()
         defer { loading.fixture.remove() }
         let controller = loading.controller
@@ -343,10 +343,12 @@ struct RecoveredPromptTests {
         for _ in 0..<20 { await Task.yield() }
         loading.view.draft = ComposerDraft(text: "typed", selection: NSRange(location: 5, length: 0))
         loading.controller.draftDidChange()
-        #expect(loading.thread.draft == "", "an edit while loading is not saved over the stored draft")
+        loading.controller.flushDraft()
+        #expect(loading.thread.draft == "", "nothing is saved while loading")
+        #expect(await loading.recordIsStored())
         loading.finishLoading(text: loading.stored.text)
         #expect(await placing.value == .placed(composers: 1))
-        let expected = "rewound\n\nsee @a.swift now\n\ntyped"
+        let expected = "rewound\n\nsee @a.swift now"
         #expect(loading.thread.draft == expected)
         #expect(loading.view.draft.text == expected)
         #expect(loading.view.draft.tokens.first?.range == NSRange(location: 13, length: 8))
@@ -356,56 +358,33 @@ struct RecoveredPromptTests {
         #expect(record.attachments.count == 1)
     }
 
-    /// AV2-02: a composer that leaves (thread switch) before the stored draft loaded hands over what was typed. It is
-    /// never written over the stored draft: the archived record stays, and when the draft loads the two are joined with
-    /// both drafts' mentions and attachments.
-    @Test func aComposerLeavingBeforeTheDraftLoadsNeverReplacesTheArchivedDraft() async throws {
+    /// AV2-02: a composer that leaves (thread switch) before the stored draft loaded hands over nothing: the thread's
+    /// text, the cache and the archived record are untouched, and the stored rich draft is what loads.
+    @Test func aComposerLeavingBeforeTheDraftLoadsWritesNothing() async throws {
         let loading = try await LoadingComposer()
         defer { loading.fixture.remove() }
-        let other = ComposerToken(kind: .file, text: "@b.swift", value: "b.swift")
-        loading.view.draft = ComposerDraft(
-            text: "and @b.swift", tokens: [PlacedToken(token: other, range: NSRange(location: 4, length: 8))],
-            attachments: [.text("trace")])
+        loading.view.draft = ComposerDraft(text: "and more", attachments: [.text("trace")])
         loading.controller.draftDidChange()
         loading.controller.attach(nil)
-        #expect(loading.thread.draft == "and @b.swift", "the thread gets the text to join with its stored draft")
+        #expect(loading.thread.draft == "", "nothing is handed to the thread")
         #expect(await loading.recordIsStored(), "the archived record is not replaced")
-        // The thread joins the texts when the stored draft arrives (`ThreadModel.mergeDrafts`).
-        loading.finishLoading(text: "see @a.swift now\n\nand @b.swift")
-        let joined = loading.host.loadDraft()
-        #expect(joined.text == "see @a.swift now\n\nand @b.swift")
-        #expect(joined.tokens == [
-            PlacedToken(token: Self.token, range: NSRange(location: 4, length: 8)),
-            PlacedToken(token: other, range: NSRange(location: 22, length: 8)),
-        ])
-        #expect(joined.attachments.count == 2)
-        let record = try #require(await loading.record())
-        #expect(record.text == joined.text)
-        #expect(record.tokens.count == 2)
-        #expect(record.attachments.count == 2)
+        loading.finishLoading(text: loading.stored.text)
+        let loaded = loading.host.loadDraft()
+        #expect(loaded.text == loading.stored.text)
+        #expect(loaded.tokens == loading.stored.tokens)
+        #expect(loaded.attachments.map(\.id) == loading.stored.attachments.map(\.id))
     }
 
-    /// A composer that hands over twice before the draft loads (a quit flush, then more typing) is kept once.
-    @Test func handingOverTwiceBeforeTheDraftLoadsKeepsOneCopy() {
-        let thread = FakeThread()
-        thread.loaded = false
-        let host = ThreadModelComposerHost(thread, cache: ComposerDraftCache())
-        let controller = ComposerController(registry: ComposerController.Registry())
-        let view = FakeView()
-        view.bind(controller)
-        controller.attach(host)
-        view.draft = ComposerDraft(text: "first", attachments: [.text("log")])
-        controller.draftDidChange()
-        controller.flushDraft()
-        view.draft.text = "first and more"
-        controller.draftDidChange()
-        controller.flushDraft()
-        #expect(thread.draft == "first and more")
-        thread.draft = "stored\n\nfirst and more"
-        thread.loaded = true
-        let joined = host.loadDraft()
-        #expect(joined.text == "stored\n\nfirst and more")
-        #expect(joined.attachments.count == 1)
+    /// The thread adapter itself refuses a write before its stored draft has been read (a stray save), so neither the
+    /// thread's text nor the cache nor the archive can be replaced by a placeholder.
+    @Test func theThreadAdapterRefusesAWriteBeforeTheDraftLoads() async throws {
+        let loading = try await LoadingComposer()
+        defer { loading.fixture.remove() }
+        loading.host.saveDraft(ComposerDraft(text: "stray", attachments: [.text("x")]))
+        #expect(loading.thread.draft == "")
+        #expect(await loading.recordIsStored())
+        loading.finishLoading(text: loading.stored.text)
+        #expect(loading.host.loadDraft().attachments.map(\.id) == loading.stored.attachments.map(\.id))
     }
 
     /// The visible composer puts the prompt in front of its draft (as the offscreen path does), never at the selection:
