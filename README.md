@@ -123,6 +123,9 @@ environment variable and run with `swift test --filter <Suite>` (export the `SWI
 | `BELLOCODE_SECRET_LIVE=1`, `BELLOCODE_SECRET_PERF=1` | The egress proxy against loopback servers, and its throughput against real package registries |
 | `BELLOCODE_STRICT_PERF=1` | Navigation timing budgets at their strict values (a quiet machine) |
 
+The real-binary suites load the plugin from `build/BelloCode.app` only while its copy is identical to `Plugin/`; a stale
+bundle is ignored with a printed note, and the suites load `Plugin/` instead.
+
 End-to-end runs of the assembled app: `make e2e-containers` (one prompt in a container), `make e2e-exec` (shared
 workspace, two repositories and a compose stack; see the Makefile for the images it needs) and
 `BELLOCODE_SMOKE_SECRETS=1 BELLOCODE_SMOKE_IMAGE=<a local image with curl> build/BelloCode.app/Contents/MacOS/BelloCode
