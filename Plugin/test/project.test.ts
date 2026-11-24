@@ -328,3 +328,44 @@ describe("untrusted repository contents on a real file system", () => {
     cleanup()
   })
 })
+
+describe("identity-bound instruction lookup (AF08, round 4)", () => {
+  test("a pinned identity must be the very root folder, before and after the reads", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "bc-identity-")))
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    writeFileSync(join(repo, "AGENTS.md"), "repo rules")
+    const found = P.instructionLookup(repo)
+    expect(found?.root).toBe(repo)
+    expect(found?.identity).toEqual(P.folderIdentity(repo))
+    expect(P.instructionLookup(repo, P.nodeFS, repo, found!.identity)?.files.map((f) => f.content)).toEqual(["repo rules"])
+    // Same path, another folder: refused.
+    renameSync(repo, join(base, "repo-moved"))
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    writeFileSync(join(repo, "AGENTS.md"), "OTHER-MARKER")
+    expect(P.instructionLookup(repo, P.nodeFS, repo, found!.identity)).toBeUndefined()
+    // A confined read bound to an identity refuses a root with another one.
+    expect(P.readConfined(repo, join(repo, "AGENTS.md"), 1024, undefined, found!.identity)).toBeUndefined()
+    expect(P.readConfined(repo, join(repo, "AGENTS.md"), 1024, undefined, P.folderIdentity(repo))?.text).toBe("OTHER-MARKER")
+    // A file system that cannot report identities cannot honour a pin: refused.
+    const memory = memoryFS({ "/r/.git/HEAD": "x", "/r/AGENTS.md": "rules" })
+    expect(P.instructionLookup("/r", memory, "/r")?.files.length).toBe(1)
+    expect(P.instructionLookup("/r", memory, "/r", { dev: "1", ino: "2" })).toBeUndefined()
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  test("an unlinked lookup refuses a session folder reached through any link, even one above every checkout", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "bc-unlinked-")))
+    const repo = join(base, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    writeFileSync(join(repo, "AGENTS.md"), "repo rules")
+    const alias = join(base, "alias")
+    symlinkSync(repo, alias)
+    expect(P.instructionLookup(repo, P.nodeFS, undefined, undefined, true)?.files.map((f) => f.content)).toEqual(["repo rules"])
+    expect(P.instructionLookup(`${repo}/`, P.nodeFS, undefined, undefined, true)?.root).toBe(repo)
+    // Followed when the session is new (the person's own layout), refused when nothing says where it used to lead.
+    expect(P.instructionLookup(alias)?.root).toBe(repo)
+    expect(P.instructionLookup(alias, P.nodeFS, undefined, undefined, true)).toBeUndefined()
+    rmSync(base, { recursive: true, force: true })
+  })
+})

@@ -232,6 +232,18 @@ struct OpenCodeConfigRealBinaryTests {
         #expect(system.contains(Self.repoMarker), "repository AGENTS.md missing from the system prompt")
         let entries = try await client.instructionEntries(sessionID: session.id)
         #expect(entries.contains { $0.key == OrchestrationContract.projectInstructionsKey })
+        // AF08: the session's root pin is on disk before the text is handed over, so it survives a server restart.
+        let pinFile = sandbox.directories.instructionPinsDirectory.appending(path: "\(session.id).json")
+        let pin = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: pinFile))
+        let canonical = try #require(realpath(sandbox.project.path, nil))
+        defer { free(canonical) }
+        #expect(pin["root"]?.stringValue == String(cString: canonical))
+        #expect(pin["identity"]?["ino"]?.stringValue?.isEmpty == false)
+        // The store recorded its creation as the first watermark when the plugin started, and this session is newer.
+        let markers = try FileManager.default.contentsOfDirectory(
+            atPath: sandbox.directories.instructionPinsDirectory.appending(path: "watermark").path)
+        let watermark = try #require(markers.compactMap(Double.init).max())
+        #expect(try #require(pin["created"]?.numberValue) > watermark)
     }
 }
 

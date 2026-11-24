@@ -191,6 +191,8 @@ struct OpenCodeConfigTests {
         let projectConfig = parsed["plugins"]?[0]?["options"]?["projectConfig"]
         #expect(projectConfig?["mode"]?.stringValue == "bellocode")
         #expect(projectConfig?["trustFile"]?.stringValue == root.appending(path: "bellocode-trust.json").path)
+        // AF08: the plugin's durable root pins live in BelloCode's own data folder, next to the trust file.
+        #expect(projectConfig?["pinDirectory"]?.stringValue == root.appending(path: "bellocode-instruction-pins").path)
 
         configuration.repositoryConfig = .native
         configuration.extraEnvironment = ["OPENCODE_DISABLE_PROJECT_CONFIG": "1"]
