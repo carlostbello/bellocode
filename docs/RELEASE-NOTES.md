@@ -66,6 +66,13 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
 - **Free models are promised only when one can be chosen now** (usable and not hidden with Hide Model) in the draft
   hint, onboarding and Settings ▸ Accounts, whose empty state otherwise says "Connect a provider to use your own
   models." (NF24, NV14).
+- **A resumed session whose checkout was replaced gets no repository instructions.** Each session's repository root
+  (its path and folder identity) is now kept on disk in BelloCode's data folder, so after a server restart a session
+  whose checkout folder became a link to, or was swapped for, another checkout gets no `AGENTS.md` text instead of
+  the other checkout's. So does a session whose pin cannot be read or stored, and an old session that may have lost
+  its pin when the store (10,000 sessions) overflowed, unless its folder's path holds no link at all. Sessions
+  started before this version count as such: one reached through a link (a code folder on another volume) gets no
+  repository instructions until a new session is started there. New sessions are not affected (AF08).
 
 ### Fixes by area
 
@@ -170,6 +177,14 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   The plugin's repository instructions are bound to the session's checkout: a session folder that is, or comes to
   be, a link inside a checkout, or that leads into the middle of another checkout, hands over no instructions, and
   each session keeps the root its first prompt found (AF08).
+- **Repository instructions across restarts (round 4,** [Astra](reviews/v1.0.1-astra-round3-check.md)**):** the
+  root pin is durable. The plugin stores each session's root path, device and inode in
+  `<data>/bellocode-instruction-pins/` (a folder the app passes in its options, outside every code root) before it
+  hands over any text, and a later lookup, in this server or a restarted one, must find that very folder; a fork or
+  child in the same folder starts from its origin's pin. An unpinned session created at or before the store's
+  watermark (the store's creation, raised by each eviction) is pinned only when its folder's path holds no link. A
+  missing or linked pin folder, an unreadable pin or watermark, or a pin that cannot be written gives no
+  instructions (AF08).
   Edit from Here's rewound prompt reaches every open composer of its thread, in any window, so a second window no
   longer saves over it, and when no window shows the thread it goes in front of the saved draft with that draft's
   mentions and attachments kept (AV2-02).

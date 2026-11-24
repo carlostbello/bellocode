@@ -11,7 +11,8 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { dirname, join, relative, sep } from "path"
 
 export type ProjectConfigMode = "bellocode" | "native"
-export type ProjectConfigOptions = { mode: ProjectConfigMode; trustFile?: string }
+/** `pinDirectory`: where session root pins are kept (`pins.ts`); without it no session gets repository instructions. */
+export type ProjectConfigOptions = { mode: ProjectConfigMode; trustFile?: string; pinDirectory?: string }
 
 export const INSTRUCTIONS_KEY = "bellocode.project-instructions"
 /** Limits: per file, all instruction files together, files per folder kind, folder depth below a kind folder. */
@@ -38,7 +39,30 @@ export interface FS {
    * instant of the open, and the folder identities before and after the read must agree, so an ancestor replaced by
    * a link at any moment cannot hand over a file outside the repository (AF08).
    */
-  readRegular(path: string, limit: number, root?: string): { text: string; size: number } | undefined
+  readRegular(path: string, limit: number, root?: string, rootIdentity?: RootIdentity): { text: string; size: number } | undefined
+  /**
+   * The identity (device and inode) of the folder at `path`, examined without following a link: undefined for a link,
+   * a file or a missing path. With `rootIdentity`, `readRegular` refuses unless `root` has that identity before the
+   * open and after the read. Optional: without it, nothing can be bound to a pinned root, so a pinned lookup refuses.
+   */
+  identity?(path: string): RootIdentity | undefined
+}
+
+/** A folder's identity as decimal strings, so a pin can be stored as JSON (`pins.ts`). */
+export type RootIdentity = { dev: string; ino: string }
+
+export function sameIdentity(a: RootIdentity | undefined, b: RootIdentity | undefined): boolean {
+  return a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino
+}
+
+/** The identity of the real folder `path` (a link is not followed), or undefined. */
+export function folderIdentity(path: string): RootIdentity | undefined {
+  try {
+    const info = lstatSync(path, { bigint: true })
+    return info.isDirectory() ? { dev: String(info.dev), ino: String(info.ino) } : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const NOFOLLOW = (constants as any).O_NOFOLLOW ?? 0
@@ -117,14 +141,23 @@ function openConfined(root: string, parts: string[]): number | undefined {
  *  3. after the bytes are read, the same walk must find the same folder identities (device and inode) and a leaf that
  *     is the very file the descriptor holds.
  * A file is also refused when it has other hard links (`nlink > 1`): a second name can sit outside the repository.
+ * With `rootIdentity` (a pinned root), `root` must be that very folder at both walks.
  */
-export function readConfined(root: string, path: string, limit: number, hooks?: ConfinedReadHooks): { text: string; size: number } | undefined {
+export function readConfined(
+  root: string,
+  path: string,
+  limit: number,
+  hooks?: ConfinedReadHooks,
+  rootIdentity?: RootIdentity,
+): { text: string; size: number } | undefined {
   const parts = componentsBelow(root, path)
   if (!parts) return undefined
   let fd: number | undefined
   try {
     const before = walkIdentities(root, parts, hooks)
     if (!before) return undefined
+    const matchesRoot = (identity: Identity) => rootIdentity === undefined || sameIdentity(rootIdentity, { dev: String(identity.dev), ino: String(identity.ino) })
+    if (!matchesRoot(before[0])) return undefined
     hooks?.beforeOpen?.()
     fd = openConfined(root, parts)
     if (fd === undefined) return undefined
@@ -135,7 +168,7 @@ export function readConfined(root: string, path: string, limit: number, hooks?: 
     if (info.dev !== leaf.dev || info.ino !== leaf.ino) return undefined
     const read = readBounded(fd, Number(info.size), limit)
     const after = walkIdentities(root, parts, hooks)
-    if (!after || after.length !== before.length) return undefined
+    if (!after || after.length !== before.length || !matchesRoot(after[0])) return undefined
     for (let index = 0; index < after.length; index++) {
       if (after[index].dev !== before[index].dev || after[index].ino !== before[index].ino) return undefined
     }
@@ -186,8 +219,10 @@ export const nodeFS: FS = {
       return []
     }
   },
-  readRegular: (path, limit, root) => {
-    if (root !== undefined) return readConfined(root, path, limit)
+  identity: folderIdentity,
+  readRegular: (path, limit, root, rootIdentity) => {
+    if (root !== undefined) return readConfined(root, path, limit, undefined, rootIdentity)
+    if (rootIdentity !== undefined) return undefined
     let fd: number | undefined
     try {
       fd = openSync(path, constants.O_RDONLY | NOFOLLOW | NONBLOCK)
@@ -209,7 +244,11 @@ export const nodeFS: FS = {
 export function projectConfigOptions(options: any): ProjectConfigOptions | undefined {
   const value = options?.projectConfig
   if (!value || (value.mode !== "bellocode" && value.mode !== "native")) return undefined
-  return { mode: value.mode, trustFile: typeof value.trustFile === "string" ? value.trustFile : undefined }
+  return {
+    mode: value.mode,
+    trustFile: typeof value.trustFile === "string" ? value.trustFile : undefined,
+    pinDirectory: typeof value.pinDirectory === "string" && value.pinDirectory.startsWith("/") ? value.pinDirectory : undefined,
+  }
 }
 
 /** The trust file (`ProjectTrustFile`): trusted project directories and the app's revision of the list. A missing or
@@ -282,11 +321,11 @@ export type BoundedRead = { text: string; size: number } | { refused: string }
 /** Reads `path` only if it resolves to a regular file inside `root` (canonical), at most `limit` bytes. The resolved
  * path is opened confined to the root (`FS.readRegular` with `root`): a concurrent replacement of an ancestor between
  * the check and the open is refused, not followed (AF08). */
-export function readInside(root: string, path: string, limit: number, fs: FS = nodeFS): BoundedRead {
+export function readInside(root: string, path: string, limit: number, fs: FS = nodeFS, rootIdentity?: RootIdentity): BoundedRead {
   const real = fs.realpath(path)
   if (!real) return { refused: "cannot be read" }
   if (!inside(root, real)) return { refused: "links outside the repository" }
-  const read = fs.readRegular(real, limit, root)
+  const read = rootIdentity === undefined ? fs.readRegular(real, limit, root) : fs.readRegular(real, limit, root, rootIdentity)
   return read ?? { refused: "not a regular file" }
 }
 
@@ -341,23 +380,34 @@ export function sessionCheckout(directory: string, fs: FS = nodeFS): SessionChec
 }
 
 /**
- * `AGENTS.md` files from the repository root down to `directory` (opencode's own order: outer first), and the root
- * they come from. Each must be a regular file inside the repository; links that leave it, FIFOs and devices are
- * ignored. The root is found by `sessionCheckout`; with `pinned` (the root a session's first lookup found), a root
- * outside it is refused, so a session folder that comes to point elsewhere mid-session hands over nothing. The
- * checkout is examined again after the reads and must not have changed, so a link put in place and removed around
- * them is refused too (AF08). Undefined when refused.
+ * `AGENTS.md` files from the repository root down to `directory` (opencode's own order: outer first), the root they
+ * come from and that root folder's identity. Each must be a regular file inside the repository; links that leave it,
+ * FIFOs and devices are ignored. The root is found by `sessionCheckout`. With `pinned` (the root a session's first
+ * lookup found, `pins.ts`), a root or folder outside it is refused, so a session folder that comes to point elsewhere
+ * hands over nothing; with `pinnedIdentity` as well, the pinned folder must still be the very folder that was pinned
+ * (same device and inode) before and after the reads, so a checkout moved away and replaced by another one at the
+ * same path is refused too, across server restarts. Every read is bound to the root's identity, and the checkout is
+ * examined again after the reads and must not have changed, so a link put in place and removed around them is
+ * refused too (AF08). With `unlinked` (a session that may have had a pin it no longer has, `pins.ts`), the session
+ * folder must be its own canonical path, before and after the reads: no component of it may be a link at all, even
+ * one above every checkout, since nothing recorded says where it used to lead. Undefined when refused.
  */
 export function instructionLookup(
   directory: string | undefined,
   fs: FS = nodeFS,
   pinned?: string,
-): { root: string; files: { path: string; content: string }[] } | undefined {
+  pinnedIdentity?: RootIdentity,
+  unlinked = false,
+): { root: string; identity?: RootIdentity; files: { path: string; content: string }[] } | undefined {
   if (!directory) return undefined
   const checkout = sessionCheckout(directory, fs)
   if (!checkout) return undefined
   const { real, root } = checkout
+  if (unlinked && real !== normalise(directory)) return undefined
   if (pinned !== undefined && !(inside(pinned, root) && inside(pinned, real))) return undefined
+  const pinHolds = () => pinnedIdentity === undefined || sameIdentity(fs.identity?.(pinned ?? root), pinnedIdentity)
+  if (!pinHolds()) return undefined
+  const identity = fs.identity?.(root)
   const chain: string[] = []
   let current = real
   for (let depth = 0; depth < 64; depth++) {
@@ -372,7 +422,7 @@ export function instructionLookup(
   for (const folder of chain) {
     const path = join(folder, "AGENTS.md")
     if (fs.kind(path) === undefined) continue
-    const read = readInside(root, path, LIMITS.fileBytes, fs)
+    const read = readInside(root, path, LIMITS.fileBytes, fs, identity)
     if ("refused" in read) continue
     let content = read.text
     if (read.size > LIMITS.fileBytes) content += "\n[truncated by BelloCode: file too large]"
@@ -382,7 +432,9 @@ export function instructionLookup(
   }
   const after = sessionCheckout(directory, fs)
   if (!after || after.real !== real || after.root !== root) return undefined
-  return { root, files }
+  if (!pinHolds()) return undefined
+  if (identity !== undefined && !sameIdentity(fs.identity?.(root), identity)) return undefined
+  return identity === undefined ? { root, files } : { root, identity, files }
 }
 
 /** `instructionLookup`'s files, or none when it refuses. */

@@ -7,12 +7,14 @@
 // output schema ("Tool result declared output without an output schema", seen on the real 2.3.0 binary). Everything here runs in the server process and keeps working while the app is closed.
 //
 // Durable state lives in opencode itself: child sessions (`parentID`), session metadata (`metadata.bellocode`) and
-// instruction entries. The plugin keeps only short-lived, in-memory bookkeeping (cascades in progress, event dedupe).
+// instruction entries, plus each session's repository-root pin in the app's pin folder (src/pins.ts, AF08). Otherwise
+// the plugin keeps only short-lived, in-memory bookkeeping (cascades in progress, event dedupe).
 
 import * as L from "./src/logic.ts"
 import * as C from "./src/container.ts"
 import * as A from "./src/auto.ts"
 import * as P from "./src/project.ts"
+import { PinStore, type RootPin } from "./src/pins.ts"
 import { readFileSync } from "fs"
 
 type Ctx = any
@@ -34,9 +36,6 @@ const cascading = new Map<string, number>()
 const guided = new Set<string>()
 /** The repository instruction text last written per session (rewritten only when the files change). */
 const projectInstructionsWritten = new Map<string, string>()
-/** The repository root each session's first instruction lookup found, per session directory (AF08): later lookups
- * must stay inside it. */
-const projectInstructionRoots = new Map<string, { directory: string; root: string }>()
 const CASCADE_WINDOW_MS = 15_000
 /** Session list page size, pages per parent and sessions per tree walk (beyond these a walk reports incomplete). */
 const PAGE_SIZE = 200
@@ -202,19 +201,59 @@ export default {
       } catch {}
     }
 
+    // Durable root pins (AF08): in a folder the app owns, so a restarted server binds a resumed session to the root
+    // its first lookup found. Without the folder no session gets repository instructions (fail closed). The store's
+    // first watermark is recorded before any prompt is served, so every session older than the store is known as such.
+    const pins = projectConfig?.pinDirectory ? new PinStore(projectConfig.pinDirectory) : undefined
+    if (pins?.initialise()) pins.prune()
+    /** The repository instructions for a session, bound to its durable pin; undefined when refused. */
+    const pinnedLookup = (sessionID: string, session: any, directory: string) => {
+      if (!pins) return undefined
+      const own = pins.read(sessionID)
+      if (own === "unreadable") return undefined
+      const ownHolds = typeof own === "object" && own.directory === directory
+      let expected: RootPin | undefined = ownHolds ? (own as RootPin) : undefined
+      if (expected === undefined) {
+        // A fork or child in the same folder starts from the pin of the session it came from.
+        for (const relative of [session?.fork?.sessionID, session?.parentID]) {
+          if (typeof relative !== "string" || !relative) continue
+          const pin = pins.read(relative)
+          if (pin === "unreadable") return undefined
+          if (typeof pin === "object" && pin.directory === directory) {
+            expected = pin
+            break
+          }
+        }
+      }
+      const created = Number(session?.time?.created)
+      let unlinked = false
+      if (expected === undefined && own === "none") {
+        // No pin. A session created after the watermark is new here; an older one predates the store or lost its pin
+        // to eviction, so nothing says where its folder used to lead: only a folder path with no link is accepted.
+        if (!Number.isFinite(created)) return undefined
+        unlinked = created <= pins.watermark()
+      }
+      const lookup = P.instructionLookup(directory, P.nodeFS, expected?.root, expected?.identity, unlinked)
+      if (!lookup) return undefined
+      if (ownHolds) return lookup
+      const root = expected?.root ?? lookup.root
+      const identity = expected?.identity ?? lookup.identity
+      if (!identity) return undefined
+      // The pin is stored before any text is handed over; a pin that cannot be stored hands over nothing.
+      const pin: RootPin = { directory, root, identity, created: Number.isFinite(created) ? created : Date.now() }
+      return pins.write(sessionID, pin) ? lookup : undefined
+    }
+
     /** Writes (or removes) the session's repository AGENTS.md entry when the text changed. Bounded by a time limit so
      * a slow write never holds up a prompt. */
-    const putProjectInstructions = async (sessionID: string, directory: string) => {
+    const putProjectInstructions = async (sessionID: string, session: any) => {
       if (projectConfig?.mode !== "bellocode") return
+      const directory = session?.location?.directory
+      if (typeof directory !== "string" || !directory) return
       let text: string
       try {
-        // Bound to the root the session's first lookup found (AF08); a refused lookup hands over nothing.
-        const pin = projectInstructionRoots.get(sessionID)
-        const lookup = P.instructionLookup(directory, P.nodeFS, pin?.directory === directory ? pin.root : undefined)
-        if (lookup && pin?.directory !== directory) {
-          projectInstructionRoots.set(sessionID, { directory, root: lookup.root })
-          if (projectInstructionRoots.size > 4_000) projectInstructionRoots.delete(projectInstructionRoots.keys().next().value as string)
-        }
+        // Bound to the session's durable root pin (AF08); a refused lookup hands over nothing.
+        const lookup = pinnedLookup(sessionID, session, directory)
         text = P.instructionsText(lookup?.files ?? []) ?? ""
       } catch {
         return
@@ -247,9 +286,7 @@ export default {
         const session = await Promise.resolve()
           .then(() => ctx.session.get({ sessionID }))
           .then((value: any) => value?.data ?? value, () => undefined)
-        const directory = session?.location?.directory
-        if (typeof directory !== "string" || !directory) return
-        await putProjectInstructions(sessionID, directory)
+        await putProjectInstructions(sessionID, session)
       })
     }
 
@@ -471,7 +508,7 @@ export default {
       const depth = L.depthOf([session, ...(await ancestors(session))])
       const value = L.guidance({ depth, limits, delegated: Boolean(session.parentID) })
       await ctx.session.instructions.entry.put({ sessionID: session.id, key: GUIDANCE_KEY, value }).catch(() => undefined)
-      await putProjectInstructions(session.id, session.location?.directory).catch(() => undefined)
+      await putProjectInstructions(session.id, session).catch(() => undefined)
       if (container) {
         // Where commands run: rewritten at each run so it reflects the image and any blocked state.
         const text = C.containerGuidance(readExecConfig(), session.location?.directory)
@@ -1191,7 +1228,7 @@ export default {
           // Sessions created before the plugin (or while it reloaded) get their guidance at their next run; with
           // containers, every run refreshes it (image, tools, blocked state).
           if (!guided.has(sessionID) || container) await putGuidance(await get(sessionID)).catch(() => undefined)
-          else if (started) await putProjectInstructions(sessionID, started.location?.directory).catch(() => undefined)
+          else if (started) await putProjectInstructions(sessionID, started).catch(() => undefined)
           // A child's cancelled report wakes its parent; inside a cascade window that restart is cut at once.
           const until = cascading.get(sessionID)
           if (until && until > Date.now()) await ctx.session.interrupt({ sessionID }).catch(() => undefined)

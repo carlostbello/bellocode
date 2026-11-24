@@ -104,10 +104,38 @@ two layers:
      The repository root itself is found so that a link cannot redirect it (`sessionCheckout`, `instructionLookup`):
      the session's folder is refused when a component of its path is a link inside a checkout (one an agent working
      there could make; links above every checkout, such as macOS `/var` or a code folder on another volume, are
-     followed), or when the root found lies above the last link's target; each session is pinned to the root its
-     first lookup found, so a folder that comes to point elsewhere mid-session hands over nothing; and the checkout is
-     examined again after the reads. A refused lookup removes the entry (AF08, third round). Not covered: a session
-     folder outside any checkout replaced by a link before a server restart (the plugin keeps no pin across restarts).
+     followed), or when the root found lies above the last link's target; and the checkout is examined again after
+     the reads. A refused lookup removes the entry (AF08, third round).
+     **Durable root pins (`Plugin/src/pins.ts`, AF08 round 4).** Each session is pinned to the root its first
+     successful lookup found: the canonical root path, its device and inode, the session folder as opencode records
+     it and the session's creation time, one 0600 file per session in `<data>/bellocode-instruction-pins/`
+     (`OpenCodeDirectories.instructionPinsDirectory`, passed as `projectConfig.pinDirectory`; under Application
+     Support, so outside every code root and every container mount; a pin folder that is a link is not used). The
+     pin is written, atomically, before any text is handed over, at session creation or at the first prompt. Every
+     later lookup, in this server or after a restart, must find the root inside the pinned one and the pinned folder
+     must still have the pinned identity before and after the reads (every read is bound to the root's identity too),
+     so a checkout folder that became a link to another checkout, or was moved away and replaced by another folder at
+     the same path, hands over nothing; the pin is kept, so the next prompt refuses again rather than re-pinning. A
+     fork or child session in the same folder starts from the pin of the session it came from.
+     **Sessions with no pin.** A watermark (`watermark/<ms>`) records the newest creation time a session can have and
+     still lack a pin it should have: when the plugin first sets up the store it records that moment (every older
+     session predates durable pins; its root was only ever pinned in memory), and when the store overflows (more than
+     10,000 pins) it removes the oldest-written down to 9,000 after raising the watermark to the newest creation time
+     among them; the watermark never goes down. An unpinned session created after the watermark is new and is pinned
+     as found, so a first-time session in a project the person adds gets its instructions, including through a link
+     above every checkout. An unpinned session created at or before the watermark is pinned only when its folder's
+     path holds no link at all (`instructionLookup(…, unlinked)`: the folder must be its own canonical path before
+     and after the reads); a checkout folder that became a link gets no instructions, and so does an older session
+     reached through a link of the person's own layout (a code folder on another volume, macOS `/var`) until a new
+     session is started there. An unknown creation time gets none either.
+     Fail closed, with no fallback: no `pinDirectory` option, a pin folder that cannot be created or is a link, an
+     unreadable pin, a watermark that cannot be read or recorded, or a pin that cannot be written means no repository
+     instructions for that session. A session whose recorded folder changes (moved to a worktree through the API) is
+     pinned again at its new folder. Re-cloning a checkout at the same path looks the same as a swap: its earlier
+     sessions get no repository instructions, new sessions do. Not covered: a session that predates the store (or lost
+     its pin) and whose link-free checkout folder was replaced by another real folder before its next prompt (nothing
+     recorded its identity), and a session created after a folder was already swapped (it is pinned to what it finds,
+     as a new session in that folder would be).
    - **Trusted projects only** ("Trust this project's opencode config", per project, default off): the repository's
      `.opencode/agent(s)/*.md`, `.opencode/command(s)/*.md`, `.opencode/skill(s)/*/SKILL.md` and `.agents/skills` are
      added to that project's location through the per-location transforms. Agents support `description`, `mode`,

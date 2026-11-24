@@ -29,6 +29,8 @@ export type Overrides = {
   failingReloads?: string[]
   /** `ctx.agent.list` entries (default: opencode's general, build and plan). */
   agents?: Array<{ id: string; mode: string }>
+  /** A fresh copy of server.ts per distinct value: a restarted server, with none of the module's memory. */
+  restart?: string
 }
 
 export async function makePlugin(overrides: Overrides = {}, options: Record<string, unknown> = {}) {
@@ -70,6 +72,9 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
   let counter = 0
   let worktreeCounter = 0
   let release: (() => void) | undefined
+  /** Events `emit` queued before the plugin asked for the next one, and the plugin's pending request. */
+  const queued: any[] = []
+  let deliver: ((event: any) => void) | undefined
   const ctx = {
     options,
     location: { directory: overrides.location ?? "/repo" },
@@ -183,7 +188,12 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     event: {
       subscribe: () => ({
         [Symbol.asyncIterator]: () => ({
-          next: () => new Promise<IteratorResult<any>>((resolve) => (release = () => resolve({ done: true, value: undefined }))),
+          next: () =>
+            new Promise<IteratorResult<any>>((resolve) => {
+              if (queued.length > 0) return resolve({ done: false, value: queued.shift() })
+              release = () => resolve({ done: true, value: undefined })
+              deliver = (event) => resolve({ done: false, value: event })
+            }),
           return: async () => {
             release?.()
             return { done: true, value: undefined }
@@ -192,7 +202,8 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
       }),
     },
   }
-  const dispose = await plugin.setup(ctx)
+  const loaded = overrides.restart === undefined ? plugin : (await import(`../server.ts?restart=${encodeURIComponent(overrides.restart)}`)).default
+  const dispose = await loaded.setup(ctx)
 
   const add = (session: Partial<FakeSession> & { id: string }) => {
     const value: FakeSession = { projectID: "p1", location: { directory: "/repo" }, time: { created: 1 }, ...session }
@@ -217,7 +228,14 @@ export async function makePlugin(overrides: Overrides = {}, options: Record<stri
     return event
   }
   const rpc = (method: string, input: any = {}) => rpcHandlers[method](input)
-  return { sessions, calls, add, run, dispose, fire, hooks, rpc }
+  /** Delivers a server event to the plugin's subscription (handled asynchronously, as opencode's stream is). */
+  const emit = (event: any) => {
+    const take = deliver
+    deliver = undefined
+    if (take) take(event)
+    else queued.push(event)
+  }
+  return { sessions, calls, add, run, dispose, fire, hooks, rpc, emit }
 }
 
 export const running = { created: 1, busy: 10, idle: 5 }
