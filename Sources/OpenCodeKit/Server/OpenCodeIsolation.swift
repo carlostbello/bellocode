@@ -32,6 +32,10 @@ public struct OpenCodeDirectories: Sendable, Hashable {
     public var connectionFile: URL { runDirectory.appending(path: "server.json") }
     /// Which projects' repository opencode configuration BelloCode's plugin loads (`ProjectTrustFile`).
     public var trustFile: URL { dataRoot.appending(path: "bellocode-trust.json") }
+    /// Where BelloCode's plugin keeps each session's repository-root pin (device and inode), so a resumed session
+    /// after a server restart is bound to the checkout its first prompt found (AF08). Owned by the plugin, outside
+    /// every code root; created 0700 by the plugin.
+    public var instructionPinsDirectory: URL { dataRoot.appending(path: "bellocode-instruction-pins", directoryHint: .isDirectory) }
     /// The owner's default model for delegated child threads, read by BelloCode's plugin at each `delegate_task`
     /// (`ModelDefaultsFile`, Settings ▸ Models).
     public var modelDefaultsFile: URL { dataRoot.appending(path: "bellocode-models.json") }

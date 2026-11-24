@@ -122,7 +122,8 @@ public struct ServerConfiguration: Sendable {
         let mcpOverrides = containerExecution.map {
             MCPRouting.globalOverrides(configDirectory: configDirectory, helper: $0.helperURL.path).servers
         } ?? [:]
-        let projectConfig = OrchestrationContract.ProjectConfigOptions(policy: repositoryConfig, trustFile: directories.trustFile)
+        let projectConfig = OrchestrationContract.ProjectConfigOptions(
+            policy: repositoryConfig, trustFile: directories.trustFile, pinDirectory: directories.instructionPinsDirectory)
         if let pluginDirectory {
             environment["OPENCODE_CONFIG_CONTENT"] = OrchestrationContract.serverConfig(
                 pluginDirectory: pluginDirectory, container: containerExecution, mcpServers: mcpOverrides, projectConfig: projectConfig,

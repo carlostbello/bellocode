@@ -117,14 +117,20 @@ extension OrchestrationContract {
     public struct ProjectConfigOptions: Sendable, Hashable {
         public var policy: RepositoryConfigPolicy
         public var trustFile: URL
+        /// The plugin's durable session root pins (`OpenCodeDirectories.instructionPinsDirectory`). Without it the
+        /// plugin gives no session repository instructions (fail closed, AF08).
+        public var pinDirectory: URL
 
-        public init(policy: RepositoryConfigPolicy, trustFile: URL) {
+        public init(policy: RepositoryConfigPolicy, trustFile: URL, pinDirectory: URL) {
             self.policy = policy
             self.trustFile = trustFile
+            self.pinDirectory = pinDirectory
         }
 
         var pluginOptions: JSONValue {
-            .object(["mode": .string(policy.rawValue), "trustFile": .string(trustFile.path)])
+            .object([
+                "mode": .string(policy.rawValue), "trustFile": .string(trustFile.path), "pinDirectory": .string(pinDirectory.path),
+            ])
         }
     }
 
