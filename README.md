@@ -6,7 +6,8 @@ BelloCode is a native macOS app for working with coding agents. It wraps a bundl
 [opencode](https://github.com/anomalyco/opencode) server (2.3.2) in an AppKit and SwiftUI interface: threads per
 project, a streaming transcript, approvals and questions pinned above the composer, a diff panel, terminals, a
 built-in browser and agents that delegate work to other agents. Every command the agent or you run executes in a
-container through Rancher Desktop, not on the Mac.
+container through Rancher Desktop, not on the Mac (the optional **Host shell, docker only** mode is the one exception:
+it runs a sandboxed `docker` client on the Mac and offers no terminals).
 
 It was built for one organisation's setup and makes that organisation's choices: GitLab (self-managed, reached through
 its API with a personal access token) rather than GitHub, Rancher Desktop for containers, a company proxy and CA on
@@ -93,8 +94,9 @@ copy needs this once. [docs/RELEASE.md](docs/RELEASE.md) describes how the zip i
 
 1. **Install and start Rancher Desktop** and choose the dockerd (moby) engine in its preferences.
 2. **Open BelloCode.** The welcome screen offers to import credentials from an existing opencode install and to
-   connect a provider; free models work without either. BelloCode keeps its own opencode data and never touches
-   `~/.config/opencode` or `~/.local/share/opencode`.
+   connect a provider; free models work without either. BelloCode keeps its own opencode data and never writes
+   to `~/.config/opencode` or `~/.local/share/opencode`; it reads accounts from an existing install only when you choose
+   **Import from opencode**.
 3. **Set your code roots and image** in Settings ▸ Containers: the folder(s) your repositories live in (shared with
    Rancher Desktop) and a default workspace image. There is no built-in default image.
 4. **Add a project** (File ▸ Add Project…, ⇧⌘O) and start a thread (⌘N).

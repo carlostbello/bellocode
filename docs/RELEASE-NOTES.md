@@ -186,8 +186,8 @@ R4a–R4c, plus the documentation for the first public push.
   hands over any text, and a later lookup, in this server or a restarted one, must find that very folder; a fork or
   child in the same folder starts from its origin's pin. An unpinned session created at or before the store's
   watermark (the store's creation, raised by each eviction) is pinned only when its folder's path holds no link. A
-  missing or linked pin folder, an unreadable pin or watermark, or a pin that cannot be written gives no
-  instructions (AF08).
+  missing or linked pin folder, an unreadable pin, or a pin that cannot be written gives no instructions; an unreadable
+  watermark makes every unpinned session count as old, so it is pinned only when its path holds no link (AF08).
   Edit from Here's rewound prompt reaches every open composer of its thread, in any window, so a second window no
   longer saves over it, and when no window shows the thread it goes in front of the saved draft with that draft's
   mentions and attachments kept (AV2-02).

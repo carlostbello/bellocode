@@ -46,7 +46,12 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
   - Auto's shell analysis is best effort, not a boundary. A program run by its path (`bin/cat`) is classified by its
     name. ripgrep's `--pre` can come from `RIPGREP_CONFIG_PATH`, but every way to set that variable on a line goes to
     the reviewer (GLM round 3).
-  - Repository instructions are withheld when a session's folder crosses a link inside a checkout (AF08).
+  - Repository instructions are withheld when a session's folder crosses a link inside a checkout (AF08). The pin
+    check and the read of `AGENTS.md` are separate path lookups, so a process that swaps directories inside your
+    checkout at that exact moment could have another checkout's instructions read (Astra, 1.0.2 final verification).
+    It needs local write access to your files, which already allows editing `AGENTS.md` directly. Accepted, not fixed.
+  - An unreadable pin watermark makes every unpinned session count as old: it is pinned only when its path holds no
+    link, and after an eviction such a path can be pinned to a different folder at the same address.
   - Approved pushes need git 2.46 or Apple Git-155 or later; an older git is refused (AF06, GV10).
   - The live tests that drive a real model were not re-run for 1.0.2, because the free opencode model's quota was
     exhausted. Everything that uses the mock provider passed.

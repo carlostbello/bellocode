@@ -790,18 +790,26 @@ public enum RiskPolicy {
         case "uniq": operandCount(args) >= 2
         case "file": args.contains { OptionSyntax.cluster($0, contains: ["C"]) || OptionSyntax.abbreviates($0, ["compile"]) }
         // xxd matches its options by prefix, with one dash or two (`-r`, `-revert`, `--r`).
-        case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || operandCount(args) >= 2
+        case "xxd": args.contains { $0.hasPrefix("-r") || $0.hasPrefix("--r") } || operandCount(args, optionsEndAtFirstOperand: true) >= 2
         default: false
         }
     }
 
     /// Words a getopt-style program takes as operands: a bare `-` and anything not starting with `-`, and every word
-    /// after `--`. Option values (`uniq -f 1`) count too, which only makes the count larger: never an allow.
-    static func operandCount(_ args: [String]) -> Int {
+    /// after `--`. Option values (`uniq -f 1`) count too, which only makes the count larger: never an allow. vim's xxd
+    /// stops reading options at its first operand, so with `optionsEndAtFirstOperand` every later word is an operand
+    /// (`xxd in -out` writes `-out`).
+    static func operandCount(_ args: [String], optionsEndAtFirstOperand: Bool = false) -> Int {
         var count = 0
         var afterTerminator = false
         for arg in args {
-            if afterTerminator { count += 1 } else if arg == "--" { afterTerminator = true } else if arg == "-" || !arg.hasPrefix("-") { count += 1 }
+            if afterTerminator || (optionsEndAtFirstOperand && count > 0) {
+                count += 1
+            } else if arg == "--" {
+                afterTerminator = true
+            } else if arg == "-" || !arg.hasPrefix("-") {
+                count += 1
+            }
         }
         return count
     }

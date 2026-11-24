@@ -25,7 +25,8 @@ How to set up and use BelloCode day to day. For how each area is built and what 
 
 - An Apple Silicon Mac on macOS 15 or later.
 - [Rancher Desktop](https://rancherdesktop.io), set to the **dockerd (moby)** container engine (Rancher Desktop ▸
-  Preferences ▸ Container Engine). BelloCode runs every command, terminal and the shared Chrome in containers; without
+  Preferences ▸ Container Engine). BelloCode runs every command, terminal and the shared Chrome in containers (except in the optional **Host shell,
+  docker only** mode, described under execution modes below); without
   Rancher Desktop the agent can still read and edit files and chat, but commands are refused, never run on the Mac.
 - A container image for your workspace. BelloCode ships none: use your organisation's development image, or build one.
   [features/workspace-image.Dockerfile](features/workspace-image.Dockerfile) is an example based on
@@ -54,8 +55,9 @@ notarised, so the first open needs **Open Anyway** or removing the quarantine fl
    code root.
 4. **Start a thread:** File ▸ New Thread (⌘N), type a request and press Return.
 
-BelloCode keeps its own opencode data in `~/Library/Application Support/BelloCode/opencode/` and never reads or writes
-your own `~/.config/opencode` or `~/.local/share/opencode`. Closing the last window does not quit: agents and schedules
+BelloCode keeps its own opencode data in `~/Library/Application Support/BelloCode/opencode/` and never writes to your own
+`~/.config/opencode` or `~/.local/share/opencode`; it reads accounts from them only when you choose **Import from
+opencode**. Closing the last window does not quit: agents and schedules
 keep running, and the Dock icon reopens the window. The menu bar item (Settings ▸ Notifications) shows what needs you.
 
 ## 3. Projects and threads
@@ -133,7 +135,9 @@ checks `opencode.json` for syntax errors with line and column, and lists the age
 loaded with their source (Global, Project or Plugin). After editing, use **Reload Configuration** (Window ▸ Reload
 opencode Configuration); it asks first if pending approvals would be cancelled. **Restart Server…** restarts opencode.
 
-**Repository configuration.** Every project's `AGENTS.md` files are used. A repository's `.opencode/` agents, commands
+**Repository configuration.** Every project's `AGENTS.md` files are used, bound to the checkout a session first
+found: a session whose folder is, or becomes, a link inside a checkout, or whose checkout was replaced, gets no
+repository instructions. A repository's `.opencode/` agents, commands
 and skills are used only when you turn on **Trust this project's opencode config** for that project in the same pane
 (off by default). A repository's own `opencode.json` and plugins are not loaded unless you change the repository config
 policy there, which applies to every project at once; the pane explains the trade-off. Do not add a policy that denies
@@ -212,7 +216,7 @@ be sent to, and a mode:
 | **Placeholder** | `$NAME` holding a random placeholder in its commands; an egress proxy swaps in the real value only for the bound destinations | The agent cannot see this value |
 | **Visible** | The value itself in `$NAME`, after you confirm once | The agent can see this value |
 
-Values shorter than 8 characters can only be Visible (too short to detect if a service echoes them). Rotate replaces the
+Values shorter than 8 bytes (UTF-8; fewer characters for non-ASCII text) can only be Visible (too short to detect if a service echoes them). Rotate replaces the
 value and keeps placeholders working; Revoke stops every use at once; Delete removes the value and its records. Each
 secret has an audit list of its uses. Placeholder mode needs the egress proxy and is offered only while it runs.
 Details: [features/secrets.md](features/secrets.md).
