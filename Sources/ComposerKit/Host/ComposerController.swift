@@ -46,6 +46,11 @@ public final class ComposerController {
     private var editedWhileAwaiting = false
     /// Failed submissions this composer already took back (bounded; most recent last).
     private var restoredSubmissions: [Int] = []
+    /// The stored draft's revision (`ComposerHost.draftRevision`) this composer's content is based on, and that
+    /// content as shown then. A save is written only on top of this revision; otherwise the edit is rebased onto the
+    /// newer stored draft first (R3-01).
+    private var baseRevision = 0
+    private var baseDraft = ComposerDraft.empty
 
     /// The live composers of a scope (weak), flushed together at quit (N16).
     @MainActor
@@ -74,63 +79,121 @@ public final class ComposerController {
             }
         }
 
-        /// A prompt recovered for `owner`'s draft outside any composer (AV2-02): every live composer of that draft
-        /// whose stored draft has loaded takes it in front of what it shows and saves the result. Returns how many
-        /// took it (a composer still loading shows the stored draft, which the caller then updates).
-        @discardableResult
-        public func placeRecovered(_ draft: ComposerDraft, owner: ObjectIdentifier, except sender: ComposerController? = nil) -> Int {
-            var placed = 0
+        /// Every live composer of `owner`'s draft whose stored draft has loaded saves its unsaved edit now, on top of
+        /// the latest revision (rebased when the draft moved on), so the stored draft holds everything typed anywhere.
+        public func commitEdits(owner: ObjectIdentifier, except sender: ComposerController? = nil) {
             for controller in live.allObjects where controller !== sender {
-                if controller.adoptRecovered(draft, owner: owner) { placed += 1 }
+                guard let host = controller.host, host.draftOwner == owner, !controller.awaitingDraft else { continue }
+                controller.flushDraft()
             }
-            return placed
+        }
+
+        /// Every live composer of `owner`'s draft whose stored draft has loaded shows the latest revision now (keeping
+        /// an unsaved edit of its own, rebased onto it), without waiting for its host observation. Returns how many
+        /// composers show the draft.
+        @discardableResult
+        public func followStoredDraft(owner: ObjectIdentifier, except sender: ComposerController? = nil) -> Int {
+            var showing = 0
+            for controller in live.allObjects where controller !== sender {
+                guard let host = controller.host, host.draftOwner == owner, !controller.awaitingDraft else { continue }
+                controller.followStoredDraft()
+                showing += 1
+            }
+            return showing
         }
     }
 
     /// How `placeRecovered` placed a prompt.
     public enum RecoveredPlacement: Equatable, Sendable {
-        /// Into this many live composers of the draft (each saved it through its host).
-        case composers(Int)
-        /// Into the stored draft through the host, in front of its text with its tokens and attachments kept.
-        case storedDraft
-        /// The stored draft did not load in time: nothing was saved (the caller keeps the text another way).
+        /// In front of the stored draft (its tokens and attachments kept); this many live composers show it.
+        case placed(composers: Int)
+        /// The stored draft never loaded (or the wait was cancelled): nothing was written, so the stored draft is
+        /// intact. The caller shows the prompt to the person instead.
         case unloadedDraft
     }
 
     /// Puts a prompt recovered outside the composer (Edit from Here's rewind, NV09, AV2-02) into `host`'s draft
-    /// without losing anything: every live composer of the draft (any window) takes it in front of what it shows, so
-    /// none of them later saves over it; with none showing it, it goes in front of the stored draft through the host,
-    /// so the draft's tokens and attachments are kept (`ComposerDraft.merging`). The stored draft is awaited first
-    /// (bounded by `timeout`), and the composers are asked again then, since one may have mounted meanwhile.
+    /// without losing anything, as one authoritative write (R3-01): every live composer of the draft (any window)
+    /// first saves its unsaved edit on top of the latest revision; the prompt then goes in front of the stored draft
+    /// through `host` (`ComposerDraft.merging`, so the draft's tokens and attachments are kept); and every composer of
+    /// the draft then shows that revision. No composer adds the prompt to its own (possibly stale) copy.
+    ///
+    /// A stored draft that has not loaded is waited for, never written over or replaced by a text-only merge: the
+    /// prompt stays pending until it loads. After `noticeAfter` `onDelay` runs once (the caller says so visibly);
+    /// after `giveUpAfter`, or when the waiting task is cancelled, nothing is written and `.unloadedDraft` returned.
     public static func placeRecovered(
-        _ draft: ComposerDraft, into host: any ComposerHost, except sender: ComposerController? = nil,
-        registry: Registry = .shared, timeout: Duration = .seconds(10)
+        _ draft: ComposerDraft, into host: any ComposerHost, registry: Registry = .shared,
+        noticeAfter: Duration = .seconds(10), giveUpAfter: Duration = .seconds(600),
+        onDelay: @MainActor () -> Void = {}
     ) async -> RecoveredPlacement {
-        if let owner = host.draftOwner {
-            let placed = registry.placeRecovered(draft, owner: owner, except: sender)
-            if placed > 0 { return .composers(placed) }
-        }
         if !host.isDraftLoaded {
             let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
             let observation = host.observe { continuation.yield() }
-            let deadline = ContinuousClock.now + timeout
-            let timer = Task {
-                try? await Task.sleep(until: deadline, clock: .continuous)
+            let start = ContinuousClock.now
+            let noticeAt = start + noticeAfter
+            let giveUpAt = start + giveUpAfter
+            let timers = Task {
+                try? await Task.sleep(until: noticeAt, clock: .continuous)
+                continuation.yield()
+                try? await Task.sleep(until: giveUpAt, clock: .continuous)
                 continuation.yield()
             }
-            for await _ in changes where host.isDraftLoaded || ContinuousClock.now >= deadline { break }
-            timer.cancel()
+            var noticed = false
+            for await _ in changes {
+                if host.isDraftLoaded || Task.isCancelled { break }
+                let now = ContinuousClock.now
+                if !noticed, now >= noticeAt {
+                    noticed = true
+                    onDelay()
+                }
+                if now >= giveUpAt { break }
+            }
+            timers.cancel()
             observation.cancel()
             continuation.finish()
-            if let owner = host.draftOwner {
-                let placed = registry.placeRecovered(draft, owner: owner, except: sender)
-                if placed > 0 { return .composers(placed) }
-            }
         }
-        // Saving over a draft that never loaded would replace its rich record: the caller keeps the text instead.
+        // Writing to a draft that never loaded would replace (or, merged as text, strip) its rich record.
         guard host.isDraftLoaded else { return .unloadedDraft }
-        host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft()))
-        return .storedDraft
+        if let owner = host.draftOwner { registry.commitEdits(owner: owner) }
+        host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft().validated()))
+        let showing = host.draftOwner.map { registry.followStoredDraft(owner: $0) } ?? 0
+        return .placed(composers: showing)
+    }
+
+    /// Whether two drafts hold the same text, tokens and attachments (the selection is not content).
+    static func sameContent(_ a: ComposerDraft, _ b: ComposerDraft) -> Bool {
+        a.text == b.text && a.tokens == b.tokens && a.attachments == b.attachments
+    }
+
+    /// A selection in `old` carried into `new`: a position in the unchanged start stays, one in the unchanged end moves
+    /// by the change in length, and one inside the changed span goes to its end (UTF-16 offsets, as `NSRange`).
+    static func mapSelection(_ selection: NSRange, from old: String, to new: String) -> NSRange {
+        let old = old as NSString, new = new as NSString
+        let shortest = min(old.length, new.length)
+        var prefix = 0
+        while prefix < shortest, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        var suffix = 0
+        while suffix < shortest - prefix,
+              old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+        func map(_ position: Int) -> Int {
+            if position <= prefix { return position }
+            if position >= old.length - suffix { return position + new.length - old.length }
+            return new.length - suffix
+        }
+        let start = map(selection.location)
+        let end = map(selection.location + selection.length)
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
+    /// An edit made on top of `base`, moved onto `latest` (the stored draft another writer saved since): nothing is
+    /// lost. Unchanged here: the latest draft. Unchanged there (or the same edit): this edit. Both changed: the latest
+    /// draft first, then this edit after a blank line (`ComposerDraft.merging`), with the caret in this edit.
+    static func rebase(_ local: ComposerDraft, base: ComposerDraft, onto latest: ComposerDraft) -> ComposerDraft {
+        if sameContent(local, base) { return latest }
+        if sameContent(latest, base) || sameContent(latest, local) { return local }
+        // This edit already extends the latest draft (all of its text, tokens and attachments): nothing to add.
+        if local.containsRestored(latest) { return local }
+        return ComposerDraft.merging(failed: latest, current: local)
     }
 
     private let registry: Registry
@@ -163,13 +226,70 @@ public final class ComposerController {
         awaitingDraft = !(newHost?.isDraftLoaded ?? true)
         editedWhileAwaiting = false
         applyDraft(awaitingDraft ? .empty : newHost?.loadDraft().validated() ?? .empty)
+        markBase()
         observation = newHost?.observe { [weak self] in self?.hostDidChange() }
         onStateChange()
     }
 
     private func hostDidChange() {
         reconcileLoadedDraft()
+        followStoredDraft()
         onStateChange()
+    }
+
+    /// What is shown now is based on the host's current revision.
+    private func markBase() {
+        baseRevision = host?.draftRevision ?? 0
+        baseDraft = currentDraft()
+    }
+
+    /// The stored draft moved on (another window's composer saved, a send or restore changed it): show it. An unsaved
+    /// edit of this composer is kept, rebased onto it and saved. Runs on every host change; call it directly before
+    /// editing on behalf of the person (the observation hop may not have run yet).
+    public func followStoredDraft() {
+        guard let host, !awaitingDraft, host.isDraftLoaded, host.draftRevision != baseRevision else { return }
+        let current = currentDraft()
+        if saveTask != nil || !Self.sameContent(current, baseDraft) {
+            commitShown()
+            return
+        }
+        var latest = host.loadDraft().validated()
+        if Self.sameContent(latest, current) {
+            markBase()
+            return
+        }
+        // Keep this view's caret on the same text (moved by what was added before it), not the other window's.
+        if !current.text.isEmpty {
+            latest.selection = Self.mapSelection(current.selection, from: current.text, to: latest.text)
+        }
+        applyDraft(latest.validated())
+        markBase()
+    }
+
+    /// Saves what this composer shows through its host, on top of the latest revision: when the stored draft changed
+    /// since this composer last read or saved it, the edit is rebased onto it first (and shown), so a stale copy never
+    /// replaces a newer draft (R3-01).
+    private func commitShown() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard let host else { return }
+        var draft = currentDraft()
+        if host.draftRevision != baseRevision {
+            let latest = host.loadDraft().validated()
+            let rebased = Self.rebase(draft, base: baseDraft, onto: latest)
+            let joined = !Self.sameContent(rebased, draft) && !Self.sameContent(rebased, latest)
+            if rebased != draft {
+                applyDraft(rebased)
+                draft = currentDraft()
+            }
+            if Self.sameContent(draft, latest) {
+                markBase()
+                return
+            }
+            if joined { announce("This draft also changed in another window. Both versions are kept.") }
+        }
+        host.saveDraft(draft)
+        markBase()
     }
 
     /// The host's stored draft arrived: show it, or put it in front of what was typed meanwhile and save the result.
@@ -179,6 +299,7 @@ public final class ComposerController {
         let loaded = host.loadDraft().validated()
         guard editedWhileAwaiting else {
             applyDraft(loaded)
+            markBase()
             return
         }
         editedWhileAwaiting = false
@@ -189,6 +310,7 @@ public final class ComposerController {
             ? loaded : ComposerDraft.merging(failed: loaded, current: current)
         applyDraft(merged)
         host.saveDraft(merged)
+        markBase()
     }
 
     /// The text or attachments changed by the user.
@@ -208,7 +330,7 @@ public final class ComposerController {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, let self, let host, self.host === host else { return }
             self.saveTask = nil
-            host.saveDraft(self.currentDraft())
+            self.commitShown()
         }
     }
 
@@ -222,9 +344,7 @@ public final class ComposerController {
             return
         }
         guard saveTask != nil else { return }
-        saveTask?.cancel()
-        saveTask = nil
-        host?.saveDraft(currentDraft())
+        commitShown()
     }
 
     // MARK: State
@@ -282,7 +402,8 @@ public final class ComposerController {
         sendError = nil
         host.clearError()
         applyDraft(.empty)
-        host.saveDraft(.empty)
+        // On top of the latest revision: a newer draft saved by another window meanwhile is kept, not cleared.
+        commitShown()
         pendingSends += 1
         onStateChange()
         let registry = self.registry
@@ -292,9 +413,11 @@ public final class ComposerController {
             if case .failed(let message) = outcome {
                 // Put the text back into its own thread, merged with anything typed since.
                 if let self, self.host === host {
+                    // Any newer stored draft first, so the text goes in front of the latest one.
+                    self.followStoredDraft()
                     let merged = ComposerDraft.merging(failed: draft, current: self.currentDraft())
                     self.applyDraft(merged)
-                    host.saveDraft(merged)
+                    self.commitShown()
                     self.sendError = message
                 } else {
                     host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft()))
@@ -330,34 +453,18 @@ public final class ComposerController {
         guard !restoredSubmissions.contains(submission) else { return }
         restoredSubmissions.append(submission)
         if restoredSubmissions.count > 32 { restoredSubmissions.removeFirst(restoredSubmissions.count - 32) }
-        saveTask?.cancel()
-        saveTask = nil
+        // The sender's restore may already be in the stored draft: catch up with it first (keeping an unsaved edit).
+        followStoredDraft()
         let current = currentDraft()
         // Shown only when all of it is already there: its text in front, its tokens in place and its attachments.
         // Otherwise it is merged in front (a longer edit that merely starts with the same words gets it back too).
         if !current.containsRestored(draft) {
-            let merged = ComposerDraft.merging(failed: draft, current: current)
-            applyDraft(merged)
-            host.saveDraft(merged)
-        } else {
-            host.saveDraft(current)
+            applyDraft(ComposerDraft.merging(failed: draft, current: current))
         }
+        commitShown()
         sendError = message
         announce("Not sent. \(message)")
         onStateChange()
-    }
-
-    /// A prompt recovered outside the composer (see `Registry.placeRecovered`): shown in front of the current edit and
-    /// saved through this composer's host. False when this composer shows another draft or its draft is loading.
-    func adoptRecovered(_ draft: ComposerDraft, owner: ObjectIdentifier) -> Bool {
-        guard let host, host.draftOwner == owner, !awaitingDraft else { return false }
-        saveTask?.cancel()
-        saveTask = nil
-        let merged = ComposerDraft.merging(failed: draft, current: currentDraft())
-        applyDraft(merged)
-        host.saveDraft(merged)
-        onStateChange()
-        return true
     }
 
     /// Stops the running turn (wired by the host to a menu item and to the Stop button).

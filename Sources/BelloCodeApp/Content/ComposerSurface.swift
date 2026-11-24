@@ -391,6 +391,8 @@ final class DraftComposerHost: ComposerHost {
     var draftKey: String { created?.draftKey ?? "draft:" + context.projectDirectory }
     /// The created thread's model, so a failed first send reaches the thread's own composer (NF04).
     var draftOwner: ObjectIdentifier? { created?.draftOwner }
+    /// The created thread's draft revision, so a save after creation is on top of that thread's latest draft (R3-01).
+    var draftRevision: Int { created?.draftRevision ?? 0 }
 
     func loadDraft() -> ComposerDraft {
         if let created { return created.loadDraft() }

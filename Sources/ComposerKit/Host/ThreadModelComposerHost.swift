@@ -91,6 +91,51 @@ public final class ComposerDraftCache {
     }
 }
 
+/// The one revision of a thread's stored draft (R3-01), shared by every host of that thread (each window makes its
+/// own host; Edit from Here makes another). Bumped by every save through any of them, and when the thread's text
+/// changed some other way (a send clearing it, a failed send restoring it, the stored draft arriving), which is seen by
+/// comparing it with the text of the last revision. Observable, so the other composers of the thread follow a save
+/// that changed only attachments or tokens.
+@MainActor
+@Observable
+final class ComposerDraftRevision {
+    /// Process-wide, so a revision number is never reused for a draft (no ABA after a thread model is replaced).
+    private static var next = 0
+    private(set) var value: Int
+    @ObservationIgnored private var text: String
+
+    init(text: String) {
+        self.text = text
+        value = Self.mint()
+    }
+
+    private static func mint() -> Int {
+        next += 1
+        return next
+    }
+
+    /// The current revision for the source's current text.
+    func current(text: String) -> Int {
+        if text != self.text { bump(text: text) }
+        return value
+    }
+
+    func bump(text: String) {
+        self.text = text
+        value = Self.mint()
+    }
+
+    /// One per source object, released with it (weak keys).
+    private static let bySource = NSMapTable<AnyObject, ComposerDraftRevision>.weakToStrongObjects()
+
+    static func of(_ source: any ComposerThreadSource) -> ComposerDraftRevision {
+        if let existing = bySource.object(forKey: source) { return existing }
+        let created = ComposerDraftRevision(text: source.draft)
+        bySource.setObject(created, forKey: source)
+        return created
+    }
+}
+
 /// Adapts an Engine `ThreadModel` (or any `ComposerThreadSource`) to `ComposerHost`.
 ///
 /// A send becomes opencode prompt input (`PromptSubmissionMapper`): attachments as `file://` URIs (pasted images and
@@ -119,6 +164,8 @@ public final class ThreadModelComposerHost: ComposerHost {
     public var draftKey: String { source.sessionID.rawValue }
     public var draftOwner: ObjectIdentifier? { ObjectIdentifier(source) }
     public var isDraftLoaded: Bool { source.isDraftLoaded }
+    private var revision: ComposerDraftRevision { ComposerDraftRevision.of(source) }
+    public var draftRevision: Int { revision.current(text: source.draft) }
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
@@ -135,6 +182,7 @@ public final class ThreadModelComposerHost: ComposerHost {
         let previous = cache.draft(for: draftKey)
         cache.store(draft, for: draftKey, owner: ObjectIdentifier(source))
         if source.draft != draft.text { source.draft = draft.text }
+        revision.bump(text: source.draft)
         if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
             archive.save(draft, for: draftKey)
         }
@@ -178,7 +226,7 @@ public final class ThreadModelComposerHost: ComposerHost {
     public func recentPrompts() -> [String] { source.composerPromptHistory }
 
     public func observe(_ onChange: @escaping @MainActor () -> Void) -> ComposerObservation {
-        let tracker = ObservationTracker(source: source, onChange: onChange)
+        let tracker = ObservationTracker(source: source, revision: revision, onChange: onChange)
         tracker.arm()
         return ComposerObservation { tracker.active = false }
     }
@@ -249,11 +297,13 @@ public enum PromptSubmissionMapper {
 @MainActor
 private final class ObservationTracker {
     let source: any ComposerThreadSource
+    let revision: ComposerDraftRevision
     let onChange: @MainActor () -> Void
     var active = true
 
-    init(source: any ComposerThreadSource, onChange: @escaping @MainActor () -> Void) {
+    init(source: any ComposerThreadSource, revision: ComposerDraftRevision, onChange: @escaping @MainActor () -> Void) {
         self.source = source
+        self.revision = revision
         self.onChange = onChange
     }
 
@@ -264,6 +314,9 @@ private final class ObservationTracker {
             _ = source.isStopping
             _ = source.isDraftLoaded
             _ = source.composerErrorMessage
+            // The stored draft: its text, and the revision (a save that changed only attachments or tokens).
+            _ = source.draft
+            _ = revision.value
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.active else { return }

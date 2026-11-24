@@ -104,6 +104,53 @@ import Testing
         #expect(firstText.range(of: "rewound prompt for B") == nil, "the first window's thread is untouched")
     }
 
+    /// R3-01: both windows show the same thread. The first saves newer text and runs Edit from Here at once; the
+    /// second, idle, has not caught up and still shows its older copy. The prompt goes in front of the newer draft, both
+    /// windows show it, and the idle window never writes its stale copy over the newer text, then or on its next edit.
+    @Test func aRewoundPromptNeverSavesAStaleWindowsCopyOverTheNewerDraft() async throws {
+        let shell = try await IntegratedShellTests.Shell.start()
+        defer { Task { await shell.stop() } }
+        let threads = shell.threads
+        try #require(!threads.isEmpty)
+        let first = shell.controller
+        #expect(await shell.driver.select(.thread(threads[0])))
+        shell.driver.settle()
+        #expect(await waitUntil(timeout: .seconds(5)) { first.changesComposer.map { !$0.controller.awaitingDraft } ?? false })
+        let workspace = WorkspaceController(engine: shell.engine, stateStore: ShellStateStore(defaults: nil))
+        let services = AppServices(settings: AppSettings(defaults: nil), auth: shell.engine.makeAuthService(openURL: { _ in }),
+                                   attachmentStore: AttachmentFileStore(directory: shell.attachments))
+        let second = MainWindowController(workspace: workspace, configuration: .init(surfaces: .builtIn(services: services), autosaveSuffix: nil))
+        defer {
+            workspace.close()
+            second.close()
+        }
+        second.showWindow(nil)
+        let driver = ShellDriver(controller: second)
+        #expect(await driver.select(.thread(threads[0])))
+        driver.settle()
+        #expect(await waitUntil(timeout: .seconds(5)) { second.changesComposer.map { !$0.controller.awaitingDraft } ?? false })
+        let active = try #require(first.changesComposer)
+        let idle = try #require(second.changesComposer)
+        let staleText = idle.textView.string
+        // The active window saves newer text and confirms Edit from Here with no run-loop turn in between, so the idle
+        // window has not observed the save.
+        active.insert(text: "newer text from the active window")
+        active.controller.flushDraft()
+        #expect(idle.textView.string == staleText, "the idle window still shows its older copy")
+        first.placeRewoundPrompt("rewound prompt", thread: threads[0])
+
+        let model = shell.engine.openThread(threads[0])
+        defer { model.close() }
+        #expect(model.draft.contains("rewound prompt"), "\(model.draft)")
+        #expect(model.draft.contains("newer text from the active window"), "the newer draft is kept: \(model.draft)")
+        #expect(await waitUntil(timeout: .seconds(5)) { idle.textView.string == model.draft }, "\(idle.textView.string)")
+        #expect(active.textView.string == model.draft)
+        // The idle window's next edit saves on top of the newer draft.
+        idle.insert(text: "!")
+        idle.controller.flushDraft()
+        #expect(model.draft.contains("newer text from the active window") && model.draft.contains("rewound prompt"), "\(model.draft)")
+    }
+
     /// NV10: the blocked-command banner follows the context's directory live: a thread shown before its session
     /// hydrated picks up the session's directory when it arrives.
     @Test func theEnvironmentBannerFollowsALateDirectory() async throws {

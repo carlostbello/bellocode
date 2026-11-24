@@ -188,6 +188,14 @@ P5–P9 on `develop`, plus the documentation for the first public push. `VERSION
   Edit from Here's rewound prompt reaches every open composer of its thread, in any window, so a second window no
   longer saves over it, and when no window shows the thread it goes in front of the saved draft with that draft's
   mentions and attachments kept (AV2-02).
+- **Drafts shown in two windows (round 4,** [Astra](reviews/v1.0.1-astra-round3-check.md)**):** a thread's draft has
+  one revision, and every composer saves only on top of the latest one. An idle window showing an older copy now
+  follows the other window's save, and an edit made there is kept after the newer draft instead of replacing it ("Both
+  versions are kept"). Edit from Here puts the rewound prompt in front of the latest draft once, and every window then
+  shows it, so an idle window can no longer save its old text over the other window's newer text or attachments
+  (R3-01). When the thread's saved draft is slow to load, the prompt waits for it (with a notice) instead of being
+  added as plain text, which used to drop the draft's mentions and attachments; if it never loads, the draft is left
+  unchanged and an alert shows the prompt with Copy Prompt (AV2-02).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
   scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,
