@@ -18,10 +18,36 @@ import Testing
     .timeLimit(.minutes(10)))
 @MainActor
 struct OrchestrationRealBinaryTests {
-    nonisolated static var pluginDirectory: URL {
-        let bundled = EngineRepo.root.appending(path: "build/BelloCode.app/Contents/Resources/opencode-plugin", directoryHint: .isDirectory)
-        if FileManager.default.fileExists(atPath: bundled.appending(path: "server.ts").path) { return bundled }
-        return EngineRepo.root.appending(path: "Plugin", directoryHint: .isDirectory)
+    /// The plugin every real-binary suite loads. Chosen afresh for each server, never cached.
+    nonisolated static var pluginDirectory: URL { pluginDirectory(root: EngineRepo.root) }
+
+    /// The bundle's copy (`make app`) only when its runtime files are byte-for-byte those of `Plugin/`; otherwise
+    /// `Plugin/`. A bundle assembled before the latest plugin change would run old plugin code against new tests: a full
+    /// live run in a checkout with a stale `build/BelloCode.app` loaded a plugin without durable root pins (AF08) and
+    /// failed only where a test looked for the pin file.
+    nonisolated static func pluginDirectory(root: URL) -> URL {
+        let source = root.appending(path: "Plugin", directoryHint: .isDirectory)
+        let bundled = root.appending(path: "build/BelloCode.app/Contents/Resources/opencode-plugin", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: bundled.appending(path: "server.ts").path) else { return source }
+        guard let expected = runtimeFiles(source), !expected.isEmpty, runtimeFiles(bundled) == expected else {
+            print("real binary: build/BelloCode.app's plugin differs from Plugin/ (stale bundle; run make app): using Plugin/")
+            return source
+        }
+        return bundled
+    }
+
+    /// `server.ts` and `src/*.ts` (what Scripts/make-app.sh bundles), by relative path; nil when unreadable.
+    nonisolated static func runtimeFiles(_ folder: URL) -> [String: Data]? {
+        let manager = FileManager.default
+        guard let server = manager.contents(atPath: folder.appending(path: "server.ts").path),
+              let names = try? manager.contentsOfDirectory(atPath: folder.appending(path: "src").path)
+        else { return nil }
+        var files = ["server.ts": server]
+        for name in names where name.hasSuffix(".ts") {
+            guard let data = manager.contents(atPath: folder.appending(path: "src/\(name)").path) else { return nil }
+            files["src/\(name)"] = data
+        }
+        return files
     }
 
     @MainActor struct Sandbox {
