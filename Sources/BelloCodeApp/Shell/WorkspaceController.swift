@@ -182,7 +182,10 @@ final class WorkspaceController {
             let context = ThreadSurfaceContext(
                 engine: engine, directory: directory, projectName: project.name, thread: nil,
                 newThreadDraft: state.newThreadDrafts[directory] ?? "")
-            context.openThread = { [weak self] id in self?.threadModel(id) ?? self!.engine.openThread(id) }
+            // The window can close while a first send is still creating its thread (NV3-01): fall back to the engine,
+            // never to a released controller.
+            let engine = engine
+            context.openThread = { [weak self] id in self?.threadModel(id) ?? engine.openThread(id) }
             context.onNewThreadDraftChange = { [weak self] text in
                 self?.state.newThreadDrafts[directory] = text
                 self?.scheduleSave()

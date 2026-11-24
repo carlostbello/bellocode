@@ -94,6 +94,24 @@ import Testing
         await stop(fixture)
     }
 
+    /// NV3-01: a new-thread draft's first send can still be creating its thread when its window closes and the
+    /// workspace is released. Opening the created thread then goes to the engine instead of trapping on the released
+    /// controller.
+    @Test func aDraftContextOutlivingItsWorkspaceStillOpensThreads() async throws {
+        let fixture = try await start()
+        let project = try #require(fixture.engine.root.projects.first)
+        var workspace: WorkspaceController? = WorkspaceController(engine: fixture.engine, stateStore: ShellStateStore(defaults: nil))
+        weak let released = workspace
+        let context = try #require(workspace?.makeContext(for: .draft(directory: project.directory)))
+        workspace?.close()
+        workspace = nil
+        #expect(released == nil, "the workspace is released with its window")
+        let opened = try #require(context.openThread?(fixture.threads[0]))
+        #expect(opened.sessionID == fixture.threads[0])
+        opened.close()
+        await stop(fixture)
+    }
+
     /// NV04: a thread working in a worktree outside the project root keeps its working directory for the terminal, but
     /// per-project settings (opencode trust, Project Environment, global MCP servers) name the registered project.
     @Test func aWorktreeThreadsSettingsNameItsProjectRoot() async throws {
