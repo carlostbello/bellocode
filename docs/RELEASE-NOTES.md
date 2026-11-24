@@ -211,7 +211,7 @@ R4a–R4c, R5 and R6, plus the documentation for the first public push.
   saved meanwhile with the same words: only the composer's own clear at Send applies, and only if nothing newer was
   saved (R4-01).
 - **Tests (P8):** time limits on every suite that touches sockets, processes or web views; the uptime-timer guard
-  scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,644 tests).
+  scans `Tests/`; assertion-free and wall-clock checks replaced (NF13, NF14, NF15). `make test` passes (1,787 tests at the 1.0.2 tag).
 - **Documentation and licences:** a public README, a [user guide](USER-GUIDE.md), these notes, a review index,
   CONTRIBUTING.md, the Apache-2.0 notice for the seccomp profile derived from moby/profiles (now also bundled in the
   app's Acknowledgements folder), stale versions and statuses corrected, and personal paths removed from recorded
