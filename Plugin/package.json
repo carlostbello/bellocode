@@ -1,7 +1,7 @@
 {
   "name": "bellocode-opencode-plugin",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "BelloCode's opencode server plugin (pinned 2.3.2): orchestration tools. Loaded by local path; no dependencies.",
   "scripts": {

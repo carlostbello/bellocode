@@ -18,8 +18,17 @@ fixed before the next release unless this index says otherwise.
 | [v1.0.1-astra-final-check.md](v1.0.1-astra-final-check.md) | 2026-11-23 | `v1.0.1` (`ab25a8e`) | AF01–AF27: 8 blocker, 18 major, 1 minor | All fixed after 1.0.1 (P5, P6, P6b, P7, P8, P9) |
 | [v1.0.1-neon-final-check.md](v1.0.1-neon-final-check.md) | 2026-11-23 | `v1.0.1` (`ab25a8e`) | NF01–NF24: 2 blocker, 12 major, 10 minor | All fixed after 1.0.1 (P6, P7, P8, P9). Its closing list of test-coverage blind spots is advice, partly addressed by the NF13–NF15 test fixes |
 | [v1.0.1-glm-final-check.md](v1.0.1-glm-final-check.md) | 2026-11-23 | `v1.0.1` (`ab25a8e`) | GF01–GF14: 3 major, 11 minor; 4 owner decisions | Code: GF02, GF14 (P8) and GF11–GF13 (P9) fixed. Documentation: GF01, GF03, GF06, GF08, GF09 and GF10 fixed in the documentation pass, with the remainders below. GF04, GF05 and GF07 and OD1–OD4 are publishing decisions for the owner, not defects in the tree |
+| [v1.0.1-astra-verification.md](v1.0.1-astra-verification.md) | 2026-11-23 | `8e02aca` | Status of AF01–AF27; AV01–AV14 | Hold. Open items and AV01–AV14 fixed in Q1–Q5 |
+| [v1.0.1-neon-verification.md](v1.0.1-neon-verification.md) | 2026-11-23 | `8e02aca` | Status of NF01–NF24; NV01–NV16 | Fixed in Q1–Q5 |
+| [v1.0.1-glm-verification.md](v1.0.1-glm-verification.md) | 2026-11-23 | `8e02aca` | Status of GF11–GF14; GV01–GV10 | No blocker. GV findings fixed in Q1–Q5; GV10 closed in R3b |
+| [v1.0.1-astra-verification-2.md](v1.0.1-astra-verification-2.md) | 2026-11-23 | `6c42b0e` | 11 incomplete; AV2-01–AV2-05 | Hold. Fixed in R3a–R3c; AF08 finished in R4a, AV2-02 in R4b |
+| [v1.0.1-neon-verification-2.md](v1.0.1-neon-verification-2.md) | 2026-11-23 | `6c42b0e` | NV2-01, NV2-02 (major) | Fixed in R3a–R3c |
+| [v1.0.1-glm-verification-2.md](v1.0.1-glm-verification-2.md) | 2026-11-23 | `6c42b0e` | GW01, GW02 (blocker); GV10 status | Fixed in R3a and R3b; the last GW02 spellings (`--text`, `--filter`) in `95268f0` |
+| [v1.0.1-astra-round3-check.md](v1.0.1-astra-round3-check.md) | 2026-11-23 | `5c9ed06` | AF08, GW02, AV2-02 open; R3-01 (new) | Hold. AF08 fixed in R4a, GW02 in `95268f0`, AV2-02 and R3-01 in R4b |
+| [v1.0.1-neon-round3-check.md](v1.0.1-neon-round3-check.md) | 2026-11-23 | `5c9ed06` | NV2-01, NV2-02 closed | Push |
+| [v1.0.1-glm-round3-check.md](v1.0.1-glm-round3-check.md) | 2026-11-24 | `e6b84a6` | GW01, GW02, GV10 closed; GR3-01 (blocker) | Hold. GR3-01 fixed in `eebf7b9`; R3-01 confirmed closed at `705d749` |
 
-The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NOTES.md#unreleased-102).
+The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NOTES.md#102-2026-11-24).
 
 ## Open items
 
@@ -33,5 +42,15 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
   capture should be checked for personal paths before it is committed. The git history keeps the old strings.
 - **GF08 remainder:** the moby/profiles notice is bundled and documented, but Settings ▸ Acknowledgements does not list
   it yet.
+- **Known limitations accepted for 1.0.2:**
+  - Auto's shell analysis is best effort, not a boundary. A program run by its path (`bin/cat`) is classified by its
+    name. ripgrep's `--pre` can come from `RIPGREP_CONFIG_PATH`, but every way to set that variable on a line goes to
+    the reviewer (GLM round 3).
+  - Repository instructions are withheld when a session's folder crosses a link inside a checkout (AF08).
+  - Approved pushes need git 2.46 or Apple Git-155 or later; an older git is refused (AF06, GV10).
+  - The live tests that drive a real model were not re-run for 1.0.2, because the free opencode model's quota was
+    exhausted. Everything that uses the mock provider passed.
+  - A rewound prompt that is still waiting for a slow draft is lost if the app quits first, and the new-thread draft
+    (before its thread exists) has no shared revision across windows (R4b follow-ups).
 - **Owner decisions (GLM OD1–OD4):** no licence has been chosen; the history's author identity; whether to publish these
   review and threat-model documents; the default branch and an explicit push refspec (GF04, GF05, GF07).

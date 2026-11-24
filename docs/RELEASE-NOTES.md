@@ -5,11 +5,13 @@ release so far bundles opencode **2.3.2**, is arm64 only, and is ad-hoc signed (
 and opened: [RELEASE.md](RELEASE.md). What the reviews found and how each finding was handled:
 [reviews/README.md](reviews/README.md).
 
-## Unreleased (1.0.2)
+## 1.0.2 (2026-11-24)
 
-The fixes from the three v1.0.1 final pre-push checks ([Astra](reviews/v1.0.1-astra-final-check.md) AF01–AF27,
-[Neon](reviews/v1.0.1-neon-final-check.md) NF01–NF24, [GLM](reviews/v1.0.1-glm-final-check.md) GF01–GF14), merged as
-P5–P9 on `develop`, plus the documentation for the first public push. `VERSION` still says 1.0.1 until this is tagged.
+The first public release. It holds the fixes from the three v1.0.1 final pre-push checks
+([Astra](reviews/v1.0.1-astra-final-check.md) AF01–AF27, [Neon](reviews/v1.0.1-neon-final-check.md) NF01–NF24,
+[GLM](reviews/v1.0.1-glm-final-check.md) GF01–GF14) and from the three verification rounds that followed (AV, NV, GV,
+GW, R3 and GR3 findings; see the [review index](reviews/README.md)), merged on `develop` as P5–P10, Q1–Q5, R3a–R3c and
+R4a–R4c, plus the documentation for the first public push.
 
 ### Behaviour you will notice
 
