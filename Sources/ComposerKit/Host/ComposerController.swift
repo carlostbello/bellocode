@@ -31,6 +31,9 @@ public final class ComposerController {
     public var applyDraft: (ComposerDraft) -> Void = { _ in }
     /// Replace only the text (and tokens) as one undoable edit; attachments stay.
     public var replaceTextUndoably: (ComposerDraft) -> Void = { _ in }
+    /// Replace the text and tokens with a recovered prompt joined in front of them, as one undoable edit named "Edit
+    /// from Here", with the caret at the draft's selection; attachments stay. Nil: `applyDraft` (no undo entry).
+    public var applyRecoveredUndoably: ((ComposerDraft) -> Void)?
     /// Visible state changed (button, error, running).
     public var onStateChange: () -> Void = {}
     /// A VoiceOver announcement.
@@ -126,38 +129,91 @@ public final class ComposerController {
         noticeAfter: Duration = .seconds(10), giveUpAfter: Duration = .seconds(600),
         onDelay: @MainActor () -> Void = {}
     ) async -> RecoveredPlacement {
-        if !host.isDraftLoaded {
-            let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-            let observation = host.observe { continuation.yield() }
-            let start = ContinuousClock.now
-            let noticeAt = start + noticeAfter
-            let giveUpAt = start + giveUpAfter
-            let timers = Task {
-                try? await Task.sleep(until: noticeAt, clock: .continuous)
-                continuation.yield()
-                try? await Task.sleep(until: giveUpAt, clock: .continuous)
-                continuation.yield()
-            }
-            var noticed = false
-            for await _ in changes {
-                if host.isDraftLoaded || Task.isCancelled { break }
-                let now = ContinuousClock.now
-                if !noticed, now >= noticeAt {
-                    noticed = true
-                    onDelay()
-                }
-                if now >= giveUpAt { break }
-            }
-            timers.cancel()
-            observation.cancel()
-            continuation.finish()
-        }
         // Writing to a draft that never loaded would replace (or, merged as text, strip) its rich record.
-        guard host.isDraftLoaded else { return .unloadedDraft }
+        guard await waitUntilLoaded(host, noticeAfter: noticeAfter, giveUpAfter: giveUpAfter, onDelay: onDelay) else {
+            return .unloadedDraft
+        }
         if let owner = host.draftOwner { registry.commitEdits(owner: owner) }
         host.saveDraft(ComposerDraft.merging(failed: draft, current: host.loadDraft().validated()))
         let showing = host.draftOwner.map { registry.followStoredDraft(owner: $0) } ?? 0
         return .placed(composers: showing)
+    }
+
+    /// Waits until `host`'s stored draft has been read. After `noticeAfter` `onDelay` runs once. False when it has not
+    /// loaded by `giveUpAfter`, or when the waiting task is cancelled before it loads.
+    static func waitUntilLoaded(
+        _ host: any ComposerHost, noticeAfter: Duration, giveUpAfter: Duration, onDelay: @MainActor () -> Void
+    ) async -> Bool {
+        guard !host.isDraftLoaded else { return true }
+        let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observation = host.observe { continuation.yield() }
+        let start = ContinuousClock.now
+        let noticeAt = start + noticeAfter
+        let giveUpAt = start + giveUpAfter
+        let timers = Task {
+            try? await Task.sleep(until: noticeAt, clock: .continuous)
+            continuation.yield()
+            try? await Task.sleep(until: giveUpAt, clock: .continuous)
+            continuation.yield()
+        }
+        var noticed = false
+        for await _ in changes {
+            if host.isDraftLoaded || Task.isCancelled { break }
+            let now = ContinuousClock.now
+            if !noticed, now >= noticeAt {
+                noticed = true
+                onDelay()
+            }
+            if now >= giveUpAt { break }
+        }
+        timers.cancel()
+        observation.cancel()
+        continuation.finish()
+        return host.isDraftLoaded
+    }
+
+    /// Puts a recovered prompt (Edit from Here) into the draft this composer shows, as the static `placeRecovered`
+    /// does for a thread with no composer on screen, and with the same result: the prompt goes in front of the latest
+    /// stored draft (`ComposerDraft.merging`: its tokens and attachments kept, the caret at the end of the prompt),
+    /// never at the selection and never replacing selected text. Here it is one undoable edit, saved at once on top of
+    /// the latest revision; every other live composer of the thread then shows that revision.
+    ///
+    /// While this composer is still loading its stored draft, nothing is inserted or saved (AV2-02): the prompt waits
+    /// for the load (`onDelay` after `noticeAfter`), the loaded draft is reconciled with anything typed meanwhile, and
+    /// only then is the prompt placed. If the composer shows another thread by then, the prompt goes into the original
+    /// thread's draft through its host. `.unloadedDraft` (nothing written) when the draft never loads or the wait is
+    /// cancelled.
+    public func placeRecovered(
+        _ draft: ComposerDraft, noticeAfter: Duration = .seconds(10), giveUpAfter: Duration = .seconds(600),
+        onDelay: @MainActor () -> Void = {}
+    ) async -> RecoveredPlacement {
+        guard let target = host else { return .unloadedDraft }
+        if let placed = placeRecoveredIfLoaded(draft) { return placed }
+        guard await Self.waitUntilLoaded(target, noticeAfter: noticeAfter, giveUpAfter: giveUpAfter, onDelay: onDelay) else {
+            return .unloadedDraft
+        }
+        if host === target {
+            // The host observation may not have run yet: take the loaded draft in now (merging any edit after it).
+            reconcileLoadedDraft()
+            if let placed = placeRecoveredIfLoaded(draft) { return placed }
+        }
+        return await Self.placeRecovered(draft, into: target, registry: registry)
+    }
+
+    /// `placeRecovered` when this composer shows its stored draft already: placed now, synchronously. Nil (nothing
+    /// done) while the stored draft is still loading or with no host.
+    public func placeRecoveredIfLoaded(_ draft: ComposerDraft) -> RecoveredPlacement? {
+        guard let host, !awaitingDraft, host.isDraftLoaded else { return nil }
+        // Every other composer's unsaved edit goes into the stored draft first; then this one catches up with it.
+        if let owner = host.draftOwner { registry.commitEdits(owner: owner, except: self) }
+        followStoredDraft()
+        var placed = ComposerDraft.merging(failed: draft, current: currentDraft())
+        placed.selection = NSRange(location: (draft.text as NSString).length, length: 0)
+        placed = placed.validated()
+        if let applyRecoveredUndoably { applyRecoveredUndoably(placed) } else { applyDraft(placed) }
+        commitShown()
+        let others = host.draftOwner.map { registry.followStoredDraft(owner: $0, except: self) } ?? 0
+        return .placed(composers: others + 1)
     }
 
     /// Whether two drafts hold the same text, tokens and attachments (the selection is not content).
@@ -337,8 +393,8 @@ public final class ComposerController {
     /// Saves now (thread switch, window close, send).
     public func flushDraft() {
         if awaitingDraft {
-            // Leaving before the stored draft arrived: hand over only real edits (the host merges them with the
-            // stored draft); never the empty placeholder.
+            // Leaving before the stored draft arrived: hand over only real edits, which the host joins with the stored
+            // draft when it loads (never written over it, AV2-02); never the empty placeholder.
             if editedWhileAwaiting { host?.saveDraft(currentDraft()) }
             editedWhileAwaiting = false
             return
@@ -402,8 +458,15 @@ public final class ComposerController {
         sendError = nil
         host.clearError()
         applyDraft(.empty)
-        // On top of the latest revision: a newer draft saved by another window meanwhile is kept, not cleared.
-        commitShown()
+        if awaitingDraft {
+            // The stored draft has not been read: the submission was typed on top of the empty placeholder, so the
+            // stored draft is not cleared (nothing is saved over it) and shows when it loads.
+            editedWhileAwaiting = false
+        } else {
+            // The send's only clear: a compare-and-swap on the revision this composer showed. A newer draft saved by
+            // another window meanwhile is kept, not cleared, and dispatch clears nothing later (R4-01).
+            commitShown()
+        }
         pendingSends += 1
         onStateChange()
         let registry = self.registry

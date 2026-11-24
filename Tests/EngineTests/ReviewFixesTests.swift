@@ -184,6 +184,27 @@ struct AmbiguousSendTests {
         await tearDown(setup)
     }
 
+    /// R4-01: a send of explicit text (the composer's submission) never touches the draft, even when the draft holds
+    /// the same words: by dispatch it can be a newer draft another window saved with different mentions. Neither the
+    /// accepted send clears it nor a failed one writes the text into it.
+    @Test func anExplicitSendNeverClearsADraftWithTheSameText() async throws {
+        let setup = try await setUp()
+        setup.thread.draft = "review the parser"
+        #expect(await setup.thread.send("review the parser") != nil)
+        #expect(setup.thread.draft == "review the parser", "a draft with the same text is not the one sent")
+
+        let prompt = "/api/session/\(setup.sessionID)/prompt"
+        await setup.harness.server.injectHTTPFault(.status(400, method: "POST", pathPrefix: prompt, tag: "InvalidRequestError", count: nil))
+        setup.thread.draft = ""
+        #expect(await setup.thread.send("refused words") == nil)
+        #expect(setup.thread.draft == "", "the composer restores a failed submission itself")
+        setup.thread.draft = "refused words"
+        #expect(await setup.thread.send("refused words") == nil)
+        #expect(setup.thread.draft == "refused words")
+        await setup.harness.server.clearHTTPFaults()
+        await tearDown(setup)
+    }
+
     /// A definite refusal after a lost answer, with the server confirming it does not have the prompt: not sent, and the
     /// text returns to the draft. A retry of an unknown send that is refused becomes "not sent" with its text kept.
     @Test func definiteRefusalsAreNotSent() async throws {

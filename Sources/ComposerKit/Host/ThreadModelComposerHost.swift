@@ -19,6 +19,8 @@ public protocol ComposerThreadSource: AnyObject, Observable {
     var composerDeliveryUnknown: Bool { get }
     /// Earlier user prompts, oldest first.
     var composerPromptHistory: [String] { get }
+    /// Sends `text`. The composer always passes its submission's text: the source must not clear or restore `draft`
+    /// for it (the composer cleared its own submitted revision and restores a failed send itself; R4-01).
     func send(_ text: String?, attachments: PromptAttachments, delivery: PromptDelivery?) async -> MessageID?
     /// Runs a server slash command; true when the server accepted it.
     func runCommand(_ name: String, arguments: String, attachments: PromptAttachments, delivery: PromptDelivery?) async -> Bool
@@ -103,6 +105,9 @@ final class ComposerDraftRevision {
     private static var next = 0
     private(set) var value: Int
     @ObservationIgnored private var text: String
+    /// An edit a composer handed over before the stored draft was read (`ThreadModelComposerHost.saveDraft` while
+    /// not loaded). Joined with the stored rich draft on the first load; never written over it.
+    @ObservationIgnored var editBeforeLoad: ComposerDraft?
 
     init(text: String) {
         self.text = text
@@ -169,6 +174,15 @@ public final class ThreadModelComposerHost: ComposerHost {
 
     public func loadDraft() -> ComposerDraft {
         let text = source.draft
+        if isDraftLoaded, let edit = revision.editBeforeLoad {
+            revision.editBeforeLoad = nil
+            let joined = Self.join(stored: storedCandidates(text: text, edit: edit), edit: edit, text: text)
+            cache.store(joined, for: draftKey, owner: ObjectIdentifier(source))
+            if let archive, ComposerDraftArchive.needsRecord(joined) || archive.load(draftKey) != nil {
+                archive.save(joined, for: draftKey)
+            }
+            return joined
+        }
         if let cached = cache.draft(for: draftKey, owner: ObjectIdentifier(source), matching: text) { return cached }
         // After a relaunch: the staged attachments and pills recorded with the draft (R28).
         if isDraftLoaded, let restored = archive?.restore(draftKey, text: text) {
@@ -179,6 +193,9 @@ public final class ThreadModelComposerHost: ComposerHost {
     }
 
     public func saveDraft(_ draft: ComposerDraft) {
+        // Not read yet: the stored draft (and its archived mentions and attachments) is not known, so nothing may be
+        // written over it (AV2-02). The edit is handed over to be joined with it when it loads.
+        guard isDraftLoaded else { return handOverBeforeLoad(draft) }
         let previous = cache.draft(for: draftKey)
         cache.store(draft, for: draftKey, owner: ObjectIdentifier(source))
         if source.draft != draft.text { source.draft = draft.text }
@@ -186,6 +203,59 @@ public final class ThreadModelComposerHost: ComposerHost {
         if let archive, ComposerDraftArchive.needsRecord(draft) || previous.map(ComposerDraftArchive.needsRecord) ?? true {
             archive.save(draft, for: draftKey)
         }
+    }
+
+    /// A composer left before the stored draft was read and hands over what was typed meanwhile. The thread gets the
+    /// text (it joins it after the stored text when that arrives, `ThreadModel.mergeDrafts`); the cache and the archive
+    /// are left alone, so the stored rich record survives; the edit's own tokens and attachments wait in the revision
+    /// and are joined with the stored rich draft by the first `loadDraft()` after it loads.
+    private func handOverBeforeLoad(_ edit: ComposerDraft) {
+        guard !edit.isEmpty else { return }
+        // A second hand-over (another composer, or the same one after more typing) keeps the first: a composer hands
+        // over all it shows, so an edit that already holds the earlier one replaces it; otherwise both are kept.
+        let pending = revision.editBeforeLoad.map { earlier in
+            edit.containsRestored(earlier) ? edit : ComposerDraft.merging(failed: earlier, current: edit)
+        } ?? edit
+        revision.editBeforeLoad = pending
+        if source.draft != pending.text { source.draft = pending.text }
+        revision.bump(text: source.draft)
+    }
+
+    /// The stored drafts that, joined with `edit` the way the thread joins text, could have produced `text`: the
+    /// archived rich record first, then the plain stored text implied by the join.
+    private func storedCandidates(text: String, edit: ComposerDraft) -> [ComposerDraft] {
+        var candidates: [ComposerDraft] = []
+        if let archive, let record = archive.load(draftKey), let rich = archive.restore(draftKey, text: record.text) {
+            candidates.append(rich)
+        }
+        let suffix = "\n\n" + edit.text
+        let joined = text as NSString
+        if joined.hasSuffix(suffix) {
+            candidates.append(ComposerDraft(text: joined.substring(to: joined.length - (suffix as NSString).length)))
+        }
+        candidates.append(ComposerDraft(text: ""))
+        return candidates
+    }
+
+    /// The rich draft for the thread's joined `text`: a stored candidate whose join with `edit` gives exactly `text`
+    /// (stored first, then the edit, as `ThreadModel.mergeDrafts` joins them), keeping both drafts' tokens and
+    /// attachments. When none matches (the text changed some other way), the text with the edit's attachments.
+    static func join(stored candidates: [ComposerDraft], edit: ComposerDraft, text: String) -> ComposerDraft {
+        func adding(_ attachments: [ComposerAttachment], to draft: ComposerDraft) -> ComposerDraft {
+            var draft = draft
+            let known = Set(draft.attachments.map(\.id))
+            draft.attachments += attachments.filter { !known.contains($0.id) }
+            return draft
+        }
+        for stored in candidates {
+            let joined = ComposerDraft.merging(failed: stored, current: edit)
+            if joined.text == text { return joined.validated() }
+            // The edit was empty or the same text: the stored draft.
+            if stored.text == text { return adding(edit.attachments, to: stored).validated() }
+            // Nothing was stored, or the edit already extends it: the edit.
+            if edit.text == text, edit.text.hasPrefix(stored.text) { return adding(stored.attachments, to: edit).validated() }
+        }
+        return ComposerDraft(text: text, attachments: edit.attachments).validated()
     }
 
     public func send(_ submission: ComposerSubmission) async -> ComposerSendOutcome {
@@ -206,6 +276,9 @@ public final class ThreadModelComposerHost: ComposerHost {
             }
             return .failed(source.composerErrorMessage ?? "The command was not run.")
         }
+        // The composer already cleared the submitted revision (a compare-and-swap on the revision it showed). Dispatch
+        // clears nothing: by now the stored draft can be a newer revision another window saved, possibly with the same
+        // text, and only the submitted revision's clear belongs to this send (R4-01).
         if await source.send(input.text, attachments: input.attachments, delivery: delivery) != nil { return .accepted }
         if source.composerDeliveryUnknown {
             return .unconfirmed(source.composerErrorMessage ?? "Delivery unknown: opencode did not confirm it received this message.")

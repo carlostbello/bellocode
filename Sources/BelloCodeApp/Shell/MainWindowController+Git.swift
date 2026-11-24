@@ -414,34 +414,41 @@ extension MainWindowController {
         showGitPanel(RewindView(model: model, close: { [weak self] _ in self?.closeGitPanel() }), title: "Edit from Here")
     }
 
-    /// The rewound prompt goes back to its own thread (NV09) as one write on top of its latest draft (AV2-02, R3-01).
-    /// While this window shows the thread it is inserted into the visible composer (one undoable edit) and saved on top
-    /// of the latest revision; every other live composer of the thread, in any window, then shows that revision (an
-    /// unsaved edit there is kept, rebased onto it), so no stale copy saves over it. With no composer showing the
-    /// thread, it goes in front of the thread's stored draft through the draft host, keeping that draft's tokens and
-    /// attachments; never into another thread's composer. A stored draft slow to load is waited for (with a notice),
-    /// never replaced by a text-only merge; if it never loads, nothing is written and the prompt is shown in an alert
-    /// that stays until dismissed, with Copy Prompt.
+    /// The rewound prompt goes back to its own thread (NV09) as one write on top of its latest draft (AV2-02, R3-01),
+    /// in front of that draft (`ComposerDraft.merging`: its mentions and attachments kept), never into another thread's
+    /// composer. While this window shows the thread, the visible composer places it as one undoable edit (caret at the
+    /// end of the prompt; nothing at the selection is replaced) and saves it on top of the latest revision; every other
+    /// live composer of the thread, in any window, then shows that revision (an unsaved edit there is kept, rebased onto
+    /// it), so no stale copy saves over it. With no composer showing the thread, it goes in front of the stored draft
+    /// through the draft host. Either way, a stored draft slow to load (including in the visible composer) is waited
+    /// for, with a notice, and nothing is inserted or saved before it loads; if it never loads, nothing is written and
+    /// the prompt is shown in an alert that stays until dismissed, with Copy Prompt.
     func placeRewoundPrompt(_ text: String, thread id: SessionID) {
         let recovered = ComposerDraft(text: text)
-        if container.context?.thread?.sessionID == id, let composer = changesComposer, let thread = container.context?.thread {
-            // On the latest revision first (another window may have saved since this composer last read it).
-            composer.controller.followStoredDraft()
-            composer.insert(text: text)
-            composer.controller.flushDraft()
-            ComposerController.Registry.shared.followStoredDraft(owner: ObjectIdentifier(thread), except: composer.controller)
+        let undo = workspace.undo
+        let notice = { @MainActor in
+            undo.showNotice("The thread's draft is still loading. The rewound prompt will be added to it when it loads.")
+        }
+        if container.context?.thread?.sessionID == id, let composer = changesComposer {
+            if composer.controller.placeRecoveredIfLoaded(recovered) != nil { return }
+            // The visible composer is still loading the thread's draft: it places the prompt once that loads (or, if
+            // the window moved on meanwhile, through the thread's host). Not cancelled with the window, like a failed
+            // send's restore; bounded by the give-up delay.
+            let thread = workspace.engine.openThread(id)
+            Task { [weak self] in
+                defer { thread.close() }
+                let placement = await composer.controller.placeRecovered(recovered, onDelay: notice)
+                if placement == .unloadedDraft { Self.presentUnplacedRewoundPrompt(text, in: self?.window) }
+            }
             return
         }
         let thread = workspace.engine.openThread(id)
         let host = draftHost(thread)
-        let undo = workspace.undo
         // Not cancelled with the window: like a failed send's restore, the prompt must reach its thread (bounded by
         // `placeRecovered`'s give-up delay; the thread lease keeps its draft loading meanwhile).
         Task { [weak self] in
             defer { thread.close() }
-            let placement = await ComposerController.placeRecovered(recovered, into: host, onDelay: {
-                undo.showNotice("The thread's draft is still loading. The rewound prompt will be added to it when it loads.")
-            })
+            let placement = await ComposerController.placeRecovered(recovered, into: host, onDelay: notice)
             if placement == .unloadedDraft {
                 // Nothing was written, so the stored draft (with its mentions and attachments) is intact; the prompt
                 // is shown until dismissed, never in a toast that expires.

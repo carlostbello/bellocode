@@ -57,6 +57,12 @@ final class FakeView {
             draft.tokens = $0.tokens
             undoableReplacements += 1
         }
+        controller.applyRecoveredUndoably = { [unowned self] in
+            draft.text = $0.text
+            draft.tokens = $0.tokens
+            draft.selection = $0.selection
+            undoableReplacements += 1
+        }
     }
 }
 
