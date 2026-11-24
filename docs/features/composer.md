@@ -47,6 +47,13 @@ when it turns true shows the stored draft or, if the user typed meanwhile, the s
 that stored them, so another engine's thread with the same session ID cannot replace them; a reopened model gets the
 newest matching entry for its session). It now reports `supportsAttachments = true` and names its thread source as
 `draftOwner` (the object that stores its draft; NF04).
+`draftRevision` (default 0, for a host that is its draft's only writer): one revision per stored draft, shared by every
+host of the same thread (one per window, plus Edit from Here's). `ThreadModelComposerHost` bumps it on every save
+through any of them and when the thread's text changes some other way, and reports it through `observe`. A composer
+saves only on top of the revision it last read (compare-and-swap): when the draft moved on, an unchanged composer
+shows the newer draft, and an edited one is rebased onto it (the newer draft first, then its own edit after a blank
+line, with "This draft also changed in another window. Both versions are kept." announced), so an idle second window
+never writes its stale copy over a newer draft (R3-01).
 
 ## What the prompt API needs for attachments (Contracts/opencode-2.3.0/openapi.json)
 
@@ -84,6 +91,14 @@ running-steer,running-stop,capped,hero}-{light,dark}.png`.
   submission has an identity and is restored at most once per composer; only a draft that already holds the failed
   text in front, its tokens in place and every attachment counts as shown, so a newer edit that merely starts with
   the same words still gets the attachment and error back (AV12).
+- **Edit from Here's rewound prompt** goes into its thread's latest draft as one write (R3-01, AV2-02).
+  `ComposerController.placeRecovered` first has every live composer of the thread save its unsaved edit on top of the
+  latest revision, then puts the prompt in front of the stored draft through one host (`ComposerDraft.merging`, so
+  mentions and attachments stay), then has every composer show that revision. With the thread on screen, the prompt is
+  inserted into the visible composer (after it catches up with the latest revision) and the other composers follow.
+  A stored draft that has not loaded is waited for, never written as plain text: after 10 s a notice says the prompt
+  will be added when it loads; after 10 minutes (or if the wait is cancelled) nothing is written and an alert shows
+  the prompt with Copy Prompt.
 - **Command-Return key equivalents:** the composer takes, before the menu, only the Return combinations that send
   (⌘↩; ⌥⌘↩ with the Command-Return send key). ⌃⌘↩ (Git ▸ Run Suggested Git Action) and ⌃⌥⌘↩ (GitLab ▸ Submit
   Review…) reach the menu; with no menu item to take them, they insert a newline as before (NV03).

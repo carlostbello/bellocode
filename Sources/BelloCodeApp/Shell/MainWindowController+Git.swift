@@ -414,30 +414,59 @@ extension MainWindowController {
         showGitPanel(RewindView(model: model, close: { [weak self] _ in self?.closeGitPanel() }), title: "Edit from Here")
     }
 
-    /// The rewound prompt goes back to its own thread (NV09), and every composer of that thread sees it (AV2-02):
-    /// while this window shows the thread it is inserted into the visible composer (one undoable edit); every other
-    /// live composer of the thread, in any window, takes it in front of what it shows, so none of them saves over it
-    /// later. With no composer showing the thread, it goes in front of the thread's stored draft through the draft
-    /// host, keeping that draft's tokens and attachments; never into another thread's composer.
+    /// The rewound prompt goes back to its own thread (NV09) as one write on top of its latest draft (AV2-02, R3-01).
+    /// While this window shows the thread it is inserted into the visible composer (one undoable edit) and saved on top
+    /// of the latest revision; every other live composer of the thread, in any window, then shows that revision (an
+    /// unsaved edit there is kept, rebased onto it), so no stale copy saves over it. With no composer showing the
+    /// thread, it goes in front of the thread's stored draft through the draft host, keeping that draft's tokens and
+    /// attachments; never into another thread's composer. A stored draft slow to load is waited for (with a notice),
+    /// never replaced by a text-only merge; if it never loads, nothing is written and the prompt is shown in an alert
+    /// that stays until dismissed, with Copy Prompt.
     func placeRewoundPrompt(_ text: String, thread id: SessionID) {
         let recovered = ComposerDraft(text: text)
         if container.context?.thread?.sessionID == id, let composer = changesComposer, let thread = container.context?.thread {
+            // On the latest revision first (another window may have saved since this composer last read it).
+            composer.controller.followStoredDraft()
             composer.insert(text: text)
             composer.controller.flushDraft()
-            ComposerController.Registry.shared.placeRecovered(recovered, owner: ObjectIdentifier(thread), except: composer.controller)
+            ComposerController.Registry.shared.followStoredDraft(owner: ObjectIdentifier(thread), except: composer.controller)
             return
         }
         let thread = workspace.engine.openThread(id)
         let host = draftHost(thread)
+        let undo = workspace.undo
         // Not cancelled with the window: like a failed send's restore, the prompt must reach its thread (bounded by
-        // the draft-load timeout).
-        Task {
+        // `placeRecovered`'s give-up delay; the thread lease keeps its draft loading meanwhile).
+        Task { [weak self] in
             defer { thread.close() }
-            if await ComposerController.placeRecovered(recovered, into: host) == .unloadedDraft {
-                // The stored draft never loaded: the thread merges the text with it when it does (text only).
-                thread.draft = thread.draft.isEmpty ? text : text + "\n\n" + thread.draft
+            let placement = await ComposerController.placeRecovered(recovered, into: host, onDelay: {
+                undo.showNotice("The thread's draft is still loading. The rewound prompt will be added to it when it loads.")
+            })
+            if placement == .unloadedDraft {
+                // Nothing was written, so the stored draft (with its mentions and attachments) is intact; the prompt
+                // is shown until dismissed, never in a toast that expires.
+                Self.presentUnplacedRewoundPrompt(text, in: self?.window)
             }
         }
+    }
+
+    /// The rewound prompt could not be added to its thread's draft (it never loaded): shows it with Copy Prompt.
+    static func presentUnplacedRewoundPrompt(_ text: String, in window: NSWindow?) {
+        let alert = NSAlert()
+        alert.messageText = "The rewound prompt was not added to the thread's draft"
+        alert.informativeText = "The thread's saved draft did not load, so it was left unchanged. Copy the prompt to keep it:\n\n" + text
+        alert.addButton(withTitle: "Copy Prompt")
+        alert.addButton(withTitle: "Close")
+        alert.alertStyle = .warning
+        let copy = {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        guard let window else {
+            if alert.runModal() == .alertFirstButtonReturn { copy() }
+            return
+        }
+        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { copy() } }
     }
 
     /// Undo of a rewind's file restore. A failure (a restored file changed since, so nothing is overwritten, or a

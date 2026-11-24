@@ -65,6 +65,12 @@ public protocol ComposerHost: AnyObject {
     /// The saved draft has been read. While false, `loadDraft()` is a placeholder: the composer saves nothing over it
     /// and reconciles (merging anything typed meanwhile) once it turns true. Report the change through `observe`.
     var isDraftLoaded: Bool { get }
+    /// The stored draft's revision, shared by every host of the same draft (`draftOwner`): it changes with every
+    /// `saveDraft` through any of them and with any other change to the stored draft (a send clearing it, a restore).
+    /// A composer saves only on top of the revision it last read; when the draft moved on it rebases its edit onto the
+    /// newer draft first, so a stale copy (an idle second window) never replaces a newer draft (R3-01). Report changes
+    /// through `observe`. A host that is its draft's only writer may keep the default (never changes).
+    var draftRevision: Int { get }
     /// Persist the draft. Called debounced while typing, and at once on send, thread switch and teardown.
     func saveDraft(_ draft: ComposerDraft)
     /// Send, queue or steer. Return only when the server admitted the prompt or the attempt failed.
@@ -83,13 +89,15 @@ public protocol ComposerHost: AnyObject {
     func clearError()
     /// Earlier prompts in this thread, oldest first, for Up/Down recall.
     func recentPrompts() -> [String]
-    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage`, `isDraftLoaded` or capabilities change.
+    /// Calls `onChange` (on the main actor) after `runState`, `errorMessage`, `isDraftLoaded`, `draftRevision` or
+    /// capabilities change.
     func observe(_ onChange: @escaping @MainActor () -> Void) -> ComposerObservation
 }
 
 extension ComposerHost {
     public var draftOwner: ObjectIdentifier? { nil }
     public var isDraftLoaded: Bool { true }
+    public var draftRevision: Int { 0 }
     public var supportsSteer: Bool { true }
     public var supportsAttachments: Bool { true }
     public var defaultFollowUp: ComposerDelivery { .queue }
