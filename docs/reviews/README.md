@@ -27,6 +27,7 @@ fixed before the next release unless this index says otherwise.
 | [v1.0.1-astra-round3-check.md](v1.0.1-astra-round3-check.md) | 2026-11-23 | `5c9ed06` | AF08, GW02, AV2-02 open; R3-01 (new) | Hold. AF08 fixed in R4a, GW02 in `95268f0`, AV2-02 and R3-01 in R4b |
 | [v1.0.1-neon-round3-check.md](v1.0.1-neon-round3-check.md) | 2026-11-23 | `5c9ed06` | NV2-01, NV2-02 closed | Push |
 | [v1.0.1-glm-round3-check.md](v1.0.1-glm-round3-check.md) | 2026-11-24 | `e6b84a6` | GW01, GW02, GV10 closed; GR3-01 (blocker) | Hold. GR3-01 fixed in `eebf7b9`; R3-01 confirmed closed at `705d749` |
+| [v1.0.2-astra-final-verification.md](v1.0.2-astra-final-verification.md) | 2026-11-24 | `dd34d1e` | AF08, AV2-02, GR3-01 open; R4-01 (new); documentation | Hold. GR3-01 (`xxd`) and the documentation fixed in `013a161`; R4-01 and AV2-02 in R5 (`d3f5f2a`); the AF08 path-swap race accepted (below) |
 
 The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NOTES.md#102-2026-11-24).
 
@@ -56,6 +57,8 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
   - The live tests that drive a real model were not re-run for 1.0.2, because the free opencode model's quota was
     exhausted. Everything that uses the mock provider passed.
   - A rewound prompt that is still waiting for a slow draft is lost if the app quits first, and the new-thread draft
-    (before its thread exists) has no shared revision across windows (R4b follow-ups).
+    (before its thread exists) has no shared revision across windows (R4b follow-ups). A composer that leaves a thread
+    before its draft loads keeps its text, but its own mentions and attachments are lost if nothing reads that draft
+    before quit (R5).
 - **Owner decisions (GLM OD1–OD4):** no licence has been chosen; the history's author identity; whether to publish these
   review and threat-model documents; the default branch and an explicit push refspec (GF04, GF05, GF07).
