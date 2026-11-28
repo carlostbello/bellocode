@@ -31,7 +31,7 @@ fixed before the next release unless this index says otherwise.
 | [v1.0.2-astra-reverification.md](v1.0.2-astra-reverification.md) | 2026-11-24 | `7f2102b` | R4-01, GR3-01 closed; AV2-02 open; R5-01, R5-02 (new); documentation | Hold. Fixed in R6 (`4b7e5a4`): a composer takes no edits until it has observed its loaded draft, which removes R5's pre-load hand-over. The guide's repository-instruction paragraph was corrected |
 | [v1.0.2-glm-final-verification.md](v1.0.2-glm-final-verification.md) | 2026-11-24 | `1dc68ff` | GR3-01 closed; publication scan of the history; R6-01 confirmed | Hold on R6-01 only. R6-01 fixed (below); the BSD `uniq` residual fixed; the snapshot count corrected |
 | [v1.0.2-astra-r6-check.md](v1.0.2-astra-r6-check.md) | 2026-11-24 | `1dc68ff` | AV2-02, R5-01, R5-02 closed; R6-01 (new); documentation | Hold. R6-01 fixed: a refused review comment keeps its editor and text, and marks no line. The feature note's Retry, Edit in Composer and first-send statements qualified; two first-send cases listed below |
-| [v1.0.2-neon-final-verification.md](v1.0.2-neon-final-verification.md) | 2026-11-24 | `60499dc` | Full-app flows and public docs; NV3-01 (crash) | Hold on NV3-01 only. Fixed: a new-thread draft whose window closed while its first send was creating the thread no longer traps. Astra confirmed R6-01 closed at `60499dc` with no new blocker |
+| [v1.0.2-neon-final-verification.md](v1.0.2-neon-final-verification.md) | 2026-11-24 | `60499dc` | Full-app flows and public docs; NV3-01 (crash) | Hold on NV3-01 only. Fixed: a new-thread draft whose window closed while its first send was creating the thread no longer traps. Astra confirmed R6-01 closed at `60499dc` with no new blocker (in its reply; no report was filed). GLM then confirmed R6-01, NV3-01 and the BSD `uniq` fix closed at the `v1.0.2` tag (`3f2cb19`), with nothing in the new commits to remove from the public history (also in its reply) |
 
 The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NOTES.md#102-2026-11-24).
 
@@ -69,6 +69,9 @@ The fixes after 1.0.1 are summarised by area in [RELEASE-NOTES.md](../RELEASE-NO
   - A GitLab merge-request review comment closes its editor before its asynchronous draft save finishes; if that save
     fails the error is shown but the text is not put back. An image pasted as TIFF and converted just as you switch
     threads can attach to the newly shown thread (Astra and Neon, 1.0.2).
+  - When a window closes while a new thread's first send is still creating it (NV3-01), that thread's model stays open
+    until the app quits, and the project's new-thread draft may still show the sent prompt after a relaunch (a
+    duplicate, not a loss). A click outside an open review-comment editor still closes it and drops its text (GLM, 1.0.2).
   - On the Mac's own BSD `uniq`, `uniq in.txt -out` writes `-out`; Auto now counts it as a write too (GLM 1.0.2 final
     verification). Commands normally run in Linux containers, where GNU `uniq` does not.
 - **Owner decisions (GLM OD1–OD4):** no licence has been chosen; the history's author identity; whether to publish these
